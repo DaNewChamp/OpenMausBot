@@ -131,7 +131,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           <div className="flex flex-col">
             <h1 className="text-[18px] font-semibold text-ink">Your engines</h1>
             <p className="mt-1 text-[13.5px] text-ink-secondary">
-              Bots run on the AI tools already on this Mac — here&rsquo;s what we found.
+              Bots run on the AI tools already on this computer — here&rsquo;s what we found.
             </p>
             <div className="mt-4 flex flex-col gap-2.5">
               {!instances ? (

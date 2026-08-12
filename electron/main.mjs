@@ -28,6 +28,8 @@ async function startServerOn(port) {
       ...process.env,
       OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
       OMB_PORT: String(port),
+      // exact userData so the harness can read cua-connection.json on any OS
+      OMB_USER_DATA: app.getPath("userData"),
     },
     stdio: "inherit",
   });

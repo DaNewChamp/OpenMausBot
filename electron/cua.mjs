@@ -15,7 +15,7 @@
 // <userData>/cua-connection.json for the harness server to hand to drivers.
 
 import { app, ipcMain } from "electron";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -53,7 +53,7 @@ const INSTALLED_DRIVER_CANDIDATES = IS_WIN
 function driverOnPath() {
   const find = IS_WIN ? "where" : "which";
   try {
-    const out = spawnSync(find, ["cua-driver"], { encoding: "utf8", timeout: 5000 });
+    const out = spawnSync(find, ["cua-driver"], { encoding: "utf8", timeout: 5000, windowsHide: true });
     if (out.status === 0 && out.stdout) return out.stdout.split(/\r?\n/)[0].trim();
   } catch {
     /* no PATH lookup available */
@@ -111,12 +111,32 @@ async function daemonRunning() {
   if (IS_WIN) {
     const binary = resolveDriverBinary();
     if (!binary) return false;
-    try {
-      const out = spawnSync(binary, ["status"], { encoding: "utf8", timeout: 5000 });
-      return out.status === 0 && /daemon is running/i.test(out.stdout);
-    } catch {
-      return false;
-    }
+    // async child — never block the main process on a dead daemon
+    return new Promise((resolveProbe) => {
+      let out = "";
+      let settled = false;
+      const done = (ok) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolveProbe(ok);
+      };
+      let child;
+      try {
+        child = spawn(binary, ["status"], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+      } catch {
+        return done(false);
+      }
+      const timer = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {}
+        done(false);
+      }, 5000);
+      child.stdout.on("data", (d) => (out += d));
+      child.on("error", () => done(false));
+      child.on("close", (code) => done(code === 0 && /daemon is running/i.test(out)));
+    });
   }
   return socketAlive(STANDALONE_SOCKET);
 }
@@ -172,6 +192,7 @@ export function cuaPermissionsStatus() {
   const out = spawnSync(binary, ["permissions", "status", "--json"], {
     encoding: "utf8",
     timeout: 5000,
+    windowsHide: true,
   });
   try {
     return { available: true, ...JSON.parse(out.stdout) };

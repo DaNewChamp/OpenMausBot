@@ -13,7 +13,7 @@ import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { newEventId, newId } from "../contracts.js";
 import { appendNative } from "./native.js";
-import { cliSpawnShell, cliVersion, resolveCli } from "./cli.js";
+import { cliVersion, killProcessTree, resolveCliCommand } from "./cli.js";
 const DRIVER_KIND = "codex";
 // catalog ported from upstream packages/contracts/src/model.ts
 const MODELS = {
@@ -63,10 +63,10 @@ export const CodexDriver = {
             // the CLI owns its own ChatGPT login; a leaked API key silently flips
             // billing to pay-as-you-go (agentcal)
             delete env.OPENAI_API_KEY;
-            const child = spawn(resolveCli(config.cli), ["app-server"], {
-                ...cliSpawnShell(config.cli),
+            const { command: cliCommand, args: cliPrefix, env: cliEnv } = resolveCliCommand(config.cli);
+            const child = spawn(cliCommand, [...cliPrefix, "app-server"], {
                 cwd: turn.cwd ?? homedir(),
-                env,
+                env: { ...env, ...cliEnv },
                 stdio: ["pipe", "pipe", "pipe"],
                 detached: true,
             });
@@ -86,17 +86,7 @@ export const CodexDriver = {
                 rpcPending.set(id, { resolve, reject });
                 send({ jsonrpc: "2.0", id, method, params });
             });
-            const stop = () => {
-                try {
-                    process.kill(-child.pid, "SIGTERM");
-                }
-                catch {
-                    try {
-                        child.kill("SIGTERM");
-                    }
-                    catch { }
-                }
-            };
+            const stop = () => killProcessTree(child.pid);
             const settle = (ok, stopReason) => {
                 if (state.settled)
                     return;

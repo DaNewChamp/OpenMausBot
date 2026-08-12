@@ -23,7 +23,7 @@ import type {
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { appendNative } from "./native.ts";
-import { cliSpawnShell, cliVersion, resolveCli } from "./cli.ts";
+import { cliVersion, killProcessTree, resolveCliCommand } from "./cli.ts";
 
 const DRIVER_KIND = "codex";
 
@@ -92,10 +92,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // billing to pay-as-you-go (agentcal)
       delete env.OPENAI_API_KEY;
 
-      const child = spawn(resolveCli(config.cli), ["app-server"], {
-        ...cliSpawnShell(config.cli),
+      const { command: cliCommand, args: cliPrefix, env: cliEnv } = resolveCliCommand(config.cli);
+      const child = spawn(cliCommand, [...cliPrefix, "app-server"], {
         cwd: turn.cwd ?? homedir(),
-        env,
+        env: { ...env, ...cliEnv },
         stdio: ["pipe", "pipe", "pipe"],
         detached: true,
       });
@@ -118,15 +118,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           send({ jsonrpc: "2.0", id, method, params });
         });
 
-      const stop = () => {
-        try {
-          process.kill(-child.pid!, "SIGTERM");
-        } catch {
-          try {
-            child.kill("SIGTERM");
-          } catch {}
-        }
-      };
+      const stop = () => killProcessTree(child.pid);
 
       const settle = (ok: boolean, stopReason: string | null) => {
         if (state.settled) return;

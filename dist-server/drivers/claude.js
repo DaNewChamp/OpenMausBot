@@ -16,7 +16,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DATA_DIR } from "../config.js";
 import { newEventId, newId } from "../contracts.js";
-import { cliExec, cliSpawnShell, cliVersion, resolveCli } from "./cli.js";
+import { cliExec, cliVersion, killProcessTree, resolveCliCommand } from "./cli.js";
 import { appendNative } from "./native.js";
 const DRIVER_KIND = "claudeAgent";
 // model catalog ported from upstream packages/contracts/src/model.ts
@@ -56,6 +56,11 @@ function askSummary(ask) {
 }
 function permissionSocketPath(threadId) {
     const tag = threadId.replace(/[^\w-]/g, "").slice(0, 8);
+    // Windows has no unix sockets; Node maps a listen() path to a named pipe,
+    // and drive-letter paths (with ':') are invalid pipe names (EACCES).
+    // Use an explicit \\.\pipe\ name — both sides get the same string via argv.
+    if (process.platform === "win32")
+        return `\\\\.\\pipe\\ogb-perm-${tag}`;
     return join(DATA_DIR, `perm-${tag}.sock`);
 }
 function createPermissionBroker(opts) {
@@ -272,10 +277,10 @@ export const ClaudeDriver = {
             delete env.ANTHROPIC_API_KEY;
             delete env.CLAUDECODE;
             delete env.CLAUDE_CODE_ENTRYPOINT;
-            const child = spawn(resolveCli(config.cli), args, {
-                ...cliSpawnShell(config.cli),
+            const { command: cliCommand, args: cliPrefix, env: cliEnv } = resolveCliCommand(config.cli);
+            const child = spawn(cliCommand, [...cliPrefix, ...args], {
                 cwd: turn.cwd ?? homedir(),
-                env,
+                env: { ...env, ...cliEnv },
                 stdio: ["pipe", "pipe", "pipe"],
                 detached: true, // own process group: killing -pid reaps child MCP servers
             });
@@ -371,17 +376,7 @@ export const ClaudeDriver = {
                     settle(false, "exit_before_result");
                 }
             });
-            const stop = () => {
-                try {
-                    process.kill(-child.pid, "SIGTERM");
-                }
-                catch {
-                    try {
-                        child.kill("SIGTERM");
-                    }
-                    catch { }
-                }
-            };
+            const stop = () => killProcessTree(child.pid);
             active.set(threadId, { stop, turnId, broker });
             emit({ ...base(threadId, turnId), type: "turn.started" });
             // prompt over stdin as a stream-json message — never argv (ARG_MAX)
