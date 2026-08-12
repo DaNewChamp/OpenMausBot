@@ -8,7 +8,6 @@
 //   - Composio Connect (connected apps → tools) over streamable HTTP
 //   - the bot's cloud computer (box.ascii.dev) via server/computer-proxy.ts
 //     — screenshot/exec/open_url, the CUA-on-the-box bridge
-import { spawn } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { homedir } from "node:os";
@@ -27,7 +26,7 @@ import type {
   SendTurnInput,
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
-import { cliExec, cliVersion, killProcessTree, resolveCliCommand } from "./cli.ts";
+import { cliExec, cliVersion, killProcessTree, spawnCliHidden } from "./cli.ts";
 import { appendNative } from "./native.ts";
 
 const DRIVER_KIND = "claudeAgent";
@@ -314,14 +313,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       delete env.CLAUDECODE;
       delete env.CLAUDE_CODE_ENTRYPOINT;
 
-      const { command: cliCommand, args: cliPrefix, env: cliEnv } = resolveCliCommand(config.cli);
-      const child = spawn(cliCommand, [...cliPrefix, ...args], {
+      const child = spawnCliHidden(config.cli, args, {
         cwd: turn.cwd ?? homedir(),
-        env: { ...env, ...cliEnv },
+        env,
         stdio: ["pipe", "pipe", "pipe"],
         detached: true, // own process group: killing -pid reaps child MCP servers
-        // GUI host: don't flash a console window for the agent CLI
-        windowsHide: true,
       });
 
       let settled = false;

@@ -9,11 +9,10 @@
 //
 // resumeCursor is the codex thread id; a later turn tries thread/resume
 // and falls back to a fresh thread/start.
-import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { newEventId, newId } from "../contracts.js";
 import { appendNative } from "./native.js";
-import { cliVersion, killProcessTree, resolveCliCommand } from "./cli.js";
+import { cliVersion, killProcessTree, spawnCliHidden } from "./cli.js";
 const DRIVER_KIND = "codex";
 // catalog ported from upstream packages/contracts/src/model.ts
 const MODELS = {
@@ -63,14 +62,11 @@ export const CodexDriver = {
             // the CLI owns its own ChatGPT login; a leaked API key silently flips
             // billing to pay-as-you-go (agentcal)
             delete env.OPENAI_API_KEY;
-            const { command: cliCommand, args: cliPrefix, env: cliEnv } = resolveCliCommand(config.cli);
-            const child = spawn(cliCommand, [...cliPrefix, "app-server"], {
+            const child = spawnCliHidden(config.cli, ["app-server"], {
                 cwd: turn.cwd ?? homedir(),
-                env: { ...env, ...cliEnv },
+                env,
                 stdio: ["pipe", "pipe", "pipe"],
                 detached: true,
-                // GUI host: don't flash a console window for the agent CLI
-                windowsHide: true,
             });
             const state = { settled: false, lastText: "" };
             const asks = new Map();

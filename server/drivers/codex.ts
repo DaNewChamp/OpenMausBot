@@ -9,7 +9,6 @@
 //
 // resumeCursor is the codex thread id; a later turn tries thread/resume
 // and falls back to a fresh thread/start.
-import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 
 import type {
@@ -23,7 +22,7 @@ import type {
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { appendNative } from "./native.ts";
-import { cliVersion, killProcessTree, resolveCliCommand } from "./cli.ts";
+import { cliVersion, killProcessTree, spawnCliHidden } from "./cli.ts";
 
 const DRIVER_KIND = "codex";
 
@@ -92,14 +91,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // billing to pay-as-you-go (agentcal)
       delete env.OPENAI_API_KEY;
 
-      const { command: cliCommand, args: cliPrefix, env: cliEnv } = resolveCliCommand(config.cli);
-      const child = spawn(cliCommand, [...cliPrefix, "app-server"], {
+      const child = spawnCliHidden(config.cli, ["app-server"], {
         cwd: turn.cwd ?? homedir(),
-        env: { ...env, ...cliEnv },
+        env,
         stdio: ["pipe", "pipe", "pipe"],
         detached: true,
-        // GUI host: don't flash a console window for the agent CLI
-        windowsHide: true,
       });
 
       const state = { settled: false, lastText: "" };

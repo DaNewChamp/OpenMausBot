@@ -10,9 +10,10 @@
 //
 // All helpers are async (or spawn async children) — nothing here blocks
 // the harness event loop.
-import { execFile, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { execFile, spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 const IS_WIN = process.platform === "win32";
 const SHIM_RE = /\.(cmd|bat)$/i;
 // `where` results don't change often; cache per CLI so per-turn spawns
@@ -142,4 +143,89 @@ export function killProcessTree(pid) {
             /* already gone */
         }
     }
+}
+// PowerShell wrapper that runs a CLI with a hidden console. windowsHide on
+// the direct spawn would give the CLI NO console — then every console-app
+// it spawns (cmd.exe for device-id probes, MCP servers like cua-driver.exe)
+// would create its own VISIBLE console window. A hidden console instead is
+// inherited by the whole subtree, so nothing ever flashes. Args travel in a
+// JSON file, so there is no cmd/PowerShell quoting hazard.
+const PS_HIDDEN_WRAPPER = `param([string]$Cli, [string]$ArgsFile)
+$ErrorActionPreference = 'Stop'
+$ArgList = @(Get-Content -Raw -LiteralPath $ArgsFile | ConvertFrom-Json)
+& $Cli @ArgList
+exit $LASTEXITCODE
+`;
+// PowerShell 5.1 (built into Windows) mangles native args that contain
+// embedded quotes — fatal for --mcp-config JSON. PowerShell 7 (pwsh)
+// passes argv correctly, so prefer it and fall back to a plain
+// windowsHide spawn (direct child hidden; grandchildren may flash).
+function resolvePwsh() {
+    const candidates = [
+        join(process.env.ProgramFiles ?? "C:\\Program Files", "PowerShell", "7", "pwsh.exe"),
+        ...(process.env.ProgramW6432 ? [join(process.env.ProgramW6432, "PowerShell", "7", "pwsh.exe")] : []),
+    ];
+    for (const c of candidates) {
+        if (existsSync(c))
+            return c;
+    }
+    return null;
+}
+/**
+ * Spawn a CLI so that no console window ever appears on Windows — including
+ * for anything the CLI itself spawns. POSIX: plain spawn (no-op).
+ * Callers pass stdio pipes (["pipe","pipe","pipe"]) and get a child with
+ * live stdout/stderr streams.
+ */
+export function spawnCliHidden(cli, args, opts) {
+    const { command, args: prefix, env: runEnv } = resolveCliCommand(cli);
+    if (!IS_WIN) {
+        return spawn(command, [...prefix, ...args], opts);
+    }
+    // `detached` is a POSIX-only need here (killProcessTree uses the process
+    // group). On Windows it maps to DETACHED_PROCESS — the child gets NO
+    // console, and pwsh then exits 0 immediately without running the script
+    // or writing a byte, which surfaces as "cli exited 0 before result".
+    // Windows reaps the tree with taskkill /T /F, so drop the flag.
+    const { detached: _detached, ...winOpts } = opts;
+    const pwsh = resolvePwsh();
+    if (!pwsh) {
+        // no pwsh: plain spawn with the direct child hidden (grandchildren may
+        // flash their own consoles — acceptable degradation)
+        return spawn(command, [...prefix, ...args], {
+            ...winOpts,
+            env: { ...opts.env, ...runEnv },
+            windowsHide: true,
+        });
+    }
+    // NOTE: no windowsHide here — PowerShell must keep a (hidden) console so
+    // the CLI and its console descendants attach to it instead of flashing.
+    const dir = mkdtempSync(join(tmpdir(), "omb-spawn-"));
+    const argsFile = join(dir, "args.json");
+    const wrapper = join(dir, "wrap.ps1");
+    writeFileSync(argsFile, JSON.stringify([...prefix, ...args]));
+    writeFileSync(wrapper, PS_HIDDEN_WRAPPER);
+    const child = spawn(pwsh, [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-WindowStyle",
+        "Hidden",
+        "-File",
+        wrapper,
+        "-Cli",
+        command,
+        "-ArgsFile",
+        argsFile,
+    ], { ...winOpts, env: { ...opts.env, ...runEnv } });
+    child.once("close", () => {
+        try {
+            rmSync(dir, { recursive: true, force: true });
+        }
+        catch {
+            /* best-effort cleanup */
+        }
+    });
+    return child;
 }
