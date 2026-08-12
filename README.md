@@ -63,7 +63,7 @@ providers dimmed with the reason. Switch a bot's model mid-conversation.
 ### 🖥️ Every bot gets a computer
 
 Open the Computer panel and the bot's cloud desktop spins up on its own — live screen preview while it
-works, "Open desktop" to take over in your browser, or point the bot at *this Mac* instead.
+works, "Open desktop" to take over in your browser, or point the bot at *this computer* instead.
 
 <img src="docs/screenshots/computer-panel.png" alt="Computer panel with live screen preview" width="100%">
 
@@ -134,7 +134,7 @@ flowchart LR
         REG[Driver registry] --> BUS[Event bus → SSE]
         BROKER[Permission broker]
     end
-    subgraph agents ["Agents on your Mac"]
+    subgraph agents ["Agents on your machine"]
         CL[claude CLI]
         CX[codex CLI]
     end
@@ -152,12 +152,13 @@ flowchart LR
 | Harness | `server/harness/` | Registry (configs → live instances) and the fan-in event bus every client folds. |
 | API | `server/index.ts` | Bots, turns, approvals, model catalog, computer lifecycle, connectors, config — HTTP + SSE. |
 | App | `src/` | The chat shell. Server-backed store, one reducer, zero client-side transports. |
-| Desktop | `electron/` | macOS shell: dictation helper (SFSpeechRecognizer), local screen capture, CUA bridge. |
+| Desktop | `electron/` | Desktop shell: macOS dictation helper (SFSpeechRecognizer), local screen capture, CUA bridge. |
 
 ## Quick start
 
-**Easiest:** [download the latest .dmg](https://github.com/milind-soni/openmausbot-releases/releases/latest),
-drag it to Applications, open it. The harness server is embedded — no setup.
+**Easiest:** [download the latest release](https://github.com/milind-soni/openmausbot-releases/releases/latest)
+— `.dmg` for macOS (drag to Applications) or `.exe` for Windows (NSIS installer). The harness server is
+embedded — no setup.
 
 **From source:**
 
@@ -170,9 +171,14 @@ pnpm dev           # app → http://127.0.0.1:5199
 pnpm dev:desktop   # or the Electron shell
 ```
 
-Requirements: **macOS**, **Node 24+**, **pnpm**, and at least one agent CLI — [`claude`](https://claude.com/claude-code)
+Requirements: **macOS or Windows**, **Node 24+**, **pnpm**, and at least one agent CLI — [`claude`](https://claude.com/claude-code)
 or [`codex`](https://github.com/openai/codex) — installed and logged in. They appear in the model picker
 automatically.
+
+**Platform notes:** computer use resolves the `cua-driver` binary automatically — the CuaDriver app
+(macOS) or the trycua Cua app / `cua-driver.exe` on PATH (Windows) — and reuses a running daemon when one
+is up. Native dictation is macOS-only (Swift/SFSpeechRecognizer); the composer mic button is hidden
+elsewhere. Windows packaging: `pnpm package:win`.
 
 Optional, pasted once in **App Settings** (gear in the sidebar footer):
 
@@ -190,8 +196,9 @@ pnpm build         # typecheck + production build
 ## Status
 
 Early but real — the loop works end to end: message → agent → streamed reply → tools → approvals →
-computer use. Rough edges to expect: routines (scheduled tasks) are a placeholder, sidebar sections aren't
-built yet, and Windows/Linux shells haven't been attempted (the harness itself is portable Node).
+computer use, on macOS and Windows. Rough edges to expect: routines (scheduled tasks) are a placeholder,
+sidebar sections aren't built yet, native dictation is macOS-only, and Linux packaging hasn't been
+attempted (the harness itself is portable Node).
 
 Contributions welcome — the driver SPI in [`server/contracts.ts`](server/contracts.ts) is deliberately
 small; adding a provider is one file in [`server/drivers/`](server/drivers/) plus a one-line registration.

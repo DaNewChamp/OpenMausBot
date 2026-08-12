@@ -4,6 +4,8 @@ export {};
 declare global {
   interface Window {
     ogb?: {
+      /** process.platform of the desktop host: darwin | win32 | linux. */
+      platform: string;
       screenFrame(): Promise<string | null>;
       speechStart(): Promise<void>;
       speechStop(): Promise<void>;

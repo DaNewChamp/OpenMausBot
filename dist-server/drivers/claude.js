@@ -9,7 +9,6 @@
 //   - the bot's cloud computer (box.ascii.dev) via server/computer-proxy.ts
 //     — screenshot/exec/open_url, the CUA-on-the-box bridge
 import { spawn } from "node:child_process";
-import { execFile } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { homedir } from "node:os";
@@ -17,6 +16,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DATA_DIR } from "../config.js";
 import { newEventId, newId } from "../contracts.js";
+import { cliExec, cliSpawnShell, cliVersion, resolveCli } from "./cli.js";
 import { appendNative } from "./native.js";
 const DRIVER_KIND = "claudeAgent";
 // model catalog ported from upstream packages/contracts/src/model.ts
@@ -272,7 +272,8 @@ export const ClaudeDriver = {
             delete env.ANTHROPIC_API_KEY;
             delete env.CLAUDECODE;
             delete env.CLAUDE_CODE_ENTRYPOINT;
-            const child = spawn(config.cli, args, {
+            const child = spawn(resolveCli(config.cli), args, {
+                ...cliSpawnShell(config.cli),
                 cwd: turn.cwd ?? homedir(),
                 env,
                 stdio: ["pipe", "pipe", "pipe"],
@@ -391,9 +392,7 @@ export const ClaudeDriver = {
             return { turnId };
         };
         const snapshot = async () => {
-            const version = await new Promise((resolve) => {
-                execFile(config.cli, ["--version"], { timeout: 8000 }, (err, stdout) => resolve(err ? null : stdout.trim()));
-            });
+            const version = await cliVersion(config.cli);
             if (!version)
                 return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
             const authenticated = existsSync(join(homedir(), ".claude", ".credentials.json"));
@@ -430,9 +429,12 @@ export const ClaudeDriver = {
                     return () => listeners.delete(listener);
                 },
             },
-            generateText: (prompt) => new Promise((resolve, reject) => {
-                execFile(config.cli, ["-p", prompt, "--model", "claude-haiku-4-5", "--output-format", "text"], { timeout: 60_000, env: { ...process.env } }, (err, stdout) => (err ? reject(err) : resolve(stdout.trim())));
-            }),
+            generateText: async (prompt) => {
+                const res = await cliExec(config.cli, ["-p", prompt, "--model", "claude-haiku-4-5", "--output-format", "text"], { timeout: 60_000, env: { ...process.env } });
+                if (!res.ok)
+                    throw new Error(res.stderr || `\`${config.cli}\` failed`);
+                return res.stdout.trim();
+            },
             dispose: async () => {
                 for (const { stop } of active.values())
                     stop();

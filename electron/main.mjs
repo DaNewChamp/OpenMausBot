@@ -11,6 +11,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 let SERVER_PORT = 8799;
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
+const IS_MAC = process.platform === "darwin";
 
 // Packaged: the harness server ships in Resources (compiled JS, zero deps)
 // and runs on Electron's own Node via utilityProcess. It serves the built
@@ -78,7 +79,7 @@ async function startServerPackaged() {
 const ERROR_PAGE =
   "data:text/html;charset=utf-8," +
   encodeURIComponent(
-    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen OpenMausBot — if it keeps happening, restart your Mac.</p></div></body>`,
+    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen OpenMausBot — if it keeps happening, restart your computer.</p></div></body>`,
   );
 
 function createWindow() {
@@ -89,8 +90,9 @@ function createWindow() {
     minHeight: 600,
     icon: APP_ICON,
     backgroundColor: "#070707",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 16 },
+    // hiddenInset + traffic lights are macOS-only window chrome; other
+    // platforms get the default frame
+    ...(IS_MAC ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 16 } } : {}),
     webPreferences: {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.cjs"),
@@ -109,8 +111,8 @@ function createWindow() {
   }
 }
 
-// "This Mac" screen preview — served from the main process so the Screen
-// Recording permission prompt attributes to the app, never the server
+// "This computer" screen preview — served from the main process so the
+// Screen Recording permission prompt attributes to the app, never the server
 ipcMain.handle("screen:frame", async () => {
   const sources = await desktopCapturer.getSources({
     types: ["screen"],
@@ -119,14 +121,15 @@ ipcMain.handle("screen:frame", async () => {
   return sources[0]?.thumbnail.toDataURL() ?? null;
 });
 
-// Onboarding permission checks. Status reads are free; the mic request
-// pops the real TCC prompt attributed to the app. Screen Recording has no
-// programmatic request — the first desktopCapturer call prompts.
+// Onboarding permission checks. macOS: TCC prompts attributed to the app.
+// Windows has no TCC — devices are gated by Windows itself at first use, so
+// the checks report the OS state and the request handlers are no-ops.
 ipcMain.handle("perm:status", () => ({
   mic: systemPreferences.getMediaAccessStatus?.("microphone") ?? "unknown",
   screen: systemPreferences.getMediaAccessStatus?.("screen") ?? "unknown",
 }));
 ipcMain.handle("perm:request-mic", async () => {
+  if (!IS_MAC) return true; // no programmatic prompt on Windows/Linux
   try {
     return await systemPreferences.askForMediaAccess("microphone");
   } catch {
@@ -137,37 +140,51 @@ ipcMain.handle("perm:request-mic", async () => {
 // registers a capture attempt, and Electron's thumbnail API doesn't always
 // register one on newer macOS. A child `screencapture` probe inherits the
 // app's TCC identity — it registers OpenMausBot in the pane and triggers
-// the system dialog on first use.
+// the system dialog on first use. macOS-only (CGRequestScreenCaptureAccess).
 const PERM_HELPER = app.isPackaged
   ? path.join(process.resourcesPath, "perm-helper")
   : path.join(__dirname, "resources", "perm-helper");
 ipcMain.handle("perm:request-screen", async () => {
-  // CGRequestScreenCaptureAccess via the helper — registers the app in the
-  // pane and shows the system dialog; child inherits the app's TCC identity
-  await new Promise((resolve) => {
-    execFile(PERM_HELPER, ["request"], { timeout: 15_000 }, () => resolve());
-  });
+  if (IS_MAC) {
+    await new Promise((resolve) => {
+      execFile(PERM_HELPER, ["request"], { timeout: 15_000 }, () => resolve());
+    });
+  }
   return systemPreferences.getMediaAccessStatus?.("screen") ?? "unknown";
 });
 
 // macOS never re-prompts a denied permission — the only path is System
-// Settings; deep-link straight to the right privacy pane.
+// Settings; deep-link straight to the right privacy pane. Windows deep-links
+// into the corresponding Settings page instead.
 ipcMain.handle("perm:open-settings", (_event, pane) => {
-  const panes = {
-    mic: "Privacy_Microphone",
-    screen: "Privacy_ScreenCapture",
-    speech: "Privacy_SpeechRecognition",
+  if (IS_MAC) {
+    const panes = {
+      mic: "Privacy_Microphone",
+      screen: "Privacy_ScreenCapture",
+      speech: "Privacy_SpeechRecognition",
+    };
+    return shell.openExternal(
+      `x-apple.systempreferences:com.apple.preference.security?${panes[pane] ?? "Privacy"}`,
+    );
+  }
+  const winPanes = {
+    mic: "ms-settings:privacy-microphone",
+    screen: "ms-settings:privacy-broadcasting",
+    speech: "ms-settings:privacy-speech",
   };
-  return shell.openExternal(
-    `x-apple.systempreferences:com.apple.preference.security?${panes[pane] ?? "Privacy"}`,
-  );
+  return shell.openExternal(winPanes[pane] ?? "ms-settings:privacy");
 });
 
+// Native dictation is macOS-only (Swift + SFSpeechRecognizer); the IPC
+// surface stays registered so the renderer's platform flag can rely on it.
 ipcMain.handle("speech:start", (event) => {
+  if (!IS_MAC) return;
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win) startSpeech(win);
 });
-ipcMain.handle("speech:stop", () => stopSpeech());
+ipcMain.handle("speech:stop", () => {
+  if (IS_MAC) stopSpeech();
+});
 
 app.whenReady().then(async () => {
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);

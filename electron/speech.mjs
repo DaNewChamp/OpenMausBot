@@ -27,6 +27,7 @@ function ensureBuilt() {
 }
 
 export function startSpeech(win) {
+  if (process.platform !== "darwin") return; // Swift/SFSpeechRecognizer helper is macOS-only
   stopSpeech();
   ensureBuilt();
   const proc = spawn(BIN, [], { stdio: ["ignore", "pipe", "pipe"] });

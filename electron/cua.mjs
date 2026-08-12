@@ -20,12 +20,46 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
-const INSTALLED_DRIVER = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
+const HOST_BUNDLE_ID = "com.openmausbot.app";
+const IS_WIN = process.platform === "win32";
+
+// Driver locations outside the app bundle. macOS ships CuaDriver.app; on
+// Windows the trycua Cua app installs under %LOCALAPPDATA%\Programs, and
+// cua-driver.exe may also be on PATH.
 const STANDALONE_SOCKET = path.join(
   app.getPath("home"),
   "Library/Caches/cua-driver/cua-driver.sock",
 );
-const HOST_BUNDLE_ID = "com.openmausbot.app";
+const INSTALLED_DRIVER_CANDIDATES = IS_WIN
+  ? [
+      path.join(
+        process.env.LOCALAPPDATA ?? path.join(app.getPath("home"), "AppData", "Local"),
+        "Programs",
+        "Cua",
+        "cua-driver",
+        "bin",
+        "cua-driver.exe",
+      ),
+      path.join(
+        process.env.LOCALAPPDATA ?? path.join(app.getPath("home"), "AppData", "Local"),
+        "Programs",
+        "CuaDriver",
+        "cua-driver.exe",
+      ),
+      path.join(process.env.PROGRAMFILES ?? "C:\\Program Files", "CuaDriver", "cua-driver.exe"),
+    ]
+  : ["/Applications/CuaDriver.app/Contents/MacOS/cua-driver"];
+
+function driverOnPath() {
+  const find = IS_WIN ? "where" : "which";
+  try {
+    const out = spawnSync(find, ["cua-driver"], { encoding: "utf8", timeout: 5000 });
+    if (out.status === 0 && out.stdout) return out.stdout.split(/\r?\n/)[0].trim();
+  } catch {
+    /* no PATH lookup available */
+  }
+  return null;
+}
 
 let embeddedHost = null; // EmbeddedCuaDriverHost | null
 let connection = null; // descriptor exposed to harness + renderer
@@ -36,8 +70,10 @@ export function resolveDriverBinary() {
     const bundled = path.join(process.resourcesPath, "cua-driver");
     if (fs.existsSync(bundled)) return bundled;
   }
-  if (fs.existsSync(INSTALLED_DRIVER)) return INSTALLED_DRIVER;
-  return null;
+  for (const candidate of INSTALLED_DRIVER_CANDIDATES) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return driverOnPath();
 }
 
 function socketAlive(sockPath) {
@@ -69,6 +105,22 @@ async function startEmbedded(binary) {
   };
 }
 
+async function daemonRunning() {
+  // On Windows the daemon listens on a named pipe that a unix-style socket
+  // connect can't probe; `cua-driver status` reports liveness cross-platform.
+  if (IS_WIN) {
+    const binary = resolveDriverBinary();
+    if (!binary) return false;
+    try {
+      const out = spawnSync(binary, ["status"], { encoding: "utf8", timeout: 5000 });
+      return out.status === 0 && /daemon is running/i.test(out.stdout);
+    } catch {
+      return false;
+    }
+  }
+  return socketAlive(STANDALONE_SOCKET);
+}
+
 export async function startCua() {
   const binary = resolveDriverBinary();
   if (!binary) {
@@ -88,11 +140,13 @@ export async function startCua() {
         reason: `embedded host failed: ${err?.message ?? err}`,
       };
     }
-  } else if (await socketAlive(STANDALONE_SOCKET)) {
-    // Dev machine with CuaDriver.app's daemon already running.
+  } else if (await daemonRunning()) {
+    // Dev machine with a cua-driver daemon already running (CuaDriver.app on
+    // macOS, the trycua Cua app / `cua-driver serve` on Windows). The MCP
+    // proxy discovers the daemon itself, so no socket path is needed.
     connection = {
       mode: "standalone",
-      socketPath: STANDALONE_SOCKET,
+      ...(IS_WIN ? {} : { socketPath: STANDALONE_SOCKET }),
       mcpCommand: binary,
       mcpArgs: ["mcp"],
       mcpEnv: {},

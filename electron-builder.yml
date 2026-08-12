@@ -25,12 +25,16 @@ extraResources:
     to: ui
   - from: dist-server
     to: server
-  - from: electron/resources/speech-helper
-    to: speech-helper
-  - from: electron/resources/perm-helper
-    to: perm-helper
 
+# macOS-only helpers (Swift binaries built by pnpm build:speech/build:perm);
+# Windows/Linux builds don't ship them — dictation is macOS-only and the
+# screen-permission helper is CGRequestScreenCaptureAccess (TCC).
 mac:
+  extraResources:
+    - from: electron/resources/speech-helper
+      to: speech-helper
+    - from: electron/resources/perm-helper
+      to: perm-helper
   target:
     - target: dmg
       arch: arm64
@@ -52,3 +56,10 @@ mac:
 dmg:
   sign: true
   artifactName: OpenMausBot-${version}.dmg
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico

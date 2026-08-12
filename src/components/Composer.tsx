@@ -9,6 +9,9 @@ export function Composer({ bot }: { bot: Bot }) {
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
+  // native dictation (Swift/SFSpeechRecognizer) is macOS-only; hide the mic
+  // button elsewhere (browser dev keeps it — it explains how to run the app)
+  const showMic = !window.ogb || window.ogb.platform === "darwin";
   // what was typed before the mic went on — partials append after it
   const baseText = useRef("");
 
@@ -94,7 +97,7 @@ export function Composer({ bot }: { bot: Bot }) {
           >
             <Square size={14} className="fill-current" />
           </button>
-        ) : (
+        ) : showMic && (
           <button
             onClick={toggleMic}
             className={cn(

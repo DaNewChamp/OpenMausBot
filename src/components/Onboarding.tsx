@@ -15,6 +15,9 @@ type InstanceRow = {
 };
 
 const isElectron = navigator.userAgent.includes("Electron");
+// TCC-style permission prompts only exist on macOS; Windows/Linux gate
+// devices at first use, so the onboarding step collapses to a note there.
+const isMac = !window.ogb || window.ogb.platform === "darwin";
 
 function StatusRow({
   ok,
@@ -177,72 +180,79 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <p className="mt-1 text-[13.5px] text-ink-secondary">
               Optional, and only ever used when you ask for the feature.
             </p>
-            <div className="mt-4 flex flex-col gap-2.5">
-              <div className="flex items-center justify-between gap-3 rounded-xl bg-card p-3.5">
-                <div className="flex items-start gap-3">
-                  <Mic size={18} className="mt-0.5 shrink-0 text-ink-secondary" />
-                  <div>
-                    <div className="text-[14px] font-medium text-ink">Microphone & speech</div>
-                    <div className="mt-0.5 text-[12.5px] text-ink-secondary">
-                      Voice dictation into the composer, transcribed on-device.
+            {isMac ? (
+              <div className="mt-4 flex flex-col gap-2.5">
+                <div className="flex items-center justify-between gap-3 rounded-xl bg-card p-3.5">
+                  <div className="flex items-start gap-3">
+                    <Mic size={18} className="mt-0.5 shrink-0 text-ink-secondary" />
+                    <div>
+                      <div className="text-[14px] font-medium text-ink">Microphone & speech</div>
+                      <div className="mt-0.5 text-[12.5px] text-ink-secondary">
+                        Voice dictation into the composer, transcribed on-device.
+                      </div>
                     </div>
                   </div>
+                  {perms?.mic === "granted" ? (
+                    <Check size={16} className="shrink-0 text-[#38d591]" />
+                  ) : perms?.mic === "denied" || perms?.mic === "restricted" ? (
+                    <button
+                      onClick={() => window.ogb?.permOpenSettings?.("mic")}
+                      className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
+                    >
+                      Open Settings
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() =>
+                        window.ogb?.permRequestMic?.().then(() => window.ogb?.permStatus?.().then(setPerms))
+                      }
+                      className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
+                    >
+                      Enable
+                    </button>
+                  )}
                 </div>
-                {perms?.mic === "granted" ? (
-                  <Check size={16} className="shrink-0 text-[#38d591]" />
-                ) : perms?.mic === "denied" || perms?.mic === "restricted" ? (
-                  <button
-                    onClick={() => window.ogb?.permOpenSettings?.("mic")}
-                    className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
-                  >
-                    Open Settings
-                  </button>
-                ) : (
-                  <button
-                    onClick={() =>
-                      window.ogb?.permRequestMic?.().then(() => window.ogb?.permStatus?.().then(setPerms))
-                    }
-                    className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
-                  >
-                    Enable
-                  </button>
-                )}
-              </div>
-              <div className="flex items-center justify-between gap-3 rounded-xl bg-card p-3.5">
-                <div className="flex items-start gap-3">
-                  <Monitor size={18} className="mt-0.5 shrink-0 text-ink-secondary" />
-                  <div>
-                    <div className="text-[14px] font-medium text-ink">Screen preview</div>
-                    <div className="mt-0.5 text-[12.5px] text-ink-secondary">
-                      Shows this Mac&rsquo;s screen in the Computer panel when a bot works locally.
+                <div className="flex items-center justify-between gap-3 rounded-xl bg-card p-3.5">
+                  <div className="flex items-start gap-3">
+                    <Monitor size={18} className="mt-0.5 shrink-0 text-ink-secondary" />
+                    <div>
+                      <div className="text-[14px] font-medium text-ink">Screen preview</div>
+                      <div className="mt-0.5 text-[12.5px] text-ink-secondary">
+                        Shows this computer&rsquo;s screen in the Computer panel when a bot works locally.
+                      </div>
                     </div>
                   </div>
+                  {perms?.screen === "granted" ? (
+                    <Check size={16} className="shrink-0 text-[#38d591]" />
+                  ) : perms?.screen === "denied" || perms?.screen === "restricted" ? (
+                    <button
+                      onClick={() => window.ogb?.permOpenSettings?.("screen")}
+                      className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
+                    >
+                      Open Settings
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() =>
+                        navigator.mediaDevices
+                          .getDisplayMedia({ video: true })
+                          .then((stream) => stream.getTracks().forEach((t) => t.stop()))
+                          .catch(() => {})
+                          .then(() => window.ogb?.permStatus?.().then(setPerms))
+                      }
+                      className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
+                    >
+                      Enable
+                    </button>
+                  )}
                 </div>
-                {perms?.screen === "granted" ? (
-                  <Check size={16} className="shrink-0 text-[#38d591]" />
-                ) : perms?.screen === "denied" || perms?.screen === "restricted" ? (
-                  <button
-                    onClick={() => window.ogb?.permOpenSettings?.("screen")}
-                    className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
-                  >
-                    Open Settings
-                  </button>
-                ) : (
-                  <button
-                    onClick={() =>
-                      navigator.mediaDevices
-                        .getDisplayMedia({ video: true })
-                        .then((stream) => stream.getTracks().forEach((t) => t.stop()))
-                        .catch(() => {})
-                        .then(() => window.ogb?.permStatus?.().then(setPerms))
-                    }
-                    className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
-                  >
-                    Enable
-                  </button>
-                )}
               </div>
-            </div>
+            ) : (
+              <div className="mt-4 rounded-xl bg-card p-3.5 text-[13px] leading-relaxed text-ink-secondary">
+                On this OS, permissions are handled by the system — you&rsquo;ll be
+                prompted the first time a bot needs the microphone or your screen.
+              </div>
+            )}
             <button onClick={finish} className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white">
               Start using OpenMausBot
             </button>

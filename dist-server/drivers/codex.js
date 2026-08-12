@@ -9,10 +9,11 @@
 //
 // resumeCursor is the codex thread id; a later turn tries thread/resume
 // and falls back to a fresh thread/start.
-import { spawn, execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { newEventId, newId } from "../contracts.js";
 import { appendNative } from "./native.js";
+import { cliSpawnShell, cliVersion, resolveCli } from "./cli.js";
 const DRIVER_KIND = "codex";
 // catalog ported from upstream packages/contracts/src/model.ts
 const MODELS = {
@@ -62,7 +63,8 @@ export const CodexDriver = {
             // the CLI owns its own ChatGPT login; a leaked API key silently flips
             // billing to pay-as-you-go (agentcal)
             delete env.OPENAI_API_KEY;
-            const child = spawn(config.cli, ["app-server"], {
+            const child = spawn(resolveCli(config.cli), ["app-server"], {
+                ...cliSpawnShell(config.cli),
                 cwd: turn.cwd ?? homedir(),
                 env,
                 stdio: ["pipe", "pipe", "pipe"],
@@ -328,9 +330,7 @@ export const CodexDriver = {
             return { turnId };
         };
         const snapshot = async () => {
-            const version = await new Promise((resolve) => {
-                execFile(config.cli, ["--version"], { timeout: 8000 }, (err, stdout) => resolve(err ? null : stdout.trim()));
-            });
+            const version = await cliVersion(config.cli);
             if (!version)
                 return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
             return { state: "available", version };
