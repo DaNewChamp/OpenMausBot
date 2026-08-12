@@ -69,6 +69,8 @@ export const CodexDriver = {
                 env: { ...env, ...cliEnv },
                 stdio: ["pipe", "pipe", "pipe"],
                 detached: true,
+                // GUI host: don't flash a console window for the agent CLI
+                windowsHide: true,
             });
             const state = { settled: false, lastText: "" };
             const asks = new Map();

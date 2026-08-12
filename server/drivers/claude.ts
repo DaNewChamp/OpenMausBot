@@ -320,6 +320,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         env: { ...env, ...cliEnv },
         stdio: ["pipe", "pipe", "pipe"],
         detached: true, // own process group: killing -pid reaps child MCP servers
+        // GUI host: don't flash a console window for the agent CLI
+        windowsHide: true,
       });
 
       let settled = false;
