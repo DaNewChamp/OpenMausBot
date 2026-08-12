@@ -54,7 +54,12 @@ function driverOnPath() {
   const find = IS_WIN ? "where" : "which";
   try {
     const out = spawnSync(find, ["cua-driver"], { encoding: "utf8", timeout: 5000, windowsHide: true });
-    if (out.status === 0 && out.stdout) return out.stdout.split(/\r?\n/)[0].trim();
+    if (out.status === 0 && out.stdout) {
+      const hits = out.stdout.split(/\r?\n/).map((h) => h.trim()).filter(Boolean);
+      // the resolved path becomes mcpCommand in cua-connection.json, spawned
+      // by the agent CLI — a .cmd/.bat shim is not directly spawnable there
+      return IS_WIN ? (hits.find((h) => /\.exe$/i.test(h)) ?? null) : hits[0];
+    }
   } catch {
     /* no PATH lookup available */
   }

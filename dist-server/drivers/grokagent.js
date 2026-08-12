@@ -23,10 +23,10 @@
 // as ordinary session/update notifications, so updates are double-gated:
 // nothing is emitted before the prompt is sent, and anything flagged
 // `_meta.isReplay` is dropped. Verified against grok 1.0.0.
-import { spawn, execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { cliVersion, killProcessTree, spawnCliHidden } from "./cli.js";
 import { newEventId, newId } from "../contracts.js";
 import { appendNative } from "./native.js";
 const DRIVER_KIND = "grokAgent";
@@ -95,7 +95,7 @@ export const GrokAgentDriver = {
                 "agent",
                 "stdio",
             ];
-            const child = spawn(config.cli, args, {
+            const child = spawnCliHidden(config.cli, args, {
                 cwd,
                 env,
                 stdio: ["pipe", "pipe", "pipe"],
@@ -129,17 +129,7 @@ export const GrokAgentDriver = {
                 rpcPending.set(id, { resolve, reject, timer });
                 send({ jsonrpc: "2.0", id, method, params });
             });
-            const stop = () => {
-                try {
-                    process.kill(-child.pid, "SIGTERM");
-                }
-                catch {
-                    try {
-                        child.kill("SIGTERM");
-                    }
-                    catch { }
-                }
-            };
+            const stop = () => killProcessTree(child.pid);
             const settle = (ok, stopReason) => {
                 if (state.settled)
                     return;
@@ -431,9 +421,7 @@ export const GrokAgentDriver = {
             return { turnId };
         };
         const snapshot = async () => {
-            const version = await new Promise((resolve) => {
-                execFile(config.cli, ["--version"], { timeout: 8000 }, (err, stdout) => resolve(err ? null : stdout.trim()));
-            });
+            const version = await cliVersion(config.cli);
             if (!version)
                 return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
             const authenticated = existsSync(join(homedir(), ".grok", "auth.json"));

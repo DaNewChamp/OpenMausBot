@@ -171,7 +171,8 @@ ipcMain.handle("perm:open-settings", (_event, pane) => {
   }
   const winPanes = {
     mic: "ms-settings:privacy-microphone",
-    screen: "ms-settings:privacy-broadcasting",
+    // graphics-capture pane — privacy-broadcasting is game broadcasting
+    screen: "ms-settings:privacy-graphicscaptureprogrammatic",
     speech: "ms-settings:privacy-speech",
   };
   return shell.openExternal(winPanes[pane] ?? "ms-settings:privacy");
