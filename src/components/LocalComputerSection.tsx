@@ -197,7 +197,7 @@ export function LocalComputerSection() {
               unsafe
                 ? "Recreate the computer with local-only ports"
                 : status?.container === "stopped"
-                  ? "Start the computer again"
+                  ? "Recreate the computer (this image can't resume)"
                   : "Start the computer"
             }
             done={ready}

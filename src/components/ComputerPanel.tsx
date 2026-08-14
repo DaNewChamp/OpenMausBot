@@ -33,6 +33,8 @@ async function api(path: string, init?: RequestInit): Promise<any> {
 
 type Phase =
   | "checking"
+  | "vm"
+  | "vm-unready"
   | "unconfigured"
   | "starting"
   | "ready"
@@ -75,6 +77,13 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const localAvailable = capabilities.localComputer.available;
   const [phase, setPhase] = useState<Phase>("checking");
   const [boxState, setBoxState] = useState<string | null>(null);
+  const [vmStatus, setVmStatus] = useState<{
+    container?: string;
+    runtime?: string | null;
+    daemonUp?: boolean;
+    image?: boolean;
+    network?: string;
+  } | null>(null);
   const [polledFrame, setPolledFrame] = useState<{ png: string; mime: string } | null>(null);
   const [localFrame, setLocalFrame] = useState<string | null>(null);
   const [pending, setPending] = useState<"join" | "sleep" | null>(null);
@@ -113,6 +122,16 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     setError(null);
     if (bot.computer === "off") {
       setPhase("off");
+      return;
+    }
+    if (bot.computer === "vm") {
+      api("/api/local-computer")
+        .then((v: { container?: string; runtime?: string | null; daemonUp?: boolean; image?: boolean; network?: string }) => {
+          if (!alive) return;
+          setVmStatus(v);
+          setPhase(v.container === "running" && v.network !== "unsafe" ? "vm" : "vm-unready");
+        })
+        .catch(() => alive && setPhase("vm-unready"));
       return;
     }
     if (bot.computer === "local") {
@@ -228,8 +247,20 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       .finally(() => setPending(null));
   };
 
+  const vmMissing = !vmStatus?.runtime
+    ? "no container runtime is installed yet"
+    : !vmStatus.daemonUp
+      ? `${vmStatus.runtime} isn't running`
+      : !vmStatus.image
+        ? "the desktop image hasn't been downloaded"
+        : vmStatus.network === "unsafe"
+          ? "its desktop ports are open beyond this machine"
+          : "the computer isn't started";
+
   const emptyState: Record<Exclude<Phase, "ready" | "local">, string> = {
     checking: "Checking…",
+    vm: "Your bot's Linux desktop is running",
+    "vm-unready": `Local VM isn't ready — ${vmMissing}`,
     starting: "Starting your bot's computer…",
     unconfigured: "No cloud computer configured",
     "local-unavailable":
@@ -306,6 +337,21 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             {error}
           </div>
         )}
+        {phase === "vm-unready" && (
+          <div className="mt-3 rounded-xl bg-card p-4">
+            <div className="mb-3 text-[13px] leading-relaxed text-ink-secondary">
+              A Local VM is a Linux desktop running on this machine — free, and separate from your own
+              desktop. It needs a one-time setup, and {vmMissing}.
+            </div>
+            <button
+              onClick={() => dispatch({ type: "toggleAppSettings", open: true })}
+              className="rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white hover:brightness-110"
+            >
+              Open Local computer setup
+            </button>
+          </div>
+        )}
+
         {phase === "unconfigured" && (
           <div className="mt-3 rounded-xl bg-card p-4">
             <div className="mb-3 text-[13px] text-ink-secondary">
@@ -357,6 +403,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             {(
               [
                 ["cloud", "Cloud box"],
+                ["vm", "Local VM"],
                 ["local", "This computer"],
                 ["off", "Off"],
               ] as const

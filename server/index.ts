@@ -516,7 +516,31 @@ async function startTurn(
       const mountsComputer =
         instance.adapter.capabilities.computerMcp === true || instance.driverKind === "boxAgent";
       let previewBoxId: string | null = null;
-      if (wants !== "off" && wants !== "local" && box.boxConfigured(cfg)) {
+      // a Linux desktop in a container on this machine: free, disposable,
+      // and driven by exactly the same tools as the cloud box
+      if (wants === "vm" && mountsComputer) {
+        const vm = await containerComputerStatus();
+        if (vm.container === "running" && vm.runtime && vm.network !== "unsafe") {
+          integrations.computer = { kind: "container", container: vm.container_name, runtime: vm.runtime };
+        } else {
+          const why = !vm.runtime
+            ? "no container runtime is installed"
+            : !vm.daemonUp
+              ? `${vm.runtime} isn't running`
+              : !vm.image
+                ? "the desktop image hasn't been downloaded"
+                : vm.network === "unsafe"
+                  ? "its desktop ports are open beyond this machine — recreate it with loopback-only ports"
+                  : "the computer isn't started";
+          const note = store.appendMessage(bot.threadId, {
+            role: "bot",
+            kind: "activity",
+            tool: { name: `no local computer — ${why} (App Settings → Local computer)`, ok: false },
+          });
+          broadcast({ kind: "message", threadId: bot.threadId, message: note });
+        }
+      }
+      if (wants !== "off" && wants !== "local" && wants !== "vm" && box.boxConfigured(cfg)) {
         let b = await box.findBox(cfg, bot.id).catch(() => null);
         // the Computer driver runs ON the box — provision it on first use
         if (!b && instance.driverKind === "boxAgent") {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   CONTAINER,
   IMAGE,
+  computerProxyEnv,
   containerComputerStatus,
   setupCommands,
   type CommandRunner,
@@ -146,5 +147,28 @@ describe("setupCommands", () => {
     expect(setupCommands(null, "win32").install).toBe(
       "winget install -e --id RedHat.Podman-Desktop",
     );
+  });
+});
+
+describe("computerProxyEnv", () => {
+  it("hands the proxy a container when the bot runs on a local VM", () => {
+    expect(computerProxyEnv({ kind: "container", container: CONTAINER, runtime: "podman" })).toEqual({
+      OGB_CONTAINER: CONTAINER,
+      OGB_RUNTIME: "podman",
+    });
+  });
+
+  it("defaults the runtime rather than shipping an empty command", () => {
+    expect(computerProxyEnv({ kind: "container", container: "c" }).OGB_RUNTIME).toBe("docker");
+  });
+
+  it("hands the proxy a box otherwise — the cloud path is unchanged", () => {
+    expect(computerProxyEnv({ boxId: "bx_1", token: "t" })).toEqual({ OGB_BOX_ID: "bx_1", OGB_BOX_TOKEN: "t" });
+  });
+
+  it("never lets box credentials travel with a container turn", () => {
+    const env = computerProxyEnv({ kind: "container", container: "c", runtime: "docker" });
+    expect(env.OGB_BOX_TOKEN).toBeUndefined();
+    expect(env.OGB_BOX_ID).toBeUndefined();
   });
 });

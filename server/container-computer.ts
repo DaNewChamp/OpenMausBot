@@ -235,7 +235,10 @@ export function setupCommands(
     pull: `${runtime} pull ${IMAGE}`,
     // 6080 is the desktop in a browser, 5900 for a native VNC viewer
     run: `${runtime} run -d --name ${CONTAINER} -p 127.0.0.1:6080:6080 -p 127.0.0.1:5900:5900 ${IMAGE}`,
-    start: `${runtime} start ${CONTAINER}`,
+    // NOT `start`: this image leaves an X11 lock behind, so a stopped
+    // container fails to resume with "Xvfb is already running on display
+    // :1" and exits. Recreating is the only reliable way back.
+    start: `${runtime} rm --force ${CONTAINER} && ${runtime} run -d --name ${CONTAINER} -p 127.0.0.1:6080:6080 -p 127.0.0.1:5900:5900 ${IMAGE}`,
     stop: `${runtime} stop ${CONTAINER}`,
     remove:
       runtime === "container"
@@ -243,4 +246,20 @@ export function setupCommands(
         : `${runtime} rm -f ${CONTAINER}`,
     view: "http://localhost:6080/vnc.html",
   };
+}
+
+/** Env for the computer proxy: which transport it should use. Both drivers
+ * mount the same proxy, so this is the only place that decides — and box
+ * credentials must never travel with a container turn. */
+export function computerProxyEnv(computer: {
+  kind?: string;
+  boxId?: string;
+  token?: string;
+  container?: string;
+  runtime?: string;
+}): Record<string, string> {
+  if (computer.kind === "container" && computer.container) {
+    return { OGB_CONTAINER: computer.container, OGB_RUNTIME: computer.runtime ?? "docker" };
+  }
+  return { OGB_BOX_ID: computer.boxId ?? "", OGB_BOX_TOKEN: computer.token ?? "" };
 }
