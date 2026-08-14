@@ -124,8 +124,8 @@ export function CommandLine({ command }: { command: string }) {
 }
 
 export function SettingsModal() {
-  const { dispatch } = useStore();
-  const [section, setSection] = useState<SectionId>("general");
+  const { state, dispatch } = useStore();
+  const [section, setSection] = useState<SectionId>(state.appSettingsSection ?? "general");
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && dispatch({ type: "toggleAppSettings", open: false });

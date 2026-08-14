@@ -171,6 +171,8 @@ interface AppState {
   pluginsOpen: boolean;
   computerOpen: boolean;
   appSettingsOpen: boolean;
+  /** which settings section to land on when it opens */
+  appSettingsSection?: "general" | "connections" | "computer";
   /** latest live frame of a bot's computer, per botId */
   screens: Record<string, { png: string; mime: string }>;
   /** bots whose cloud computer is being provisioned */
@@ -235,7 +237,7 @@ type Action =
   | { type: "toggleSettings"; open?: boolean }
   | { type: "togglePlugins"; open?: boolean }
   | { type: "toggleComputer"; open?: boolean }
-  | { type: "toggleAppSettings"; open?: boolean }
+  | { type: "toggleAppSettings"; open?: boolean; section?: "general" | "connections" | "computer" }
   | {
       type: "updateBot";
       botId: string;
@@ -475,6 +477,7 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         appSettingsOpen: open,
+        appSettingsSection: open ? (action.section ?? state.appSettingsSection) : state.appSettingsSection,
         settingsOpen: open ? false : state.settingsOpen,
         computerOpen: open ? false : state.computerOpen,
         pluginsOpen: open ? false : state.pluginsOpen,

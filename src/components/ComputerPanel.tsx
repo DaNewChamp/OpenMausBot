@@ -29,6 +29,8 @@ async function api(path: string, init?: RequestInit): Promise<any> {
 
 type Phase =
   | "checking"
+  | "vm"
+  | "vm-unready"
   | "unconfigured"
   | "starting"
   | "ready"
@@ -43,6 +45,12 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const localAvailable = capabilities.localComputer.available;
   const [phase, setPhase] = useState<Phase>("checking");
   const [boxState, setBoxState] = useState<string | null>(null);
+  const [vmStatus, setVmStatus] = useState<{
+    container?: string;
+    runtime?: string | null;
+    daemonUp?: boolean;
+    image?: boolean;
+  } | null>(null);
   const [polledFrame, setPolledFrame] = useState<{ png: string; mime: string } | null>(null);
   const [localFrame, setLocalFrame] = useState<string | null>(null);
   const [pending, setPending] = useState<"join" | "sleep" | null>(null);
@@ -64,6 +72,18 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     }
     if (bot.computer === "local") {
       setPhase(capabilitiesReady && localAvailable ? "local" : "local-unavailable");
+      return;
+    }
+    // a local VM is a container on this machine — never provision a paid
+    // cloud box for it, and say plainly when it isn't set up yet
+    if (bot.computer === "vm") {
+      api("/api/local-computer")
+        .then((s: { container?: string; runtime?: string | null; daemonUp?: boolean; image?: boolean }) => {
+          if (!alive) return;
+          setVmStatus(s);
+          setPhase(s.container === "running" ? "vm" : "vm-unready");
+        })
+        .catch(() => alive && setPhase("vm-unready"));
       return;
     }
     if (bot.computer !== "cloud" && !capabilitiesReady) return;
@@ -175,8 +195,17 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       .finally(() => setPending(null));
   };
 
-  const emptyState: Record<Exclude<Phase, "ready" | "local">, string> = {
+  const vmMissing = !vmStatus?.runtime
+    ? "no container runtime is installed yet"
+    : !vmStatus.daemonUp
+      ? `${vmStatus.runtime} isn't running`
+      : !vmStatus.image
+        ? "the desktop image hasn't been downloaded"
+        : "the computer isn't started";
+
+  const emptyState: Record<Exclude<Phase, "ready" | "local" | "vm">, string> = {
     checking: "Checking…",
+    "vm-unready": `Local VM isn't ready — ${vmMissing}`,
     starting: "Starting your bot's computer…",
     unconfigured: "No cloud computer configured",
     "local-unavailable":
@@ -234,7 +263,9 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                     ? localMisses >= 3
                       ? "No frames yet — the preview needs Screen Recording permission. After granting, relaunch the app."
                       : "Capturing this computer's screen…"
-                    : emptyState[phase]}
+                    : phase === "vm"
+                      ? "Your bot's Linux desktop is running"
+                      : emptyState[phase]}
               </span>
               {phase === "local" && localMisses >= 3 && (
                 <button
@@ -253,6 +284,38 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             {error}
           </div>
         )}
+        {phase === "vm-unready" && (
+          <div className="mt-3 rounded-xl bg-card p-4">
+            <div className="mb-3 text-[13px] leading-relaxed text-ink-secondary">
+              A Local VM is a Linux desktop running on this machine — free, and separate from your own
+              desktop. It needs a one-time setup, and {vmMissing}.
+            </div>
+            <button
+              onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "computer" })}
+              className="rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white hover:brightness-110"
+            >
+              Set up the Local VM
+            </button>
+          </div>
+        )}
+
+        {phase === "vm" && (
+          <div className="mt-3 rounded-xl bg-card p-4">
+            <div className="text-[13px] leading-relaxed text-ink-secondary">
+              This bot has a Linux desktop on this machine. Nothing it does touches your own desktop or
+              files.
+            </div>
+            <a
+              href="http://localhost:6080/vnc.html"
+              target="_blank"
+              rel="noreferrer"
+              className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-hairline/40 px-3 py-1.5 text-[13px] text-ink hover:bg-raised"
+            >
+              <ExternalLink size={13} /> Watch the screen
+            </a>
+          </div>
+        )}
+
         {phase === "unconfigured" && (
           <div className="mt-3 rounded-xl bg-card p-4">
             <div className="mb-3 text-[13px] text-ink-secondary">
