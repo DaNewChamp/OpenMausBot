@@ -302,11 +302,11 @@ const groupSpeakers = new Map<string, { botId: string; name: string; color: stri
 //
 // Keyed by BOT rather than thread because a bot runs one turn at a time, so
 // the identity is exact, and because the peer-comms paths know who is asking
-// but not always from which thread. Expired by time rather than cleared on
+// but not always from which thread. Idle marks expire rather than clearing on
 // turn.completed: bus subscribers fire in registration order, and the
 // delegation drain runs AFTER the main fold — clearing there would blank the
-// flag before the hop that needs to read it. A stale mark only ever means
-// "ask a human", so this fails closed.
+// flag before the hop that needs to read it. A busy bot never ages out, and a
+// stale mark only ever means "ask a human", so this fails closed.
 const unattendedBots = new Map<string, number>();
 const UNATTENDED_TTL_MS = 30 * 60_000;
 
@@ -320,10 +320,14 @@ function isUnattended(botId?: string | null): boolean {
   if (!botId) return false;
   const at = unattendedBots.get(botId);
   if (at === undefined) return false;
-  if (Date.now() - at > UNATTENDED_TTL_MS) {
+  // A long-running turn is still unattended even if its next approval comes
+  // more than 30 minutes after the previous one. Only an idle bot may age
+  // out; every positive read refreshes the inactivity window.
+  if (Date.now() - at > UNATTENDED_TTL_MS && !store.bot(botId)?.busy) {
     unattendedBots.delete(botId);
     return false;
   }
+  unattendedBots.set(botId, Date.now());
   return true;
 }
 let routines: RoutineManager | null = null;

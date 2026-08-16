@@ -136,7 +136,14 @@ posixOnly("unattended turns keep asking", () => {
       const bots = await api("GET", "/api/bots");
       const bot = bots.body.bots[0];
       // auto mode ON: an attended turn would sail straight through
-      expect((await api("PATCH", `/api/bots/${bot.id}`, { autoApprove: true })).status).toBe(200);
+      expect(
+        (
+          await api("PATCH", `/api/bots/${bot.id}`, {
+            autoApprove: true,
+            modelSelection: { instanceId: "grok", model: "fake-model" },
+          })
+        ).status,
+      ).toBe(200);
 
       const hook = await api("POST", "/api/webhooks", {
         name: "Nightly build",
