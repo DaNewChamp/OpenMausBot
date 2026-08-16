@@ -1433,38 +1433,55 @@ const server = createServer(async (req, res) => {
         return json(res, 400, { error: error instanceof Error ? error.message : "Invalid team file" });
       }
 
-      const selection = await defaultSelection();
-      const importedBots = manifest.team.members.map((member) =>
-        store.createBot({
-          name: member.name,
-          title: member.title,
-          description: member.description,
-          color: member.appearance.color,
-          mascotExpression: member.appearance.mascotExpression,
-          modelSelection: selection,
-        }),
-      );
-      const idByKey = new Map(
-        manifest.team.members.map((member, index) => [member.key, importedBots[index]!.id]),
-      );
-      const group = store.createGroup(
-        manifest.team.room.name,
-        importedBots.map((bot) => bot.id),
-      );
-      const responder = manifest.team.room.defaultResponder;
-      const defaultResponder: GroupDefaultResponder =
-        responder.kind === "member"
-          ? { kind: "member", botId: idByKey.get(responder.member)! }
-          : { kind: responder.kind };
-      store.patchGroup(group.id, {
-        bulletin: manifest.team.room.bulletin,
-        defaultResponder,
-      });
-      broadcast({ kind: "group", group });
-      return json(res, 201, {
-        bots: importedBots.map(publicBot),
-        group: { ...group, messages: [] },
-      });
+      const importedBots: ReturnType<typeof store.createBot>[] = [];
+      let importedGroupId: string | null = null;
+      try {
+        const selection = await defaultSelection();
+        for (const member of manifest.team.members) {
+          importedBots.push(
+            store.createBot({
+              name: member.name,
+              title: member.title,
+              description: member.description,
+              color: member.appearance.color,
+              mascotExpression: member.appearance.mascotExpression,
+              modelSelection: selection,
+            }),
+          );
+        }
+        const idByKey = new Map(
+          manifest.team.members.map((member, index) => [member.key, importedBots[index]!.id]),
+        );
+        const group = store.createGroup(
+          manifest.team.room.name,
+          importedBots.map((bot) => bot.id),
+        );
+        importedGroupId = group.id;
+        const responder = manifest.team.room.defaultResponder;
+        const defaultResponder: GroupDefaultResponder =
+          responder.kind === "member"
+            ? { kind: "member", botId: idByKey.get(responder.member)! }
+            : { kind: responder.kind };
+        const configuredGroup = store.patchGroup(group.id, {
+          bulletin: manifest.team.room.bulletin,
+          defaultResponder,
+        });
+        if (!configuredGroup) throw new Error("The imported room could not be configured");
+
+        const publicBots = importedBots.map(publicBot);
+        // Other open windows need the new members before the room that
+        // references them. The importing window also folds the HTTP result.
+        for (const bot of publicBots) broadcast({ kind: "bot", bot });
+        broadcast({ kind: "group", group: configuredGroup });
+        return json(res, 201, {
+          bots: publicBots,
+          group: { ...configuredGroup, messages: [] },
+        });
+      } catch (error) {
+        if (importedGroupId) store.deleteGroup(importedGroupId);
+        for (const bot of importedBots) store.deleteBot(bot.id);
+        throw error;
+      }
     }
     m = path.match(/^\/api\/groups\/([\w-]+)$/);
     if (m && method === "PATCH") {

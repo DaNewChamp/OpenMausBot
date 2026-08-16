@@ -24,6 +24,8 @@ export async function downloadTeamFile(groupId: string): Promise<{ name: string;
   document.body.appendChild(link);
   link.click();
   link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  // There is no browser event for "download has consumed this URL". Keep it
+  // alive long enough for slower engines to start reading, then clean it up.
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   return { name: manifest.team.name, members: manifest.team.members.length };
 }

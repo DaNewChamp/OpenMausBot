@@ -110,4 +110,45 @@ describe("team manifests", () => {
       }),
     ).toThrow("Unknown default responder");
   });
+
+  it("refuses to export values that the importer would reject", () => {
+    expect(() =>
+      createTeamManifest(
+        {
+          name: "x".repeat(101),
+          memberIds: ["one"],
+          bulletin: "",
+          defaultResponder: { kind: "member", botId: "one" },
+        },
+        [
+          {
+            id: "one",
+            name: "One",
+            title: "",
+            description: "",
+            color: "blue",
+          },
+        ],
+      ),
+    ).toThrow("team.name is too long");
+
+    const bots = Array.from({ length: 51 }, (_, index) => ({
+      id: `bot-${index}`,
+      name: `Bot ${index}`,
+      title: "",
+      description: "",
+      color: "green" as const,
+    }));
+    expect(() =>
+      createTeamManifest(
+        {
+          name: "Too many",
+          memberIds: bots.map((bot) => bot.id),
+          bulletin: "",
+          defaultResponder: { kind: "everyone" },
+        },
+        bots,
+      ),
+    ).toThrow("at most 50 members");
+  });
 });

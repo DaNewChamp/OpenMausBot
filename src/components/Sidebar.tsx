@@ -317,19 +317,56 @@ function ImportTeamPanel({
   pending,
   onClose,
   onImported,
+  returnFocusRef,
 }: {
   pending: PendingTeamImport;
   onClose: () => void;
   onImported: (name: string) => void;
+  returnFocusRef: React.RefObject<HTMLButtonElement | null>;
 }) {
   const { dispatch } = useStore();
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => event.key === "Escape" && !working && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    confirmRef.current?.focus();
+    return () => returnFocusRef.current?.focus();
+  }, [returnFocusRef]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !working) {
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialogRef.current?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose, working]);
 
   const importTeam = async () => {
@@ -357,8 +394,15 @@ function ImportTeamPanel({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/45"
       onMouseDown={(event) => event.target === event.currentTarget && !working && onClose()}
     >
-      <div className="w-[420px] max-w-[calc(100vw-32px)] rounded-2xl border border-hairline/50 bg-card p-5 shadow-2xl">
-        <div className="text-[17px] font-semibold text-ink">Import {pending.name}?</div>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="import-team-title"
+        tabIndex={-1}
+        className="w-[420px] max-w-[calc(100vw-32px)] rounded-2xl border border-hairline/50 bg-card p-5 shadow-2xl"
+      >
+        <div id="import-team-title" className="text-[17px] font-semibold text-ink">Import {pending.name}?</div>
         <div className="mt-1 text-[13px] text-ink-secondary">
           This creates {pending.members.length} new {pending.members.length === 1 ? "bot" : "bots"} and the room “{pending.roomName}”.
         </div>
@@ -375,7 +419,7 @@ function ImportTeamPanel({
         <div className="mt-3 text-[12.5px] leading-relaxed text-ink-secondary">
           The bots will use your default engine. Conversations, permissions, and computer access are never imported.
         </div>
-        {error && <div className="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</div>}
+        {error && <div role="alert" className="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</div>}
         <div className="mt-5 flex justify-end gap-2">
           <button
             onClick={onClose}
@@ -385,6 +429,7 @@ function ImportTeamPanel({
             Cancel
           </button>
           <button
+            ref={confirmRef}
             onClick={() => void importTeam()}
             disabled={working}
             className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-[13.5px] font-medium text-white hover:bg-accent/90 disabled:opacity-60"
@@ -648,6 +693,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const { state, dispatch } = useStore();
   const { capabilities } = useDesktopCapabilities();
   const importInputRef = useRef<HTMLInputElement>(null);
+  const importReturnRef = useRef<HTMLButtonElement>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [roomMenu, setRoomMenu] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
@@ -760,6 +806,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           style={macInset ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined}
         >
           <button
+            ref={importReturnRef}
             onClick={() => setPlusOpen((o) => !o)}
             className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
             title="New bot or room"
@@ -906,6 +953,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       {pendingImport && (
         <ImportTeamPanel
           pending={pendingImport}
+          returnFocusRef={importReturnRef}
           onClose={() => setPendingImport(null)}
           onImported={(name) => {
             setPendingImport(null);

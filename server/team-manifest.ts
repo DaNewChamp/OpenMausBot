@@ -211,7 +211,7 @@ export function createTeamManifest(group: ExportableGroup, bots: ExportableBot[]
     defaultResponder = { kind: group.defaultResponder.kind };
   }
 
-  return {
+  const manifest: TeamManifestV1 = {
     format: TEAM_MANIFEST_FORMAT,
     version: TEAM_MANIFEST_VERSION,
     team: {
@@ -224,4 +224,7 @@ export function createTeamManifest(group: ExportableGroup, bots: ExportableBot[]
       },
     },
   };
+  // Keep export and import in lockstep: a file produced here must satisfy
+  // the exact same limits and normalization as an untrusted shared file.
+  return parseTeamManifest(manifest);
 }

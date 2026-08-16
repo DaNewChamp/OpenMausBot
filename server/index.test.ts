@@ -250,21 +250,36 @@ describe("harness HTTP API", () => {
     });
     expect(JSON.stringify(exported.body)).not.toMatch(/autoApprove|alwaysAllow|modelSelection|threadId/);
 
-    const imported = await api("POST", "/api/teams/import", exported.body);
-    expect(imported.status).toBe(201);
-    expect(imported.body.bots.map((bot: { name: string }) => bot.name)).toEqual(["Mira", "Scout"]);
-    expect(imported.body.bots.every((bot: { id: string }) => ![first.id, second.id].includes(bot.id))).toBe(true);
-    expect(imported.body.bots[0]).not.toHaveProperty("alwaysAllow");
-    expect(imported.body.group.memberIds).toEqual(imported.body.bots.map((bot: { id: string }) => bot.id));
-    expect(imported.body.group.defaultResponder).toEqual({ kind: "member", botId: imported.body.bots[1].id });
+    const stream = await openSse(`${BASE}/api/events`);
+    try {
+      await stream.until((frame) => frame.kind === "hello");
+      const imported = await api("POST", "/api/teams/import", exported.body);
+      expect(imported.status).toBe(201);
+      expect(imported.body.bots.map((bot: { name: string }) => bot.name)).toEqual(["Mira", "Scout"]);
+      expect(imported.body.bots.every((bot: { id: string }) => ![first.id, second.id].includes(bot.id))).toBe(true);
+      expect(imported.body.bots[0]).not.toHaveProperty("alwaysAllow");
+      expect(imported.body.group.memberIds).toEqual(imported.body.bots.map((bot: { id: string }) => bot.id));
+      expect(imported.body.group.defaultResponder).toEqual({ kind: "member", botId: imported.body.bots[1].id });
 
-    const invalid = await api("POST", "/api/teams/import", { ...exported.body, version: 2 });
-    expect(invalid.status).toBe(400);
+      await stream.until((frame) => frame.kind === "group" && frame.group?.id === imported.body.group.id);
+      const importedBotIds = new Set(imported.body.bots.map((bot: { id: string }) => bot.id));
+      const importFrames = stream.frames.filter(
+        (frame) =>
+          (frame.kind === "bot" && importedBotIds.has(frame.bot?.id)) ||
+          (frame.kind === "group" && frame.group?.id === imported.body.group.id),
+      );
+      expect(importFrames.map((frame) => frame.kind)).toEqual(["bot", "bot", "group"]);
 
-    expect((await api("DELETE", `/api/groups/${roomId}`)).status).toBe(200);
-    expect((await api("DELETE", `/api/groups/${imported.body.group.id}`)).status).toBe(200);
-    for (const bot of [first, second, ...imported.body.bots]) {
-      expect((await api("DELETE", `/api/bots/${bot.id}`)).status).toBe(200);
+      const invalid = await api("POST", "/api/teams/import", { ...exported.body, version: 2 });
+      expect(invalid.status).toBe(400);
+
+      expect((await api("DELETE", `/api/groups/${roomId}`)).status).toBe(200);
+      expect((await api("DELETE", `/api/groups/${imported.body.group.id}`)).status).toBe(200);
+      for (const bot of [first, second, ...imported.body.bots]) {
+        expect((await api("DELETE", `/api/bots/${bot.id}`)).status).toBe(200);
+      }
+    } finally {
+      stream.close();
     }
   });
 
