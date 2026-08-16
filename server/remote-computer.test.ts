@@ -24,7 +24,9 @@ describe("remote Cua computer setup", () => {
     expect(command).not.toContain("uv pip install");
     expect(command).not.toContain("cua-computer-server");
     expect(command).not.toContain("--port 8000");
-    expect(spawnSync("/bin/bash", ["-n"], { input: command }).status).toBe(0);
+    if (process.platform !== "win32") {
+      expect(spawnSync("/bin/bash", ["-n"], { input: command }).status).toBe(0);
+    }
   });
 
   it("reattaches the private daemon after resume without opening a port", () => {
