@@ -290,6 +290,14 @@ function notify(notification: Notification | null) {
 // Group threads: the fold needs to know WHO is talking — the turn engine
 // records the active member here before dispatching its turn.
 const groupSpeakers = new Map<string, { botId: string; name: string; color: string }>();
+
+// Threads whose current turn was started by an outside event rather than a
+// person. Auto mode is a decision someone made for turns they were present
+// for; a webhook means the turn begins with nobody at the keyboard, on a
+// payload somebody else wrote. So these turns don't inherit it — the guard
+// behind auto mode is a pattern list, not a security boundary, and letting
+// it stand in for a human at 3am is not what "approve as you go" meant.
+const webhookTurns = new Set<string>();
 let routines: RoutineManager | null = null;
 // The Local VM is intentionally one shared, visible desktop. Two agents
 // driving it simultaneously would mix clicks, keystrokes and screenshots,
@@ -372,7 +380,9 @@ bus.subscribe((event: RuntimeEvent) => {
       // looks destructive stops even in auto mode.
       const asker = bot ?? (speaker ? store.bot(speaker.botId) : undefined);
       const settled = permission && asker && event.requestId
-        ? autoDecision(asker, event.tool, event.summary)
+        ? autoDecision(asker, event.tool, event.summary, {
+            unattended: webhookTurns.has(event.threadId),
+          })
         : null;
       if (settled && asker && event.requestId) {
         const instance = event.providerInstanceId
@@ -461,6 +471,7 @@ bus.subscribe((event: RuntimeEvent) => {
       });
       break;
     case "turn.completed": {
+      webhookTurns.delete(event.threadId);
       if (activeVmThreadId === event.threadId) activeVmThreadId = null;
       const reply = lastReply.get(event.threadId) ?? "";
       lastReply.delete(event.threadId);
@@ -619,6 +630,9 @@ async function startTurn(
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
   if (bot.busy) throw Object.assign(new Error("the bot is already working — interrupt it first"), { status: 409 });
   const threadId = opts?.threadId ?? bot.threadId;
+  // a webhook turn runs in its own detached task, so mark THAT thread —
+  // marking the bot's active one would gate the wrong conversation
+  if (opts?.automationSource === "webhook") webhookTurns.add(threadId);
   const task = store.taskByThread(bot.id, threadId);
   if (!task) throw Object.assign(new Error("no such task"), { status: 404 });
   const commsDepth = opts?.commsDepth ?? 0;
