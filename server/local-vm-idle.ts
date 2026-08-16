@@ -1,8 +1,8 @@
 /** Renewable idle deadline for the shared Local VM.
  *
- * Activity resets the full window. Expiry is reversible (the caller stops,
- * never removes, the VM), and an active turn or lifecycle operation defers
- * suspension for another full window instead of racing current work.
+ * Activity resets the full window. The caller decides how to suspend or
+ * recycle the disposable VM, and an active turn or lifecycle operation defers
+ * that work for another full window instead of racing current work.
  */
 export class LocalVmIdleTimer {
   private timer: ReturnType<typeof setTimeout> | null = null;
