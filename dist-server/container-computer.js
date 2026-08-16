@@ -532,23 +532,30 @@ export async function containerComputerScreenshot(runner = sh, platform = proces
     }
     if (cacheable)
         screenshotStatusCache = { status, expiresAt: now + SCREENSHOT_STATUS_TTL_MS };
-    const screenshot = "/tmp/openmausbot-preview.png";
-    await runner(status.runtime, cuaExecArgs([
-        "call",
-        "get_desktop_state",
-        "{}",
-        "--socket",
-        CUA_SOCKET,
-        "--screenshot-out-file",
-        screenshot,
-    ]), 30_000);
-    const { stdout } = await runner(status.runtime, ["exec", CONTAINER, "base64", "-w0", screenshot], 30_000);
-    const data = stdout.trim();
-    const checked = wholeScreenshot(Buffer.from(data, "base64"));
-    if (!checked.ok) {
-        throw Object.assign(new Error("Cua Driver returned an incomplete screenshot"), { status: 502 });
+    try {
+        const screenshot = "/tmp/openmausbot-preview.png";
+        await runner(status.runtime, cuaExecArgs([
+            "call",
+            "get_desktop_state",
+            "{}",
+            "--socket",
+            CUA_SOCKET,
+            "--screenshot-out-file",
+            screenshot,
+        ]), 30_000);
+        const { stdout } = await runner(status.runtime, ["exec", CONTAINER, "base64", "-w0", screenshot], 30_000);
+        const data = stdout.trim();
+        const checked = wholeScreenshot(Buffer.from(data, "base64"));
+        if (!checked.ok) {
+            throw Object.assign(new Error("Cua Driver returned an incomplete screenshot"), { status: 502 });
+        }
+        return `data:${checked.mime};base64,${data}`;
     }
-    return `data:${checked.mime};base64,${data}`;
+    catch (error) {
+        if (cacheable)
+            screenshotStatusCache = null;
+        throw error;
+    }
 }
 let screenshotStatusCache = null;
 const containerMcpPath = (() => {

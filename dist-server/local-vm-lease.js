@@ -23,6 +23,10 @@ export class LocalVmLease {
         return true;
     }
     touch(threadId, now = Date.now()) {
+        if (this.record && this.record.expiresAt <= now) {
+            this.record = null;
+            return;
+        }
         if (this.record?.threadId === threadId)
             this.record.expiresAt = now + this.ttlMs;
     }

@@ -51,13 +51,16 @@ const CHROME_PROFILE_SETUP = [
     'chmod 700 "$profile"',
     'for browser_dir in "$HOME/.config/google-chrome" "$HOME/.config/chromium"; do',
     '  if [ -e "$browser_dir" ] && [ ! -L "$browser_dir" ]; then',
-    '    if [ -d "$browser_dir" ]; then cp -a -n "$browser_dir"/. "$profile"/ 2>/dev/null || true; fi',
+    '    if [ -d "$browser_dir" ] && ! cp -a -n "$browser_dir"/. "$profile"/; then',
+    '      echo "failed to copy browser profile: $browser_dir" >&2',
+    "      exit 1",
+    "    fi",
     '    mv "$browser_dir" "$browser_dir.pre-openmausbot-$(date +%s)-$$"',
     "  fi",
     '  if [ -L "$browser_dir" ]; then rm -f "$browser_dir"; fi',
     '  ln -s "$profile" "$browser_dir"',
     "done",
-].join("; ");
+].join("\n");
 /** Frames larger than this come back over the files API instead of
  * inline stdout (keeps us clear of the command endpoint's stdout cap). */
 const INLINE_MAX_BYTES = 400_000;
@@ -882,8 +885,8 @@ async function handle(msg) {
             return await call(msg.id, msg.params?.name, msg.params?.arguments ?? {});
         }
         catch (e) {
-            const error = e;
-            const timedOut = error?.name === "TimeoutError" || /timed?\s*out|timeout/i.test(error?.message ?? "");
+            const error = e instanceof Error ? e : new Error(String(e));
+            const timedOut = error.name === "TimeoutError" || /timed?\s*out|timeout/i.test(error.message);
             return text(msg.id, timedOut
                 ? "computer tool timed out. The action may or may not have completed; take a screenshot to inspect the current state before retrying it."
                 : `computer tool failed: ${error.message}`, true);
