@@ -349,7 +349,10 @@ const localVmIdle = new LocalVmIdleTimer(
     localVmLifecycleBusy = true;
     try {
       const status = await containerComputerStatus();
-      if (status.container === "running") await containerComputerAction("stop");
+      // The upstream desktop leaves a stale X lock after a stop, so it cannot
+      // safely resume. Remove only the disposable container; the mounted
+      // workspace and prepared image remain for a fast, clean recreation.
+      if (status.container === "running") await containerComputerAction("remove");
     } finally {
       localVmLifecycleBusy = false;
     }
@@ -926,7 +929,7 @@ async function startTurn(
           (computerKind === "vm"
             ? " You have a shared, isolated Cua sandbox: a Linux desktop in a container on this machine. Only /home/cua/workspace is durable; save downloads, repositories, working files, and browser profiles there because everything else inside the VM is disposable. No other host folder is mounted. Use the computer tools for desktop, accessibility, window, and shell work. Inspect the desktop state before acting, prefer accessibility targets over raw coordinates, and work carefully."
             : computerKind === "box" && instance.driverKind !== "boxAgent"
-              ? " You have your own cloud computer — use screenshot, click, type_text, open_url and computer_exec whenever a desktop helps. Every action already returns the resulting screen, so don't follow it with screenshot; batch predictable sequences with computer_batch."
+            ? " You have your own cloud computer. In Chrome, prefer browser_snapshot with browser_click/browser_fill for semantic, trusted actions; use screenshot/click/type_text for visual or non-browser UI, open_url for navigation, and computer_exec for Linux tasks. Every action already returns the resulting screen, so don't follow it with screenshot; batch predictable pixel actions with computer_batch."
               : computerKind === "local"
               ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully."
               : "") +
