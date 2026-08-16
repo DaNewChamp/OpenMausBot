@@ -112,15 +112,18 @@ export function PluginsPanel() {
 
   return (
     <div
-      className="absolute inset-0 z-20 flex items-center justify-center bg-black/40"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-5 backdrop-blur-sm"
       onClick={() => dispatch({ type: "togglePlugins", open: false })}
     >
       <div
-        className="animate-pop-in flex max-h-[80%] w-[560px] flex-col rounded-2xl border border-hairline/50 bg-panel p-5 shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="connected-apps-title"
+        className="animate-pop-in flex max-h-[calc(100dvh-2.5rem)] w-full max-w-[560px] flex-col overflow-hidden rounded-2xl border border-hairline/50 bg-panel p-5 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
-          <div className="text-[17px] font-semibold text-ink">Connected apps</div>
+          <div id="connected-apps-title" className="text-[17px] font-semibold text-ink">Connected apps</div>
           <div className="flex items-center gap-1">
             <button
               onClick={() => refreshStatus(visible.map((c) => c.slug).slice(0, 40))}
