@@ -38,6 +38,7 @@ interface Status {
   workspace_path: string;
   workspace_guest_path: string;
   viewer_url: string;
+  idle_timeout_ms: number;
   commands: {
     install: string | null;
     runtimeStart: string | null;
@@ -197,7 +198,7 @@ export function LocalComputerSection() {
     <>
       <Card
         title="Local VM"
-        subtitle={`A shared Cua Linux sandbox on this ${host} for bots to browse and work in — free, isolated, and backed by one durable workspace.`}
+        subtitle={`A shared Cua Linux sandbox on this ${host} for bots to browse and work in — isolated, backed by one durable workspace, and automatically stopped after 8 hours without activity.`}
       >
         <div className="flex flex-wrap items-center gap-2">
           <span

@@ -42,6 +42,7 @@ import {
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { readCuaConnection } from "./local-computer.ts";
+import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease } from "./local-vm-lease.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
 import { createTeamManifest, parseTeamManifest } from "./team-manifest.ts";
@@ -338,10 +339,38 @@ let routines: RoutineManager | null = null;
 const localVmLease = new LocalVmLease(30 * 60_000);
 const localVmOwnerBusy = (botId: string) => store.bot(botId)?.busy === true;
 let localVmLifecycleBusy = false;
+let localVmActiveThread: string | null = null;
+const LOCAL_VM_IDLE_MS = 8 * 60 * 60_000;
+const localVmIdle = new LocalVmIdleTimer(
+  LOCAL_VM_IDLE_MS,
+  () => localVmLifecycleBusy || localVmActiveThread !== null,
+  async () => {
+    // Fence lifecycle and turn dispatch before the first runtime inspection.
+    localVmLifecycleBusy = true;
+    try {
+      const status = await containerComputerStatus();
+      if (status.container === "running") await containerComputerAction("stop");
+    } finally {
+      localVmLifecycleBusy = false;
+    }
+  },
+);
+
+// A running VM may have survived an app/server restart. Start its idle
+// backstop even if nobody opens Settings or begins a turn this session.
+void containerComputerStatus()
+  .then((status) => {
+    if (status.container === "running") localVmIdle.touch();
+  })
+  .catch(() => null);
 
 bus.subscribe((event: RuntimeEvent) => {
   localVmLease.touch(event.threadId);
-  if (event.type === "turn.completed") localVmLease.release(event.threadId);
+  if (localVmActiveThread === event.threadId) localVmIdle.touch();
+  if (event.type === "turn.completed") {
+    localVmLease.release(event.threadId);
+    if (localVmActiveThread === event.threadId) localVmActiveThread = null;
+  }
   broadcast({ kind: "runtime", event });
   routines?.handleRuntimeEvent(event);
   const bot = store.botByThread(event.threadId);
@@ -789,6 +818,8 @@ async function startTurn(
         if (!localVmLease.claim(threadId, bot.id, localVmOwnerBusy)) {
           throw new Error("the shared Local VM is already being used by another bot — wait for that turn to finish");
         }
+        localVmActiveThread = threadId;
+        localVmIdle.touch();
         const localVm = await containerComputerStatus();
         if (!localVm.ready || !localVm.runtime) {
           throw new Error(`${localVm.problem ?? "the Local VM is not ready"} (App Settings → Local VM)`);
@@ -923,6 +954,7 @@ async function startTurn(
       if (previewBoxId) startScreenPoller(bot.id, previewBoxId);
     } catch (e) {
       localVmLease.release(threadId);
+      if (localVmActiveThread === threadId) localVmActiveThread = null;
       const message = e instanceof Error ? e.message : String(e);
       const failure = store.appendMessage(threadId, {
         role: "bot",
@@ -2089,7 +2121,7 @@ const server = createServer(async (req, res) => {
     // its daemon is up, and whether the desktop image and container exist
     if (method === "GET" && path === "/api/local-computer") {
       const status = await containerComputerStatus();
-      return json(res, 200, { ...status, commands: setupCommands(status.runtime) });
+      return json(res, 200, { ...status, commands: setupCommands(status.runtime), idle_timeout_ms: LOCAL_VM_IDLE_MS });
     }
     m = path.match(/^\/api\/local-computer\/(pull|run|start|stop|remove)$/);
     if (m && method === "POST") {
@@ -2111,12 +2143,19 @@ const server = createServer(async (req, res) => {
       localVmLifecycleBusy = true;
       try {
         const status = await containerComputerAction(action);
-        return json(res, 200, { ...status, commands: setupCommands(status.runtime) });
+        if (action === "run" || action === "start") localVmIdle.touch();
+        if (action === "stop" || action === "remove") localVmIdle.cancel();
+        return json(res, 200, {
+          ...status,
+          commands: setupCommands(status.runtime),
+          idle_timeout_ms: LOCAL_VM_IDLE_MS,
+        });
       } finally {
         localVmLifecycleBusy = false;
       }
     }
     if (method === "POST" && path === "/api/local-computer/screenshot") {
+      localVmIdle.touch();
       return json(res, 200, { image: await containerComputerScreenshot() });
     }
 
@@ -2306,6 +2345,7 @@ server.listen(PORT, "127.0.0.1", () => {
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
+    localVmIdle.cancel();
     routines?.stop();
     webhookIngress?.server.close();
     void registry.disposeAll().finally(() => process.exit(0));
