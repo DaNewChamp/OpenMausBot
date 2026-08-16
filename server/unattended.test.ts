@@ -86,6 +86,13 @@ posixOnly("unattended turns keep asking", () => {
             environment: { FAKE_ACP_MODE: "delegate-peer" },
             config: { cli: FAKE_CLI, fullAuto: false },
           },
+          // asks a teammate synchronously — the other comms path, and the
+          // likelier one: a webhook bot pulling someone in for an answer
+          asker: {
+            driver: "grokAgent",
+            environment: { FAKE_ACP_MODE: "ask-peer" },
+            config: { cli: FAKE_CLI, fullAuto: false },
+          },
         },
       }),
     );
@@ -205,6 +212,62 @@ posixOnly("unattended turns keep asking", () => {
         if (!card) await new Promise((r) => setTimeout(r, 300));
       }
       expect(card, "the delegated turn auto-approved — the gate did not cross the hop").not.toBeNull();
+      expect(card!.card!.answered).toBeUndefined();
+    },
+    90_000,
+  );
+
+  it(
+    "keeps asking when the teammate is pulled in synchronously",
+    async () => {
+      // ask_bot rather than delegate_bot. Same hole, different door, and
+      // this is the ordinary shape: a webhook bot asking someone a question
+      // mid-turn. The fake asks whichever peer list_bots returns first, so
+      // everything else is hidden to make the target deterministic.
+      const existing = await api("GET", "/api/bots");
+      for (const b of existing.body.bots) await api("PATCH", `/api/bots/${b.id}`, { hidden: true });
+
+      const target = (await api("POST", "/api/bots")).body.bot;
+      await api("PATCH", `/api/bots/${target.id}`, {
+        name: "Answerer",
+        autoApprove: true,
+        modelSelection: { instanceId: "grok", model: "fake-model" },
+      });
+
+      const asker = (await api("POST", "/api/bots")).body.bot;
+      await api("PATCH", `/api/bots/${asker.id}`, {
+        name: "Asker",
+        autoApprove: true,
+        hidden: true, // keep it out of its own peer list's way
+        modelSelection: { instanceId: "asker", model: "fake-model" },
+      });
+
+      const hook = await api("POST", "/api/webhooks", {
+        name: "Ask a teammate",
+        prompt: "Ask the Answerer what to do about this",
+        botId: asker.id,
+        runOn: "maus",
+      });
+      expect(hook.status).toBe(201);
+      const delivered = await fetch(hook.body.credential.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ event: "ask" }),
+      });
+      expect(delivered.status).toBe(202);
+
+      const deadline = Date.now() + 40_000;
+      let card: { card?: { requestId?: string; answered?: string } } | null = null;
+      while (Date.now() < deadline && !card) {
+        const { body } = await api("GET", "/api/bots");
+        const peer = body.bots.find((b: { id: string }) => b.id === target.id);
+        card =
+          peer?.messages?.find(
+            (m: { kind: string; card?: { requestId?: string } }) => m.kind === "options" && m.card?.requestId,
+          ) ?? null;
+        if (!card) await new Promise((r) => setTimeout(r, 300));
+      }
+      expect(card, "the asked teammate auto-approved — ask_bot did not carry the gate").not.toBeNull();
       expect(card!.card!.answered).toBeUndefined();
     },
     90_000,
