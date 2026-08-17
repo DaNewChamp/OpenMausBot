@@ -21,6 +21,7 @@ import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { ApprovalCard } from "./ApprovalCard";
 import { cn } from "@/lib/cn";
+import { useFocusMessage } from "@/lib/focus-message";
 
 function dayLabel(at: number): string {
   const d = new Date(at);
@@ -109,7 +110,7 @@ const Transcript = memo(function Transcript({
           ) : null;
         if (!row) return null;
         return (
-          <div key={m.id} className="contents">
+          <div key={m.id} className="contents" data-mid={m.id}>
             {newDay && (
               <div className="py-3 text-center text-[13px] text-ink-secondary">
                 {dayLabel(m.at)} {formatTime(m.at)}
@@ -189,6 +190,7 @@ function DefaultResponderSelect({ group, members }: { group: Group; members: Bot
 
 export function GroupView({ group }: { group: Group }) {
   const { state, dispatch } = useStore();
+  useFocusMessage(group.threadId, (group.messages?.length ?? 0) > 0);
   const stream = useStreaming();
   const streaming = stream.streaming[group.threadId];
   const scrollRef = useRef<HTMLDivElement>(null);

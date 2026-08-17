@@ -40,6 +40,7 @@ import { ReactionBar, ReactionChips } from "./Reactions";
 import { SpeakButton } from "./SpeakButton";
 import { CallButton, CallOverlay } from "./CallView";
 import { cn } from "@/lib/cn";
+import { useFocusMessage } from "@/lib/focus-message";
 import { webhookMessageView } from "@/lib/webhook-message";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
@@ -583,7 +584,7 @@ const MessagesList = memo(function MessagesList({
         })();
         if (!row) return null;
         return (
-          <div key={m.id} className="contents">
+          <div key={m.id} className="contents" data-mid={m.id}>
             {newDay && <DaySeparator at={m.at} />}
             {row}
           </div>
@@ -596,6 +597,8 @@ const MessagesList = memo(function MessagesList({
 export function ChatView({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
   const scrollRef = useRef<HTMLDivElement>(null);
+  // a search hit lands here once this thread's messages are on screen
+  useFocusMessage(bot.threadId, (bot.messages?.length ?? 0) > 0);
 
   const stream = useStreaming();
   const streaming = stream.streaming[bot.threadId];

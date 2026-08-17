@@ -46,6 +46,7 @@ import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease } from "./local-vm-lease.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
+import { searchThreads, type SearchableThread } from "./search.ts";
 import { createTeamManifest, parseTeamManifest } from "./team-manifest.ts";
 import { listenWebhookIngress, webhookCredential, type WebhookIngress } from "./webhook-ingress.ts";
 import { WebhookManager } from "./webhooks.ts";
@@ -2311,6 +2312,43 @@ const server = createServer(async (req, res) => {
     // the same API shape but a different pid)
     if (method === "GET" && path === "/api/health") {
       return json(res, 200, { app: "openmausbot", pid: process.pid, static: Boolean(STATIC_DIR) });
+    }
+
+    // ── cross-thread search: every bot task and every room ──
+    if (method === "GET" && path === "/api/search") {
+      const q = url.searchParams.get("q") ?? "";
+      const botId = url.searchParams.get("bot") ?? undefined;
+      const kind = url.searchParams.get("kind") ?? undefined;
+      const limit = Number(url.searchParams.get("limit")) || undefined;
+      const threads: SearchableThread[] = [];
+      for (const bot of store.bots) {
+        if (bot.hidden) continue;
+        for (const task of store.tasks(bot.id)) {
+          threads.push({
+            owner: { botId: bot.id, name: bot.name },
+            threadId: task.threadId,
+            title: task.title,
+            messages: store.messagesFor(task.threadId),
+            activePath: new Set(store.activePath(task.threadId).map((m) => m.id)),
+          });
+        }
+      }
+      for (const group of store.groups) {
+        threads.push({
+          owner: { groupId: group.id, name: group.name },
+          threadId: group.threadId,
+          title: group.name,
+          messages: store.messagesFor(group.threadId),
+          activePath: new Set(store.activePath(group.threadId).map((m) => m.id)),
+        });
+      }
+      const hits = searchThreads(threads, {
+        q,
+        botId,
+        kind: kind === "text" || kind === "activity" ? kind : undefined,
+        limit,
+      });
+      return json(res, 200, { hits });
     }
 
     // ── provider instances (model picker) ──
