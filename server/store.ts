@@ -2,7 +2,7 @@
 // thread→instance binding and per-instance resume cursors — upstream's
 // ProviderSessionDirectory, recipe step 6: persist the binding from day
 // one). messages-<threadId>.json holds the folded transcript.
-import { readFileSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
@@ -366,6 +366,17 @@ export class Store {
         },
       ];
     }
+    // Search reads SQLite directly, so migrate every known legacy transcript
+    // at startup rather than waiting until the user happens to open it. Only
+    // pending JSON files are touched; already-migrated threads stay lazy.
+    const knownThreads = new Set([
+      ...this.bots.flatMap((b) => [b.threadId, ...(b.tasks ?? []).map((task) => task.threadId)]),
+      ...this.groups.map((group) => group.threadId),
+    ]);
+    for (const threadId of knownThreads) {
+      const legacyFile = messagesFile(threadId);
+      if (existsSync(legacyFile)) mdb.readThread(threadId, legacyFile);
+    }
   }
 
   private saveBots() {
@@ -498,8 +509,7 @@ export class Store {
     const full: Message = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...message };
     t.messages.push(full);
     t.activeLeafId = full.id;
-    mdb.insertMessage(threadId, full);
-    mdb.setActiveLeaf(threadId, t.activeLeafId);
+    mdb.appendMessage(threadId, full);
     if (full.kind === "screen") {
       for (const pruned of this.pruneScreenFrames(t)) mdb.updateMessage(threadId, pruned);
     }
@@ -543,8 +553,7 @@ export class Store {
     };
     t.messages.push(full);
     t.activeLeafId = full.id;
-    mdb.insertMessage(threadId, full);
-    mdb.setActiveLeaf(threadId, t.activeLeafId);
+    mdb.appendMessage(threadId, full);
     return full;
   }
 

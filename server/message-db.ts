@@ -10,7 +10,7 @@
 // Legacy JSON thread files import lazily: the first read of a thread with
 // no rows pulls the old file in, after which the DB is the source of
 // truth (the JSON file is left behind as a one-time backup).
-import { existsSync, readFileSync, renameSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, openSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -23,7 +23,15 @@ let handle: DatabaseSync | null = null;
 let handlePath: string | null = null;
 
 function open(): DatabaseSync {
-  const db = new DatabaseSync(DB_FILE());
+  const file = DB_FILE();
+  // Transcripts can contain private conversations and tool output. Create
+  // the database with owner-only permissions and also repair an existing
+  // file that may have inherited a permissive umask.
+  closeSync(openSync(file, "a", 0o600));
+  try {
+    chmodSync(file, 0o600);
+  } catch {}
+  const db = new DatabaseSync(file);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec(`
@@ -112,6 +120,9 @@ function importLegacy(threadId: string, legacyFile: string): ThreadRows {
   // runs twice against a thread whose rows were later deleted
   try {
     renameSync(legacyFile, `${legacyFile}.imported`);
+    try {
+      chmodSync(`${legacyFile}.imported`, 0o600);
+    } catch {}
   } catch {}
   return { messages, activeLeafId };
 }
@@ -120,6 +131,20 @@ export function insertMessage(threadId: string, message: Message): void {
   db()
     .prepare("INSERT OR REPLACE INTO messages (thread_id, id, at, role, kind, text, json) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .run(threadId, message.id, message.at, message.role, message.kind, message.text ?? null, JSON.stringify(message));
+}
+
+/** Persist a new message and the branch head as one crash-safe mutation. */
+export function appendMessage(threadId: string, message: Message): void {
+  const database = db();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    insertMessage(threadId, message);
+    setActiveLeaf(threadId, message.id);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export function updateMessage(threadId: string, message: Message): void {

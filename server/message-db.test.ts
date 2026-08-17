@@ -1,6 +1,6 @@
 // SQLite message-store contract: per-mutation persistence, one-time legacy
 // import, deletion, and the LIKE search used by /api/search.
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -68,6 +68,25 @@ describe("message-db", () => {
     const imported = readThread("t3", legacy("t3"));
     expect(imported.messages).toHaveLength(2);
     expect(imported.activeLeafId).toBeNull(); // Store derives the tail
+  });
+
+  it("migrates known legacy transcripts at Store startup so search sees unopened tasks", () => {
+    const initial = new Store(selection);
+    const bot = initial.createBot({}, { seedMessages: false });
+    closeMessageDb();
+    for (const suffix of ["", "-wal", "-shm"]) rmSync(join(DATA_DIR, `messages.db${suffix}`), { force: true });
+    writeFileSync(legacy(bot.threadId), JSON.stringify([msg("old", "find this unopened legacy conversation")]));
+
+    new Store(selection);
+    expect(searchMessages("unopened legacy")).toMatchObject([{ threadId: bot.threadId, messageId: "old" }]);
+    expect(existsSync(`${legacy(bot.threadId)}.imported`)).toBe(true);
+  });
+
+  it("stores transcripts with owner-only permissions", () => {
+    insertMessage("private", msg("m1", "secret"));
+    if (process.platform !== "win32") {
+      expect(statSync(join(DATA_DIR, "messages.db")).mode & 0o777).toBe(0o600);
+    }
   });
 
   it("deleteThread removes rows and state", () => {
