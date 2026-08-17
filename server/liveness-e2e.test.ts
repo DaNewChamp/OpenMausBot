@@ -118,6 +118,41 @@ posixOnly("turn liveness e2e (fake ACP in hang mode)", () => {
   );
 
   it(
+    "a scheduled routine runs in a detached task thread — its quiet state still reaches the bot, and it is stopped",
+    async () => {
+      const created = (await api("POST", "/api/bots")).body.bot;
+      await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "hang", model: "fake-model" } });
+      const routine = await api("POST", "/api/routines", {
+        name: "Nightly digest",
+        prompt: "summarize the day",
+        botId: created.id,
+        runOn: "maus",
+        schedule: { type: "daily", time: "03:00", weekdays: [0, 1, 2, 3, 4, 5, 6] },
+      });
+      expect(routine.status).toBe(201);
+      expect((await api("POST", `/api/routines/${routine.body.routine.id}/run`)).status).toBe(201);
+
+      await waitFor(async () => (await getBot(created.id)).busy === true, "the routine turn to start");
+      // the routine's task is NOT the thread open in chat: quietSince must
+      // still be on the bot broadcast (it is keyed by the routine's thread)
+      const during = await getBot(created.id);
+      const routineTask = during.tasks.find((t: any) => t.threadId !== created.threadId);
+      expect(routineTask, "the routine did not get its own detached task").toBeTruthy();
+      await waitFor(async () => typeof (await getBot(created.id)).quietSince === "number", "the quiet flag for the detached task");
+      // …and it is an automation turn, so the ceiling stops it with the chip
+      await waitFor(async () => {
+        const b = await getBot(created.id);
+        return !b.busy && b.messages.concat(
+          // the chip lands on the routine's thread, not the chat thread
+          (await api("GET", `/api/threads/${routineTask.threadId}/messages`)).body?.messages ?? [],
+        ).some((m: any) => m.kind === "activity" && /stopped — no output from .* for \d+ minutes?/.test(m.tool?.name ?? ""));
+      }, "the routine turn to be stopped with a chip", 60_000);
+      expect((await getBot(created.id)).quietSince).toBeUndefined();
+    },
+    90_000,
+  );
+
+  it(
     "stops a webhook-started turn after the ceiling and says why",
     async () => {
       const created = (await api("POST", "/api/bots")).body.bot;

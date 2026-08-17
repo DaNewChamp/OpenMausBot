@@ -174,7 +174,11 @@ const quietSince = new Map<string, number>();
 
 const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
   const { resumeCursors, tasks, ...rest } = bot;
-  const quiet = quietSince.get(bot.threadId);
+  // a routine runs in a detached task thread, not the one open in chat —
+  // any of the bot's threads being quiet is the bot being quiet
+  const quiet = [bot.threadId, ...(tasks ?? []).map((t) => t.threadId)]
+    .map((threadId) => quietSince.get(threadId))
+    .find((v): v is number => v !== undefined);
   return {
     ...rest,
     ...(tasks ? { tasks: tasks.map(wireTask) } : {}),
@@ -1460,6 +1464,12 @@ async function reloadProviders() {
     if (vmLease?.botId === b.id) {
       localVmLease.release(vmLease.threadId);
       if (localVmActiveThread === vmLease.threadId) localVmActiveThread = null;
+    }
+    // the turn's terminal event may never come — drop its liveness clock
+    // too, or the tick would flag/stop a turn that is already gone
+    for (const threadId of new Set([b.threadId, ...store.tasks(b.id).map((t) => t.threadId)])) {
+      liveness.settle(threadId);
+      quietSince.delete(threadId);
     }
     stopScreenPoller(b.id);
     finalizeDelegationWatch(

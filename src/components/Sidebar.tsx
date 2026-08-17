@@ -879,6 +879,15 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { state, dispatch } = useStore();
+  // "Quiet for 3m…" has to keep counting: re-render every 30s while any
+  // bot is quiet, since nothing else in state changes during a silence
+  const [, quietTick] = useState(0);
+  const anyQuiet = state.bots.some((b) => b.busy && b.quietSince);
+  useEffect(() => {
+    if (!anyQuiet) return;
+    const t = setInterval(() => quietTick((n) => n + 1), 30_000);
+    return () => clearInterval(t);
+  }, [anyQuiet]);
   const { capabilities } = useDesktopCapabilities();
   const importInputRef = useRef<HTMLInputElement>(null);
   const importReturnRef = useRef<HTMLButtonElement>(null);
