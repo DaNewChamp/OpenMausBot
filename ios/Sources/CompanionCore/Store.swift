@@ -109,10 +109,26 @@ public struct CompanionState: Sendable {
 
     public mutating func apply(_ frame: Frame) {
         switch frame {
-        case let .hello(cursor, _):
-            // The caller decides what to do about `resumed`; either way this
-            // is where we now are in the stream.
-            self.cursor = cursor
+        case let .hello(cursor, resumed):
+            // Where the cursor goes depends on `resumed`, and getting it wrong
+            // loses frames silently.
+            //
+            // On a RESUMED stream the server replays the missed frames AFTER
+            // this hello, each delivered through the normal path that calls
+            // `advance(to:)`. Jumping the cursor to the server's current
+            // position here would claim we had already seen frames still in
+            // flight — and if the connection drops mid-replay (an app-switcher
+            // peek, a lock), the next reconnect asks `?since=` that position and
+            // the skipped frames are gone, with no error and no symptom. So on a
+            // resume we keep our position and let the replayed frames advance it.
+            //
+            // On a full hydrate (not resumed) the client is about to fetch
+            // current state, so adopting the server's position is correct — and
+            // a first connection has no cursor yet, so we must take one to
+            // establish the stream id `advance(to:)` reuses.
+            if !resumed || self.cursor == nil {
+                self.cursor = cursor
+            }
 
         case let .message(threadId, message):
             append(message, to: threadId)
@@ -141,14 +157,38 @@ public struct CompanionState: Sendable {
             if let index = bots.firstIndex(where: { $0.threadId == threadId }) {
                 bots[index].activeLeafId = activeLeafId
             }
+            // A thread frame means the visible branch moved (an edit or a
+            // version switch on the desktop). Text half-streamed into the branch
+            // that was just abandoned has nowhere to land — drop it, as the
+            // desktop does on the same frame.
+            clearStream(threadId)
 
         case let .bot(bot):
             // Frames carry the bot record without its transcript, so merge
             // rather than replace: assigning would wipe the messages the
             // hydrate put there.
+            //
+            // The exception is a TASK SWITCH. When a bot changes which task is
+            // live, the harness broadcasts a full bot record with a NEW
+            // `threadId` and that task's own transcript (server/index.ts, "a
+            // partial patch would leave the client showing the previous task's
+            // conversation"). The desktop honours this (store.tsx switchedThread
+            // branch); the phone must too, or the chat goes blank until a cold
+            // hydrate. Adopt the incoming transcript for the new thread, and
+            // drop any half-streamed text from the task we just left.
             if let index = bots.firstIndex(where: { $0.id == bot.id }) {
+                let previousThread = bots[index].threadId
+                let switchedThread = bot.threadId != previousThread
                 var merged = bot
-                merged.messages = bots[index].messages
+                if switchedThread, let incoming = bot.messages {
+                    messages[bot.threadId] = incoming
+                    hasMore[bot.threadId] = false
+                    clearStream(previousThread)
+                    clearStream(bot.threadId)
+                    merged.messages = incoming
+                } else {
+                    merged.messages = bots[index].messages
+                }
                 merged.activeLeafId = bot.activeLeafId ?? bots[index].activeLeafId
                 bots[index] = merged
             } else {

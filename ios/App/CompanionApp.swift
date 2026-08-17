@@ -18,7 +18,14 @@ struct CompanionApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
                     case .active: session.connect()
-                    case .background, .inactive: session.disconnect()
+                    // Only `.background` tears the stream down. `.inactive` is
+                    // transient — a Control Centre pull, the app switcher, an
+                    // incoming-call banner — and iOS returns to `.active`
+                    // moments later. Disconnecting on it would cost a reconnect
+                    // for every one of those, and drop frames each time the
+                    // resume cursor was advanced past what actually arrived.
+                    case .background: session.disconnect()
+                    case .inactive: break
                     @unknown default: break
                     }
                 }

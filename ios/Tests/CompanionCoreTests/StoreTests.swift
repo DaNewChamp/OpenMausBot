@@ -95,6 +95,40 @@ final class StoreTests: XCTestCase {
         XCTAssertNotNil(state.bot(bot.id)?.messages, "the merged bot keeps the transcript it had")
     }
 
+    func testATaskSwitchAdoptsTheNewTranscriptInsteadOfBlanking() throws {
+        // A task switch broadcasts a full bot record with a NEW threadId and
+        // that task's transcript. The merge path must adopt it — the old bug
+        // discarded the incoming messages and never populated the new thread,
+        // leaving the chat blank until a cold hydrate.
+        var state = try hydrated()
+        var bot = try XCTUnwrap(state.bots.first)
+        let firstThread = bot.threadId
+        state.apply(.message(threadId: firstThread, message: message("on-task-one")))
+        // half-streamed text on the task we are leaving
+        state.apply(.runtime(RuntimeEvent(type: "content.delta", threadId: firstThread, delta: "half", streamKind: "assistant_text")))
+
+        bot.threadId = "task-two-thread"
+        bot.messages = [message("on-task-two", text: "fresh context")]
+        state.apply(.bot(bot))
+
+        XCTAssertEqual(state.bot(bot.id)?.threadId, "task-two-thread")
+        XCTAssertEqual(state.transcript(forThread: "task-two-thread").map(\.id), ["on-task-two"])
+        XCTAssertNil(state.streaming[firstThread], "the abandoned task's live text is dropped")
+        // the first task's transcript is untouched — switching back must find it
+        XCTAssertEqual(state.transcript(forThread: firstThread).map(\.id).contains("on-task-one"), true)
+    }
+
+    func testAThreadFrameDropsHalfStreamedTextFromTheAbandonedBranch() throws {
+        var state = try hydrated()
+        let bot = try XCTUnwrap(state.bots.first)
+        state.apply(.runtime(RuntimeEvent(type: "content.delta", threadId: bot.threadId, delta: "typing…", streamKind: "assistant_text")))
+        XCTAssertNotNil(state.streaming[bot.threadId])
+
+        state.apply(.thread(threadId: bot.threadId, activeLeafId: "some-earlier-leaf"))
+        XCTAssertEqual(state.bot(bot.id)?.activeLeafId, "some-earlier-leaf")
+        XCTAssertNil(state.streaming[bot.threadId], "a rewind invalidates the dead branch's live text")
+    }
+
     func testDeletingABotTakesItsTranscriptWithIt() throws {
         var state = try hydrated()
         let bot = try XCTUnwrap(state.bots.first)
@@ -159,6 +193,33 @@ final class StoreTests: XCTestCase {
         var state = CompanionState()
         state.advance(to: 4)
         XCTAssertNil(state.cursor, "without a stream id there is no cursor worth keeping")
+    }
+
+    func testAResumedHelloDoesNotSkipTheFramesItIsAboutToReplay() {
+        // The cursor is at :5. A resumed stream re-opens and the server says
+        // "you are caught up to :9" — but the frames :6..:9 arrive AFTER this
+        // hello. If the cursor jumped to :9 now, a disconnect before :6 lands
+        // would ask ?since=:9 next time and those frames would be lost.
+        var state = CompanionState()
+        state.apply(.hello(cursor: "s1:5", resumed: false)) // establish
+        XCTAssertEqual(state.cursor, "s1:5")
+
+        state.apply(.hello(cursor: "s1:9", resumed: true))
+        XCTAssertEqual(state.cursor, "s1:5", "a resume must not advance past frames still in flight")
+
+        // the replayed frames advance it one real delivery at a time
+        state.advance(to: 6)
+        state.advance(to: 7)
+        XCTAssertEqual(state.cursor, "s1:7")
+    }
+
+    func testAFullHydrateHelloAdoptsTheServerPosition() {
+        // not resumed: the client fetches current state, so jumping to the
+        // server's position is right — there are no replayed frames coming
+        var state = CompanionState()
+        state.apply(.hello(cursor: "s1:5", resumed: false))
+        state.apply(.hello(cursor: "s2:20", resumed: false))
+        XCTAssertEqual(state.cursor, "s2:20")
     }
 
     // MARK: - Notifications
