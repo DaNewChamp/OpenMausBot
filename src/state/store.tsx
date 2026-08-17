@@ -42,7 +42,10 @@ export interface OptionCardData {
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen";
+  kind: "text" | "options" | "activity" | "screen" | "compaction";
+  /** compaction messages: the model-facing rebuild folded everything before
+   * `firstKeptId` into `summary`. A divider in the chat; nothing is gone. */
+  compaction?: { summary: string; firstKeptId: string; tokensBefore: number };
   text?: string;
   card?: OptionCardData;
   /** activity messages: tool name + outcome. `spoken` is the server's

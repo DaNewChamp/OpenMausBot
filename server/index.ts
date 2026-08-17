@@ -24,7 +24,7 @@ import { ensureDirs, instanceConfigs, loadConfig, saveConfig, withInstanceCli, E
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
 import { buildNotification, type Notification } from "./notify.ts";
-import { isEffortLevel, type RuntimeEvent } from "./contracts.ts";
+import { isEffortLevel, type ModelCatalog, type RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
@@ -48,6 +48,9 @@ import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease } from "./local-vm-lease.ts";
 import { TurnLiveness } from "./liveness.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
+import { rebuildForModel } from "./compactor.ts";
+import { contextWindowFor } from "./context-window.ts";
+import { replayEntries } from "./context-rebuild.ts";
 import { createTeamManifest, parseTeamManifest } from "./team-manifest.ts";
 import { listenWebhookIngress, webhookCredential, type WebhookIngress } from "./webhook-ingress.ts";
 import { WebhookManager } from "./webhooks.ts";
@@ -821,13 +824,11 @@ async function startTurn(
     broadcast({ kind: "message", threadId, message: userMessage });
   }
 
-  // transcript for API-backed drivers: settled text turns on the ACTIVE
-  // branch only — abandoned forks never reach the model
-  const transcript = store
-    .activePath(threadId)
-    .filter((m) => m.kind === "text" && m.text && m.id !== userMessage.id)
-    .slice(-40)
-    .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), text: m.text! }));
+  // The model-facing view of the thread: the ACTIVE branch only (abandoned
+  // forks never reach the model), from the latest compaction onward. Text
+  // and tool activity both — a handed-over engine must see the work, not
+  // just the talk. Unbounded here; bounded below only if it will be sent.
+  const modelView = replayEntries(store.modelContext(threadId).messages, { excludeId: userMessage.id });
 
   // After a rewind (edit / branch switch) the provider's native session
   // still contains the abandoned branch: start a fresh session instead of
@@ -843,13 +844,36 @@ async function startTurn(
   // whether we hold a cursor — see engineIsFresh.
   const fresh =
     !rewound &&
-    engineIsFresh({ instanceId, lastInstanceId: task.lastInstanceId, resumeCursors: task.resumeCursors, transcript });
+    engineIsFresh({ instanceId, lastInstanceId: task.lastInstanceId, resumeCursors: task.resumeCursors, transcript: modelView });
+  const replaysNatively = instance.driverKind === "grok";
+  // Only a turn that will actually replay pays for a rebuild — and the
+  // rebuild is sized for THIS model's window, summarizing older turns
+  // through generateText (the bot's own engine, else any that has one)
+  // when it will not fit. A compaction is a record in the tree; the
+  // display path is untouched.
+  const willReplay = rewound || fresh || replaysNatively;
+  const summarizer = instance.generateText ?? registry.instances().find((i) => i.generateText)?.generateText;
+  const rebuilt = willReplay
+    ? await rebuildForModel({
+        store,
+        threadId,
+        contextWindow: contextWindowFor(model, instance.models),
+        generateText: summarizer,
+        excludeId: userMessage.id,
+      })
+    : { entries: [], summary: undefined, compacted: false };
+  if (rebuilt.compacted) {
+    const record = store.activePath(threadId).at(-1);
+    if (record?.kind === "compaction") broadcast({ kind: "message", threadId, message: record });
+  }
+  const transcript = rebuilt.entries;
   const { turnText, resume } = buildTurnContext({
     text,
     transcript,
     rewound,
     fresh,
-    replaysNatively: instance.driverKind === "grok",
+    replaysNatively,
+    summary: rebuilt.summary,
   });
 
   const persona = [
@@ -1003,7 +1027,11 @@ async function startTurn(
         // the active task's own session — another task's cursor would
         // resume the wrong conversation and defeat the context bubble
         resumeCursor: resume ? task.resumeCursors[instanceId] : undefined,
-        transcript,
+        // transcript-replay drivers: the summary leads as an opening user
+        // line, since the transcript shape has no slot of its own for it
+        transcript: rebuilt.summary
+          ? [{ role: "user" as const, text: `[Summary of the earlier part of this conversation]\n${rebuilt.summary}` }, ...transcript]
+          : transcript,
         system:
           persona +
           (computerKind === "vm"
@@ -1153,16 +1181,29 @@ const webhookIngressStatus = () => ({
 // fresh session with recent room context. A member's reply may @mention
 // teammates; those get one chained turn (hop 1), never deeper.
 const groupQueues = new Map<string, Promise<void>>();
-const GROUP_CONTEXT_MESSAGES = 30;
 const MAX_GROUP_HOPS = 1;
 
-function serializeRoomContext(threadId: string, userName: string): string {
-  return store
-    .messagesFor(threadId)
-    .filter((m) => m.kind === "text" && m.text)
-    .slice(-GROUP_CONTEXT_MESSAGES)
-    .map((m) => `${m.role === "user" ? userName : (m.from?.name ?? "Bot")}: ${m.text}`)
-    .join("\n");
+/** The room as the next speaker should see it: sized for THEIR model, with
+ * each member's lines attributed. Reads the active path (a room can be
+ * rewound too) and compacts through the responder's engine when needed. */
+async function serializeRoomContext(
+  threadId: string,
+  userName: string,
+  target: { model: string | undefined; catalog: ModelCatalog; generateText?: (prompt: string) => Promise<string> },
+): Promise<string> {
+  const rebuilt = await rebuildForModel({
+    store,
+    threadId,
+    contextWindow: contextWindowFor(target.model, target.catalog),
+    generateText: target.generateText ?? registry.instances().find((i) => i.generateText)?.generateText,
+    attribute: true,
+  });
+  if (rebuilt.compacted) {
+    const record = store.activePath(threadId).at(-1);
+    if (record?.kind === "compaction") broadcast({ kind: "message", threadId, message: record });
+  }
+  const lines = rebuilt.entries.map((e) => (e.role === "user" ? `${userName}: ${e.text}` : e.text));
+  return [rebuilt.summary ? `[Summary of the earlier conversation]\n${rebuilt.summary}` : "", ...lines].filter(Boolean).join("\n");
 }
 
 function broadcastGroup(groupId: string) {
@@ -1233,7 +1274,11 @@ async function runGroupMemberTurn(
     .filter(Boolean)
     .join("\n");
 
-  const text = `${serializeRoomContext(group.threadId, userName)}\n\n(Reply to the conversation above as ${bot.name}.)`;
+  const text = `${await serializeRoomContext(group.threadId, userName, {
+    model: bot.modelSelection.model,
+    catalog: instance.models,
+    generateText: instance.generateText,
+  })}\n\n(Reply to the conversation above as ${bot.name}.)`;
 
   // run the turn and wait for it to settle, folding the reply text so a
   // chained @mention can be routed afterwards

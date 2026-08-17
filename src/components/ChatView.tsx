@@ -40,6 +40,7 @@ import { ReactionBar, ReactionChips } from "./Reactions";
 import { SpeakButton } from "./SpeakButton";
 import { CallButton, CallOverlay } from "./CallView";
 import { cn } from "@/lib/cn";
+import { CompactionDivider } from "./CompactionDivider";
 import { quietFor } from "@/lib/quiet";
 import { webhookMessageView } from "@/lib/webhook-message";
 
@@ -567,6 +568,8 @@ const MessagesList = memo(function MessagesList({
               );
             case "screen":
               return m.png ? <ScreenFrame png={m.png} mime={m.mime} /> : null;
+            case "compaction":
+              return <CompactionDivider message={m} />;
             default:
               return (
                 <Bubble

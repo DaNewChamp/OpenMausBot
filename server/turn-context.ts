@@ -15,6 +15,9 @@ export interface TurnContextInput {
   fresh: boolean;
   /** transcript-replay drivers get history via SendTurnInput.transcript instead */
   replaysNatively: boolean;
+  /** a compaction summary of what came before `transcript`, when the
+   * rebuild was bounded (see server/compactor.ts) */
+  summary?: string;
 }
 
 /** Does this engine need the thread replayed to it? True when a DIFFERENT
@@ -49,14 +52,15 @@ export function buildTurnContext(input: TurnContextInput): {
   /** false when the native session must not be resumed */
   resume: boolean;
 } {
-  const { text, transcript, rewound, fresh, replaysNatively } = input;
+  const { text, transcript, rewound, fresh, replaysNatively, summary } = input;
   const resume = !rewound && !fresh;
-  const replay = !resume && !replaysNatively && transcript.length > 0;
+  const replay = !resume && !replaysNatively && (transcript.length > 0 || Boolean(summary));
   if (!replay) return { turnText: text, resume };
   return {
     turnText: [
       rewound ? REWOUND_PREAMBLE : FRESH_PREAMBLE,
       "",
+      ...(summary ? [`[Summary of the earlier part of the conversation:]`, summary, ""] : []),
       ...transcript.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.text}`),
       "",
       "[Now reply to the user's latest message:]",

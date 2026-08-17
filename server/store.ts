@@ -50,9 +50,14 @@ export interface OptionCardData {
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen";
+  kind: "text" | "options" | "activity" | "screen" | "compaction";
   text?: string;
   card?: OptionCardData;
+  /** compaction messages: the model-facing rebuild folded everything on
+   * the path before `firstKeptId` into `summary`. A record in the tree
+   * like any message — nothing behind it is deleted; the display path
+   * still reaches message one. Only modelContext() reads it. */
+  compaction?: { summary: string; firstKeptId: string; tokensBefore: number };
   /** activity messages: tool name + outcome. `spoken` is the same chip as
    * a phrase a voice can read ("reading a file") — computed once here so
    * call mode never has to re-derive it from the raw tool name, and absent
@@ -502,6 +507,37 @@ export class Store {
     if (full.kind === "screen") this.pruneScreenFrames(t);
     this.saveThread(threadId);
     return full;
+  }
+
+  /** Fold the older part of the model-facing rebuild into a summary. The
+   * record is appended like any message (parentId = current leaf) so it
+   * sits in the tree and travels with the branch; a rewind to before it
+   * simply no longer sees it. */
+  appendCompaction(threadId: string, compaction: NonNullable<Message["compaction"]>): Message {
+    return this.appendMessage(threadId, { role: "bot", kind: "compaction", compaction });
+  }
+
+  /** What a model should be shown for this thread: the latest compaction's
+   * summary (if one is on the active path) plus every message from its
+   * firstKeptId onward, records themselves excluded. Without a compaction
+   * this is the whole active path. */
+  modelContext(threadId: string): { summary?: string; messages: Message[] } {
+    const path = this.activePath(threadId);
+    let latest = -1;
+    for (let i = path.length - 1; i >= 0; i--) {
+      if (path[i].kind === "compaction" && path[i].compaction) {
+        latest = i;
+        break;
+      }
+    }
+    if (latest < 0) return { messages: path.filter((m) => m.kind !== "compaction") };
+    const record = path[latest].compaction!;
+    const keptFrom = path.findIndex((m) => m.id === record.firstKeptId);
+    const start = keptFrom >= 0 && keptFrom < latest ? keptFrom : latest + 1;
+    return {
+      summary: record.summary,
+      messages: path.slice(start).filter((m) => m.kind !== "compaction"),
+    };
   }
 
   /** Screen frames are ~100-500KB of base64 each and the whole thread file

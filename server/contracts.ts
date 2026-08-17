@@ -220,7 +220,15 @@ export interface EngineInstall {
 // a rejection to an unavailable shadow snapshot.
 export interface ModelCatalog {
   default: string;
-  options: Array<{ id: string; label: string; custom?: boolean }>;
+  options: Array<{
+    id: string;
+    label: string;
+    custom?: boolean;
+    /** total context window in tokens, when the driver knows it — sizes
+     * the model-facing rebuild (server/context-rebuild.ts). Unknown falls
+     * back to a pattern table over the model id, then a conservative default. */
+    contextWindow?: number;
+  }>;
 }
 
 export interface DriverCreateInput<Config> {

@@ -43,6 +43,18 @@ describe("buildTurnContext", () => {
   });
 });
 
+describe("buildTurnContext with a compaction summary", () => {
+  it("leads the replay with the summary, then the kept transcript", () => {
+    const out = buildTurnContext({ text: "hi", transcript, rewound: false, fresh: true, replaysNatively: false, summary: "They named the dog." });
+    expect(out.turnText).toMatch(/Summary of the earlier part[\s\S]*They named the dog\.[\s\S]*User: my dog is named Biscuit[\s\S]*hi$/);
+  });
+  it("replays even when only a summary survives", () => {
+    const out = buildTurnContext({ text: "hi", transcript: [], rewound: false, fresh: true, replaysNatively: false, summary: "S" });
+    expect(out.turnText).toContain("S");
+    expect(out.resume).toBe(false);
+  });
+});
+
 describe("engineIsFresh", () => {
   const withUser = transcript;
   const greetingOnly = [{ role: "assistant" as const, text: "Hey — I'm Wren. Nice to meet you." }];

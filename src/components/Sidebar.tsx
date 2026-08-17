@@ -128,7 +128,8 @@ function preview(bot: Bot): string {
   if (bot.busy) return bot.quietSince ? `Quiet for ${quietFor(bot.quietSince)}…` : "Working…";
   // the visible branch's tail — bot.messages holds every fork, so its last
   // entry can belong to a version the user switched away from
-  const last = visibleMessages(bot).at(-1);
+  // a compaction record is a divider, not something the bot said
+  const last = visibleMessages(bot).filter((m) => m.kind !== "compaction").at(-1);
   if (!last) return "";
   if (last.kind === "options" && last.card) return last.card.title;
   if (last.kind === "activity" && last.tool) return last.tool.name;
