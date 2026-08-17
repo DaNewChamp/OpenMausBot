@@ -742,9 +742,11 @@ export class Store {
     const task = this.taskByThread(botId, threadId);
     if (!task) return null;
     const prev = task.usage ?? { input: 0, output: 0, turns: 0 };
+    const input = Number.isFinite(usage.input) ? Math.max(0, Math.trunc(usage.input)) : 0;
+    const output = Number.isFinite(usage.output) ? Math.max(0, Math.trunc(usage.output)) : 0;
     task.usage = {
-      input: prev.input + Math.max(0, usage.input),
-      output: prev.output + Math.max(0, usage.output),
+      input: prev.input + input,
+      output: prev.output + output,
       turns: prev.turns + 1,
     };
     this.saveBots();

@@ -85,7 +85,7 @@ export class TurnWatchdog {
   /** Visible for tests; the interval calls this. */
   sweep(): void {
     const at = this.now();
-    for (const turn of [...this.turns.values()]) {
+    for (const turn of this.turns.values()) {
       if (turn.waitingOnHuman) continue;
       if (at - turn.lastEventAt < this.opts.stallMs) continue;
       this.turns.delete(turn.threadId);

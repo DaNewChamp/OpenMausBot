@@ -42,11 +42,12 @@ describe("Store", () => {
       usage: { input: 1200, output: 300, turns: 1 },
     });
     store.addTaskUsage(bot.id, bot.threadId, { input: 800, output: 100 });
+    store.addTaskUsage(bot.id, bot.threadId, { input: Number.NaN, output: -20 });
     // a different thread never inherits another task's tally
     expect(store.addTaskUsage(bot.id, "no-such-thread", { input: 5, output: 5 })).toBeNull();
 
     const reloaded = new Store(selection);
-    expect(reloaded.taskByThread(bot.id, bot.threadId)?.usage).toEqual({ input: 2000, output: 400, turns: 2 });
+    expect(reloaded.taskByThread(bot.id, bot.threadId)?.usage).toEqual({ input: 2000, output: 400, turns: 3 });
   });
 
   it("persists the per-bot composio gate", () => {

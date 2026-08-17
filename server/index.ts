@@ -338,17 +338,26 @@ const watchdog = new TurnWatchdog({
     broadcast({ kind: "message", threadId: turn.threadId, message: note });
     finalizeDelegationWatch(turn.threadId, false, "", "Delegated turn stalled and was stopped");
     turnUsage.delete(turn.threadId);
-    const group = store.groupByThread(turn.threadId);
-    if (group && group.busyBotId === turn.botId) {
-      groupSpeakers.delete(turn.threadId);
-      store.patchGroup(group.id, { busyBotId: null });
-      broadcastGroup(group.id);
-    }
-    if (bot?.busy) {
-      stopScreenPoller(bot.id);
-      store.patchBot(bot.id, { busy: false });
-      broadcast({ kind: "bot", bot: wireBot(store.bot(bot.id)!) });
-    }
+    // ACP interruption settles within five seconds; other adapters settle
+    // sooner. Keep ownership during that grace period so another turn cannot
+    // overlap the process we are stopping. The normal turn.completed fold
+    // clears it first when the adapter responds.
+    const release = setTimeout(() => {
+      const group = store.groupByThread(turn.threadId);
+      const speaker = groupSpeakers.get(turn.threadId);
+      if (group && group.busyBotId === turn.botId && speaker?.botId === turn.botId) {
+        groupSpeakers.delete(turn.threadId);
+        store.patchGroup(group.id, { busyBotId: null, unread: true });
+        broadcastGroup(group.id);
+      }
+      const currentBot = store.bot(turn.botId);
+      if (currentBot?.busy) {
+        stopScreenPoller(currentBot.id);
+        store.patchBot(currentBot.id, { busy: false });
+        broadcast({ kind: "bot", bot: wireBot(store.bot(currentBot.id)!) });
+      }
+    }, 6_000);
+    release.unref?.();
   },
 });
 watchdog.start();
@@ -631,6 +640,18 @@ bus.subscribe((event: RuntimeEvent) => {
               pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
             }
           });
+        }
+      }
+      const speaker = groupSpeakers.get(event.threadId);
+      const group = store.groupByThread(event.threadId);
+      if (speaker && group?.busyBotId === speaker.botId) {
+        groupSpeakers.delete(event.threadId);
+        store.patchGroup(group.id, { busyBotId: null, unread: true });
+        broadcastGroup(group.id);
+        const speakingBot = store.bot(speaker.botId);
+        if (speakingBot?.busy) {
+          store.patchBot(speakingBot.id, { busy: false, unread: true });
+          broadcast({ kind: "bot", bot: wireBot(store.bot(speakingBot.id)!) });
         }
       }
       // A delegated turn's terminal state belongs in the A⇄B channel:
@@ -938,7 +959,7 @@ async function startTurn(
   // hang the HTTP request
   store.patchBot(bot.id, { busy: true, unread: false });
   broadcast({ kind: "bot", bot: wireBot(store.bot(bot.id)!) });
-  watchdog.watch(threadId, bot.id);
+  turnUsage.delete(threadId);
 
   void (async () => {
     try {
@@ -1075,6 +1096,7 @@ async function startTurn(
           ? "You can work with the user's other bots through the agents tools — list_bots shows who's available, ask_bot sends one of them a message and returns their reply."
           : "";
 
+      watchdog.watch(threadId, bot.id);
       await instance.adapter.sendTurn({
         threadId,
         text: turnText,
@@ -1128,6 +1150,7 @@ async function startTurn(
       localVmLease.release(threadId);
       if (localVmActiveThread === threadId) localVmActiveThread = null;
       watchdog.settle(threadId);
+      turnUsage.delete(threadId);
       const message = e instanceof Error ? e.message : String(e);
       const failure = store.appendMessage(threadId, {
         role: "bot",
@@ -1251,10 +1274,10 @@ async function runGroupMemberTurn(
   // bots that already spoke for this user message — "@Scout ask @Pixel"
   // must not run Pixel twice (once chained, once as a direct responder)
   spoken: Set<string> = new Set(),
-): Promise<void> {
+): Promise<boolean> {
   const group = store.group(groupId);
   const bot = store.bot(botId);
-  if (!group || !bot) return;
+  if (!group || !bot) return false;
   spoken.add(botId);
   const instance = registry.get(bot.modelSelection.instanceId);
   const userName = cfg.profile?.name?.trim() || "User";
@@ -1266,7 +1289,7 @@ async function runGroupMemberTurn(
       tool: { name: `error: ${bot.name}'s model is unavailable`, ok: false },
     });
     broadcast({ kind: "message", threadId: group.threadId, message: failure });
-    return;
+    return true;
   }
   // One turn per bot at a time, across BOTH engines. Without this a bot
   // could run its 1:1 turn and a room turn concurrently — two provider
@@ -1280,11 +1303,10 @@ async function runGroupMemberTurn(
       tool: { name: `${bot.name} is busy in another conversation — skipped this round`, ok: false },
     });
     broadcast({ kind: "message", threadId: group.threadId, message: note });
-    return;
+    return true;
   }
   store.patchBot(bot.id, { busy: true });
   broadcast({ kind: "bot", bot: wireBot(store.bot(bot.id)!) });
-  watchdog.watch(group.threadId, bot.id);
 
   store.patchGroup(group.id, { busyBotId: bot.id });
   broadcastGroup(group.id);
@@ -1317,21 +1339,32 @@ async function runGroupMemberTurn(
   // run the turn and wait for it to settle, folding the reply text so a
   // chained @mention can be routed afterwards
   let replyText = "";
-  await new Promise<void>((resolve) => {
+  const outcome = await new Promise<"settled" | "dispatch_failed" | "timed_out">((resolve) => {
     let done = false;
-    const finish = () => {
+    const finish = (value: "settled" | "dispatch_failed" | "timed_out") => {
       if (done) return;
       done = true;
       clearTimeout(timer);
       unsub();
-      resolve();
+      resolve(value);
     };
     const unsub = bus.subscribe((e: RuntimeEvent) => {
       if (e.threadId !== group.threadId) return;
       if (e.type === "item.completed" && e.itemType === "assistant_text") replyText += `\n${e.text}`;
-      else if (e.type === "turn.completed") finish();
+      else if (e.type === "turn.completed") finish("settled");
     });
-    const timer = setTimeout(finish, 5 * 60_000);
+    const timer = setTimeout(() => {
+      void instance.adapter.interruptTurn(group.threadId).catch(() => {});
+      const failure = store.appendMessage(group.threadId, {
+        role: "bot",
+        kind: "activity",
+        from: { botId: bot.id, name: bot.name, color: bot.color },
+        tool: { name: `${bot.name}'s room turn exceeded 5 minutes and was stopped`, ok: false },
+      });
+      broadcast({ kind: "message", threadId: group.threadId, message: failure });
+      finish("timed_out");
+    }, 5 * 60_000);
+    watchdog.watch(group.threadId, bot.id);
     instance.adapter
       .sendTurn({
         threadId: group.threadId,
@@ -1348,16 +1381,17 @@ async function runGroupMemberTurn(
           tool: { name: `error: ${err instanceof Error ? err.message.slice(0, 140) : "turn failed"}`, ok: false },
         });
         broadcast({ kind: "message", threadId: group.threadId, message: failure });
-        finish();
+        watchdog.settle(group.threadId);
+        finish("dispatch_failed");
       });
   });
+  // A timed-out provider still owns the room thread until its interrupt
+  // produces turn.completed (or the stall watchdog's grace fallback runs).
+  // Do not clear busy or start the next member on that same thread early.
+  if (outcome === "timed_out") return false;
   groupSpeakers.delete(group.threadId);
   store.patchGroup(group.id, { busyBotId: null, unread: true });
   broadcastGroup(group.id);
-  // the underlying provider turn may still be running past the 5-minute
-  // room ceiling — the bot stays interruptible via its own chat, and the
-  // stall watchdog reaps it if it goes silent. Busy clears here because
-  // the ROOM has moved on either way.
   const after = store.bot(bot.id);
   if (after?.busy) {
     store.patchBot(bot.id, { busy: false });
@@ -1371,9 +1405,10 @@ async function runGroupMemberTurn(
       .filter((b): b is NonNullable<typeof b> => Boolean(b) && b!.id !== bot.id);
     for (const next of roomResponders(replyText, members, { kind: "mentions" })) {
       if (spoken.has(next.id)) continue;
-      await runGroupMemberTurn(groupId, next.id, hop + 1, spoken);
+      if (!(await runGroupMemberTurn(groupId, next.id, hop + 1, spoken))) return false;
     }
   }
+  return true;
 }
 
 function startGroupTurn(groupId: string, text: string) {
@@ -1398,10 +1433,21 @@ function startGroupTurn(groupId: string, text: string) {
 
   const prev = groupQueues.get(groupId) ?? Promise.resolve();
   const next = prev.then(async () => {
+    const current = store.group(groupId);
+    if (current?.busyBotId) {
+      const owner = store.bot(current.busyBotId);
+      const note = store.appendMessage(current.threadId, {
+        role: "bot",
+        kind: "activity",
+        tool: { name: `${owner?.name ?? "A room member"} is still stopping — this message was not dispatched`, ok: false },
+      });
+      broadcast({ kind: "message", threadId: current.threadId, message: note });
+      return;
+    }
     const spoken = new Set<string>();
     for (const responder of responders) {
       if (spoken.has(responder.id)) continue;
-      await runGroupMemberTurn(groupId, responder.id, 0, spoken);
+      if (!(await runGroupMemberTurn(groupId, responder.id, 0, spoken))) break;
     }
   });
   groupQueues.set(groupId, next.catch(() => {}));

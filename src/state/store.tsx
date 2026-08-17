@@ -130,6 +130,9 @@ export interface Bot {
   /** When this bot wants to talk to another bot (ask_bot/delegate_bot),
    * pause and ask the user first. Off by default. */
   approvePeerComms?: boolean;
+  /** Whether this bot may use the workspace's connected apps. Unset means
+   * allowed for existing bots; imported bots start with this disabled. */
+  composio?: boolean;
   messages: Message[];
   /** leaf of the visible conversation branch (see visibleMessages) */
   activeLeafId?: string | null;
@@ -198,7 +201,12 @@ export interface InstanceInfo {
     version?: string | null;
   };
   models: { default: string; options: Array<{ id: string; label: string; custom?: boolean; loaded?: boolean }> };
-  capabilities?: { computerMcp?: boolean; agentsMcp?: boolean; effortLevels?: readonly EffortLevel[] };
+  capabilities?: {
+    computerMcp?: boolean;
+    agentsMcp?: boolean;
+    composioMcp?: boolean;
+    effortLevels?: readonly EffortLevel[];
+  };
   /** `custom` agents sit below the rail divider — no subscription catalog. */
   access?: "subscription" | "custom";
   install?: EngineInstall;
@@ -336,6 +344,7 @@ type Action =
           | "hidden"
           | "chiefOfStaff"
           | "approvePeerComms"
+          | "composio"
           | "modelSelection"
         >
       >;

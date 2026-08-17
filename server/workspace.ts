@@ -32,7 +32,9 @@ Longer notes belong in memory/<topic>.md files, read on demand.
  * cheap enough to call at every turn dispatch. */
 export function ensureWorkspace(botId: string): string {
   const dir = join(WORKSPACES_DIR, botId);
-  mkdirSync(join(dir, "memory"), { recursive: true });
+  // Memories can contain personal details and task history. New workspace
+  // directories should not be readable by other local accounts.
+  mkdirSync(join(dir, "memory"), { recursive: true, mode: 0o700 });
   const memoryFile = join(dir, "MEMORY.md");
   if (!existsSync(memoryFile)) writeFileSync(memoryFile, MEMORY_SEED, { mode: 0o600 });
   return dir;
