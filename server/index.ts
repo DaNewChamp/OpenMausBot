@@ -2146,6 +2146,10 @@ const server = createServer(async (req, res) => {
       }
     }
     if (method === "POST" && path === "/api/teams/import") {
+      const importMode = url.searchParams.get("mode") ?? "add";
+      if (importMode !== "add" && importMode !== "replace") {
+        return json(res, 400, { error: "Team import mode must be add or replace" });
+      }
       const body = await readBody(req);
       let manifest;
       try {
@@ -2154,6 +2158,14 @@ const server = createServer(async (req, res) => {
         return json(res, 400, { error: error instanceof Error ? error.message : "Invalid team file" });
       }
 
+      // Snapshot before creating anything so replace never archives the new
+      // team. Old bots are hidden only after every new bot was created; a
+      // failed import therefore leaves the current workspace untouched.
+      const archived = importMode === "replace"
+        ? store.bots
+            .filter((bot) => !bot.hidden)
+            .map((bot) => ({ id: bot.id, chiefOfStaff: Boolean(bot.chiefOfStaff) }))
+        : [];
       const importedBots: ReturnType<typeof store.createBot>[] = [];
       try {
         const selection = await defaultSelection();
@@ -2176,9 +2188,14 @@ const server = createServer(async (req, res) => {
           store.patchBot(created.id, { composio: false });
           importedBots.push(created);
         }
+        const archivedBots = archived.flatMap(({ id }) => {
+          const bot = store.patchBot(id, { hidden: true, chiefOfStaff: false });
+          return bot ? [publicBot(bot)] : [];
+        });
         const publicBots = importedBots.map(publicBot);
+        for (const bot of archivedBots) broadcast({ kind: "bot", bot });
         for (const bot of publicBots) broadcast({ kind: "bot", bot });
-        return json(res, 201, { bots: publicBots });
+        return json(res, 201, { bots: publicBots, archivedBots, archived });
       } catch (error) {
         for (const bot of importedBots) store.deleteBot(bot.id);
         throw error;
