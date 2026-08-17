@@ -12,7 +12,6 @@ export interface CommsBus {
   /** SSE broadcast (kind: "message" envelope). */
   broadcast: (payload: Record<string, unknown>) => void;
   /** SSE broadcast (kind: "group" envelope) for a single group. */
-  broadcastGroup: (groupId: string) => void;
 }
 
 /** Find or create the bot⇄bot channel for the pair. The channel keeps
@@ -68,7 +67,6 @@ export function mirrorExchange(
   });
   if (channel) {
     bus.store.patchGroup(channel.id, { unread: true });
-    bus.broadcastGroup(channel.id);
   }
 }
 
@@ -89,7 +87,6 @@ export function mirrorReply(
     from: { botId: target.id, name: target.name, color: target.color },
   });
   bus.store.patchGroup(channel.id, { unread: true });
-  bus.broadcastGroup(channel.id);
 }
 
 /** Mirror a terminal activity note into the channel — for async handoffs
@@ -112,5 +109,4 @@ export function mirrorActivity(
     from: { botId: from.id, name: from.name, color: from.color },
   });
   bus.store.patchGroup(channel.id, { unread: true });
-  bus.broadcastGroup(channel.id);
 }

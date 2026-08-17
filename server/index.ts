@@ -1146,15 +1146,11 @@ function serializeRoomContext(threadId: string, userName: string): string {
     .join("\n");
 }
 
-function broadcastGroup(groupId: string) {
-  const group = store.group(groupId);
-  if (group) broadcast({ kind: "group", group });
-}
 
 // comms bus: passed into the visibility helpers in comms-visibility.ts so
 // they can mirror messages + chips without re-deriving SSE plumbing. Same
 // shape every comms entry point uses (ask_bot, delegate_bot).
-const commsBus: CommsBus = { store, broadcast, broadcastGroup };
+const commsBus: CommsBus = { store, broadcast };
 
 // approval bus: peer-approval.ts only needs to push cards and broadcast
 // them — its pending map lives in the module so the two respond endpoints
@@ -1193,8 +1189,7 @@ async function runGroupMemberTurn(
     return;
   }
 
-  store.patchGroup(group.id, { busyBotId: bot.id });
-  broadcastGroup(group.id);
+  store.patchGroup(group.id, { busyBotId: bot.id }); // the store's change stream carries the frame
   groupSpeakers.set(group.threadId, { botId: bot.id, name: bot.name, color: bot.color });
 
   const roster = group.memberIds
@@ -1247,7 +1242,6 @@ async function runGroupMemberTurn(
   });
   groupSpeakers.delete(group.threadId);
   store.patchGroup(group.id, { busyBotId: null, unread: true });
-  broadcastGroup(group.id);
 
   // chained mentions: a member's reply can summon teammates — one hop only
   if (hop < MAX_GROUP_HOPS && replyText.trim()) {

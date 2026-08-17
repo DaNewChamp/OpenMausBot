@@ -24,12 +24,10 @@ interface BusPair {
   commsBus: CommsBus;
   approvalBus: { store: Store; broadcast: (payload: unknown) => void };
   broadcasts: unknown[];
-  groupBroadcasts: string[];
 }
 
 function setupBuses(store: Store): BusPair {
   const broadcasts: unknown[] = [];
-  const groupBroadcasts: string[] = [];
   const broadcast = (payload: unknown) => {
     broadcasts.push(payload);
   };
@@ -40,12 +38,9 @@ function setupBuses(store: Store): BusPair {
       broadcasts.push({ kind: change.type, threadId: change.threadId, message: change.message });
     }
   });
-  const broadcastGroup = (id: string) => {
-    groupBroadcasts.push(id);
-  };
-  const commsBus: CommsBus = { store, broadcast, broadcastGroup };
+  const commsBus: CommsBus = { store, broadcast };
   const approvalBus = { store, broadcast };
-  return { commsBus, approvalBus, broadcasts, groupBroadcasts };
+  return { commsBus, approvalBus, broadcasts };
 }
 
 /** Poll until `predicate` returns a truthy value or `timeout` elapses.
