@@ -39,6 +39,43 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: pnpm exec vite build
 
+  ios-companion:
+    name: iOS companion (swift test + build)
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # CompanionCore is a plain SwiftPM package — the fold, the wire types and
+      # the SSE parser run with no Xcode, no simulator, no signing. This is the
+      # test the whole two-language contract strategy rests on: it decodes the
+      # fixtures captured from a real harness, so the phone's idea of the API
+      # cannot drift from what the server sends without something here failing.
+      - name: swift test (CompanionCore)
+        run: swift test --package-path ios
+      # The App target only compiles under Xcode. Build it unsigned for the
+      # simulator so a change that breaks the UI layer fails CI rather than a
+      # phone. XcodeGen renders project.yml into the .xcodeproj (not committed).
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          cd ios && xcodegen generate
+      - name: Build for the iOS Simulator (unsigned)
+        run: |
+          xcodebuild \
+            -project ios/OpenMausCompanion.xcodeproj \
+            -scheme OpenMausCompanion \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+      # NOTE: a fixture-drift gate (re-capture against a live harness, fail on a
+      # diff) is the eventual guard against the server changing a shape the phone
+      # reads. It is NOT wired here yet because capture-companion-fixtures.mjs
+      # embeds random ids, timestamps and a temp workspace path, so a git-diff
+      # gate would red-fail every run. Making the capture deterministic is the
+      # prerequisite — tracked as a follow-up.
+
   package-linux:
     name: package + smoke (Ubuntu 24.04 x64)
     runs-on: ubuntu-24.04

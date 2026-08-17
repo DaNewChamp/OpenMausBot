@@ -105,7 +105,7 @@ is the point.
 
 ## What the phone may and may not do
 
-Enforced server-side by `remoteDenial()` in `server/index.ts`, and mirrored here
+Enforced by `denyReason()` in `companion/src/routes.ts` (a default-deny allowlist), and mirrored here
 by simply not having the methods:
 
 | Allowed | Refused |

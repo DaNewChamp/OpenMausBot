@@ -130,7 +130,7 @@ in `server/index.ts`:
   machine?" a structural fact rather than an address guess: a single `0.0.0.0` bind
   reports `localAddress` `127.0.0.1` for loopback traffic, so one socket could not tell
   the desktop app from the coffee-shop wifi.
-- **Default deny on the companion socket.** `remoteDenial()` allows a route family
+- **Default deny on the companion socket.** `denyReason()` in companion/src/routes.ts allows a route family
   explicitly, so anything added later is closed to phones until someone opens it. A
   paired phone may chat, answer approvals, manage tasks and rooms — and may **not**
   write API keys (`PUT /api/config`), manage the companion (`/api/remote/*`,
@@ -427,7 +427,7 @@ a different design.
 1. **Remote reach for v1: the LAN, or Tailscale.** No relay until someone asks — and
    after Layer 4, Tailscale is the path the docs lead with rather than the footnote,
    because a network that isolates its clients defeats the LAN path entirely.
-2. **The phone may not change app settings or API keys.** Enforced by `remoteDenial()`.
+2. **The phone may not change app settings or API keys.** Enforced by `denyReason()` in companion/src/routes.ts, plus a field filter (`deviceBodyFields`) that strips privilege-bearing fields from a device bot PATCH.
 3. **Distribution: the App Store.** See the caveats below — this is the one decision with
    consequences that reach back into the architecture.
 4. **Code layout: `ios/` in this repo**, for the upstreaming reason below.

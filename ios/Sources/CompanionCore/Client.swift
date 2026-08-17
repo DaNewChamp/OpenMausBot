@@ -1,7 +1,7 @@
 // The companion API client.
 //
 // Everything the phone can do to the harness, in one place. The rules it
-// encodes come from `remoteDenial()` in server/index.ts: a paired phone may
+// encodes come from `denyReason()` in companion/src/routes.ts: a paired phone may
 // chat, answer approvals, and manage tasks and rooms — it may not touch
 // credentials, pairing, or the Local VM. Those routes are simply absent
 // here rather than present and failing at runtime.
