@@ -363,7 +363,8 @@ describe("ClaudeDriver turns (fake CLI)", () => {
       requestId: "ask-1",
     });
 
-    await instance.adapter.respondToRequest("t-perm-abc", "ask-1", { behavior: "allow" });
+    // the outcome names exactly what was granted: this action, once
+    await expect(instance.adapter.respondToRequest("t-perm-abc", "ask-1", { behavior: "allow" })).resolves.toBe("allowed-once");
     expect(await answered).toMatchObject({ behavior: "allow" });
     const resolved = await recorder.until((e) => e.type === "request.resolved");
     expect(resolved).toMatchObject({ behavior: "allow", source: "user" });
@@ -373,12 +374,12 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "turn.completed");
   });
 
-  it("rejects answers to unknown or already-resolved asks", async () => {
+  it("answers to unknown or already-resolved asks resolve `unavailable` — typed, never a throw", async () => {
     await create("hang");
     await instance.adapter.sendTurn({ threadId: "t-perm-2", text: "go" });
-    await expect(
-      instance.adapter.respondToRequest("t-perm-2", "never-asked", { behavior: "allow" }),
-    ).rejects.toThrow(/pending request/);
+    await expect(instance.adapter.respondToRequest("t-perm-2", "never-asked", { behavior: "allow" })).resolves.toBe("unavailable");
+    // and a thread with no turn at all is the same answer
+    await expect(instance.adapter.respondToRequest("no-such-thread", "x", { behavior: "deny" })).resolves.toBe("unavailable");
     await instance.adapter.interruptTurn("t-perm-2");
     await recorder.until((e) => e.type === "turn.completed");
   });

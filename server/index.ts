@@ -24,7 +24,7 @@ import { ensureDirs, instanceConfigs, loadConfig, saveConfig, withInstanceCli, E
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
 import { buildNotification, type Notification } from "./notify.ts";
-import { isEffortLevel, type RuntimeEvent } from "./contracts.ts";
+import { isEffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
@@ -45,6 +45,7 @@ import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease } from "./local-vm-lease.ts";
+import { RepeatDetector, callKey } from "./repeat-detector.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
 import { createTeamManifest, parseTeamManifest } from "./team-manifest.ts";
 import { listenWebhookIngress, webhookCredential, type WebhookIngress } from "./webhook-ingress.ts";
@@ -281,6 +282,43 @@ function broadcast(payload: Record<string, unknown>) {
 // once can collide on a bare id and patch each other's messages.
 const toolMessageByItem = new Map<string, string>(); // threadId:itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // threadId:requestId -> messageId
+
+/** Deliver a person's answer to the engine that asked, and tell the truth
+ * about what happened. `unavailable` — the turn ended, the ask timed out,
+ * the engine has no asks — is fail-closed: the action was never run. The
+ * card is settled and a chip says so, instead of the answer vanishing into
+ * a 500 while the card sits open forever. */
+async function answerRequest(
+  threadId: string,
+  instanceId: string,
+  requestId: string,
+  behavior: "allow" | "deny" | "answer",
+  message?: string,
+): Promise<RequestOutcome> {
+  const instance = registry.get(instanceId);
+  let outcome: RequestOutcome = "unavailable";
+  if (instance) {
+    try {
+      outcome = await instance.adapter.respondToRequest(threadId, requestId, { behavior, message });
+    } catch {
+      outcome = "unavailable";
+    }
+  }
+  if (outcome === "unavailable") {
+    const messageId = askMessageByRequest.get(`${threadId}:${requestId}`);
+    const existing = messageId ? store.messagesFor(threadId).find((m) => m.id === messageId) : undefined;
+    if (existing?.card && !existing.card.answered) {
+      store.patchMessage(threadId, existing.id, { card: { ...existing.card, answered: "unavailable", dismissed: true } });
+    }
+    if (messageId) askMessageByRequest.delete(`${threadId}:${requestId}`);
+    store.appendMessage(threadId, {
+      role: "bot",
+      kind: "activity",
+      tool: { name: "Couldn't deliver that answer — the request is no longer open, so the action was not run", ok: false },
+    });
+  }
+  return outcome;
+}
 // the last settled assistant text per thread, so a "finished" notification
 // can carry what the bot actually said
 const lastReply = new Map<string, string>();
@@ -466,7 +504,8 @@ bus.subscribe((event: RuntimeEvent) => {
         void (async () => {
           try {
             if (!instance) throw new Error("provider unavailable");
-            await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "allow" });
+            const outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "allow" });
+            if (outcome === "unavailable") throw new Error("the ask is no longer open");
             pushMessage({
               role: "bot",
               kind: "activity",
@@ -598,6 +637,34 @@ function finalizeDelegationWatch(
   else mirrorActivity(commsBus, target, channel, failureName, false);
   return true;
 }
+
+// A bot going in circles — the same call with the same arguments, over and
+// over in one turn — gets a chip at 5, 10 and 20 repeats. Observe and say
+// so; the human has Stop. Keyed on tool + arguments, so a bare tool name
+// (Claude's item.started carries only that) is never counted: five "Bash"
+// may be five different commands. Arguments come from ACP item titles and
+// from every permission ask's summary (the command being approved).
+const repeats = new RepeatDetector({ thresholds: [5, 10, 20] });
+bus.subscribe((event: RuntimeEvent) => {
+  if (event.type === "turn.completed") return void repeats.settle(event.threadId);
+  let key: string | null = null;
+  if (event.type === "item.started" && event.itemType === "tool") {
+    // a title with more than a bare identifier is a call with arguments
+    // (ACP: "echo hi", "Read src/x.ts"); a bare "Bash" is not countable
+    const title = event.title ?? "";
+    if (/\s|\//.test(title.trim())) key = callKey("tool", title);
+  } else if (event.type === "request.opened" && event.requestType === "permission") key = callKey(event.tool, event.summary);
+  if (!key) return;
+  const { threshold } = repeats.record(event.threadId, key);
+  if (!threshold) return;
+  const [tool, ...rest] = key.split(":");
+  const args = rest.join(":");
+  store.appendMessage(event.threadId, {
+    role: "bot",
+    kind: "activity",
+    tool: { name: `Same call repeated ${threshold}× — ${tool}: ${args.slice(0, 80)}${args.length > 80 ? "…" : ""} — it may be stuck`, ok: false },
+  });
+});
 
 // Drain queued delegations for a source thread after its turn settles.
 // Run as a separate subscriber so the drain logic stays out of the main
@@ -2167,15 +2234,10 @@ const server = createServer(async (req, res) => {
       // that lives in peer-approval's pending map. Resolve them here so
       // the provider adapter never sees a request it didn't raise.
       if (resolvePeerComms(approvalBus, String(body.requestId), body.behavior)) {
-        return json(res, 200, { ok: true });
+        return json(res, 200, { ok: true, outcome: body.behavior === "allow" ? "allowed-once" : "rejected" });
       }
-      const instance = registry.get(bot.modelSelection.instanceId);
-      if (!instance) return json(res, 409, { error: "provider unavailable" });
-      await instance.adapter.respondToRequest(bot.threadId, String(body.requestId), {
-        behavior: body.behavior,
-        message: body.message,
-      });
-      return json(res, 200, { ok: true });
+      const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), body.behavior, body.message);
+      return json(res, 200, { ok: true, outcome });
     }
     // Answer by THREAD, so a request raised inside a room can be answered
     // too: a member's turn runs on the room's thread, and the bot that
@@ -2191,13 +2253,8 @@ const server = createServer(async (req, res) => {
       if (resolvePeerComms(approvalBus, String(body.requestId), body.behavior)) {
         return json(res, 200, { ok: true });
       }
-      const instance = registry.get(owner.modelSelection.instanceId);
-      if (!instance) return json(res, 409, { error: "provider unavailable" });
-      await instance.adapter.respondToRequest(threadId, String(body.requestId), {
-        behavior: body.behavior,
-        message: body.message,
-      });
-      return json(res, 200, { ok: true });
+      const outcome = await answerRequest(threadId, owner.modelSelection.instanceId, String(body.requestId), body.behavior, body.message);
+      return json(res, 200, { ok: true, outcome });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/interrupt$/);
     if (m && method === "POST") {

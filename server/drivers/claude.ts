@@ -441,8 +441,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               ...base(threadId, turnId),
               type: "request.resolved",
               requestId: resolved.id,
-              behavior: resolved.behavior,
-              source: resolved.source,
+              behavior: resolved.behavior as "allow" | "deny" | "answer",
+              source: resolved.source as "user" | "timeout" | "system",
             }),
         });
         args.push("--permission-prompt-tool", "mcp__ogb__approve");
@@ -644,12 +644,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
         respondToRequest: async (threadId, requestId, decision) => {
+          // fail-closed by construction: no broker, or an ask that already
+          // timed out / settled, is `unavailable` — the caller denies
           const broker = active.get(threadId)?.broker;
-          if (!broker) throw new Error("no active turn with a permission broker on this thread");
+          if (!broker) return "unavailable";
           const behavior = decision.behavior === "answer" ? "answer" : decision.behavior;
-          if (!broker.answer(requestId, behavior, decision.message)) {
-            throw new Error("no such pending request (it may have timed out)");
-          }
+          if (!broker.answer(requestId, behavior, decision.message)) return "unavailable";
+          return behavior === "allow" ? "allowed-once" : behavior === "answer" ? "answered" : "rejected";
         },
         hasSession: (threadId) => active.has(threadId),
         stopAll: async () => {
