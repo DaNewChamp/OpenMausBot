@@ -8,15 +8,18 @@ import { api, useStore, formatTime, type Bot } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { cn } from "@/lib/cn";
 
+/** One /api/search hit: the server's SQLite scan, resolved to its owner. */
 export interface SearchHit {
   botId?: string;
   groupId?: string;
-  ownerName: string;
+  /** the bot's or room's name */
+  name: string;
   threadId: string;
-  taskTitle: string;
+  /** the task title (bots only) */
+  task?: string;
   messageId: string;
-  role: "user" | "bot";
-  kind: "text" | "options" | "activity" | "screen";
+  role: string;
+  kind: string;
   from?: string;
   at: number;
   snippet: string;
@@ -103,8 +106,8 @@ export function SearchResults({ query, onLanded }: { query: string; onLanded: ()
             )}
             <span className="min-w-0 flex-1">
               <span className="flex items-baseline gap-1.5 text-[12px] text-ink-secondary">
-                <span className="truncate font-medium text-ink">{hit.from ?? hit.ownerName}</span>
-                <span className="truncate">· {hit.taskTitle}</span>
+                <span className="truncate font-medium text-ink">{hit.from ?? hit.name}</span>
+                {hit.task ? <span className="truncate">· {hit.task}</span> : null}
                 <span className="ml-auto shrink-0 tabular-nums">{formatTime(hit.at)}</span>
               </span>
               <span className={cn("mt-0.5 line-clamp-2 text-[12.5px] leading-snug", hit.role === "user" ? "text-ink" : "text-ink-secondary")}>

@@ -97,6 +97,9 @@ export interface Task {
   threadId: string;
   title: string;
   createdAt: number;
+  /** folder this task's turns run in, pinned on its first turn; null =
+   * legacy home-folder session; absent = not pinned yet */
+  cwd?: string | null;
 }
 
 export interface Bot {
@@ -115,6 +118,8 @@ export interface Bot {
   modelSelection: ModelSelection;
   /** Where this bot's computer runs; unset = auto (cloud box if one exists, else local). */
   computer?: "cloud" | "vm" | "local" | "off";
+  /** where new tasks run their shell tools; absent = the private bot workspace */
+  cwd?: string;
   /** auto mode: the bot approves its own tool permissions */
   autoApprove?: boolean;
   /** tools this bot may always use without asking */
@@ -130,6 +135,9 @@ export interface Bot {
   /** When this bot wants to talk to another bot (ask_bot/delegate_bot),
    * pause and ask the user first. Off by default. */
   approvePeerComms?: boolean;
+  /** Whether this bot may use the workspace's connected apps. Unset means
+   * allowed for existing bots; imported bots start with this disabled. */
+  composio?: boolean;
   messages: Message[];
   /** leaf of the visible conversation branch (see visibleMessages) */
   activeLeafId?: string | null;
@@ -197,8 +205,15 @@ export interface InstanceInfo {
     authenticated?: boolean;
     version?: string | null;
   };
-  models: { default: string; options: Array<{ id: string; label: string; custom?: boolean }> };
-  capabilities?: { computerMcp?: boolean; agentsMcp?: boolean; effortLevels?: readonly EffortLevel[] };
+  models: { default: string; options: Array<{ id: string; label: string; custom?: boolean; loaded?: boolean }> };
+  capabilities?: {
+    computerMcp?: boolean;
+    agentsMcp?: boolean;
+    composioMcp?: boolean;
+    effortLevels?: readonly EffortLevel[];
+  };
+  /** `custom` agents sit below the rail divider — no subscription catalog. */
+  access?: "subscription" | "custom";
   install?: EngineInstall;
   /** Configured CLI path override — set ONLY when the user overrode it;
    * absent means the driver default is in effect. */
@@ -338,6 +353,7 @@ type Action =
           | "hidden"
           | "chiefOfStaff"
           | "approvePeerComms"
+          | "composio"
           | "modelSelection"
         >
       >;
@@ -476,7 +492,9 @@ function reducer(state: AppState, action: Action): AppState {
     case "botAdded":
       return withMascotMotion({
         ...state,
-        bots: [action.bot, ...state.bots],
+        // An HTTP create/import response and its SSE broadcast can race. Fold
+        // both paths without ever showing the same bot twice.
+        bots: [action.bot, ...state.bots.filter((bot) => bot.id !== action.bot.id)],
         activeView: "chat",
         selectedId: action.bot.id,
       }, action.bot.id, "arrive");
