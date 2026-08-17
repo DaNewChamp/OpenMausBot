@@ -43,6 +43,10 @@ export function SearchResults({ query, onLanded }: { query: string; onLanded: ()
       setError(null);
       return;
     }
+    // Do not leave the previous query's hits clickable while the debounced
+    // request for this query is still in flight.
+    setHits(null);
+    setError(null);
     let alive = true;
     const t = setTimeout(() => {
       api(`/api/search?q=${encodeURIComponent(q)}&limit=40`)
@@ -59,7 +63,8 @@ export function SearchResults({ query, onLanded }: { query: string; onLanded: ()
 
   const land = async (hit: SearchHit) => {
     try {
-      const ownerId = hit.botId ?? hit.groupId!;
+      const ownerId = hit.botId ?? hit.groupId;
+      if (!ownerId) throw new Error("That conversation is no longer available.");
       dispatch({ type: "select", id: ownerId });
       if (hit.botId) {
         const bot = state.bots.find((b) => b.id === hit.botId);
@@ -71,7 +76,15 @@ export function SearchResults({ query, onLanded }: { query: string; onLanded: ()
         // only when the hit is on an abandoned version — this rewinds the
         // leaf and marks the provider session stale, so never do it idly
         if (!hit.onActivePath) {
-          await api(`/api/bots/${hit.botId}/active-branch`, { method: "POST", body: JSON.stringify({ messageId: hit.messageId }) });
+          const branch = await api(`/api/bots/${hit.botId}/active-branch`, {
+            method: "POST",
+            body: JSON.stringify({ messageId: hit.messageId }),
+          });
+          // The store also broadcasts this over SSE, but apply the response
+          // now so rendering the target never depends on cross-stream timing.
+          if (branch?.activeLeafId) {
+            dispatch({ type: "threadActive", threadId: hit.threadId, activeLeafId: branch.activeLeafId });
+          }
         }
       }
       dispatch({ type: "focusMessage", threadId: hit.threadId, messageId: hit.messageId });

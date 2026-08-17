@@ -663,7 +663,14 @@ function reducer(state: AppState, action: Action): AppState {
     case "togglePlugins":
       return { ...state, pluginsOpen: action.open ?? !state.pluginsOpen };
     case "focusMessage":
-      return { ...state, focusMessage: { threadId: action.threadId, messageId: action.messageId, nonce: Date.now() } };
+      return {
+        ...state,
+        focusMessage: {
+          threadId: action.threadId,
+          messageId: action.messageId,
+          nonce: (state.focusMessage?.nonce ?? 0) + 1,
+        },
+      };
     case "toggleComputer": {
       const open = action.open ?? !state.computerOpen;
       return {

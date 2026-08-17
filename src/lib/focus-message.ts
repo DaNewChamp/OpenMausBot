@@ -14,21 +14,29 @@ export function useFocusMessage(threadId: string, ready: boolean) {
     if (!focus || focus.threadId !== threadId || !ready) return;
     // messages may land a tick after the task switch; try briefly
     let tries = 0;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let flashTimer: ReturnType<typeof setTimeout> | null = null;
+    let target: HTMLElement | null = null;
     const attempt = () => {
+      if (cancelled) return;
       const wrapper = document.querySelector<HTMLElement>(`[data-mid="${CSS.escape(focus.messageId)}"]`);
-      const target = wrapper?.lastElementChild as HTMLElement | null;
+      target = wrapper?.lastElementChild as HTMLElement | null;
       if (!target) {
-        if (tries++ < 20) setTimeout(attempt, 100);
+        if (tries++ < 20) retryTimer = setTimeout(attempt, 100);
         return;
       }
-      target.scrollIntoView({ block: "center", behavior: "smooth" });
+      const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      target.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
       target.classList.add(...FLASH_CLASSES);
-      flashTimer = setTimeout(() => target.classList.remove(...FLASH_CLASSES), 1800);
+      flashTimer = setTimeout(() => target?.classList.remove(...FLASH_CLASSES), 1800);
     };
     attempt();
     return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
       if (flashTimer) clearTimeout(flashTimer);
+      target?.classList.remove(...FLASH_CLASSES);
     };
   }, [focus?.nonce, focus?.threadId, focus?.messageId, threadId, ready]);
 }
