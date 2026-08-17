@@ -19,8 +19,9 @@ Electron + Vite. Tests: `pnpm vitest run <file>`; typecheck: `pnpm typecheck`.
 
 **Spec:** `docs/plans/agent-harness-upgrades.md` (v1). This document
 supersedes its ordering and scope; v1's **Verified findings**, **Design**
-sections, and **Upstream references** remain the design detail for items
-this plan carries forward unchanged. Where this plan says "design as v1
+sections, and **Upstream references** (the section at the end of v1 listing
+what was taken from pi, deepseek-harness, mem0/Letta) remain the design
+detail for items this plan carries forward unchanged. Where this plan says "design as v1
 item N", the executor reads that section of v1.
 
 ## Global Constraints
@@ -165,9 +166,22 @@ access groundwork, decomposing `server/index.ts`), plus:
 - Create: `server/turn-context.test.ts`
 - Modify: `server/index.ts:806-826` (transcript/turnText block), `:979` (resumeCursor line stays as-is — verify only)
 
+> **As built (#180):** the naive rule below — "fresh = this instance has no
+> cursor" — was implemented first and failed manual testing on A → B → A
+> (the first engine had a cursor from days earlier and resumed a stale
+> session). The shipped contract is **dispatch-based**: `TaskRecord.
+> lastInstanceId` is set by `store.markTaskDispatched()` after every
+> `sendTurn`, and `engineIsFresh({ instanceId, lastInstanceId, resumeCursors,
+> transcript })` decides replay — a different last instance ⇒ fresh; legacy
+> tasks without the field fall back to the cursor map (a lone own cursor
+> keeps resuming; anything ambiguous replays); a seeded greeting alone never
+> triggers a replay. `resumeCursor` is passed only when `resume` is true.
+> Steps below are kept as written for the record; where they differ, the
+> code and `server/turn-context.test.ts` are authoritative.
+
 **Interfaces:**
-- Consumes: `store.activePath(threadId)` (exists), `task.resumeCursors: Record<InstanceId, unknown>` (exists, `server/store.ts:117`), `bot.rewound` (exists).
-- Produces: `buildTurnContext(input: TurnContextInput): { turnText: string; resume: boolean }` from `server/turn-context.ts` — item 2.2 (portable context) later replaces this function's internals; its signature is the seam.
+- Consumes: `store.activePath(threadId)` (exists), `task.resumeCursors: Record<InstanceId, unknown>` (exists, `server/store.ts:117`), `bot.rewound` (exists), `task.lastInstanceId` (new, see above).
+- Produces: `buildTurnContext(input: TurnContextInput): { turnText: string; resume: boolean }` and `engineIsFresh(...)` from `server/turn-context.ts`; `store.markTaskDispatched(botId, threadId, instanceId)` — item 2.2 (portable context) later replaces `buildTurnContext`'s internals; its signature is the seam.
 
 ```ts
 // server/turn-context.ts — the produced interface, in full
@@ -342,12 +356,14 @@ distinctive token (e.g. `Biscuit`), patches the bot's
 follow-up, waits for the reply, and asserts the *prompt* the second fake
 received contains `User:` and `Biscuit`. The fake's reply text is fixed, so
 assert via the native protocol log: the driver tees verbatim protocol
-messages under `join(home, ".openmausbot", "native")` — read the newest log
-for the second instance and match `/joining this conversation[\s\S]*Biscuit/`.
-If the native tee is not written for the fake driver, assert instead by
-setting `FAKE_ACP_MODE` aside and extending the fake CLI to echo the prompt
-length/first line back in its `agent_message_chunk` — a 3-line change to
-`server/testing/fake-acp-cli.ts` guarded by a new `FAKE_ACP_ECHO=1` env var.
+messages **per thread** to `join(home, ".openmausbot", "native",
+`${bot.threadId}.ndjson`)`. Read that one file, keep the `dir === "out"`
+entries whose `msg.method === "session/prompt"`, and tell the prompts apart
+by **order and content**: prompt 1 (first engine) carries no replay
+wrapper; prompt 2 (second engine) matches
+`/joining this conversation[\s\S]*User: my dog is named Biscuit/`; and — as
+built — a prompt 3 after switching back to the first engine replays too.
+(There is no per-instance log; the tee is per thread.)
 
 Run: `pnpm vitest run server/branching.test.ts`
 Expected: PASS, including the new test.
@@ -366,6 +382,6 @@ git commit -m "fix: rebuild context when a bot's engine switches mid-thread"
 
 ## Self-review notes
 
-- v1 coverage: every v1 item appears above as carried (1,3,4,5,6,7,8,11,13,14,15), rescoped (2→1.6, 9→2.8+3.3, 10→2.4), promoted (open question 1→1.4), or deferred with cause (12). Deferred list carried whole.
+- v1 coverage: every v1 item appears above as carried (1,3,4,5,6,7,8,11,13,14,15,16→3.1,17→3.2), rescoped (2→1.6/3.5, 9→2.8+3.3, 10→2.4), promoted (open question 1→1.4), or deferred with cause (12). Deferred list carried whole.
 - Task 1's `resume` flag deliberately reproduces today's cursor semantics; the only behaviour change is the `fresh` replay path.
 - Follow-on tasks (1.2 onward) get their own bite-sized plans as they are picked up, per the scope check — each is an independent subsystem with its own test cycle.
