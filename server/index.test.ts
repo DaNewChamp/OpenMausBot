@@ -296,7 +296,14 @@ describe("harness HTTP API", () => {
           (frame.kind === "bot" && importedBotIds.has(frame.bot?.id)) ||
           (frame.kind === "group" && frame.group?.id === imported.body.group.id),
       );
-      expect(importFrames.map((frame) => frame.kind)).toEqual(["bot", "bot", "group"]);
+      // Other windows must learn the members before the room that references
+      // them. The store emits on every write now, so there are more frames
+      // than three — the invariant is the ORDER: every imported bot has been
+      // announced before the room's first frame.
+      const firstGroupAt = importFrames.findIndex((frame) => frame.kind === "group");
+      expect(firstGroupAt).toBeGreaterThan(0);
+      const announcedBefore = new Set(importFrames.slice(0, firstGroupAt).map((frame) => frame.bot?.id));
+      for (const id of importedBotIds) expect(announcedBefore.has(id)).toBe(true);
 
       const invalid = await api("POST", "/api/teams/import", { ...importManifest, version: 2 });
       expect(invalid.status).toBe(400);

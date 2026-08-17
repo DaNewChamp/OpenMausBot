@@ -39,8 +39,7 @@ export function mirrorExchange(
   sourceThreadId = from.threadId,
 ): void {
   const note = (threadId: string, m: Omit<Message, "id" | "at">) => {
-    const message = bus.store.appendMessage(threadId, m);
-    bus.broadcast({ kind: "message", threadId, message });
+    bus.store.appendMessage(threadId, m);
     return message;
   };
   if (channel) {
@@ -83,13 +82,12 @@ export function mirrorReply(
   channel: GroupRecord | undefined,
 ): void {
   if (!channel || !reply.trim()) return;
-  const message = bus.store.appendMessage(channel.threadId, {
+  bus.store.appendMessage(channel.threadId, {
     role: "bot",
     kind: "text",
     text: reply,
     from: { botId: target.id, name: target.name, color: target.color },
   });
-  bus.broadcast({ kind: "message", threadId: channel.threadId, message });
   bus.store.patchGroup(channel.id, { unread: true });
   bus.broadcastGroup(channel.id);
 }
@@ -107,13 +105,12 @@ export function mirrorActivity(
   ok: boolean,
 ): void {
   if (!channel) return;
-  const message = bus.store.appendMessage(channel.threadId, {
+  bus.store.appendMessage(channel.threadId, {
     role: "bot",
     kind: "activity",
     tool: { name, ok },
     from: { botId: from.id, name: from.name, color: from.color },
   });
-  bus.broadcast({ kind: "message", threadId: channel.threadId, message });
   bus.store.patchGroup(channel.id, { unread: true });
   bus.broadcastGroup(channel.id);
 }

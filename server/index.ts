@@ -176,6 +176,42 @@ const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
   tasks: store.tasks(bot.id).map(wireTask),
 });
 
+// The store tells us what it wrote; this is the ONE place that turns those
+// into SSE frames. No mutation path can persist without emitting — the
+// property holds by construction, not by every call site remembering to
+// broadcast. Bot frames are the slim wire shape (no transcript); the few
+// endpoints whose callers need the transcript (task create/switch, imports)
+// still send their richer payload on top.
+store.onChange((change) => {
+  switch (change.type) {
+    case "message":
+      broadcast({ kind: "message", threadId: change.threadId, message: change.message });
+      break;
+    case "message.patch":
+      broadcast({ kind: "message.patch", threadId: change.threadId, message: change.message });
+      break;
+    case "thread":
+      broadcast({ kind: "thread", threadId: change.threadId, activeLeafId: change.activeLeafId });
+      break;
+    case "bot": {
+      const bot = store.bot(change.botId);
+      if (bot) broadcast({ kind: "bot", bot: wireBot(bot) });
+      break;
+    }
+    case "bot.deleted":
+      broadcast({ kind: "bot.deleted", botId: change.botId });
+      break;
+    case "group": {
+      const group = store.group(change.groupId);
+      if (group) broadcast({ kind: "group", group });
+      break;
+    }
+    case "group.deleted":
+      broadcast({ kind: "group.deleted", groupId: change.groupId });
+      break;
+  }
+});
+
 // ── message pages ──────────────────────────────────────────────────────
 // GET /api/bots hands back every bot with its entire transcript, which is
 // the right answer over loopback and the wrong one over a phone network:
@@ -384,7 +420,6 @@ bus.subscribe((event: RuntimeEvent) => {
 
   const pushMessage = (m: Omit<Message, "id" | "at">) => {
     const message = store.appendMessage(event.threadId, group && m.role === "bot" ? { ...m, from: speaker } : m);
-    broadcast({ kind: "message", threadId: event.threadId, message });
     return message;
   };
 
@@ -409,10 +444,9 @@ bus.subscribe((event: RuntimeEvent) => {
           // dropping it here would silently un-narrate every completed tool
           const existing = store.messagesFor(event.threadId).find((m) => m.id === messageId)?.tool;
           toolName = existing?.name ?? "tool";
-          const patched = store.patchMessage(event.threadId, messageId, {
+          store.patchMessage(event.threadId, messageId, {
             tool: { name: toolName, ok: event.ok, spoken: existing?.spoken },
           });
-          if (patched) broadcast({ kind: "message.patch", threadId: event.threadId, message: patched });
           toolMessageByItem.delete(itemKey);
         }
         // the bot just acted ON ITS SCREEN — refresh the preview now. Only
@@ -514,19 +548,23 @@ bus.subscribe((event: RuntimeEvent) => {
       // this is the branch where a card actually reached a human. Anything
       // auto mode answered took the early return above and never buzzes.
       if (asker) {
+        // the bot is not working now — it is waiting on a person
+        if (asker.busy) store.setActivity(asker.id, "waiting-on-you");
         notify(buildNotification(permission ? "approval" : "question", asker, event.threadId, event.summary));
       }
       break;
     }
     case "request.resolved": {
+      // answered (by whoever): the turn is working again, unless it settled
+      const waiting = bot ?? (speaker ? store.bot(speaker.botId) : undefined);
+      if (waiting?.activity === "waiting-on-you") store.setActivity(waiting.id, "working");
       const messageId = event.requestId ? askMessageByRequest.get(`${event.threadId}:${event.requestId}`) : null;
       if (messageId) {
         const existing = store.messagesFor(event.threadId).find((m) => m.id === messageId);
         if (existing?.card && !existing.card.answered) {
-          const patched = store.patchMessage(event.threadId, messageId, {
+          store.patchMessage(event.threadId, messageId, {
             card: { ...existing.card, answered: event.behavior, dismissed: event.source !== "user" },
           });
-          if (patched) broadcast({ kind: "message.patch", threadId: event.threadId, message: patched });
         }
         if (event.requestId) askMessageByRequest.delete(`${event.threadId}:${event.requestId}`);
       }
@@ -538,13 +576,19 @@ bus.subscribe((event: RuntimeEvent) => {
         kind: "activity",
         tool: { name: `error: ${event.message.slice(0, 160)}`, ok: false, setup: event.setup },
       });
+      // a setup error means the engine could not even start: the bot is
+      // dead until something changes, not merely idle. The next successful
+      // dispatch moves it to working; turn.completed (which follows a setup
+      // failure) is told to leave "dead" alone.
+      if (event.setup && bot) store.setActivity(bot.id, "dead");
       break;
     case "turn.completed": {
       const reply = lastReply.get(event.threadId) ?? "";
       lastReply.delete(event.threadId);
       if (bot) {
-        store.patchBot(bot.id, { busy: false, unread: true });
-        broadcast({ kind: "bot", bot: wireBot(store.bot(bot.id)!) });
+        // settled → idle; a setup failure already marked it dead, keep that
+        if (store.bot(bot.id)?.activity !== "dead") store.setActivity(bot.id, "idle");
+        store.patchBot(bot.id, { unread: true });
         notify(buildNotification("done", bot, event.threadId, reply));
         if (screenPollers.has(bot.id)) {
           // the last live frame becomes a settled inline screen message —
@@ -632,12 +676,11 @@ bus.subscribe((event: RuntimeEvent) => {
       }
       const source = store.botByThread(sourceThreadId);
       if (!source) return;
-      const note = store.appendMessage(sourceThreadId, {
+      store.appendMessage(sourceThreadId, {
         role: "bot",
         kind: "activity",
         tool: { name: `error: delegation to @${bot?.name ?? toBotId} could not start — ${why.slice(0, 120)}`, ok: false },
       });
-      broadcast({ kind: "message", threadId: sourceThreadId, message: note });
     };
     return startTurn(toBotId, text, {
       commsDepth,
@@ -796,7 +839,6 @@ async function startTurn(
   let userMessage = opts?.userMessage;
   if (!userMessage) {
     userMessage = store.appendMessage(threadId, { role: "user", kind: "text", text });
-    broadcast({ kind: "message", threadId, message: userMessage });
   }
 
   // transcript for API-backed drivers: settled text turns on the ACTIVE
@@ -838,8 +880,8 @@ async function startTurn(
   // busy flips immediately so the composer locks; the dispatch itself runs
   // in the background — box provisioning can take ~90s and must never
   // hang the HTTP request
-  store.patchBot(bot.id, { busy: true, unread: false });
-  broadcast({ kind: "bot", bot: wireBot(store.bot(bot.id)!) });
+  store.setActivity(bot.id, "working");
+  store.patchBot(bot.id, { unread: false });
 
   void (async () => {
     try {
@@ -1014,14 +1056,12 @@ async function startTurn(
       localVmLease.release(threadId);
       if (localVmActiveThread === threadId) localVmActiveThread = null;
       const message = e instanceof Error ? e.message : String(e);
-      const failure = store.appendMessage(threadId, {
+      store.appendMessage(threadId, {
         role: "bot",
         kind: "activity",
         tool: { name: `error: ${message.slice(0, 160)}`, ok: false },
       });
-      broadcast({ kind: "message", threadId, message: failure });
-      store.patchBot(bot.id, { busy: false });
-      broadcast({ kind: "bot", bot: wireBot(store.bot(bot.id)!) });
+      store.setActivity(bot.id, "idle");
       opts?.onDispatchError?.(message);
     }
   })();
@@ -1144,13 +1184,12 @@ async function runGroupMemberTurn(
   const instance = registry.get(bot.modelSelection.instanceId);
   const userName = cfg.profile?.name?.trim() || "User";
   if (!instance) {
-    const failure = store.appendMessage(group.threadId, {
+    store.appendMessage(group.threadId, {
       role: "bot",
       kind: "activity",
       from: { botId: bot.id, name: bot.name, color: bot.color },
       tool: { name: `error: ${bot.name}'s model is unavailable`, ok: false },
     });
-    broadcast({ kind: "message", threadId: group.threadId, message: failure });
     return;
   }
 
@@ -1197,13 +1236,12 @@ async function runGroupMemberTurn(
     instance.adapter
       .sendTurn({ threadId: group.threadId, text, system })
       .catch((err) => {
-        const failure = store.appendMessage(group.threadId, {
+        store.appendMessage(group.threadId, {
           role: "bot",
           kind: "activity",
           from: { botId: bot.id, name: bot.name, color: bot.color },
           tool: { name: `error: ${err instanceof Error ? err.message.slice(0, 140) : "turn failed"}`, ok: false },
         });
-        broadcast({ kind: "message", threadId: group.threadId, message: failure });
         finish();
       });
   });
@@ -1226,8 +1264,7 @@ async function runGroupMemberTurn(
 function startGroupTurn(groupId: string, text: string) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
-  const userMessage = store.appendMessage(group.threadId, { role: "user", kind: "text", text });
-  broadcast({ kind: "message", threadId: group.threadId, message: userMessage });
+  store.appendMessage(group.threadId, { role: "user", kind: "text", text });
 
   const members = group.memberIds
     .map((id) => store.bot(id))
@@ -1364,14 +1401,12 @@ async function reloadProviders() {
       "",
       "Delegated turn did not finish — provider settings changed",
     );
-    const note = store.appendMessage(b.threadId, {
+    store.appendMessage(b.threadId, {
       role: "bot",
       kind: "activity",
       tool: { name: "error: turn interrupted — provider settings changed", ok: false },
     });
-    broadcast({ kind: "message", threadId: b.threadId, message: note });
-    store.patchBot(b.id, { busy: false });
-    broadcast({ kind: "bot", bot: wireBot(store.bot(b.id)!) });
+    store.setActivity(b.id, "idle");
   }
 }
 
@@ -1802,7 +1837,6 @@ const server = createServer(async (req, res) => {
           ? body.name.trim()
           : `${store.bot(memberIds[0])!.name} & co.`;
       const group = store.createGroup(name, memberIds);
-      broadcast({ kind: "group", group });
       return json(res, 201, { group: { ...group, messages: [] } });
     }
     if (method === "POST" && path === "/api/teams/export") {
@@ -1921,7 +1955,6 @@ const server = createServer(async (req, res) => {
       }
       const group = store.patchGroup(m[1], patch);
       if (!group) return json(res, 404, { error: "no such room" });
-      broadcast({ kind: "group", group });
       return json(res, 200, { group });
     }
     m = path.match(/^\/api\/groups\/([\w-]+)$/);
@@ -1935,7 +1968,6 @@ const server = createServer(async (req, res) => {
           unlinkSync(join(dir, `${group.threadId}.ndjson`));
         } catch {}
       }
-      broadcast({ kind: "group.deleted", groupId: group.id });
       return json(res, 200, { ok: true });
     }
     m = path.match(/^\/api\/groups\/([\w-]+)\/messages$/);
@@ -1964,7 +1996,6 @@ const server = createServer(async (req, res) => {
       if (!emoji) return json(res, 400, { error: "emoji required" });
       const patched = store.toggleReaction(m[1], m[2], emoji, typeof body.by === "string" ? body.by : "user");
       if (!patched) return json(res, 404, { error: "no such message" });
-      broadcast({ kind: "message.patch", threadId: m[1], message: patched });
       return json(res, 200, { message: patched });
     }
     if (method === "POST" && path === "/api/bots") {
@@ -2056,7 +2087,6 @@ const server = createServer(async (req, res) => {
       if (chiefChanges === null) return json(res, 404, { error: "no such bot" });
       const changed = new Map([[bot.id, store.bot(bot.id)!]]);
       for (const changedBot of chiefChanges) changed.set(changedBot.id, changedBot);
-      for (const changedBot of changed.values()) broadcast({ kind: "bot", bot: wireBot(changedBot) });
       return json(res, 200, { bot: wireBot(bot) });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)$/);
@@ -2079,7 +2109,6 @@ const server = createServer(async (req, res) => {
           unlinkSync(join(dir, `${bot.threadId}.ndjson`));
         } catch {}
       }
-      broadcast({ kind: "bot.deleted", botId: bot.id });
       return json(res, 200, { ok: true });
     }
 
@@ -2098,7 +2127,6 @@ const server = createServer(async (req, res) => {
           ...(body.dismissed !== undefined ? { dismissed: body.dismissed } : {}),
         },
       });
-      broadcast({ kind: "message.patch", threadId: bot.threadId, message: patched });
       return json(res, 200, { message: patched });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/messages$/);
@@ -2138,8 +2166,6 @@ const server = createServer(async (req, res) => {
       const message = store.branchMessage(bot.threadId, messageId, text);
       if (!message) return json(res, 404, { error: "no such message" });
       store.patchBot(bot.id, { rewound: true });
-      broadcast({ kind: "message", threadId: bot.threadId, message });
-      broadcast({ kind: "thread", threadId: bot.threadId, activeLeafId: message.id });
       await startTurn(bot.id, text, { userMessage: message });
       return json(res, 202, { ok: true });
     }
@@ -2155,7 +2181,6 @@ const server = createServer(async (req, res) => {
       if (!leaf) return json(res, 404, { error: "no such message" });
       // provider sessions still hold the other branch — next turn replays
       store.patchBot(bot.id, { rewound: true });
-      broadcast({ kind: "thread", threadId: bot.threadId, activeLeafId: leaf });
       return json(res, 200, { activeLeafId: leaf });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/respond$/);

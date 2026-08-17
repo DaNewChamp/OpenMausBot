@@ -273,3 +273,123 @@ describe("Store", () => {
     expect(reloaded.bot(bot.id)?.busy).toBe(false);
   });
 });
+
+describe("Store change stream", () => {
+  beforeEach(() => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+  });
+
+  const record = (store: Store) => {
+    const events: Array<Record<string, unknown>> = [];
+    store.onChange((e) => events.push(e as unknown as Record<string, unknown>));
+    return events;
+  };
+
+  it("emits once per write, after the write, with the record it wrote", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const events = record(store);
+    const m = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
+    expect(events).toEqual([{ type: "message", threadId: bot.threadId, message: m }]);
+    // the emitted record is the stored one (redacted, id'd) — not the input
+    expect(store.messagesFor(bot.threadId).at(-1)).toBe(m);
+  });
+
+  it("every message-tree write emits a message or thread event", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const first = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "a" });
+    const events = record(store);
+    store.patchMessage(bot.threadId, first.id, { text: "a2" });
+    store.branchMessage(bot.threadId, first.id, "b");
+    store.setActiveLeaf(bot.threadId, first.id);
+    store.toggleReaction(bot.threadId, first.id, "👍", "user");
+    expect(events.map((e) => e.type)).toEqual(["message.patch", "message", "thread", "message.patch"]);
+    expect(events[2]).toMatchObject({ type: "thread", threadId: bot.threadId, activeLeafId: expect.any(String) });
+  });
+
+  it("every bot write emits a bot event carrying only the id (the wire shape is the caller's)", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const events = record(store);
+    store.patchBot(bot.id, { name: "Zed" });
+    store.createTask(bot.id, "t2");
+    store.switchTask(bot.id, bot.threadId);
+    store.renameTask(bot.id, bot.threadId, "renamed");
+    store.setResumeCursor(bot.id, "claude", "s1", bot.threadId);
+    expect(events.every((e) => e.type === "bot" && e.botId === bot.id)).toBe(true);
+    expect(events).toHaveLength(5);
+    store.deleteBot(bot.id);
+    expect(events.at(-1)).toEqual({ type: "bot.deleted", botId: bot.id });
+  });
+
+  it("group writes emit group events; a listener that throws never breaks the write", () => {
+    const store = new Store(selection);
+    const a = store.createBot();
+    const b = store.createBot();
+    const events = record(store);
+    store.onChange(() => {
+      throw new Error("bad listener");
+    });
+    const g = store.createGroup("ops", [a.id, b.id]);
+    store.patchGroup(g.id, { unread: true });
+    expect(events.map((e) => e.type)).toEqual(["group", "group"]);
+    expect(store.group(g.id)?.unread).toBe(true);
+    store.deleteGroup(g.id);
+    expect(events.at(-1)).toEqual({ type: "group.deleted", groupId: g.id });
+  });
+
+  it("unsubscribe stops delivery", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const seen: unknown[] = [];
+    const off = store.onChange((e) => seen.push(e));
+    off();
+    store.patchBot(bot.id, { name: "x" });
+    expect(seen).toEqual([]);
+  });
+});
+
+describe("Store bot activity state", () => {
+  beforeEach(() => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+  });
+
+  it("derives busy from activity, so every existing busy reader keeps working", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    expect(bot.activity ?? "idle").toBe("idle");
+    expect(Boolean(bot.busy)).toBe(false);
+    for (const [state, busy] of [
+      ["working", true],
+      ["waiting-on-you", true],
+      ["no-signal", true],
+      ["idle", false],
+      ["dead", false],
+    ] as const) {
+      store.setActivity(bot.id, state);
+      expect(store.bot(bot.id)?.activity).toBe(state);
+      expect(Boolean(store.bot(bot.id)?.busy)).toBe(busy);
+    }
+  });
+
+  it("emits a bot change per transition and skips a no-op", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const seen: string[] = [];
+    store.onChange((c) => seen.push(c.type));
+    store.setActivity(bot.id, "working");
+    store.setActivity(bot.id, "working");
+    store.setActivity(bot.id, "idle");
+    expect(seen).toEqual(["bot", "bot"]);
+  });
+
+  it("neither activity nor busy survives a restart", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.setActivity(bot.id, "waiting-on-you");
+    const again = new Store(selection);
+    expect(again.bot(bot.id)?.activity).toBe("idle");
+    expect(Boolean(again.bot(bot.id)?.busy)).toBe(false);
+  });
+});
