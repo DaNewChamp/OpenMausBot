@@ -7,7 +7,7 @@
 // and the one that quietly stopped being true once before.
 import { describe, expect, it } from "vitest";
 
-import { denyReason } from "../src/routes.ts";
+import { denyReason, deviceBodyFields } from "../src/routes.ts";
 
 const ask = (method: string, path: string, authenticated = true) =>
   denyReason({ method, path, authenticated });
@@ -109,6 +109,44 @@ describe("what it may not", () => {
       expect(allowed("GET", path), path).toBe(false);
       expect(allowed("POST", path), path).toBe(false);
       expect(allowed("DELETE", path), path).toBe(false);
+    }
+  });
+});
+
+// PATCH /api/bots/:id is allowed as a route, but the SAME handler that renames
+// a bot also flips its permission model (autoApprove, computer, cwd,
+// alwaysAllow). A route allowlist cannot see that; the field filter must.
+describe("the bot-patch field filter", () => {
+  const fields = deviceBodyFields("PATCH", "/api/bots/bot_123");
+
+  it("only applies to the one route with privilege-bearing fields", () => {
+    expect(deviceBodyFields("PATCH", "/api/bots/bot_123")).not.toBeNull();
+    expect(deviceBodyFields("POST", "/api/bots/bot_123/messages")).toBeNull();
+    expect(deviceBodyFields("POST", "/api/threads/th_1/respond")).toBeNull();
+    expect(deviceBodyFields("GET", "/api/bots")).toBeNull();
+  });
+
+  it("passes cosmetic and preference fields", () => {
+    for (const field of ["name", "title", "description", "color", "unread", "pinned", "voice"]) {
+      expect(fields?.has(field), field).toBe(true);
+    }
+  });
+
+  it("drops every field that widens a bot's standing authority", () => {
+    // the RCE chain both reviews flagged: a stolen token flipping a bot to
+    // unattended execution on the owner's Mac
+    for (const field of [
+      "autoApprove",
+      "alwaysAllow",
+      "computer",
+      "cwd",
+      "composio",
+      "chiefOfStaff",
+      "modelSelection",
+      "hidden",
+      "approvePeerComms",
+    ]) {
+      expect(fields?.has(field), field).toBe(false);
     }
   });
 });

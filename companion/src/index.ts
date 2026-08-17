@@ -18,6 +18,7 @@
 // inside a process you chose to start would be ceremony: stopping it is the
 // off switch, and it is a more honest one than a flag in a file.
 import { createServer } from "node:http";
+import { pathToFileURL } from "node:url";
 
 import { createControlServer } from "./control.ts";
 import { DeviceRegistry } from "./devices.ts";
@@ -43,6 +44,14 @@ const HARNESS_PORT = num(process.env.OMB_PORT, 8799);
 const WEBHOOK_PORT = num(process.env.OMB_WEBHOOK_PORT, HARNESS_PORT + 1);
 const COMPANION_PORT = num(process.env.OMB_COMPANION_PORT, 8810);
 const CONTROL_PORT = num(process.env.OMB_CONTROL_PORT, 8811);
+// The single most security-critical pair in the package, hoisted out of the
+// listen() calls so a test can assert them: the device port faces the network,
+// the control plane (pairing + revocation) must never leave the machine. A
+// one-character edit from CONTROL_HOST to "0.0.0.0" would expose the pairing
+// plane to the LAN — a constant a test pins, rather than a literal a comment
+// guards.
+export const DEVICE_HOST = "0.0.0.0";
+export const CONTROL_HOST = "127.0.0.1";
 const SERVICE_TYPE = "_openmausbot._tcp";
 
 /** Ports the harness takes for itself, and what it uses each for.
@@ -190,8 +199,8 @@ async function main(): Promise<void> {
     );
   }
 
-  await listen(control, CONTROL_PORT, "127.0.0.1");
-  await listen(companion, COMPANION_PORT, "0.0.0.0");
+  await listen(control, CONTROL_PORT, CONTROL_HOST);
+  await listen(companion, COMPANION_PORT, DEVICE_HOST);
 
   // Before advertising: the service name goes into the Bonjour record, and
   // re-advertising under a new name later would show the phone two computers.
@@ -242,10 +251,19 @@ const shutdown = async (signal: string): Promise<void> => {
   process.exit(0);
 };
 
-process.on("SIGINT", () => void shutdown("SIGINT"));
-process.on("SIGTERM", () => void shutdown("SIGTERM"));
+// Run only when this file IS the process, not when it is imported for its
+// constants (a test reading DEVICE_HOST/CONTROL_HOST must not boot a server or
+// install signal handlers). Both real entry points — `node …/index.ts` in dev
+// and `utilityProcess.fork(…/index.js)` when packaged — run this file as
+// argv[1], so the guard fires for them and not for an import.
+const isEntryPoint = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (isEntryPoint) {
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

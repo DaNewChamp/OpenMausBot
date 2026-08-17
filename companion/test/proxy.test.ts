@@ -274,6 +274,28 @@ describe("the sidecar in front of an unmodified harness", () => {
     }
   });
 
+  it("strips privilege-bearing fields from a device's bot PATCH, keeping cosmetic ones", async () => {
+    // The route is allowed (rename, mark-read); the fields that flip the
+    // harness's permission model are not. Proven against the real harness:
+    // set a safe field and a dangerous one in the same body, then read back
+    // what actually persisted.
+    const bot = (await device("GET", "/api/bots")).body.bots[0];
+    const patched = await device("PATCH", `/api/bots/${bot.id}`, {
+      body: { title: "Renamed from the phone", autoApprove: true, computer: "local", alwaysAllow: ["Bash"] },
+    });
+    expect(patched.status).toBe(200);
+    // the cosmetic field took…
+    expect(patched.body.bot.title).toBe("Renamed from the phone");
+    // …and the dangerous ones never reached the harness
+    expect(patched.body.bot.autoApprove).toBeUndefined();
+    expect(patched.body.bot.computer).toBeUndefined();
+    expect(patched.body.bot.alwaysAllow ?? []).not.toContain("Bash");
+
+    const reread = (await device("GET", "/api/bots")).body.bots.find((b: { id: string }) => b.id === bot.id);
+    expect(reread.autoApprove).toBeUndefined();
+    expect(reread.computer).toBeUndefined();
+  });
+
   it("never passes the provider session cursors through", async () => {
     const listed = await device("GET", "/api/bots");
     expect(listed.status).toBe(200);

@@ -14,7 +14,7 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { bearerToken } from "./devices.ts";
-import { denyReason } from "./routes.ts";
+import { denyReason, deviceBodyFields } from "./routes.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
 /** What the forwarding handler needs from the process around it. */
@@ -347,6 +347,30 @@ export function createProxyHandler(options: ProxyOptions) {
           : { error: "OpenMausBot is not running on this computer" },
       );
     });
+
+    // Most requests stream their body straight through. The exception is a
+    // write whose body carries fields a device may not set (PATCH a bot): the
+    // body is buffered, reduced to the allowed fields, and re-sent — the harness
+    // never sees the dropped ones, so a stolen token cannot use them. The
+    // filter runs on the parsed object, not on text, so a field cannot be
+    // smuggled past it by encoding.
+    const bodyFields = deviceBodyFields(method, path);
+    if (bodyFields) {
+      readJson(req).then(
+        (body) => {
+          const filtered: Record<string, unknown> = {};
+          for (const key of Object.keys(body)) {
+            if (bodyFields.has(key)) filtered[key] = body[key];
+          }
+          upstream.end(JSON.stringify(filtered));
+        },
+        (error: Error) => {
+          upstream.destroy();
+          if (!res.headersSent) sendJson(res, 400, { error: error.message });
+        },
+      );
+      return;
+    }
     req.pipe(upstream);
   };
 }

@@ -92,6 +92,43 @@ const EXPLAINED: ReadonlyArray<{ path: RegExp; error: string }> = [
   { path: /^\/api\/teams(\/|$)/, error: "teams are imported and exported on your computer" },
 ];
 
+/** Fields a paired device may set on `PATCH /api/bots/:id`.
+ *
+ * A route allowlist cannot see that one PATCH is really fifteen capabilities,
+ * and that three of them ARE the harness's permission model: the same handler
+ * that renames a bot also accepts `autoApprove` (the bot stops asking a human
+ * before it acts), `computer: "local"` (it acts on the actual Mac), `cwd`
+ * (where), `alwaysAllow` (standing grants), `composio`, `chiefOfStaff` and
+ * `modelSelection`. A device that could send those could flip a bot to
+ * unattended execution on the owner's laptop with no approval prompt — which
+ * is exactly the "nobody decided this" failure the route list above exists to
+ * prevent, one level down. So the field filter draws the line the route filter
+ * cannot: cosmetic and preference fields travel; anything that widens a bot's
+ * standing authority is dropped, because that is a decision that belongs on the
+ * computer. (One-off approvals still reach the phone via /threads/:id/respond;
+ * only PERSISTING a wider grant from a pocket is refused.) */
+const BOT_PATCH_DEVICE_FIELDS: ReadonlySet<string> = new Set([
+  "name",
+  "title",
+  "description",
+  "color",
+  "mascotExpression",
+  "notifications",
+  "pinned",
+  "unread",
+  "voice",
+  "speakReplies",
+]);
+
+/** The field allowlist for a device-originated write body, or null when the
+ * route carries no body worth filtering (the body is then forwarded as-is).
+ * Only PATCH /api/bots/:id needs this today; POST /messages and /respond
+ * carry no privilege-bearing fields. */
+export function deviceBodyFields(method: string, path: string): ReadonlySet<string> | null {
+  if (method === "PATCH" && /^\/api\/bots\/[\w-]+$/.test(path)) return BOT_PATCH_DEVICE_FIELDS;
+  return null;
+}
+
 /** Why this request may not go through, or null when it may.
  *
  * Default deny: the answer for anything not on the list is "no route", which
