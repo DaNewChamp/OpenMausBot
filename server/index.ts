@@ -379,6 +379,10 @@ async function answerRequest(
   }
   return outcome;
 }
+
+function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
+  return value === "allow" || value === "deny" || value === "answer" ? value : null;
+}
 // the last settled assistant text per thread, so a "finished" notification
 // can carry what the bot actually said
 const lastReply = new Map<string, string>();
@@ -400,6 +404,11 @@ const groupSpeakers = new Map<string, { botId: string; name: string; color: stri
 // into the task's tally when the turn settles.
 const turnUsage = new Map<string, { input: number; output: number }>();
 
+// Bounded per active turn. OpenHands uses a bounded recent-event scan for
+// the same class of stuck-loop detection; retaining an unlimited set of
+// unique arguments would let one pathological turn grow the server forever.
+const repeats = new RepeatDetector({ thresholds: [5, 10, 20], maxKeysPerThread: 256 });
+
 // ── stall watchdog ─────────────────────────────────────────────────────
 // ask_bot has a 4-minute ceiling and room turns a 5-minute one; the main
 // 1:1 path had none, so a wedged CLI left its bot busy forever. The
@@ -411,6 +420,7 @@ const watchdog = new TurnWatchdog({
   stallMs: TURN_STALL_MS,
   checkMs: 60_000,
   onStall: (turn) => {
+    repeats.settle(turn.threadId);
     const bot = store.bot(turn.botId);
     const instance = bot ? registry.get(bot.modelSelection.instanceId) : null;
     void instance?.adapter.interruptTurn(turn.threadId).catch(() => {});
@@ -790,9 +800,8 @@ function finalizeDelegationWatch(
 // (Claude's item.started carries only that) is never counted: five "Bash"
 // may be five different commands. Arguments come from ACP item titles and
 // from every permission ask's summary (the command being approved).
-const repeats = new RepeatDetector({ thresholds: [5, 10, 20] });
 bus.subscribe((event: RuntimeEvent) => {
-  if (event.type === "turn.completed") return void repeats.settle(event.threadId);
+  if (event.type === "turn.completed" || event.type === "session.exited") return void repeats.settle(event.threadId);
   let key: string | null = null;
   if (event.type === "item.started" && event.itemType === "tool") {
     // a title with more than a bare identifier is a call with arguments
@@ -2591,13 +2600,15 @@ const server = createServer(async (req, res) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const body = await readBody(req);
+      const behavior = requestBehavior(body.behavior);
+      if (!behavior) return json(res, 400, { error: "behavior must be allow, deny, or answer" });
       // peer-approval intercept: harness-native cards carry a requestId
       // that lives in peer-approval's pending map. Resolve them here so
       // the provider adapter never sees a request it didn't raise.
-      if (resolvePeerComms(approvalBus, String(body.requestId), body.behavior)) {
-        return json(res, 200, { ok: true, outcome: body.behavior === "allow" ? "allowed-once" : "rejected" });
+      if (resolvePeerComms(approvalBus, String(body.requestId), behavior)) {
+        return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
-      const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), body.behavior, body.message);
+      const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), behavior, body.message);
       return json(res, 200, { ok: true, outcome });
     }
     // Answer by THREAD, so a request raised inside a room can be answered
@@ -2607,14 +2618,16 @@ const server = createServer(async (req, res) => {
     if (m && method === "POST") {
       const threadId = m[1];
       const body = await readBody(req);
+      const behavior = requestBehavior(body.behavior);
+      if (!behavior) return json(res, 400, { error: "behavior must be allow, deny, or answer" });
       const group = store.groupByThread(threadId);
       const owner = group ? (group.busyBotId ? store.bot(group.busyBotId) : undefined) : store.botByThread(threadId);
       if (!owner) return json(res, 404, { error: "nothing is waiting on an answer in this conversation" });
       // peer-approval intercept (see /api/bots/:id/respond above).
-      if (resolvePeerComms(approvalBus, String(body.requestId), body.behavior)) {
-        return json(res, 200, { ok: true });
+      if (resolvePeerComms(approvalBus, String(body.requestId), behavior)) {
+        return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
-      const outcome = await answerRequest(threadId, owner.modelSelection.instanceId, String(body.requestId), body.behavior, body.message);
+      const outcome = await answerRequest(threadId, owner.modelSelection.instanceId, String(body.requestId), behavior, body.message);
       return json(res, 200, { ok: true, outcome });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/interrupt$/);

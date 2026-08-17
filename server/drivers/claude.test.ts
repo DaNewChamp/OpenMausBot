@@ -384,6 +384,26 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "turn.completed");
   });
 
+  it("resolves a pending ask as a system denial when the turn is interrupted", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-stop", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = connect(permissionSocketPath("t-perm-stop"));
+    await new Promise<void>((resolve, reject) => {
+      conn.on("connect", resolve);
+      conn.on("error", reject);
+    });
+    conn.write(JSON.stringify({ t: "ask", id: "ask-stop", tool: "Bash", input: { command: "sleep 60" } }) + "\n");
+    await recorder.until((e) => e.type === "request.opened" && e.requestId === "ask-stop");
+
+    await instance.adapter.interruptTurn("t-perm-stop");
+    const resolved = await recorder.until((e) => e.type === "request.resolved" && e.requestId === "ask-stop");
+    expect(resolved).toMatchObject({ behavior: "deny", source: "system" });
+    await recorder.until((e) => e.type === "turn.completed");
+    conn.end();
+  });
+
   it("passes effort to the CLI, and omits the flag when unset", async () => {
     await create();
     const dump = join(scratch, "effort.json");

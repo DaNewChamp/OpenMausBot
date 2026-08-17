@@ -17,16 +17,27 @@ export function callKey(tool: string, args: string | undefined): string | null {
 export class RepeatDetector {
   private readonly counts = new Map<string, Map<string, number>>();
   private readonly thresholds: readonly number[];
+  private readonly maxKeysPerThread: number;
 
-  constructor(opts: { thresholds: readonly number[] }) {
+  constructor(opts: { thresholds: readonly number[]; maxKeysPerThread?: number }) {
     this.thresholds = [...opts.thresholds].sort((a, b) => a - b);
+    this.maxKeysPerThread = opts.maxKeysPerThread ?? 256;
+    if (!Number.isInteger(this.maxKeysPerThread) || this.maxKeysPerThread < 1) {
+      throw new Error("maxKeysPerThread must be a positive integer");
+    }
   }
 
   /** Count one call. `threshold` is set exactly when the count lands on one. */
   record(threadId: string, key: string): { count: number; threshold?: number } {
     let per = this.counts.get(threadId);
     if (!per) this.counts.set(threadId, (per = new Map()));
-    const count = (per.get(key) ?? 0) + 1;
+    const previous = per.get(key);
+    // Keep a bounded, recency-ordered set instead of retaining every unique
+    // command an arbitrarily long turn ever issued. Existing keys move to
+    // the back; when full, the least-recently-seen signature falls out.
+    if (previous !== undefined) per.delete(key);
+    else if (per.size >= this.maxKeysPerThread) per.delete(per.keys().next().value!);
+    const count = (previous ?? 0) + 1;
     per.set(key, count);
     return this.thresholds.includes(count) ? { count, threshold: count } : { count };
   }

@@ -41,4 +41,19 @@ describe("RepeatDetector", () => {
     d.settle("t1");
     expect(d.record("t1", "Bash:a").count).toBe(1);
   });
+
+  it("bounds distinct calls per thread and evicts the least recently seen", () => {
+    const d = new RepeatDetector({ thresholds: [2], maxKeysPerThread: 2 });
+    d.record("t1", "Bash:a");
+    d.record("t1", "Bash:b");
+    // Refresh a, so b is the least-recently-seen entry.
+    expect(d.record("t1", "Bash:a").threshold).toBe(2);
+    d.record("t1", "Bash:c");
+    expect(d.record("t1", "Bash:a").count).toBe(3);
+    expect(d.record("t1", "Bash:b").count).toBe(1);
+  });
+
+  it("rejects an invalid memory bound", () => {
+    expect(() => new RepeatDetector({ thresholds: [2], maxKeysPerThread: 0 })).toThrow(/positive integer/);
+  });
 });
