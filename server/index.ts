@@ -37,6 +37,7 @@ import { isEffortLevel, type RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
+import { searchMessages } from "./message-db.ts";
 import { discardDelegations, drainDelegations, queueDelegation, type QueueResult } from "./delegations.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
@@ -1996,6 +1997,72 @@ const server = createServer(async (req, res) => {
         "cache-control": "private, max-age=31536000, immutable",
       });
       return res.end(bytes);
+    }
+
+    // ── search across every transcript ──────────────────────────────────
+    // A LIKE scan over the SQLite message store: local transcripts are
+    // megabytes at most, so a scan answers in milliseconds and needs no
+    // index to maintain. Hits resolve to the bot/room that owns the thread;
+    // rows belonging to deleted conversations resolve to nothing and drop.
+    if (method === "GET" && path === "/api/search") {
+      const q = url.searchParams.get("q") ?? "";
+      const rawLimit = url.searchParams.get("limit");
+      const limit = rawLimit ? Math.min(Math.max(Number(rawLimit) || 0, 1), 100) : 40;
+      const hits = searchMessages(q, limit)
+        .map((hit) => {
+          const bot = store.botByThread(hit.threadId);
+          const group = bot ? undefined : store.groupByThread(hit.threadId);
+          if (bot) {
+            const task = store.taskByThread(bot.id, hit.threadId);
+            return { ...hit, botId: bot.id, name: bot.name, task: task?.title };
+          }
+          if (group) return { ...hit, groupId: group.id, name: group.name };
+          return null;
+        })
+        .filter((hit): hit is NonNullable<typeof hit> => hit !== null);
+      return json(res, 200, { hits });
+    }
+
+    // ── transcript export (the visible branch, human-readable) ──────────
+    m = path.match(/^\/api\/threads\/([\w-]+)\/export$/);
+    if (m && method === "GET") {
+      const threadId = m[1];
+      const bot = store.botByThread(threadId);
+      const group = bot ? undefined : store.groupByThread(threadId);
+      if (!bot && !group) return json(res, 404, { error: "no such conversation" });
+      const format = url.searchParams.get("format") ?? "markdown";
+      if (format !== "markdown" && format !== "json") {
+        return json(res, 400, { error: "format must be markdown or json" });
+      }
+      const title = bot ? (store.taskByThread(bot.id, threadId)?.title || bot.name) : group!.name;
+      const filename = (title.replace(/[^\w\- ]+/g, "").trim() || "conversation").slice(0, 60);
+      const messages = store.activePath(threadId);
+      if (format === "json") {
+        // pixels stripped — an export is for reading and archiving, and a
+        // base64 desktop frame is neither
+        const slim = messages.map(({ png, mime, ...rest }) => rest);
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "content-disposition": `attachment; filename="${filename}.json"`,
+        });
+        return res.end(JSON.stringify({ name: title, threadId, messages: slim }, null, 2));
+      }
+      const userName = cfg.profile?.name?.trim() || "User";
+      const lines: string[] = [`# ${title}`, ""];
+      for (const msg of messages) {
+        const who = msg.role === "user" ? userName : (msg.from?.name ?? bot?.name ?? "Bot");
+        if (msg.kind === "text" && msg.text) lines.push(`**${who}:**`, "", msg.text, "");
+        else if (msg.kind === "activity" && msg.tool) lines.push(`> ${msg.tool.name}`, "");
+        else if (msg.kind === "screen") lines.push("> [screen capture]", "");
+        else if (msg.kind === "options" && msg.card) {
+          lines.push(`> ${msg.card.title}${msg.card.answered ? ` — answered: ${msg.card.answered}` : ""}`, "");
+        }
+      }
+      res.writeHead(200, {
+        "content-type": "text/markdown; charset=utf-8",
+        "content-disposition": `attachment; filename="${filename}.md"`,
+      });
+      return res.end(lines.join("\n"));
     }
 
     // ── rooms (group chats) ─────────────────────────────────────────────

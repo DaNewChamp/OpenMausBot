@@ -215,6 +215,36 @@ describe("harness HTTP API", () => {
     expect(body.instances[0].snapshot.reason).toContain("not-a-real-driver");
   });
 
+  it("searches transcripts and exports a conversation", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    // every new bot opens with a seeded greeting — a known searchable string
+    const hits = await api("GET", "/api/search?q=nice%20to%20meet");
+    expect(hits.status).toBe(200);
+    const hit = hits.body.hits.find((h: { botId?: string }) => h.botId === bot.id);
+    expect(hit).toMatchObject({ botId: bot.id, threadId: bot.threadId, name: bot.name });
+    expect(hit.snippet.toLowerCase()).toContain("nice to meet");
+    expect((await api("GET", "/api/search?q=")).body.hits).toEqual([]);
+
+    const markdown = await fetch(`${BASE}/api/threads/${bot.threadId}/export`);
+    expect(markdown.status).toBe(200);
+    expect(markdown.headers.get("content-type")).toContain("text/markdown");
+    expect(markdown.headers.get("content-disposition")).toContain("attachment");
+    const text = await markdown.text();
+    expect(text).toContain("Nice to meet you");
+
+    const asJson = await api("GET", `/api/threads/${bot.threadId}/export?format=json`);
+    expect(asJson.status).toBe(200);
+    expect(asJson.body.messages.length).toBeGreaterThan(0);
+    expect(JSON.stringify(asJson.body)).not.toContain('"png"');
+    expect((await api("GET", `/api/threads/${bot.threadId}/export?format=pdf`)).status).toBe(400);
+    expect((await api("GET", "/api/threads/nope/export")).status).toBe(404);
+
+    // deleted conversations drop out of search rather than 404ing it
+    await api("DELETE", `/api/bots/${bot.id}`);
+    const after = await api("GET", "/api/search?q=nice%20to%20meet");
+    expect(after.body.hits.find((h: { botId?: string }) => h.botId === bot.id)).toBeUndefined();
+  });
+
   it("creates, patches, and deletes a bot", async () => {
     const created = await api("POST", "/api/bots");
     expect(created.status).toBe(201);

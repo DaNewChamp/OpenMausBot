@@ -1,7 +1,7 @@
 // Store persistence contract: bots.json + messages-<threadId>.json are
 // the durable record — everything here must survive a process restart
 // except `busy`, which never does (no turn survives one either).
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -172,15 +172,15 @@ describe("Store", () => {
     expect(store.patchMessage(bot.threadId, "nope", {})).toBeNull();
   });
 
-  it("deleteBot removes the bot and its transcript file", () => {
+  it("deleteBot removes the bot and its durable transcript", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    const file = join(DATA_DIR, `messages-${bot.threadId}.json`);
-    expect(existsSync(file)).toBe(true);
+    // the transcript is durable — a fresh Store sees the seeded messages
+    expect(new Store(selection).messagesFor(bot.threadId).length).toBeGreaterThan(0);
 
     expect(store.deleteBot(bot.id)).toBe(true);
     expect(store.bot(bot.id)).toBeNull();
-    expect(existsSync(file)).toBe(false);
+    expect(new Store(selection).messagesFor(bot.threadId)).toHaveLength(0);
     expect(store.deleteBot(bot.id)).toBe(false);
   });
 
@@ -268,7 +268,9 @@ describe("Store", () => {
 
   it("migrates a pre-branching flat transcript file", () => {
     const store = new Store(selection);
-    const bot = store.createBot();
+    // seedMessages:false — a legacy-era thread has its history ONLY in the
+    // JSON file; any DB rows would (correctly) take precedence over it
+    const bot = store.createBot({}, { seedMessages: false });
     const legacy = [
       { id: "m1", role: "bot", kind: "text", text: "hello", at: 1 },
       { id: "m2", role: "user", kind: "text", text: "hi", at: 2 },

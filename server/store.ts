@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
 import { DATA_DIR } from "./config.ts";
+import * as mdb from "./message-db.ts";
 import { workspaceDir } from "./workspace.ts";
 import { newId, type ModelSelection, type ThreadId } from "./contracts.ts";
 import { pickBotName } from "./names.ts";
@@ -422,15 +423,23 @@ export class Store {
     return group;
   }
 
+  /** A thread's durable record: DB rows plus any legacy JSON leftovers. */
+  private deleteThreadRecord(threadId: string) {
+    this.threads.delete(threadId);
+    mdb.deleteThread(threadId);
+    for (const file of [messagesFile(threadId), `${messagesFile(threadId)}.imported`]) {
+      try {
+        unlinkSync(file);
+      } catch {}
+    }
+  }
+
   deleteGroup(id: string): boolean {
     const group = this.group(id);
     if (!group) return false;
     this.groups = this.groups.filter((g) => g.id !== id);
-    this.threads.delete(group.threadId);
     this.saveGroups();
-    try {
-      unlinkSync(messagesFile(group.threadId));
-    } catch {}
+    this.deleteThreadRecord(group.threadId);
     return true;
   }
 
@@ -447,18 +456,10 @@ export class Store {
   private thread(threadId: string): ThreadState {
     let t = this.threads.get(threadId);
     if (t) return t;
-    let messages: Message[] = [];
-    let activeLeafId: string | null = null;
-    try {
-      const raw = JSON.parse(readFileSync(messagesFile(threadId), "utf8"));
-      if (Array.isArray(raw)) messages = raw; // pre-branching flat file
-      else {
-        messages = raw.messages ?? [];
-        activeLeafId = raw.activeLeafId ?? null;
-      }
-    } catch {
-      /* fresh thread */
-    }
+    // SQLite is the source of truth; a thread with no rows imports its
+    // legacy messages-<threadId>.json once, inside readThread
+    const { messages, activeLeafId: storedLeaf } = mdb.readThread(threadId, messagesFile(threadId));
+    let activeLeafId = storedLeaf;
     // legacy rows carry no parentId — chain them in array order
     let prev: string | null = null;
     for (const m of messages) {
@@ -469,14 +470,6 @@ export class Store {
     t = { messages, activeLeafId };
     this.threads.set(threadId, t);
     return t;
-  }
-
-  private saveThread(threadId: string) {
-    const t = this.thread(threadId);
-    writeFileAtomic(
-      messagesFile(threadId),
-      JSON.stringify({ activeLeafId: t.activeLeafId, messages: t.messages }, null, 2),
-    );
   }
 
   messagesFor(threadId: string): Message[] {
@@ -505,24 +498,33 @@ export class Store {
     const full: Message = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...message };
     t.messages.push(full);
     t.activeLeafId = full.id;
-    if (full.kind === "screen") this.pruneScreenFrames(t);
-    this.saveThread(threadId);
+    mdb.insertMessage(threadId, full);
+    mdb.setActiveLeaf(threadId, t.activeLeafId);
+    if (full.kind === "screen") {
+      for (const pruned of this.pruneScreenFrames(t)) mdb.updateMessage(threadId, pruned);
+    }
     return full;
   }
 
-  /** Screen frames are ~100-500KB of base64 each and the whole thread file
-   * is rewritten on every append, so keeping every frame of a long
-   * computer session makes each later message slower than the last. The
-   * newest few keep their pixels; older ones stay in the transcript as
-   * placeholders. Mirrors the client's own frame cap. */
-  private pruneScreenFrames(t: { messages: Message[] }, keep = 4) {
+  /** Screen frames are ~100-500KB of base64 each; keeping every frame of a
+   * long computer session bloats the transcript for nothing the client
+   * would ever show. The newest few keep their pixels; older ones stay in
+   * the transcript as placeholders. Mirrors the client's own frame cap.
+   * Returns the messages whose pixels were dropped so the caller can
+   * persist exactly those. */
+  private pruneScreenFrames(t: { messages: Message[] }, keep = 4): Message[] {
+    const pruned: Message[] = [];
     let seen = 0;
     for (let i = t.messages.length - 1; i >= 0 && seen < t.messages.length; i--) {
       const m = t.messages[i];
       if (m.kind !== "screen" || !m.png) continue;
       seen += 1;
-      if (seen > keep) m.png = undefined;
+      if (seen > keep) {
+        m.png = undefined;
+        pruned.push(m);
+      }
     }
+    return pruned;
   }
 
   /** Fork the conversation: a new user message that replaces `sourceId`
@@ -541,7 +543,8 @@ export class Store {
     };
     t.messages.push(full);
     t.activeLeafId = full.id;
-    this.saveThread(threadId);
+    mdb.insertMessage(threadId, full);
+    mdb.setActiveLeaf(threadId, t.activeLeafId);
     return full;
   }
 
@@ -557,7 +560,7 @@ export class Store {
       cur = children.reduce((a, b) => (b.at >= a.at ? b : a)).id;
     }
     t.activeLeafId = cur;
-    this.saveThread(threadId);
+    mdb.setActiveLeaf(threadId, cur);
     return cur;
   }
 
@@ -566,7 +569,7 @@ export class Store {
     const idx = t.messages.findIndex((m) => m.id === messageId);
     if (idx === -1) return null;
     t.messages[idx] = { ...t.messages[idx], ...patch, card: patch.card ?? t.messages[idx].card };
-    this.saveThread(threadId);
+    mdb.updateMessage(threadId, t.messages[idx]);
     return t.messages[idx];
   }
 
@@ -623,10 +626,7 @@ export class Store {
     this.bots = this.bots.filter((b) => b.id !== id);
     // every task's transcript goes with the bot, not just the open one
     for (const threadId of new Set([bot.threadId, ...(bot.tasks ?? []).map((t) => t.threadId)])) {
-      this.threads.delete(threadId);
-      try {
-        unlinkSync(messagesFile(threadId));
-      } catch {}
+      this.deleteThreadRecord(threadId);
     }
     // the bot's workspace (files + memory) goes with it — same rule as its
     // transcripts: deleting a bot deletes what it knew
@@ -767,10 +767,7 @@ export class Store {
     if (!bot || !bot.tasks || bot.tasks.length < 2) return null;
     if (!bot.tasks.some((t) => t.threadId === threadId)) return null;
     bot.tasks = bot.tasks.filter((t) => t.threadId !== threadId);
-    this.threads.delete(threadId);
-    try {
-      unlinkSync(messagesFile(threadId));
-    } catch {}
+    this.deleteThreadRecord(threadId);
     if (bot.threadId === threadId) {
       bot.threadId = bot.tasks[0]!.threadId;
       bot.resumeCursors = { ...bot.tasks[0]!.resumeCursors };
