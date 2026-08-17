@@ -176,12 +176,12 @@ export function PluginsPanel() {
     // Browser development fallback. If a popup blocker rejects the first
     // asynchronous open, the visible Continue button retries from a direct
     // user gesture using the URL retained in pendingUrls.
-    const opened = window.open(url, "_blank");
+    const opened = window.open("", "_blank");
     if (!opened) throw new Error("Your browser blocked the connection page. Click Continue to open it.");
-    // Some browsers return null whenever `noopener` is passed as a feature,
-    // even when the tab opened successfully. Clear opener explicitly so a
-    // real null remains a reliable popup-blocked signal.
+    // Open a same-origin blank page first so the OAuth origin never receives
+    // an opener reference, while a real null remains a reliable blocked signal.
     opened.opener = null;
+    opened.location.replace(url);
   };
 
   const startPolling = (slug: string) => {
