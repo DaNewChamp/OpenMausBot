@@ -1439,11 +1439,14 @@ async function runGroupMemberTurn(
   // produces turn.completed (or the stall watchdog's grace fallback runs).
   // Do not clear busy or start the next member on that same thread early.
   if (outcome === "timed_out") return false;
-  groupSpeakers.delete(group.threadId);
-  store.patchGroup(group.id, { busyBotId: null, unread: true });
-  // a room turn that never emitted turn.completed leaves the speaker busy;
-  // the store's change stream carries the frame
-  if (store.bot(bot.id)?.busy) store.setActivity(bot.id, "idle");
+  // turn.completed normally performs this cleanup. Only use the fallback
+  // when this invocation still owns the room; otherwise it would emit a
+  // duplicate group frame or clear a newer speaker's state.
+  if (store.group(group.id)?.busyBotId === bot.id) {
+    groupSpeakers.delete(group.threadId);
+    store.patchGroup(group.id, { busyBotId: null, unread: true });
+    if (store.bot(bot.id)?.busy) store.setActivity(bot.id, "idle");
+  }
 
   // chained mentions: a member's reply can summon teammates — one hop only
   if (hop < MAX_GROUP_HOPS && replyText.trim()) {

@@ -326,6 +326,15 @@ describe("Store change stream", () => {
     expect(store.messagesFor(bot.threadId).at(-1)).toBe(m);
   });
 
+  it("announces a new bot before its onboarding messages", () => {
+    const store = new Store(selection);
+    const events = record(store);
+    const bot = store.createBot();
+    expect(events.map((event) => event.type)).toEqual(["bot", "message", "message"]);
+    expect(events[0]).toEqual({ type: "bot", botId: bot.id });
+    expect(events.slice(1).every((event) => event.threadId === bot.threadId)).toBe(true);
+  });
+
   it("every message-tree write emits a message or thread event", () => {
     const store = new Store(selection);
     const bot = store.createBot();
@@ -339,6 +348,21 @@ describe("Store change stream", () => {
     expect(events[2]).toMatchObject({ type: "thread", threadId: bot.threadId, activeLeafId: expect.any(String) });
   });
 
+  it("announces screen frames whose pixels are pruned", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const first = store.appendMessage(bot.threadId, { role: "bot", kind: "screen", png: "frame-1" });
+    for (let i = 2; i <= 4; i += 1) {
+      store.appendMessage(bot.threadId, { role: "bot", kind: "screen", png: `frame-${i}` });
+    }
+    const events = record(store);
+    const newest = store.appendMessage(bot.threadId, { role: "bot", kind: "screen", png: "frame-5" });
+    expect(events).toEqual([
+      { type: "message.patch", threadId: bot.threadId, message: { ...first, png: undefined } },
+      { type: "message", threadId: bot.threadId, message: newest },
+    ]);
+  });
+
   it("every bot write emits a bot event carrying only the id (the wire shape is the caller's)", () => {
     const store = new Store(selection);
     const bot = store.createBot();
@@ -348,8 +372,10 @@ describe("Store change stream", () => {
     store.switchTask(bot.id, bot.threadId);
     store.renameTask(bot.id, bot.threadId, "renamed");
     store.setResumeCursor(bot.id, "claude", "s1", bot.threadId);
+    store.pinTaskCwd(bot.id, bot.threadId, "/private/workspace");
+    store.addTaskUsage(bot.id, bot.threadId, { input: 10, output: 5 });
     expect(events.every((e) => e.type === "bot" && e.botId === bot.id)).toBe(true);
-    expect(events).toHaveLength(5);
+    expect(events).toHaveLength(7);
     store.deleteBot(bot.id);
     expect(events.at(-1)).toEqual({ type: "bot.deleted", botId: bot.id });
   });

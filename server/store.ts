@@ -574,7 +574,10 @@ export class Store {
     t.activeLeafId = full.id;
     mdb.appendMessage(threadId, full);
     if (full.kind === "screen") {
-      for (const pruned of this.pruneScreenFrames(t)) mdb.updateMessage(threadId, pruned);
+      for (const pruned of this.pruneScreenFrames(t)) {
+        mdb.updateMessage(threadId, pruned);
+        this.emit({ type: "message.patch", threadId, message: pruned });
+      }
     }
     this.emit({ type: "message", threadId, message: full });
     return full;
@@ -685,6 +688,9 @@ export class Store {
     bot.tasks = [{ threadId: bot.threadId, title: UNTITLED_TASK, createdAt: bot.createdAt, resumeCursors: {} }];
     this.bots.unshift(bot);
     this.saveBots();
+    // Announce the owner before its onboarding transcript. SSE clients need
+    // the bot/thread mapping before they can place either message.
+    this.emit({ type: "bot", botId: bot.id });
     if (opts.seedMessages !== false) {
       this.appendMessage(bot.threadId, {
         role: "bot",
@@ -693,7 +699,6 @@ export class Store {
       });
       this.appendMessage(bot.threadId, { role: "bot", kind: "options", card: onboardingCard() });
     }
-    this.emit({ type: "bot", botId: bot.id });
     return bot;
   }
 
@@ -786,12 +791,14 @@ export class Store {
       if (task.cwd !== null) {
         task.cwd = null;
         this.saveBots();
+        this.emit({ type: "bot", botId });
       }
       return null;
     }
     if (task.cwd === undefined) {
       task.cwd = Object.keys(task.resumeCursors).length === 0 ? (bot.cwd ?? fallbackCwd ?? null) : null;
       this.saveBots();
+      this.emit({ type: "bot", botId });
     }
     return task.cwd;
   }
@@ -870,6 +877,7 @@ export class Store {
       turns: prev.turns + 1,
     };
     this.saveBots();
+    this.emit({ type: "bot", botId });
     return task;
   }
 
