@@ -29,6 +29,34 @@ describe("Store", () => {
     expect(bot.modelSelection).toEqual(selection());
   });
 
+  it("createBot with seedMessages:false starts with an empty transcript", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({ name: "Imported" }, { seedMessages: false });
+    expect(store.messagesFor(bot.threadId)).toHaveLength(0);
+  });
+
+  it("addTaskUsage accumulates settled-turn totals per task and survives a restart", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    expect(store.addTaskUsage(bot.id, bot.threadId, { input: 1200, output: 300 })).toMatchObject({
+      usage: { input: 1200, output: 300, turns: 1 },
+    });
+    store.addTaskUsage(bot.id, bot.threadId, { input: 800, output: 100 });
+    // a different thread never inherits another task's tally
+    expect(store.addTaskUsage(bot.id, "no-such-thread", { input: 5, output: 5 })).toBeNull();
+
+    const reloaded = new Store(selection);
+    expect(reloaded.taskByThread(bot.id, bot.threadId)?.usage).toEqual({ input: 2000, output: 400, turns: 2 });
+  });
+
+  it("persists the per-bot composio gate", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.patchBot(bot.id, { composio: false });
+    const reloaded = new Store(selection);
+    expect(reloaded.bot(bot.id)?.composio).toBe(false);
+  });
+
   it("rotates colors across created bots", () => {
     const store = new Store(selection);
     const first = store.createBot();

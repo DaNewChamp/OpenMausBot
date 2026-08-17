@@ -218,6 +218,22 @@ describe("harness HTTP API", () => {
     const missing = await api("PATCH", "/api/bots/does-not-exist", { name: "x" });
     expect(missing.status).toBe(404);
 
+    // persona fields are bounded at the write boundary — they reach system
+    // prompts (Chief roster, room rosters), so an unbounded PATCH is a
+    // token-burn and prompt-injection surface
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { name: "N".repeat(101) })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { name: "   " })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { title: "T".repeat(201) })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { description: "D".repeat(4001) })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { description: 7 })).status).toBe(400);
+
+    // the per-bot composio gate is a boolean, and it round-trips
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { composio: "yes" })).status).toBe(400);
+    const gated = await api("PATCH", `/api/bots/${bot.id}`, { composio: false });
+    expect(gated.status).toBe(200);
+    expect(gated.body.bot.composio).toBe(false);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { composio: true })).body.bot.composio).toBe(true);
+
     const deleted = await api("DELETE", `/api/bots/${bot.id}`);
     expect(deleted.status).toBe(200);
     const after = await api("GET", "/api/bots");
@@ -286,6 +302,11 @@ describe("harness HTTP API", () => {
       expect(imported.body.bots.map((bot: { name: string }) => bot.name)).toEqual(["Mira", "Scout"]);
       expect(imported.body.bots.every((bot: { id: string }) => ![first.id, second.id].includes(bot.id))).toBe(true);
       expect(imported.body.bots[0]).not.toHaveProperty("alwaysAllow");
+      // imported bots arrive quiet and without reach: no seeded greeting
+      // in their name, and no access to the workspace's connected apps
+      // until the user grants it per bot
+      expect(imported.body.bots.every((bot: { messages: unknown[] }) => bot.messages.length === 0)).toBe(true);
+      expect(imported.body.bots.every((bot: { composio?: boolean }) => bot.composio === false)).toBe(true);
       expect(imported.body.group.memberIds).toEqual(imported.body.bots.map((bot: { id: string }) => bot.id));
       expect(imported.body.group.defaultResponder).toEqual({ kind: "member", botId: imported.body.bots[1].id });
 

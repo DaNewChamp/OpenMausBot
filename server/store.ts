@@ -2,12 +2,13 @@
 // thread→instance binding and per-instance resume cursors — upstream's
 // ProviderSessionDirectory, recipe step 6: persist the binding from day
 // one). messages-<threadId>.json holds the folded transcript.
-import { readFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { readFileSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
 import { DATA_DIR } from "./config.ts";
+import { workspaceDir } from "./workspace.ts";
 import { newId, type ModelSelection, type ThreadId } from "./contracts.ts";
 import { pickBotName } from "./names.ts";
 
@@ -115,6 +116,10 @@ export interface TaskRecord {
   createdAt: number;
   /** provider-native continuation per instance, for THIS task only */
   resumeCursors: Record<string, unknown>;
+  /** cumulative token spend across this task's settled turns — providers
+   * report running totals per turn; the fold adds each turn's final total
+   * here when the turn completes. Informational, not billing. */
+  usage?: { input: number; output: number; turns: number };
 }
 
 /** What a task is called before its first message names it. */
@@ -172,6 +177,12 @@ export interface BotRecord {
    * delegate_bot). Off by default: a chief-of-staff-style bot is most
    * useful when it can coordinate without nagging. */
   approvePeerComms?: boolean;
+  /** Whether this bot may use the workspace's connected apps (Composio).
+   * Unset/true = allowed (the user configured the key deliberately);
+   * false = this bot never receives the connection. Imported team members
+   * start false — a shared persona must not reach the user's Gmail on
+   * turn one. */
+  composio?: boolean;
   busy?: boolean;
   createdAt: number;
 }
@@ -571,6 +582,11 @@ export class Store {
     profile: Partial<
       Pick<BotRecord, "name" | "title" | "description" | "color" | "mascotExpression" | "modelSelection">
     > = {},
+    opts: {
+      /** false = no greeting/onboarding seed. Imported bots must not open
+       * with a first-person greeting the user never asked for. */
+      seedMessages?: boolean;
+    } = {},
   ): BotRecord {
     const name = profile.name?.trim() || pickBotName(this.bots.map((b) => b.name));
     const bot: BotRecord = {
@@ -590,12 +606,14 @@ export class Store {
     bot.tasks = [{ threadId: bot.threadId, title: UNTITLED_TASK, createdAt: bot.createdAt, resumeCursors: {} }];
     this.bots.unshift(bot);
     this.saveBots();
-    this.appendMessage(bot.threadId, {
-      role: "bot",
-      kind: "text",
-      text: `Hey — I'm ${name}. Nice to meet you.`,
-    });
-    this.appendMessage(bot.threadId, { role: "bot", kind: "options", card: onboardingCard() });
+    if (opts.seedMessages !== false) {
+      this.appendMessage(bot.threadId, {
+        role: "bot",
+        kind: "text",
+        text: `Hey — I'm ${name}. Nice to meet you.`,
+      });
+      this.appendMessage(bot.threadId, { role: "bot", kind: "options", card: onboardingCard() });
+    }
     return bot;
   }
 
@@ -610,6 +628,11 @@ export class Store {
         unlinkSync(messagesFile(threadId));
       } catch {}
     }
+    // the bot's workspace (files + memory) goes with it — same rule as its
+    // transcripts: deleting a bot deletes what it knew
+    try {
+      rmSync(workspaceDir(id), { recursive: true, force: true });
+    } catch {}
     this.saveBots();
     return true;
   }
@@ -710,6 +733,20 @@ export class Store {
     const task = this.bot(botId)?.tasks?.find((t) => t.threadId === threadId);
     if (!task) return null;
     task.title = title.trim().slice(0, 80) || UNTITLED_TASK;
+    this.saveBots();
+    return task;
+  }
+
+  /** Add one settled turn's final token totals to its task's tally. */
+  addTaskUsage(botId: string, threadId: string, usage: { input: number; output: number }): TaskRecord | null {
+    const task = this.taskByThread(botId, threadId);
+    if (!task) return null;
+    const prev = task.usage ?? { input: 0, output: 0, turns: 0 };
+    task.usage = {
+      input: prev.input + Math.max(0, usage.input),
+      output: prev.output + Math.max(0, usage.output),
+      turns: prev.turns + 1,
+    };
     this.saveBots();
     return task;
   }
