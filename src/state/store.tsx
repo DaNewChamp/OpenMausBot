@@ -112,6 +112,9 @@ export interface Bot {
   mascotExpression?: string | null;
   unread: boolean;
   busy?: boolean;
+  /** transient: when the running turn last showed a sign of life, once it
+   * has been quiet long enough for the harness to say so */
+  quietSince?: number;
   modelSelection: ModelSelection;
   /** Where this bot's computer runs; unset = auto (cloud box if one exists, else local). */
   computer?: "cloud" | "vm" | "local" | "off";

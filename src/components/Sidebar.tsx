@@ -32,6 +32,7 @@ import { useUpdaterState } from "@/lib/updater";
 import { cn } from "@/lib/cn";
 import { downloadSelectedTeam } from "@/lib/team-files";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { quietFor } from "@/lib/quiet";
 
 /** "Milind Soni" → "MS", "milind" → "M", "you@x.dev" → "Y", unset → "?" */
 function profileInitials(profile?: { name?: string; email?: string }): string {
@@ -124,7 +125,7 @@ function UpdateButton() {
 }
 
 function preview(bot: Bot): string {
-  if (bot.busy) return "Working…";
+  if (bot.busy) return bot.quietSince ? `Quiet for ${quietFor(bot.quietSince)}…` : "Working…";
   // the visible branch's tail — bot.messages holds every fork, so its last
   // entry can belong to a version the user switched away from
   const last = visibleMessages(bot).at(-1);

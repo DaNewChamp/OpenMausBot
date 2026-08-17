@@ -45,6 +45,7 @@ import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease } from "./local-vm-lease.ts";
+import { TurnLiveness } from "./liveness.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
 import { createTeamManifest, parseTeamManifest } from "./team-manifest.ts";
 import { listenWebhookIngress, webhookCredential, type WebhookIngress } from "./webhook-ingress.ts";
@@ -164,9 +165,19 @@ store.seedIfEmpty();
  * so a new broadcast cannot forget. */
 const wireTask = ({ resumeCursors, ...task }: TaskRecord) => task;
 
+/** threadId → when it went quiet; transient, rides on the bot broadcast */
+const quietSince = new Map<string, number>();
+
 const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
   const { resumeCursors, tasks, ...rest } = bot;
-  return { ...rest, ...(tasks ? { tasks: tasks.map(wireTask) } : {}) };
+  const quiet = quietSince.get(bot.threadId);
+  return {
+    ...rest,
+    ...(tasks ? { tasks: tasks.map(wireTask) } : {}),
+    // transient: when the running turn last showed a sign of life, once it
+    // has been quiet long enough to say so. Never persisted — like busy.
+    ...(quiet !== undefined ? { quietSince: quiet } : {}),
+  };
 };
 
 const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
@@ -338,6 +349,13 @@ let routines: RoutineManager | null = null;
 // driving it simultaneously would mix clicks, keystrokes and screenshots,
 // so only one thread may lease it at a time.
 const localVmLease = new LocalVmLease(30 * 60_000);
+
+// A running turn that has gone quiet: surfaced after QUIET_AFTER, and for
+// turns nobody is watching (routines, webhooks) stopped after STOP_AFTER.
+// Env overrides exist so the e2e can exercise both without waiting.
+const QUIET_AFTER_MS = Number(process.env.OMB_TURN_QUIET_AFTER_MS) || 2 * 60_000;
+const STOP_AFTER_MS = Number(process.env.OMB_TURN_STOP_AFTER_MS) || 30 * 60_000;
+const liveness = new TurnLiveness({ quietAfterMs: QUIET_AFTER_MS, stopAfterMs: STOP_AFTER_MS });
 const localVmOwnerBusy = (botId: string) => store.bot(botId)?.busy === true;
 let localVmLifecycleBusy = false;
 let localVmActiveThread: string | null = null;
@@ -371,9 +389,12 @@ void containerComputerStatus()
 bus.subscribe((event: RuntimeEvent) => {
   localVmLease.touch(event.threadId);
   if (localVmActiveThread === event.threadId) localVmIdle.touch();
+  liveness.touch(event.threadId, Date.now());
   if (event.type === "turn.completed") {
     localVmLease.release(event.threadId);
     if (localVmActiveThread === event.threadId) localVmActiveThread = null;
+    // a flagged thread settling drops its note with the bot broadcast below
+    if (liveness.settle(event.threadId)) quietSince.delete(event.threadId);
   }
   broadcast({ kind: "runtime", event });
   routines?.handleRuntimeEvent(event);
@@ -1009,6 +1030,10 @@ async function startTurn(
       });
       // dispatched: the rewind is spent, and the old cursors are dead
       if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
+      liveness.start(threadId, {
+        source: opts?.automationSource !== undefined || opts?.unattended ? "automation" : "user",
+        at: Date.now(),
+      });
       if (previewBoxId) startScreenPoller(bot.id, previewBoxId);
     } catch (e) {
       localVmLease.release(threadId);
@@ -1028,6 +1053,34 @@ async function startTurn(
 }
 
 // ── routines: persisted definitions → detached bot tasks ───────────────
+// The liveness clock. Every 15s: flag threads gone quiet, clear ones that
+// woke up, and stop unattended turns past the ceiling. Interactive turns are
+// never stopped here — a human with a Stop button decides those.
+setInterval(() => {
+  const now = Date.now();
+  for (const action of liveness.tick(now)) {
+    const bot = store.botByThread(action.threadId);
+    if (action.action === "flag") quietSince.set(action.threadId, action.quietSince);
+    else quietSince.delete(action.threadId);
+    if (bot) broadcast({ kind: "bot", bot: wireBot(bot) });
+    if (action.action !== "stop") continue;
+    // an unattended turn that has said nothing for STOP_AFTER: end it, and
+    // leave a chip so the morning after explains itself
+    const minutes = Math.round((now - action.quietSince) / 60_000);
+    const engine = bot ? (registry.get(bot.modelSelection.instanceId)?.displayName ?? bot.modelSelection.instanceId) : "the engine";
+    const note = store.appendMessage(action.threadId, {
+      role: "bot",
+      kind: "activity",
+      tool: { name: `error: stopped — no output from ${engine} for ${minutes} minutes`, ok: false },
+    });
+    broadcast({ kind: "message", threadId: action.threadId, message: note });
+    if (!bot) continue;
+    const routineRun = routines?.activeRunForBot(bot.id);
+    if (routineRun) void routines?.cancelRun(routineRun.id).catch(() => {});
+    else void registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(action.threadId).catch(() => {});
+  }
+}, 15_000).unref();
+
 // The scheduler owns timing and receipts; the existing harness remains the
 // only owner of provider sessions, approvals, tools, computers and messages.
 routines = new RoutineManager({
