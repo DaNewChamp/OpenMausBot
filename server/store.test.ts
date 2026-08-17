@@ -362,6 +362,7 @@ describe("Store task working folder — cloud runs", () => {
     const store = new Store(selection);
     const bot = store.createBot();
     store.patchBot(bot.id, { cwd: "/tmp/project-a" });
+    expect(store.pinTaskCwd(bot.id, bot.threadId)).toBe("/tmp/project-a");
     expect(store.pinTaskCwd(bot.id, bot.threadId, undefined, { none: true })).toBeNull();
     expect(store.taskByThread(bot.id, bot.threadId)?.cwd).toBeNull();
     // and it stays pinned even if a host run follows

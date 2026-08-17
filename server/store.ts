@@ -705,10 +705,15 @@ export class Store {
     const bot = this.bot(botId);
     const task = bot ? this.taskByThread(botId, threadId) : undefined;
     if (!bot || !task) return null;
+    if (opts.none) {
+      if (task.cwd !== null) {
+        task.cwd = null;
+        this.saveBots();
+      }
+      return null;
+    }
     if (task.cwd === undefined) {
-      // a cloud run has no host folder at all — pin the default so the UI
-      // never shows the bot's folder for a task that runs elsewhere
-      task.cwd = opts.none ? null : Object.keys(task.resumeCursors).length === 0 ? (bot.cwd ?? fallbackCwd ?? null) : null;
+      task.cwd = Object.keys(task.resumeCursors).length === 0 ? (bot.cwd ?? fallbackCwd ?? null) : null;
       this.saveBots();
     }
     return task.cwd;
