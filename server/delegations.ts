@@ -11,7 +11,12 @@
 // time, never at queue time, because the user might have just turned
 // approvePeerComms on between queueing and draining.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { writeFileAtomic } from "./atomic.ts";
 import { getOrCreateChannel, mirrorExchange, type CommsBus } from "./comms-visibility.ts";
+import { DATA_DIR } from "./config.ts";
 import { requestPeerApproval, type ApprovalBus } from "./peer-approval.ts";
 import type { BotRecord, GroupRecord } from "./store.ts";
 
@@ -28,10 +33,44 @@ export interface DelegationItem {
 
 export type QueueResult = "ok" | "no_target" | "self" | "too_deep" | "too_many";
 
-/** Per source-thread queue. Persisted nowhere — a server restart drops
- * delegations the same way provider permissions drop, which is honest:
- * nobody can answer for an unattended bot. */
+/** Per source-thread queue. Persisted to delegations.json on every change
+ * and reloaded at boot: a handoff queued right before a restart runs after
+ * it. (Provider PERMISSIONS still die with the process — nobody can answer
+ * for an unattended bot — but queued work is not a permission; the target
+ * and approvePeerComms are re-checked at drain time as always.) */
 const pendingDelegations = new Map<string, DelegationItem[]>();
+const DELEGATIONS_FILE = join(DATA_DIR, "delegations.json");
+
+function savePending(): void {
+  try {
+    writeFileAtomic(DELEGATIONS_FILE, JSON.stringify(Object.fromEntries(pendingDelegations), null, 2));
+  } catch (error) {
+    console.error("delegations: could not persist queue", error);
+  }
+}
+
+/** Load what a previous process left queued. Missing or corrupt → empty. */
+export function _loadPending(): void {
+  pendingDelegations.clear();
+  try {
+    const raw = JSON.parse(readFileSync(DELEGATIONS_FILE, "utf8")) as Record<string, unknown>;
+    for (const [threadId, list] of Object.entries(raw)) {
+      if (!Array.isArray(list)) continue;
+      const items = list.filter(
+        (i): i is DelegationItem =>
+          Boolean(i) && typeof i === "object" && typeof (i as DelegationItem).toBotId === "string" && typeof (i as DelegationItem).message === "string" && typeof (i as DelegationItem).depth === "number",
+      );
+      if (items.length) pendingDelegations.set(threadId, items);
+    }
+  } catch {
+    /* fresh install, or unreadable — start empty */
+  }
+}
+
+/** Source threads with something queued — what a boot drain iterates. */
+export function pendingThreads(): string[] {
+  return [...pendingDelegations.keys()];
+}
 
 /** How many handoffs one turn may queue. Small on purpose: this is the only
  * thing standing between a confused bot and a fan-out of real turns. */
@@ -57,6 +96,7 @@ export function queueDelegation(
   if (list.length >= MAX_QUEUED_PER_THREAD) return "too_many";
   list.push(item);
   pendingDelegations.set(sourceThreadId, list);
+  savePending();
   const label = `Delegated to @${target.name}${item.reason ? `: ${item.reason}` : ""}`;
   const note = bus.store.appendMessage(sourceThreadId, {
     role: "bot",
@@ -88,6 +128,7 @@ export function drainDelegations(
   const list = pendingDelegations.get(threadId);
   if (!list?.length) return;
   pendingDelegations.delete(threadId);
+  savePending();
   const from = bus.store.botByThread(threadId);
   if (!from) return;
   for (const item of list) {
@@ -113,6 +154,7 @@ export function discardDelegations(bus: CommsBus, threadId: string): void {
   const list = pendingDelegations.get(threadId);
   if (!list?.length) return;
   pendingDelegations.delete(threadId);
+  savePending();
   const from = bus.store.botByThread(threadId);
   if (!from) return;
   const note = bus.store.appendMessage(threadId, {
@@ -204,4 +246,9 @@ async function processOne(
 /** Test helper: how many items remain queued for a thread. */
 export function _pendingCount(threadId: string): number {
   return pendingDelegations.get(threadId)?.length ?? 0;
+}
+
+/** Test helper: forget the in-memory queue (a simulated restart). */
+export function _resetPending(): void {
+  pendingDelegations.clear();
 }

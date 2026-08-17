@@ -10,6 +10,7 @@ import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
 import { DATA_DIR } from "./config.ts";
 import { newId, type ModelSelection, type ThreadId } from "./contracts.ts";
 import { pickBotName } from "./names.ts";
+import { redactSecretsInText } from "./redact.ts";
 
 export type MausColor =
   | "green"
@@ -115,6 +116,27 @@ export interface TaskRecord {
   createdAt: number;
   /** provider-native continuation per instance, for THIS task only */
   resumeCursors: Record<string, unknown>;
+}
+
+/** Everything the BOT authored is scrubbed of content-shaped secrets before
+ * it is stored: its reply text, a tool title (an ACP engine's title can be
+ * the whole command line), a permission card's summary. What the user typed
+ * is theirs and stays as typed. Stored, not just displayed: the transcript
+ * is replayed into every rebuild, and a leaked key would otherwise be
+ * permanent. */
+function redactBotAuthored<T extends Omit<Message, "id" | "at"> & { at?: number }>(message: T): T {
+  if (message.role !== "bot") return message;
+  const out = { ...message };
+  if (typeof out.text === "string") out.text = redactSecretsInText(out.text);
+  if (out.tool?.name) out.tool = { ...out.tool, name: redactSecretsInText(out.tool.name) };
+  if (out.card) {
+    const card = { ...out.card } as OptionCardData & { summary?: string };
+    card.title = redactSecretsInText(card.title);
+    if (typeof card.subtitle === "string") card.subtitle = redactSecretsInText(card.subtitle);
+    if (typeof card.summary === "string") card.summary = redactSecretsInText(card.summary);
+    out.card = card;
+  }
+  return out;
 }
 
 /** What a task is called before its first message names it. */
@@ -491,7 +513,7 @@ export class Store {
 
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {
     const t = this.thread(threadId);
-    const full: Message = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...message };
+    const full: Message = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...redactBotAuthored(message) };
     t.messages.push(full);
     t.activeLeafId = full.id;
     if (full.kind === "screen") this.pruneScreenFrames(t);
