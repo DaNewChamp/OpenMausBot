@@ -53,7 +53,7 @@ Nearly all held. These did not, and they reshape the plan:
 
 ## Round 1 — broken, missing, or pays for everything after
 
-Order within the round is execution order.
+Order within the round is execution order (1.3 was skipped on 2026-08-17 and now sits at 3.4).
 
 ### 1.1 Fix model-switch context loss *(v1 item 1 — detailed task plan below)*
 
@@ -67,15 +67,13 @@ replay branch with a distinct `fresh` marker. Full TDD breakdown in
 
 `RuntimeEventBase.raw` already carries the native payload; surface it
 per-thread with tool calls, timestamps, and a raw toggle. Design as v1
-item 15. Build it now because items 1.3–2.x are all diagnosed through it,
+item 15. Build it now because items 1.4–2.x are all diagnosed through it,
 and because deferred generation-fencing needs its evidence.
 
-### 1.3 Auto-retry in the main drivers *(v1 item 3)*
+### 1.3 Auto-retry in the main drivers — **skipped for now, moved to 3.4**
 
-Verified: zero retry in `claude.ts` / `codex.ts` / `grok.ts` while
-`box.ts`, `webhooks.ts`, and `acp/core.ts` all have it. Design as v1
-item 3 (classify transient vs terminal, backoff + jitter, `turn.retrying`
-event, abort path, no duplicated partial output).
+Decided 2026-08-17 after 1.1 and 1.2 shipped: deferred to the end of
+Round 3 (see 3.4). The finding still stands; the item just isn't next.
 
 ### 1.4 Per-bot working directory *(promoted from v1 open question 1)*
 
@@ -132,6 +130,7 @@ included, results land via `switchBranch`).
 ### 3.1 Local models *(v1 item 16)* — design as v1; blocked on 2.2, then nearly free starting from `grok.ts`.
 ### 3.2 Mid-turn steering *(v1 item 17)* — design as v1, including the stdin-EOF verification gate (`claude.ts:536` — answer open question 3 **before** designing the queue) and the 2.1 prerequisite.
 ### 3.3 Tool deadlines and loop **enforcement** *(v1 item 9, second half)* — with steering available, escalate 2.8's detection: inject the advisory note at the next safe point, terminate past the hard threshold. Per-call deadlines only where the harness actually owns the call; for CLI drivers the deadline remains "interrupt the turn", stated honestly in the UI.
+### 3.4 Auto-retry in the main drivers *(v1 item 3, was 1.3 — skipped on 2026-08-17 and moved here)* — verified: zero retry in `claude.ts` / `codex.ts` / `grok.ts` while `box.ts`, `webhooks.ts`, and `acp/core.ts` all have it. Design as v1 item 3: classify transient (429, 5xx, overloaded, connection reset) vs terminal (auth, invalid model, quota); backoff + jitter with a small attempt cap; a `turn.retrying` runtime event so the UI shows it (the inspector from 1.2 makes this visible for free); an abort path so an interrupt during a retry cancels the whole turn; a retry after partial output discards the partial rather than duplicating it. Done when a simulated 529 produces a visible retry and a completed turn, and an invalid API key fails immediately without retrying.
 
 ---
 
