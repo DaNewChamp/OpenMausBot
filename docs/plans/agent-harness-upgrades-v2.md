@@ -53,7 +53,7 @@ Nearly all held. These did not, and they reshape the plan:
 
 ## Round 1 — broken, missing, or pays for everything after
 
-Order within the round is execution order (1.3 was skipped on 2026-08-17 and now sits at 3.4).
+Order within the round is execution order (1.3 and 1.6 were skipped on 2026-08-17 and now sit at 3.4 and 3.5).
 
 ### 1.1 Fix model-switch context loss *(v1 item 1 — detailed task plan below)*
 
@@ -92,18 +92,9 @@ Verified: `cost` on `turn.completed` (`server/contracts.ts:92`) and
 `cost` reference in `src/` is a dormant field in `routines.ts`. Design as
 v1 item 5, including the metered-vs-subscription labeling.
 
-### 1.6 Image attachments *(v1 item 2, rescoped)*
+### 1.6 Image attachments *(v1 item 2, rescoped)* — **skipped for now, moved to 3.5**
 
-Extend `src/lib/composer-attachments.ts` with an `ImageAttachment`
-variant (`{ kind: "image"; id; name; mediaType; data; size }`) beside the
-existing paste/file kinds; extend `SendTurnInput` with
-`images?: Array<{ mediaType: string; data: string }>`; add
-`capabilities.images?: boolean` and per-driver encoding; store as a user
-message kind beside `screen` (which already carries `png`/`mime` — reuse
-that shape with `role: "user"`). Composer paste/drag plumbing, size
-gating, and chip rendering already exist — do not rebuild them. Done
-when a pasted screenshot reaches the model on every driver advertising
-support, appears in the transcript, and survives reload.
+Decided 2026-08-17: not next. The rescoped design is recorded at 3.5.
 
 ### 1.7 Cross-thread search *(v1 item 4)*
 
@@ -131,6 +122,7 @@ included, results land via `switchBranch`).
 ### 3.2 Mid-turn steering *(v1 item 17)* — design as v1, including the stdin-EOF verification gate (`claude.ts:536` — answer open question 3 **before** designing the queue) and the 2.1 prerequisite.
 ### 3.3 Tool deadlines and loop **enforcement** *(v1 item 9, second half)* — with steering available, escalate 2.8's detection: inject the advisory note at the next safe point, terminate past the hard threshold. Per-call deadlines only where the harness actually owns the call; for CLI drivers the deadline remains "interrupt the turn", stated honestly in the UI.
 ### 3.4 Auto-retry in the main drivers *(v1 item 3, was 1.3 — skipped on 2026-08-17 and moved here)* — verified: zero retry in `claude.ts` / `codex.ts` / `grok.ts` while `box.ts`, `webhooks.ts`, and `acp/core.ts` all have it. Design as v1 item 3: classify transient (429, 5xx, overloaded, connection reset) vs terminal (auth, invalid model, quota); backoff + jitter with a small attempt cap; a `turn.retrying` runtime event so the UI shows it (the inspector from 1.2 makes this visible for free); an abort path so an interrupt during a retry cancels the whole turn; a retry after partial output discards the partial rather than duplicating it. Done when a simulated 529 produces a visible retry and a completed turn, and an invalid API key fails immediately without retrying.
+### 3.5 Image attachments *(v1 item 2, was 1.6 — skipped on 2026-08-17 and moved here)* — the paste/file/drop layer already exists in `src/lib/composer-attachments.ts`; only the image path is missing. Design: `POST /api/attachments` (image mimes, ≤10 MB) writes `~/.openmausbot/attachments/<uuid>.<ext>` and returns a path; the composer shows a thumbnail chip and `composeMessage` emits `<attached-image path="…"/>` — every CLI engine opens the file by path, no per-driver encoding; the transcript parses the tag into a thumbnail; `capabilities.images` per driver gates the paste (Claude/Codex/Antigravity/ACP true, grok/boxAgent false); `SendTurnInput.images` for API drivers waits for a second API driver (3.1). Done when a pasted screenshot reaches Claude, renders in the transcript, survives reload, and a grok bot refuses it politely.
 
 ---
 
