@@ -35,7 +35,11 @@ export class EventBus {
       // the canonical log is a file people paste into bug reports; scrub
       // credential-shaped content (tool titles, request summaries, reply
       // text) the same way the native tee does
-      appendFileSync(join(EVENTS_DIR, `${event.threadId}.ndjson`), JSON.stringify(redactSecrets(event)) + "\n");
+      appendFileSync(
+        join(EVENTS_DIR, `${event.threadId}.ndjson`),
+        JSON.stringify(redactSecrets(event)) + "\n",
+        { mode: 0o600 },
+      );
     } catch {
       /* logging must never take down the stream */
     }

@@ -24,21 +24,23 @@ interface BusPair {
   commsBus: CommsBus;
   approvalBus: { store: Store; broadcast: (payload: unknown) => void };
   broadcasts: unknown[];
-  groupBroadcasts: string[];
 }
 
 function setupBuses(store: Store): BusPair {
   const broadcasts: unknown[] = [];
-  const groupBroadcasts: string[] = [];
   const broadcast = (payload: unknown) => {
     broadcasts.push(payload);
   };
-  const broadcastGroup = (id: string) => {
-    groupBroadcasts.push(id);
-  };
-  const commsBus: CommsBus = { store, broadcast, broadcastGroup };
+  // the store emits what it writes; the server turns those into frames.
+  // Mirror that here so assertions see what a client would.
+  store.onChange((change) => {
+    if (change.type === "message" || change.type === "message.patch") {
+      broadcasts.push({ kind: change.type, threadId: change.threadId, message: change.message });
+    }
+  });
+  const commsBus: CommsBus = { store, broadcast };
   const approvalBus = { store, broadcast };
-  return { commsBus, approvalBus, broadcasts, groupBroadcasts };
+  return { commsBus, approvalBus, broadcasts };
 }
 
 /** Poll until `predicate` returns a truthy value or `timeout` elapses.
@@ -240,7 +242,7 @@ describe("drainDelegations", () => {
       },
     );
 
-    await waitFor(() => runTargetCalls.length === 1);
+    await waitFor(() => runTargetCalls.length === 1 && _pendingCount(routineTask.threadId) === 0);
     expect(_pendingCount(routineTask.threadId)).toBe(0);
     expect(runTargetCalls[0]?.sourceThreadId).toBe(routineTask.threadId);
     expect(
@@ -437,8 +439,52 @@ describe("delegations survive a restart", () => {
     drainDelegations(buses.commsBus, buses.approvalBus, from.threadId, async (_to, message) => {
       ran.push(message);
     });
-    await waitFor(() => ran.length === 1);
+    await waitFor(() => ran.length === 1 && pendingThreads().length === 0);
     expect(JSON.parse(readFileSync(file(), "utf8"))[from.threadId]).toBeUndefined();
+  });
+
+  it("keeps a handoff durable until its approval and dispatch path settles", async () => {
+    queueDelegation(buses.commsBus, from, { toBotId: target.id, message: "wait for dispatch", depth: 0 }, 1);
+    let release!: () => void;
+    const dispatchSettled = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = false;
+    drainDelegations(buses.commsBus, buses.approvalBus, from.threadId, async () => {
+      started = true;
+      await dispatchSettled;
+    });
+
+    await waitFor(() => started);
+    expect(pendingThreads()).toEqual([from.threadId]);
+    expect(JSON.parse(readFileSync(file(), "utf8"))[from.threadId]).toHaveLength(1);
+
+    release();
+    await waitFor(() => pendingThreads().length === 0);
+    expect(JSON.parse(readFileSync(file(), "utf8"))[from.threadId]).toBeUndefined();
+  });
+
+  it("drains work queued by a later settled turn while an earlier handoff is waiting", async () => {
+    queueDelegation(buses.commsBus, from, { toBotId: target.id, message: "first", depth: 0 }, 1);
+    let release!: () => void;
+    const firstSettled = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const ran: string[] = [];
+    const runTarget = async (_to: string, message: string) => {
+      ran.push(message);
+      if (message.includes("first")) await firstSettled;
+    };
+    drainDelegations(buses.commsBus, buses.approvalBus, from.threadId, runTarget);
+    await waitFor(() => ran.length === 1);
+
+    queueDelegation(buses.commsBus, from, { toBotId: target.id, message: "second", depth: 0 }, 1);
+    drainDelegations(buses.commsBus, buses.approvalBus, from.threadId, runTarget);
+    expect(ran).toHaveLength(1);
+
+    release();
+    await waitFor(() => ran.length === 2 && pendingThreads().length === 0);
+    expect(ran[1]).toContain("second");
   });
 
   it("a fresh process loads what the last one queued, and can drain it", async () => {
@@ -452,7 +498,7 @@ describe("delegations survive a restart", () => {
     drainDelegations(buses.commsBus, buses.approvalBus, from.threadId, async (_to, message) => {
       ran.push(message);
     });
-    await waitFor(() => ran.length === 1);
+    await waitFor(() => ran.length === 1 && pendingThreads().length === 0);
     expect(ran[0]).toContain("left over");
     expect(pendingThreads()).toEqual([]);
   });
