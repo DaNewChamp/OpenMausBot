@@ -53,6 +53,16 @@ beforeAll(async () => {
         ],
       }));
     }
+    if (req.method === "GET" && url.pathname === "/api/v3.1/connected_accounts") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({
+        items: [
+          { toolkit: { slug: "github" }, status: "ACTIVE", updated_at: "2026-08-17T08:00:00Z" },
+          { toolkit: { slug: "notion" }, status: "INITIATED", updated_at: "2026-08-17T08:01:00Z" },
+          { toolkit: { slug: "linear" }, status: "EXPIRED", updated_at: "2026-08-17T08:02:00Z" },
+        ],
+      }));
+    }
     if (req.method === "POST" && url.pathname.endsWith("/link")) {
       res.writeHead(201, { "content-type": "application/json" });
       return res.end(JSON.stringify({ redirect_url: `https://connect.composio.dev/link/${body.toolkit}` }));
@@ -113,11 +123,12 @@ describe.sequential("Composio Sessions", () => {
     const cfg: AppConfig = {
       composio: { apiKey: "ak_test", userId: "openmausbot_existing", sessionId: "trs_test" },
     };
-    await expect(connectionStatus(cfg, ["github", "gmail", "slack", "notion"])).resolves.toEqual({
-      github: { connected: true, status: "ACTIVE" },
-      gmail: { connected: true, status: "ACTIVE" },
-      slack: { connected: false, status: "not_connected" },
-      notion: { connected: false, status: "not_connected" },
+    await expect(connectionStatus(cfg, ["github", "gmail", "slack", "notion", "linear"])).resolves.toEqual({
+      github: { connected: true, pending: false, status: "ACTIVE" },
+      gmail: { connected: true, pending: false, status: "ACTIVE" },
+      slack: { connected: false, pending: false, status: "not_connected" },
+      notion: { connected: false, pending: true, status: "INITIATED" },
+      linear: { connected: false, pending: false, status: "EXPIRED" },
     });
     await expect(authorizeService(cfg, "github")).resolves.toEqual({
       url: "https://connect.composio.dev/link/github",
