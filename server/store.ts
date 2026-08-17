@@ -121,6 +121,12 @@ export interface TaskRecord {
    * report running totals per turn; the fold adds each turn's final total
    * here when the turn completes. Informational, not billing. */
   usage?: { input: number; output: number; turns: number };
+  /** the folder this task's turns run in, pinned on its first turn from
+   * the bot's `cwd` at that moment. Pinned, not read live: Claude keeps
+   * sessions per project directory and Codex threads carry their cwd, so
+   * a folder that moved under a live session would break resume. `null`
+   * = pinned to the default (home); absent = not pinned yet. */
+  cwd?: string | null;
 }
 
 /** What a task is called before its first message names it. */
@@ -151,6 +157,9 @@ export interface BotRecord {
   /** which computer the bot acts on: its cloud box, this Mac (local CUA),
    * or none. Unset = auto (box when it exists, else local when available). */
   computer?: "cloud" | "vm" | "local" | "off";
+  /** where NEW tasks run their shell tools; each task pins its own copy
+   * on its first turn (TaskRecord.cwd). Absent = the home folder. */
+  cwd?: string;
   /** Auto mode: the bot approves its own tool permissions and keeps
    * working instead of stopping to ask. Questions it asks YOU still come
    * through, and a short list of destructive commands still stops it. */
@@ -686,6 +695,21 @@ export class Store {
     // routine task working in the background.
     if (!threadId || bot.threadId === threadId) bot.resumeCursors[instanceId] = cursor;
     this.saveBots();
+  }
+
+  /** The folder a task's turn runs in. Pins on first call from the bot's
+   * current folder — unless the task already has a session (a thread from
+   * before folders existed), which pins to the default so the folder can't
+   * move under it. Returns the pinned value: a path, or null for default. */
+  pinTaskCwd(botId: string, threadId: string, fallbackCwd?: string): string | null {
+    const bot = this.bot(botId);
+    const task = bot ? this.taskByThread(botId, threadId) : undefined;
+    if (!bot || !task) return null;
+    if (task.cwd === undefined) {
+      task.cwd = Object.keys(task.resumeCursors).length === 0 ? (bot.cwd ?? fallbackCwd ?? null) : null;
+      this.saveBots();
+    }
+    return task.cwd;
   }
 
   // ── tasks ─────────────────────────────────────────────────────────────
