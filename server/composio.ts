@@ -135,7 +135,7 @@ export async function connectionStatus(cfg: AppConfig, slugs: string[]) {
             const accountBody = (await accountRes.json()) as {
               items?: Array<{ toolkit?: { slug?: string }; status?: string; updated_at?: string }>;
             };
-            return accountBody.items ?? [];
+            return Array.isArray(accountBody?.items) ? accountBody.items : [];
           })
           .catch(() => [])
       : Promise.resolve([]),

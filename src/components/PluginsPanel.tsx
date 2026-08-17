@@ -15,6 +15,26 @@ interface ToolkitCard {
   domain: string | null;
 }
 
+export interface ConnectorStatus {
+  connected: boolean;
+  pending?: boolean;
+  status?: string;
+}
+
+export function mergeCurrentConnectorStatus(
+  current: Record<string, ConnectorStatus>,
+  incoming: Record<string, ConnectorStatus>,
+  latestGenerations: ReadonlyMap<string, number>,
+  requestGenerations: ReadonlyMap<string, number>,
+) {
+  const next = { ...current };
+  for (const [slug, state] of Object.entries(incoming)) {
+    if ((latestGenerations.get(slug) ?? 0) !== (requestGenerations.get(slug) ?? 0)) continue;
+    next[slug] = state;
+  }
+  return next;
+}
+
 function ServiceIcon({ card }: { card: ToolkitCard }) {
   // 0 = official logo, 1 = favicon by domain, 2 = monogram
   const [stage, setStage] = useState(card.logo ? 0 : card.domain ? 1 : 2);
@@ -44,7 +64,7 @@ export function PluginsPanel() {
   const [cards, setCards] = useState<ToolkitCard[] | null>(null);
   const [source, setSource] = useState<"api" | "curated">("curated");
   const [configured, setConfigured] = useState(true);
-  const [status, setStatus] = useState<Record<string, { connected: boolean; pending?: boolean; status?: string }>>({});
+  const [status, setStatus] = useState<Record<string, ConnectorStatus>>({});
   const [pendingUrls, setPendingUrls] = useState<Record<string, string>>({});
   const [busySlug, setBusySlug] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -52,17 +72,27 @@ export function PluginsPanel() {
   const [search, setSearch] = useState("");
 
   const pollTimers = useRef(new Map<string, ReturnType<typeof setInterval>>());
+  const statusGenerations = useRef(new Map<string, number>());
 
-  const refreshStatus = useCallback((slugs: string[]): Promise<Record<string, { connected: boolean; pending?: boolean; status?: string }>> => {
+  const refreshStatus = useCallback((slugs: string[]): Promise<Record<string, ConnectorStatus>> => {
     if (!slugs.length) return Promise.resolve({});
+    const requestGenerations = new Map(slugs.map((slug) => [slug, statusGenerations.current.get(slug) ?? 0]));
     setRefreshing(true);
     return api(`/api/connectors?services=${slugs.join(",")}`)
       .then((r) => {
-        const services: Record<string, { connected: boolean; pending?: boolean; status?: string }> = r.services ?? {};
+        const services: Record<string, ConnectorStatus> = r.services ?? {};
         // A one-service OAuth poll must not erase every other app's state.
-        setStatus((current) => ({ ...current, ...services }));
+        // A request that began before Connect must also not erase the newer
+        // local INITIATED state when its stale not_connected result arrives.
+        setStatus((current) => mergeCurrentConnectorStatus(
+          current,
+          services,
+          statusGenerations.current,
+          requestGenerations,
+        ));
         for (const [slug, state] of Object.entries(services)) {
-          if (state.connected) setPendingUrls((current) => {
+          const isCurrent = (statusGenerations.current.get(slug) ?? 0) === (requestGenerations.get(slug) ?? 0);
+          if (isCurrent && state.connected) setPendingUrls((current) => {
             if (!current[slug]) return current;
             const next = { ...current };
             delete next[slug];
@@ -171,6 +201,7 @@ export function PluginsPanel() {
   };
 
   const connect = async (slug: string) => {
+    statusGenerations.current.set(slug, (statusGenerations.current.get(slug) ?? 0) + 1);
     setBusySlug(slug);
     setError(null);
     try {
