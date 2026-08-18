@@ -224,6 +224,7 @@ export interface ModelCatalog {
     id: string;
     label: string;
     custom?: boolean;
+    loaded?: boolean;
     /** total context window in tokens, when the driver knows it — sizes
      * the model-facing rebuild (server/context-rebuild.ts). Unknown falls
      * back to a pattern table over the model id, then a conservative default. */
@@ -254,9 +255,18 @@ export interface ProviderInstance {
   dispose(): Promise<void>;
 }
 
+/** How an engine is presented in the picker rail.
+ *  `subscription` — first-party cloud catalog; Custom is extra.
+ *  `custom` — no subscription catalog; Custom is the product. */
+export type EngineAccess = "subscription" | "custom";
+
 export interface ProviderDriver<Config = unknown> {
   readonly driverKind: DriverKind;
-  readonly metadata: { displayName: string; supportsMultipleInstances?: boolean };
+  readonly metadata: {
+    displayName: string;
+    supportsMultipleInstances?: boolean;
+    access?: EngineAccess;
+  };
   /** How to get this engine installed. Omit for engines that need no local
    * binary (API-key drivers), which is what makes it optional. */
   readonly install?: EngineInstall;

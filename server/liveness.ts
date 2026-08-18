@@ -1,47 +1,48 @@
-// Turn liveness: noticing when a running turn has gone quiet. A driver
-// process that DIES is already handled — every child driver settles on
-// close — but a driver that HANGS (a stalled request, an ACP prompt that
-// never resolves, an SSE that never ends) leaves the bot busy until a human
-// presses Stop. This is the harness's own clock over the event stream, so
-// it works for every driver alike.
-//
-// Two thresholds. Quiet past `quietAfterMs` is surfaced (a "quiet for 3m"
-// note next to Stop) — informative, not a judgement: a long silent tool
-// run looks the same. Quiet past `stopAfterMs` stops the turn, but ONLY
-// for turns nobody is watching (routines, webhooks): an interactive turn
-// has a visible Stop and a human who can decide.
-
-export type TurnSource = "user" | "automation";
+// Turn liveness: SAYING when a running turn has gone quiet. Stopping a
+// wedged turn is the TurnWatchdog's job (server/turn-watchdog.ts — no
+// activity for 20 minutes, waiting-on-human exempt); this is the earlier,
+// softer signal: a "quiet for 3m" note next to Stop, so a human looking at
+// the chat can decide long before the watchdog would. It watches the same
+// event stream, driver-agnostic. Informative, not a verdict — a long silent
+// tool run looks exactly like a hung engine from out here.
 
 export type LivenessAction =
   | { threadId: string; action: "flag"; quietSince: number }
-  | { threadId: string; action: "clear" }
-  | { threadId: string; action: "stop"; quietSince: number };
+  | { threadId: string; action: "clear" };
 
 interface Tracked {
-  source: TurnSource;
   lastEventAt: number;
   flagged: boolean;
-  stopped: boolean;
+  /** parked on an approval or a question — waiting on a person is not quiet */
+  waitingOnHuman: boolean;
 }
 
 export class TurnLiveness {
   private readonly turns = new Map<string, Tracked>();
-  private readonly opts: { quietAfterMs: number; stopAfterMs: number };
+  private readonly opts: { quietAfterMs: number };
 
-  constructor(opts: { quietAfterMs: number; stopAfterMs: number }) {
+  constructor(opts: { quietAfterMs: number }) {
     this.opts = opts;
   }
 
   /** A turn was dispatched. Restarting a thread resets its clock. */
-  start(threadId: string, input: { source: TurnSource; at: number }) {
-    this.turns.set(threadId, { source: input.source, lastEventAt: input.at, flagged: false, stopped: false });
+  start(threadId: string, input: { at: number }) {
+    this.turns.set(threadId, { lastEventAt: input.at, flagged: false, waitingOnHuman: false });
   }
 
   /** Any runtime event for the thread counts as a sign of life. */
   touch(threadId: string, at: number) {
     const t = this.turns.get(threadId);
     if (t) t.lastEventAt = at;
+  }
+
+  /** A card reached a human (or was answered). While waiting, the clock is
+   * paused; when answered, it restarts from now. */
+  setWaitingOnHuman(threadId: string, waiting: boolean, at: number) {
+    const t = this.turns.get(threadId);
+    if (!t) return;
+    t.waitingOnHuman = waiting;
+    t.lastEventAt = at;
   }
 
   /** The turn ended. Returns true when it was flagged, so the caller can
@@ -62,19 +63,11 @@ export class TurnLiveness {
   tick(now: number): LivenessAction[] {
     const out: LivenessAction[] = [];
     for (const [threadId, t] of this.turns) {
-      if (t.stopped) continue;
-      const quiet = now - t.lastEventAt;
-      if (t.flagged && quiet < this.opts.quietAfterMs) {
+      const quiet = !t.waitingOnHuman && now - t.lastEventAt >= this.opts.quietAfterMs;
+      if (t.flagged && !quiet) {
         t.flagged = false;
         out.push({ threadId, action: "clear" });
-        continue;
-      }
-      if (t.source === "automation" && quiet >= this.opts.stopAfterMs) {
-        t.stopped = true;
-        out.push({ threadId, action: "stop", quietSince: t.lastEventAt });
-        continue;
-      }
-      if (!t.flagged && quiet >= this.opts.quietAfterMs) {
+      } else if (!t.flagged && quiet) {
         t.flagged = true;
         out.push({ threadId, action: "flag", quietSince: t.lastEventAt });
       }

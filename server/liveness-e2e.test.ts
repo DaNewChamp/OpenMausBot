@@ -1,8 +1,8 @@
 // Turn liveness, end to end: boots the real harness with the fake ACP CLI in
 // `hang` mode (a session/prompt that never resolves — the shape of a stuck
-// engine) and thresholds shrunk to seconds. An interactive turn is flagged
-// quiet and stays running (a human decides); a webhook-started turn is
-// flagged, then stopped with an explanatory chip.
+// engine) and thresholds shrunk. The quiet flag surfaces after seconds; the
+// TurnWatchdog (main's stall guard, floor 60s) then stops the turn with its
+// own chip — for a routine in a detached task and for a webhook alike.
 //
 // Same POSIX gating as branching.test.ts (the fake CLI is a shebang script).
 import { spawn, type ChildProcess } from "node:child_process";
@@ -18,9 +18,10 @@ const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
 const posixOnly = describe.skipIf(process.platform === "win32");
 
-// the harness ticks every 15s; thresholds sit just under one and two ticks
+// the liveness clock ticks every 15s; the watchdog checks every 60s and
+// refuses a stall shorter than 60s — so a stop lands within ~2 minutes
 const QUIET_AFTER_MS = 2_000;
-const STOP_AFTER_MS = 12_000;
+const STALL_MS = 60_000;
 
 posixOnly("turn liveness e2e (fake ACP in hang mode)", () => {
   let child: ChildProcess;
@@ -64,7 +65,7 @@ posixOnly("turn liveness e2e (fake ACP in hang mode)", () => {
         USERPROFILE: home,
         OMB_PORT: String(PORT),
         OMB_TURN_QUIET_AFTER_MS: String(QUIET_AFTER_MS),
-        OMB_TURN_STOP_AFTER_MS: String(STOP_AFTER_MS),
+        OMB_TURN_STALL_MS: String(STALL_MS),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -93,21 +94,19 @@ posixOnly("turn liveness e2e (fake ACP in hang mode)", () => {
   });
 
   it(
-    "flags an interactive turn as quiet but leaves it running for the human to decide",
+    "flags an interactive turn as quiet while it keeps running; Stop clears the note",
     async () => {
       const created = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "hang", model: "fake-model" } });
       expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "hello?" })).status).toBe(202);
       await waitFor(async () => (await getBot(created.id)).busy === true, "the turn to start");
 
-      // the quiet note arrives on the bot broadcast within a tick or two
+      // the quiet note arrives on the bot broadcast within a tick or two —
+      // long before the watchdog's stall floor; the turn keeps running
       await waitFor(async () => typeof (await getBot(created.id)).quietSince === "number", "the quiet flag");
-      // …and well past the automation ceiling it is STILL running: no auto-stop
-      await new Promise((r) => setTimeout(r, STOP_AFTER_MS + 16_000));
       const bot = await getBot(created.id);
       expect(bot.busy).toBe(true);
       expect(typeof bot.quietSince).toBe("number");
-      expect(bot.messages.some((m: any) => m.kind === "activity" && /stopped — no output/.test(m.tool?.name ?? ""))).toBe(false);
 
       // the human stops it; the note goes with the turn
       expect((await api("POST", `/api/bots/${created.id}/interrupt`)).status).toBe(200);
@@ -118,7 +117,7 @@ posixOnly("turn liveness e2e (fake ACP in hang mode)", () => {
   );
 
   it(
-    "a scheduled routine runs in a detached task thread — its quiet state still reaches the bot, and it is stopped",
+    "a scheduled routine runs in a detached task thread — its quiet state still reaches the bot, then the watchdog stops it",
     async () => {
       const created = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "hang", model: "fake-model" } });
@@ -139,21 +138,21 @@ posixOnly("turn liveness e2e (fake ACP in hang mode)", () => {
       const routineTask = during.tasks.find((t: any) => t.threadId !== created.threadId);
       expect(routineTask, "the routine did not get its own detached task").toBeTruthy();
       await waitFor(async () => typeof (await getBot(created.id)).quietSince === "number", "the quiet flag for the detached task");
-      // …and it is an automation turn, so the ceiling stops it with the chip
+      // …then the watchdog's stall floor passes and it stops the turn with its chip
       await waitFor(async () => {
         const b = await getBot(created.id);
         return !b.busy && b.messages.concat(
           // the chip lands on the routine's thread, not the chat thread
           (await api("GET", `/api/threads/${routineTask.threadId}/messages`)).body?.messages ?? [],
-        ).some((m: any) => m.kind === "activity" && /stopped — no output from .* for \d+ minutes?/.test(m.tool?.name ?? ""));
-      }, "the routine turn to be stopped with a chip", 60_000);
+        ).some((m: any) => m.kind === "activity" && /no activity for \d+ minutes? — the turn was stopped/.test(m.tool?.name ?? ""));
+      }, "the routine turn to be stopped by the watchdog", 150_000);
       expect((await getBot(created.id)).quietSince).toBeUndefined();
     },
-    90_000,
+    180_000,
   );
 
   it(
-    "stops a webhook-started turn after the ceiling and says why",
+    "a webhook-started turn is flagged quiet, then stopped by the watchdog with its chip",
     async () => {
       const created = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "hang", model: "fake-model" } });
@@ -167,15 +166,19 @@ posixOnly("turn liveness e2e (fake ACP in hang mode)", () => {
       expect(delivered.status).toBe(202);
 
       await waitFor(async () => (await getBot(created.id)).busy === true, "the webhook turn to start");
+      // a webhook run gets its own detached task, like a routine
+      const webhookTask = (await getBot(created.id)).tasks.find((t: any) => t.threadId !== created.threadId);
+      expect(webhookTask, "the webhook did not get its own detached task").toBeTruthy();
       // flagged first…
       await waitFor(async () => typeof (await getBot(created.id)).quietSince === "number", "the quiet flag");
-      // …then stopped, with the chip explaining it
+      // …then the watchdog stops it, with its chip explaining why
       await waitFor(async () => {
         const b = await getBot(created.id);
-        return !b.busy && b.messages.some((m: any) => m.kind === "activity" && /stopped — no output from .* for \d+ minutes?/.test(m.tool?.name ?? ""));
-      }, "the automation turn to be stopped with a chip", 60_000);
+        const threadMessages = (await api("GET", `/api/threads/${webhookTask.threadId}/messages`)).body?.messages ?? [];
+        return !b.busy && threadMessages.some((m: any) => m.kind === "activity" && /no activity for \d+ minutes? — the turn was stopped/.test(m.tool?.name ?? ""));
+      }, "the webhook turn to be stopped by the watchdog", 150_000);
       expect((await getBot(created.id)).quietSince).toBeUndefined();
     },
-    90_000,
+    180_000,
   );
 });
