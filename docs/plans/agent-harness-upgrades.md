@@ -6,7 +6,7 @@
 
 ## Summary
 
-Sixteen changes to `server/` and `src/`, ordered into three rounds, plus a
+Seventeen changes to `server/` and `src/`, ordered into three rounds, plus a
 deferred list. No external agent harness is adopted as a dependency.
 
 This plan replaces an earlier draft that was built by reading other harnesses
@@ -129,11 +129,18 @@ engine instead of starting it blank.
 
 **Why.** Verified broken, and it is a front-page feature.
 
-**Design.** At dispatch, if the selected instance has no entry in
-`task.resumeCursors` and the thread has prior messages, treat it as a rebuild —
-the same branch `rewound` already takes at `server/index.ts:817`. Ship this
-before item 7; a 40-message text replay is worth far more than nothing, and the
-rebuild path is where item 7 later plugs in.
+**Design.** At dispatch, decide freshness by *who ran the last turn on the
+task*, not by whether this instance holds a cursor — a cursor only proves a
+session covering some prefix of the thread, and every turn another engine took
+since is missing from it. Track `TaskRecord.lastInstanceId` at dispatch and
+replay (the same branch `rewound` already takes at `server/index.ts:817`) when
+it differs from the selected instance. Tasks from before the field existed fall
+back to the cursor map: a lone cursor that is ours keeps resuming, anything
+ambiguous replays. Ship this before item 7; a 40-message text replay is worth
+far more than nothing, and the rebuild path is where item 7 later plugs in.
+*(As built in #180: `engineIsFresh()` in `server/turn-context.ts`,
+`store.markTaskDispatched()`; the naive missing-cursor rule was tried first and
+failed the A → B → A case in manual testing.)*
 
 Keep the rebuild marker distinct from `rewound`. `rewound` means "the visible
 branch changed"; this means "this engine has no session here". They coincide
@@ -617,3 +624,25 @@ separate them before adding the third.
    correct at 8k, or does it need a floor?
 8. Which liveness probe per driver kind — process existence, or a protocol-level
    ping where the transport supports one?
+
+## Upstream references
+
+The projects this plan reads for design, and what was taken from each. Facts
+below are the ones the item designs cite; nothing else from these projects is
+assumed.
+
+- **pi** — compaction correctness rules (never cut between a tool call and its
+  result; split-turn case; feed the previous summary into the next; carry
+  read/modified files forward) — item 7. Its flat 16384-token reserve assumes a
+  ~200k window — item 7d scales the reserve instead. Local-model compatibility
+  (send `system`, not the `developer` role; declare no effort levels) — item 16.
+  Steer vs follow-up semantics (steer after the current tool batch, follow-up
+  after the turn) — item 17.
+- **agent-orchestrator** — read for the general shape of a multi-agent
+  harness; no specific design is borrowed.
+- **deepseek-harness** — token-meter principle (anchor on provider-reported
+  usage when the request envelope matches, heuristic otherwise) — item 7; the
+  typed approval seam (`allowed-once | rejected | cancelled | unavailable`) —
+  item 11.
+- **mem0** (`mem0ai`, Apache-2.0) and **Letta** — the extract-then-reconcile
+  memory design and the last-writer-wins caveat — deferred "shared memory".
