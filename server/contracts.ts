@@ -218,6 +218,9 @@ export interface ProviderSnapshot {
   reason?: string;
   authenticated?: boolean;
   version?: string | null;
+  /** Installed but not running (a local server that isn't up): the setup
+   * card offers install.signInCommand as "start it", not an install. */
+  notRunning?: boolean;
 }
 
 // ── engine install descriptor ───────────────────────────────────────────

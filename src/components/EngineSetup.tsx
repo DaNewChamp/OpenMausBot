@@ -119,11 +119,15 @@ export function EngineSetup({
   const installCommand = installCommandFor(install);
   const signInCommand = install?.signInCommand;
   const signInOnly = intent === "cloud" && needsSignIn(instance);
-  const command = signInOnly ? signInCommand : installCommand;
-  const title = signInOnly ? `Sign in to ${instance.displayName}` : `Install ${instance.displayName}`;
+  // a local server that is installed but not up: the fix is to start it
+  const startOnly = Boolean(instance.snapshot.notRunning && signInCommand);
+  const command = signInOnly || startOnly ? signInCommand : installCommand;
+  const title = signInOnly ? `Sign in to ${instance.displayName}` : startOnly ? `Start ${instance.displayName}` : `Install ${instance.displayName}`;
   const description = signInOnly
     ? "Finish the account sign-in in Terminal. Reopen this menu afterward and we’ll check again."
-    : intent === "inject"
+    : startOnly
+      ? "It’s installed but not answering. Start it, then reopen this menu and we’ll check again."
+      : intent === "inject"
       ? "Install the agent once, then you can run it with local models—no cloud sign-in required."
       : `Install the command-line app once. Models will appear here as soon as it’s ready${signInCommand ? "; sign-in may follow" : ""}.`;
 
@@ -144,7 +148,7 @@ export function EngineSetup({
     <div className={cn("rounded-xl border border-hairline/40 bg-raised/30 p-3", className)}>
       <div className="flex items-start gap-2.5">
         <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-inset text-ink-secondary">
-          {signInOnly ? <LogIn size={14} /> : <Download size={14} />}
+          {signInOnly || startOnly ? <LogIn size={14} /> : <Download size={14} />}
         </span>
         <div className="min-w-0">
           <div className="text-[13px] font-semibold text-ink">{title}</div>
@@ -153,7 +157,7 @@ export function EngineSetup({
       </div>
 
       {command ? (
-        <CommandRow command={command} actionLabel={signInOnly ? "Open sign-in in Terminal" : "Open install in Terminal"} />
+        <CommandRow command={command} actionLabel={signInOnly ? "Open sign-in in Terminal" : startOnly ? "Start in Terminal" : "Open install in Terminal"} />
       ) : (
         <p className="mt-3 rounded-lg bg-inset px-2.5 py-2 text-[12px] leading-relaxed text-ink-secondary">
           There isn’t a one-line installer for this platform. Use the setup guide below.

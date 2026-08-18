@@ -211,6 +211,8 @@ export interface InstanceInfo {
     reason?: string;
     authenticated?: boolean;
     version?: string | null;
+    /** installed but not running — the setup card offers "start it" */
+    notRunning?: boolean;
   };
   models: { default: string; options: Array<{ id: string; label: string; custom?: boolean; loaded?: boolean }> };
   capabilities?: {

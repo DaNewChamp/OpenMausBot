@@ -219,10 +219,14 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     computer: { driver: "boxAgent" },
     qwen: { driver: "qwenAgent" },
     hermes: { driver: "hermesAgent" },
+    // the no-CLI path: Ollama spoken to directly. Unavailable until Ollama
+    // is running, like every engine before its CLI is installed.
+    local: { driver: "local", config: { host: "ollama" } },
   };
   const CUSTOM_ONLY = {
     qwen: { driver: "qwenAgent" },
     hermes: { driver: "hermesAgent" },
+    local: { driver: "local", config: { host: "ollama" } },
   } as const;
   const configured = cfg.instances && Object.keys(cfg.instances).length ? cfg.instances : null;
   const map: InstanceConfigMap = configured ? { ...configured } : { ...DEFAULT_FLEET };
