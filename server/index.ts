@@ -70,6 +70,7 @@ import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease } from "./local-vm-lease.ts";
 import { RepeatDetector, callKey } from "./repeat-detector.ts";
+import { REPEAT_THRESHOLDS, repeatAction } from "./repeat-policy.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
 import { fetchGithubTeam, fetchLibraryTeam, fetchTeamCatalog } from "./team-library.ts";
 import { createTeamManifest, parseTeamManifest } from "./team-manifest.ts";
@@ -418,7 +419,7 @@ const turnUsage = new Map<string, { input: number; output: number }>();
 // Bounded per active turn. OpenHands uses a bounded recent-event scan for
 // the same class of stuck-loop detection; retaining an unlimited set of
 // unique arguments would let one pathological turn grow the server forever.
-const repeats = new RepeatDetector({ thresholds: [5, 10, 20], maxKeysPerThread: 256 });
+const repeats = new RepeatDetector({ thresholds: [...REPEAT_THRESHOLDS], maxKeysPerThread: 256 });
 
 // ── stall watchdog ─────────────────────────────────────────────────────
 // ask_bot has a 4-minute ceiling and room turns a 5-minute one; the main
@@ -815,21 +816,37 @@ bus.subscribe((event: RuntimeEvent) => {
   if (event.type === "turn.completed" || event.type === "session.exited") return void repeats.settle(event.threadId);
   let key: string | null = null;
   if (event.type === "item.started" && event.itemType === "tool") {
-    // a title with more than a bare identifier is a call with arguments
-    // (ACP: "echo hi", "Read src/x.ts"); a bare "Bash" is not countable
-    const title = event.title ?? "";
-    if (/\s|\//.test(title.trim())) key = callKey("tool", title);
+    if (event.args) {
+      // the driver saw the call's arguments (Claude's tool_use input)
+      key = callKey(event.title ?? "tool", event.args);
+    } else {
+      // a title with more than a bare identifier is a call with arguments
+      // (ACP: "echo hi", "Read src/x.ts"); a bare "Bash" is not countable
+      const title = event.title ?? "";
+      if (/\s|\//.test(title.trim())) key = callKey("tool", title);
+    }
   } else if (event.type === "request.opened" && event.requestType === "permission") key = callKey(event.tool, event.summary);
   if (!key) return;
   const { threshold } = repeats.record(event.threadId, key);
   if (!threshold) return;
   const [tool, ...rest] = key.split(":");
   const args = rest.join(":");
-  store.appendMessage(event.threadId, {
-    role: "bot",
-    kind: "activity",
-    tool: { name: `Same call repeated ${threshold}× — ${tool}: ${args.slice(0, 80)}${args.length > 80 ? "…" : ""} — it may be stuck`, ok: false },
-  });
+  // enforcement (plan item 3.3): nudge the model out of the loop where the
+  // engine takes a message mid-turn; stop the turn at the ceiling either way
+  const bot = store.botByThread(event.threadId);
+  const instance = bot ? registry.get(bot.modelSelection.instanceId) : null;
+  const canSteer = Boolean(instance?.adapter.capabilities.queueing && instance.adapter.steer);
+  const action = repeatAction({ threshold, tool, args, canSteer });
+  store.appendMessage(event.threadId, { role: "bot", kind: "activity", tool: { name: action.chip, ok: false } });
+  if (action.steer && instance?.adapter.steer) {
+    void instance.adapter.steer(event.threadId, action.steer).catch(() => {});
+  }
+  if (action.stop && bot && instance) {
+    repeats.settle(event.threadId);
+    if (routines?.activeRunForBot(bot.id)) void routines.cancelRun(routines.activeRunForBot(bot.id)!.id).catch(() => {});
+    else void instance.adapter.interruptTurn(event.threadId).catch(() => {});
+    finalizeDelegationWatch(event.threadId, false, "", "Delegated turn stopped — the same call kept repeating");
+  }
 });
 
 // Drain queued delegations for a source thread after its turn settles.

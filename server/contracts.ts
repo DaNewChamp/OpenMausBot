@@ -92,7 +92,15 @@ export type RuntimeEvent = RuntimeEventBase &
         cost?: number | null;
         denials?: string[];
       }
-    | { type: "item.started"; itemType: "tool" | "reasoning"; title?: string }
+    | {
+        type: "item.started";
+        itemType: "tool" | "reasoning";
+        title?: string;
+        /** the call's arguments in one line (a command, a path, a URL) when
+         * the driver can see them — what makes "the same call again" a
+         * meaningful thing to count (repeat detection). Not shown as-is. */
+        args?: string;
+      }
     | { type: "item.updated"; itemType: "tool" | "reasoning"; tokens?: number | null }
     | { type: "item.completed"; itemType: "tool"; ok: boolean }
     | { type: "item.completed"; itemType: "assistant_text"; text: string }

@@ -191,6 +191,19 @@ function askSummary(ask: Ask): string {
   return text === "{}" ? (ask.tool ?? "tool") : text.slice(0, 200);
 }
 
+/** A tool call's arguments in one line — the same shape askSummary gives a
+ * permission card, for calls that never ask (auto mode). Empty when the
+ * input carries nothing recognisable. */
+export function toolArgsSummary(input: unknown): string {
+  if (!input || typeof input !== "object") return "";
+  const o = input as Record<string, unknown>;
+  for (const key of ["command", "file_path", "path", "url", "pattern", "query", "prompt"]) {
+    if (typeof o[key] === "string" && (o[key] as string).trim()) return (o[key] as string).slice(0, 200);
+  }
+  const text = JSON.stringify(o);
+  return text === "{}" ? "" : text.slice(0, 200);
+}
+
 export function permissionSocketPath(threadId: string) {
   const tag = threadId.replace(/[^\w-]/g, "").slice(0, 8);
   return brokerSocketPath(DATA_DIR, tag);
@@ -633,7 +646,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             }
             for (const b of Array.isArray(msg.content) ? msg.content : []) {
               if (b.type === "tool_use") {
-                emit({ ...base(threadId, currentTurnId()), type: "item.started", itemType: "tool", itemId: b.id, title: b.name });
+                // the call's arguments in one line, so the harness can tell
+                // "git status" from "rm -rf" when it counts repeats
+                const args = toolArgsSummary(b.input);
+                emit({ ...base(threadId, currentTurnId()), type: "item.started", itemType: "tool", itemId: b.id, title: b.name, ...(args ? { args } : {}) });
               }
             }
             if (msg.usage) {

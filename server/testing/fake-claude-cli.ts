@@ -132,7 +132,7 @@ const playTurn = (prompt: JsonValue) => {
     message: {
       content: [
         { type: "text", text: "hello from fake claude" },
-        { type: "tool_use", id: "tu-1", name: "Bash" },
+        { type: "tool_use", id: "tu-1", name: "Bash", input: { command: "echo hi" } },
       ],
       usage: { input_tokens: 10, cache_read_input_tokens: 2, output_tokens: 5 },
     },
@@ -145,6 +145,29 @@ const playTurn = (prompt: JsonValue) => {
     if (queue.length) playTurn(queue.shift()!);
     else finishIfDone();
   };
+
+  // a bot going in circles: the SAME call again and again inside one turn.
+  // `loop` runs 6 (past the first nudge threshold) then replies, folding any
+  // steered note in like `slow`; `loop-hard` never stops — the harness must
+  // end the turn at its ceiling (the process dies with it).
+  if (mode === "loop" || mode === "loop-hard") {
+    const n = mode === "loop" ? 6 : 1000;
+    let i = 0;
+    const tick = () => {
+      if (i++ >= n) {
+        const tail = steered.length ? ` + steered: ${steered.join(" | ")}` : "";
+        out({ type: "assistant", message: { content: [{ type: "text", text: `loop reply${tail}` }] } });
+        finish();
+        return;
+      }
+      out({ type: "assistant", message: { content: [{ type: "tool_use", id: `tu-loop-${i}`, name: "Bash", input: { command: "git status" } }] } });
+      out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: `tu-loop-${i}`, is_error: false }] } });
+      setTimeout(tick, 60);
+    };
+    setTimeout(tick, 60);
+    return;
+  }
+
   if (mode === "slow") {
     // a gap a test can steer into; the closing reply carries anything that
     // was folded in, the way the real CLI includes a mid-turn message in

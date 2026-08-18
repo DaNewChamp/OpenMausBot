@@ -480,6 +480,14 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     }
   }, 30_000);
 
+  it("item.started carries the call's arguments, so repeats are countable in auto mode", async () => {
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-args", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    const started = recorder.events.find((e) => e.type === "item.started" && e.itemType === "tool") as { title?: string; args?: string };
+    expect(started).toMatchObject({ title: "Bash", args: "echo hi" });
+  });
+
   it("passes effort to the CLI, and omits the flag when unset", async () => {
     await create();
     const dump = join(scratch, "effort.json");
