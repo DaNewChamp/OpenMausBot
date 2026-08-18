@@ -178,8 +178,12 @@ export function createControlServer(options: ControlOptions): Server {
     }
     const cloudDesktop = path.match(/^\/devices\/([\w-]+)\/cloud-desktop$/);
     if (cloudDesktop && (method === "POST" || method === "DELETE")) {
-      if (!options.devices.setCloudDesktopAccess(cloudDesktop[1], method === "POST")) {
-        return json(res, 404, { error: "no such device" });
+      try {
+        if (!options.devices.setCloudDesktopAccess(cloudDesktop[1], method === "POST")) {
+          return json(res, 404, { error: "no such device" });
+        }
+      } catch {
+        return json(res, 500, { error: "could not save cloud desktop access" });
       }
       return json(res, 200, companionState(options));
     }

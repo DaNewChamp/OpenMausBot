@@ -142,6 +142,17 @@ describe("DeviceRegistry", () => {
     expect(registry.setCloudDesktopAccess("missing", true)).toBe(false);
   });
 
+  it("rolls cloud desktop access back when it cannot be saved", () => {
+    const registry = new DeviceRegistry();
+    const { token, device } = pair(registry);
+    (registry as unknown as { persist: () => void }).persist = () => {
+      throw new Error("ENOSPC: no space left on device");
+    };
+
+    expect(() => registry.setCloudDesktopAccess(device.id, true)).toThrow("ENOSPC");
+    expect(registry.authenticate(token)?.cloudDesktopAccess).toBe(false);
+  });
+
   it("uses a high-entropy QR credential and burns the manual fallback with it", () => {
     const registry = new DeviceRegistry();
     const { code, token } = registry.openPairing();

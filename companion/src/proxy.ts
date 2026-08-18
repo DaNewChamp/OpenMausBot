@@ -14,7 +14,7 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { bearerToken } from "./devices.ts";
-import { denyReason } from "./routes.ts";
+import { denyReason, isCloudDesktopJoin } from "./routes.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
 /** What the forwarding handler needs from the process around it. */
@@ -147,11 +147,7 @@ export function createProxyHandler(options: ProxyOptions) {
     // Pairing a phone grants the ordinary companion surface, not a browser
     // session with every credential that may exist inside the cloud desktop.
     // The computer owner enables this capability per device, off by default.
-    if (
-      method === "POST" &&
-      /^\/api\/bots\/[\w-]+\/computer\/join$/.test(path) &&
-      !device?.cloudDesktopAccess
-    ) {
+    if (isCloudDesktopJoin(method, path) && !device?.cloudDesktopAccess) {
       return sendJson(res, 403, {
         error: "cloud desktop access is off for this phone — enable it in OpenMausBot → Settings → Companion",
       });
