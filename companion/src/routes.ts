@@ -61,6 +61,9 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "POST", path: /^\/api\/bots\/[\w-]+\/tasks\/[\w-]+$/ },
   { method: "PATCH", path: /^\/api\/bots\/[\w-]+\/tasks\/[\w-]+$/ },
   { method: "DELETE", path: /^\/api\/bots\/[\w-]+\/tasks\/[\w-]+$/ },
+  // Full cloud desktop access. The route is narrow and the proxy applies a
+  // second, per-device capability check before it reaches the harness.
+  { method: "POST", path: /^\/api\/bots\/[\w-]+\/computer\/join$/ },
 
   // rooms
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/messages$/ },
