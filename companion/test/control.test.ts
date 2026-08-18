@@ -5,7 +5,7 @@
 // inside that boundary, and any page on the internet can aim a form at it.
 // These tests pin the rule that keeps that from mattering.
 import { type Server } from "node:http";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createControlServer, originIsLoopback } from "../src/control.ts";
 import { DeviceRegistry } from "../src/devices.ts";
@@ -60,18 +60,21 @@ describe("origins the control server will change state for", () => {
 
   it("reports a permission write failure without dropping the control server", async () => {
     const [device] = devices.list();
-    const save = vi.spyOn(devices, "setCloudDesktopAccess").mockImplementation(() => {
+    const writable = devices as unknown as { persist: () => void };
+    const persist = writable.persist;
+    writable.persist = () => {
       throw new Error("ENOSPC: no space left on device");
-    });
+    };
     try {
       const failed = await ask("POST", `/devices/${device.id}/cloud-desktop`);
       expect(failed).toEqual({
         status: 500,
         body: { error: "could not save cloud desktop access" },
       });
+      expect(devices.list().find((candidate) => candidate.id === device.id)?.cloudDesktopAccess).toBe(false);
       expect((await ask("GET", "/state")).status).toBe(200);
     } finally {
-      save.mockRestore();
+      writable.persist = persist;
     }
   });
 
