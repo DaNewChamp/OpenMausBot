@@ -9,9 +9,11 @@ import { openBlankTerminal } from "./terminal-launch.mjs";
 import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
 import capabilitiesModule from "./capabilities.cjs";
 import vaultModule from "./vault.cjs";
+import vaultBridgeModule from "./vault-bridge.cjs";
 
 const { desktopCapabilities } = capabilitiesModule;
 const { createVault } = vaultModule;
+const { startVaultBridge } = vaultBridgeModule;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
@@ -394,6 +396,23 @@ ipcMain.handle("vault:list", () => vault.list());
 ipcMain.handle("vault:upsert", (_event, input) => vault.upsert(input ?? {}));
 ipcMain.handle("vault:remove", (_event, id) => vault.remove(String(id)));
 ipcMain.handle("vault:reveal", (_event, id) => vault.reveal(String(id)));
+// The fill bridge: the server may REQUEST a fill over loopback; main
+// decrypts and types into the isolated computer, and answers with an
+// outcome only — the secret never leaves this process to the server. The
+// actual keystroke into the VM (approach B, a harness-owned login browser)
+// is wired in a live-VM session; until then a fill reports unavailable
+// rather than pretending. See the Phase-1b design.
+let vaultBridge = null;
+startVaultBridge({
+  userData: app.getPath("userData"),
+  vault,
+  log: slog,
+  fillIntoComputer: async () => {
+    throw new Error("VM credential fill is not yet wired on this build");
+  },
+})
+  .then((b) => (vaultBridge = b))
+  .catch((err) => slog(`vault bridge failed to start: ${err?.message ?? err}`));
 
 ipcMain.handle("desktop:open-external", async (_event, rawUrl) => {
   if (typeof rawUrl !== "string") throw new Error("A web address is required");
