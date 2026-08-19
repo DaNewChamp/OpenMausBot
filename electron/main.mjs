@@ -8,8 +8,10 @@ import { finishSpeech, startSpeech, stopSpeech } from "./speech.mjs";
 import { openBlankTerminal } from "./terminal-launch.mjs";
 import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
 import capabilitiesModule from "./capabilities.cjs";
+import vaultModule from "./vault.cjs";
 
 const { desktopCapabilities } = capabilitiesModule;
+const { createVault } = vaultModule;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
@@ -380,6 +382,18 @@ ipcMain.handle("desktop:pick-folder", async (event, current) => {
   });
   return result.canceled ? null : (result.filePaths[0] ?? null);
 });
+
+// ── credential vault ──────────────────────────────────────────────────
+// Secrets a bot may sign in with. They live here in main, keystore-
+// encrypted, and are handed to the renderer only as metadata; the raw
+// secret leaves this process only when typed into an isolated computer
+// during a blind fill (a later phase). See docs/superpowers/specs/
+// 2026-08-19-bot-credential-vault-design.md.
+const vault = createVault({ userData: app.getPath("userData"), log: slog });
+ipcMain.handle("vault:list", () => vault.list());
+ipcMain.handle("vault:upsert", (_event, input) => vault.upsert(input ?? {}));
+ipcMain.handle("vault:remove", (_event, id) => vault.remove(String(id)));
+ipcMain.handle("vault:reveal", (_event, id) => vault.reveal(String(id)));
 
 ipcMain.handle("desktop:open-external", async (_event, rawUrl) => {
   if (typeof rawUrl !== "string") throw new Error("A web address is required");
