@@ -32,6 +32,7 @@ function timingSafeEqual(a, b) {
  *   vault: import("./vault.cjs").Vault,
  *   log?: (m: string) => void,
  *   fillIntoComputer: (job: { entry: any, field: "username"|"password"|"totp", context: "vm"|"box", threadId: string, botId: string }) => Promise<void>,
+ *   readOrigin?: (ctx: { context: "vm"|"box", threadId: string }) => Promise<string>,
  *   totp?: (seed: string) => string,
  * }} deps
  */
@@ -74,7 +75,19 @@ function startVaultBridge(deps) {
       return doFill(entry, pending.field, pending.context, pending.botId, pending.threadId);
     }
 
-    const matches = await deps.vault.matchForFill({ origin, botId, context });
+    // main reads the REAL origin itself when it can, so a compromised
+    // server cannot steer the match; the body origin is only a fallback for
+    // callers (and tests) without a live browser.
+    let realOrigin = origin;
+    if (deps.readOrigin) {
+      try {
+        realOrigin = await deps.readOrigin({ context, threadId });
+      } catch (err) {
+        log(`vault fill: could not read origin: ${err?.message ?? err}`);
+        return { outcome: "no-match", reason: "no-origin" };
+      }
+    }
+    const matches = await deps.vault.matchForFill({ origin: realOrigin, botId, context });
     // zero, or ambiguous (more than one for the same origin+bot) → refuse.
     // Ambiguity must never resolve to "guess one"; the user disambiguates.
     if (matches.length !== 1) return { outcome: "no-match", count: matches.length };
@@ -82,7 +95,7 @@ function startVaultBridge(deps) {
 
     if (entry.askEveryFill !== false) {
       const approvalToken = crypto.randomBytes(18).toString("hex");
-      pendingApprovals.set(approvalToken, { entryId: entry.id, field, context, botId, threadId, origin, at: Date.now() });
+      pendingApprovals.set(approvalToken, { entryId: entry.id, field, context, botId, threadId, origin: realOrigin, at: Date.now() });
       // metadata only — the card the harness raises shows who/where, never the secret
       return { outcome: "needs-approval", approvalToken, origin: entry.origin, username: entry.username };
     }

@@ -11,7 +11,7 @@
 //
 // See docs/superpowers/specs/2026-08-19-bot-credential-vault-design.md.
 import { useEffect, useState } from "react";
-import { Eye, KeySquare, Loader2, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import { Eye, KeySquare, Loader2, Plus, ShieldCheck, Trash2, Wand2 } from "lucide-react";
 import { useStore } from "@/state/store";
 import { Card } from "./SettingsPrimitives";
 import { MausAvatar } from "./Avatar";
@@ -125,7 +125,30 @@ function VaultRow({
   onError: (m: string) => void;
 }) {
   const [revealed, setRevealed] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
   const allowed = entry.allowedBots.length === 0 ? "Any bot" : bots.filter((b) => entry.allowedBots.includes(b.id)).map((b) => b.name).join(", ") || "specific bots";
+
+  const runTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const r = await window.ogb!.vault!.testFill!(entry.id, "password");
+      setTestResult(
+        r.outcome === "filled"
+          ? `Filled into the focused field on ${r.origin}.`
+          : r.outcome === "no-match"
+            ? `The open page (${r.origin ?? "?"}) doesn't match this entry (${r.entryOrigin ?? entry.origin}).`
+            : r.outcome === "no-origin"
+              ? `Couldn't read the page origin — ${r.reason ?? ""}`
+              : `${r.outcome}${r.reason ? ` — ${r.reason}` : ""}`,
+      );
+    } catch (e) {
+      setTestResult(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTesting(false);
+    }
+  };
 
   return (
     <div className="flex items-start gap-3 py-3">
@@ -148,6 +171,7 @@ function VaultRow({
           {entry.askEveryFill && <span className="rounded bg-inset px-1.5 py-0.5">asks each time</span>}
         </div>
         {revealed !== null && <div className="mt-1.5 rounded-lg bg-inset px-2.5 py-1.5 font-mono text-[12px] text-ink">{revealed}</div>}
+        {testResult && <div className="mt-1.5 rounded-lg bg-inset px-2.5 py-1.5 text-[11.5px] text-ink-secondary">{testResult}</div>}
       </div>
       <div className="flex shrink-0 items-center gap-1">
         <button
@@ -160,6 +184,14 @@ function VaultRow({
           className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
         >
           <Eye size={15} />
+        </button>
+        <button
+          title="Test fill into the focused browser field"
+          disabled={testing}
+          onClick={() => void runTest()}
+          className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50"
+        >
+          {testing ? <Loader2 size={15} className="animate-spin" /> : <Wand2 size={15} />}
         </button>
         <button onClick={onEdit} className="rounded-md px-2 py-1.5 text-[12px] text-ink-secondary hover:bg-raised hover:text-ink">
           Edit

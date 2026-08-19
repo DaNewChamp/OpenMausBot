@@ -99,6 +99,8 @@ declare global {
         upsert(input: VaultUpsert): Promise<{ id: string }>;
         remove(id: string): Promise<{ removed: boolean }>;
         reveal(id: string): Promise<{ secret: string; totpSeed: string | null }>;
+        /** Diagnostic: run the real fill against the focused browser field. */
+        testFill(id: string, field: "username" | "password" | "totp"): Promise<{ outcome: string; origin?: string; reason?: string; entryOrigin?: string }>;
       };
       /** Save a provider credential through Electron's OS-backed store. */
       setCredential?(name: "composioApiKey", value: string): Promise<ConfigStatus>;

@@ -71,6 +71,7 @@ contextBridge.exposeInMainWorld("ogb", {
     upsert: (input) => ipcRenderer.invoke("vault:upsert", input),
     remove: (id) => ipcRenderer.invoke("vault:remove", id),
     reveal: (id) => ipcRenderer.invoke("vault:reveal", id),
+    testFill: (id, field) => ipcRenderer.invoke("vault:test-fill", id, field),
   },
   /** Native folder picker for a bot's working folder; null when cancelled. */
   pickFolder: (current) => ipcRenderer.invoke("desktop:pick-folder", current),

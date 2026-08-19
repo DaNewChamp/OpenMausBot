@@ -10,10 +10,14 @@ import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
 import capabilitiesModule from "./capabilities.cjs";
 import vaultModule from "./vault.cjs";
 import vaultBridgeModule from "./vault-bridge.cjs";
+import vaultFillCuaModule from "./vault-fill-cua.cjs";
+import totpModule from "./totp.cjs";
 
 const { desktopCapabilities } = capabilitiesModule;
 const { createVault } = vaultModule;
 const { startVaultBridge } = vaultBridgeModule;
+const { cuaFillSeams } = vaultFillCuaModule;
+const { generateTotp } = totpModule;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
@@ -396,6 +400,33 @@ ipcMain.handle("vault:list", () => vault.list());
 ipcMain.handle("vault:upsert", (_event, input) => vault.upsert(input ?? {}));
 ipcMain.handle("vault:remove", (_event, id) => vault.remove(String(id)));
 ipcMain.handle("vault:reveal", (_event, id) => vault.reveal(String(id)));
+// Diagnostic: run the real fill chain (read the page's origin, match this
+// entry, type into the focused browser field) so a user can verify the
+// blind fill against a live browser without a bot. The production bot path
+// is VM/box-only; this explicit, user-clicked test uses whatever computer
+// is connected. Returns only an outcome — never the secret.
+ipcMain.handle("vault:test-fill", async (_event, id, field) => {
+  const entries = await vault.list();
+  const meta = entries.find((e) => e.id === String(id));
+  if (!meta) return { outcome: "no-match", reason: "no such entry" };
+  const seams = cuaFillSeams({ userData: app.getPath("userData"), home: app.getPath("home"), totp: (s) => generateTotp(s) });
+  let origin;
+  try {
+    origin = await seams.readOrigin({ context: "vm", threadId: "test" });
+  } catch (err) {
+    return { outcome: "no-origin", reason: String(err?.message ?? err) };
+  }
+  // reuse the exact scoping the bridge enforces (origin + bot + context)
+  const match = (await vault.matchForFill({ origin, botId: (meta.allowedBots[0] ?? "test"), context: (meta.contexts[0] ?? "vm") })).find((e) => e.id === meta.id);
+  if (!match) return { outcome: "no-match", origin, entryOrigin: meta.origin };
+  try {
+    await seams.fillIntoComputer({ entry: match, field: field === "username" || field === "totp" ? field : "password", context: "vm", threadId: "test", botId: "test" });
+    await vault.markUsed(match.id);
+    return { outcome: "filled", origin };
+  } catch (err) {
+    return { outcome: "fill-failed", reason: String(err?.message ?? err), origin };
+  }
+});
 // The fill bridge: the server may REQUEST a fill over loopback; main
 // decrypts and types into the isolated computer, and answers with an
 // outcome only — the secret never leaves this process to the server. The
@@ -403,16 +434,21 @@ ipcMain.handle("vault:reveal", (_event, id) => vault.reveal(String(id)));
 // is wired in a live-VM session; until then a fill reports unavailable
 // rather than pretending. See the Phase-1b design.
 let vaultBridge = null;
-startVaultBridge({
-  userData: app.getPath("userData"),
-  vault,
-  log: slog,
-  fillIntoComputer: async () => {
-    throw new Error("VM credential fill is not yet wired on this build");
-  },
-})
-  .then((b) => (vaultBridge = b))
-  .catch((err) => slog(`vault bridge failed to start: ${err?.message ?? err}`));
+{
+  // TOTP is generated in main from the stored seed — never leaves this process
+  const totp = (seed) => generateTotp(seed);
+  const seams = cuaFillSeams({ userData: app.getPath("userData"), home: app.getPath("home"), totp });
+  startVaultBridge({
+    userData: app.getPath("userData"),
+    vault,
+    log: slog,
+    readOrigin: seams.readOrigin,
+    fillIntoComputer: seams.fillIntoComputer,
+    totp,
+  })
+    .then((b) => (vaultBridge = b))
+    .catch((err) => slog(`vault bridge failed to start: ${err?.message ?? err}`));
+}
 
 ipcMain.handle("desktop:open-external", async (_event, rawUrl) => {
   if (typeof rawUrl !== "string") throw new Error("A web address is required");
