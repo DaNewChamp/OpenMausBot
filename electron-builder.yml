@@ -40,13 +40,9 @@ files:
 asar: true
 
 extraResources:
-  # Ship the app's own license terms in every desktop distribution. The
-  # separate MIT notice preserves the terms for code published before the
-  # Apache-2.0 transition.
+  # Ship the app's own license terms in every desktop distribution.
   - from: LICENSE
     to: licenses/OpenMausBot-LICENSE.txt
-  - from: LICENSE-MIT
-    to: licenses/OpenMausBot-LICENSE-MIT.txt
   - from: NOTICE
     to: licenses/OpenMausBot-NOTICE.txt
   - from: dist
