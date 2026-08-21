@@ -1,0 +1,5 @@
+{
+  "title": "Features",
+  "icon": "Sparkles",
+  "pages": ["index", "chat-and-teams", "automation", "voice-and-memory"]
+}

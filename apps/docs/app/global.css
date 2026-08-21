@@ -1,0 +1,32 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+:root {
+  --omb-blue: #2389ff;
+  --omb-cyan: #61d7ff;
+  --omb-ink: #07111f;
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0 !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+.omb-hero-grid {
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--omb-blue) 10%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--omb-blue) 10%, transparent) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: linear-gradient(to bottom, black, transparent 86%);
+}
+
+.omb-gradient-text {
+  background: linear-gradient(115deg, var(--omb-blue), var(--omb-cyan));
+  background-clip: text;
+  color: transparent;
+}

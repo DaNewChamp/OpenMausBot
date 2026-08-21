@@ -1,0 +1,33 @@
+---
+title: Connected apps
+description: Authorize Gmail, Slack, GitHub, Notion, and hundreds of other tools through Composio.
+icon: PlugZap
+---
+
+OpenMausBot uses Composio Sessions for connected apps. You provide one Composio project key, authorize services in your normal browser, and the resulting tools become available to bots.
+
+### 1. Create or choose a Composio project
+
+Open the [Composio dashboard](https://dashboard.composio.dev), then go to **Platform → Settings → API Keys**.
+
+### 2. Save the project key
+
+Copy the key beginning with `ak_` and save it under **App Settings → Connections**. OpenMausBot validates it before saving.
+
+### 3. Authorize an app
+
+Open **Connected apps**, choose a toolkit such as Gmail or GitHub, and finish authorization in your browser.
+
+### 4. Use it in chat
+
+Ask a bot to use the connected service. The session exposes the service's tools to supported agents.
+
+## Credential boundary
+
+Provider OAuth tokens stay with Composio. OpenMausBot stores its project key and non-secret session identifiers. In packaged desktop builds, the project key is protected with Electron's operating-system-backed secure storage.
+
+Disconnecting an account revokes the upstream grant rather than only hiding it locally.
+
+<Callout type="info" title="No separate Connect key">
+  Current OpenMausBot builds use one Composio project key. The older two-key Connect setup has been removed.
+</Callout>
