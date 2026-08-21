@@ -5,6 +5,8 @@
 /.open-next
 /out
 /build
+/public/app-icon.svg
+/public/screenshots
 *.tsbuildinfo
 .DS_Store
 *.pem

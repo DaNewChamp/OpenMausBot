@@ -17,6 +17,10 @@ export const metadata: Metadata = {
     description: 'Your own team of AI agents, in a chat app.',
     type: 'website',
   },
+  icons: {
+    icon: '/app-icon.svg',
+    apple: '/app-icon.svg',
+  },
 };
 
 export default function Layout({ children }: LayoutProps<'/'>) {

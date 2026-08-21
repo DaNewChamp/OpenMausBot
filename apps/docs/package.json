@@ -3,12 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "assets:sync": "node scripts/sync-assets.mjs",
+    "prebuild": "pnpm assets:sync",
+    "predev": "pnpm assets:sync",
     "build": "next build",
     "dev": "next dev",
-    "start": "serve out",
+    "start": "next start",
     "types:check": "next typegen && tsc --noEmit",
     "lint": "oxlint .",
-    "preview": "serve out"
+    "preview": "next start"
   },
   "dependencies": {
     "cnfast": "^0.1.0",
@@ -28,7 +31,6 @@
     "@types/react-dom": "^19.2.4",
     "oxlint": "^1.78.0",
     "postcss": "^8.5.26",
-    "serve": "^14.2.6",
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3"
   }

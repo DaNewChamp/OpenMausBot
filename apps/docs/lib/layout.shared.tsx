@@ -1,15 +1,18 @@
 import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
-import { appName, gitConfig } from './shared';
+import { BrandTitle } from '@/components/brand-title';
+import { gitConfig } from './shared';
 
 export function baseOptions(): BaseLayoutProps {
   return {
     nav: {
-      title: appName,
-      transparentMode: 'top',
+      title: <BrandTitle />,
+      url: '/docs',
+      transparentMode: 'none',
     },
     links: [
+      { text: 'Website', url: 'https://www.openmausbot.com', external: true },
       { text: 'Changelog', url: '/docs/changelog' },
-      { text: 'Download', url: 'https://github.com/milind-soni/openmausbot-releases/releases/latest', external: true },
+      { type: 'button', text: 'Download', url: 'https://github.com/milind-soni/openmausbot-releases/releases/latest', external: true },
     ],
     githubUrl: `https://github.com/${gitConfig.user}/${gitConfig.repo}`,
   };
