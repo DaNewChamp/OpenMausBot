@@ -597,6 +597,10 @@ describe("harness HTTP API", () => {
         chiefOfStaff: false,
       });
       expect(archivedBot.status).toBe(200);
+      await api("PATCH", `/api/bots/${active.id}`, {
+        name: "Atlas",
+        modelSelection: { instanceId: "ghost" },
+      });
       await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
 
       expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "@Quill take this" })).status).toBe(202);
@@ -609,6 +613,34 @@ describe("harness HTTP API", () => {
           ok: false,
         },
       });
+
+      const archivedError = "Quill is archived and can't respond — restore it or mention an active room member.";
+      const beforeMixedMention = messages.filter((message: { tool?: { name?: string } }) =>
+        message.tool?.name === archivedError
+      ).length;
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "@Quill and @Atlas take this" });
+      await expect.poll(async () => {
+        state = (await api("GET", "/api/bots?messages=20")).body;
+        messages = state.groups.find((group: { id: string }) => group.id === room.id).messages;
+        return {
+          archivedErrors: messages.filter((message: { tool?: { name?: string } }) =>
+            message.tool?.name === archivedError
+          ).length,
+          activeDispatched: messages.some((message: { tool?: { name?: string } }) =>
+            message.tool?.name === "error: Atlas's model is unavailable"
+          ),
+        };
+      }).toEqual({ archivedErrors: beforeMixedMention + 1, activeDispatched: true });
+
+      await api("PATCH", `/api/groups/${room.id}`, {
+        defaultResponder: { kind: "member", botId: archived.id },
+      });
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "use the default responder" });
+      state = (await api("GET", "/api/bots?messages=20")).body;
+      messages = state.groups.find((group: { id: string }) => group.id === room.id).messages;
+      expect(messages.at(-1)?.tool).toEqual({ name: archivedError, ok: false });
+
+      await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
 
       const beforeUnmentioned = messages.length;
       await api("POST", `/api/groups/${room.id}/messages`, { text: "no mention" });
