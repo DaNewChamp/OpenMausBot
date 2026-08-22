@@ -35,7 +35,7 @@ export function OptionCard({
           onClick={() =>
             dispatch({ type: "dismissCard", botId, messageId: message.id })
           }
-          className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
+          className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
         >
           <X size={16} />
         </button>
@@ -59,9 +59,9 @@ export function OptionCard({
                 : "hover:bg-raised-hover/60 disabled:hover:bg-transparent",
             )}
           >
-            {/* the hairline keeps the letter a chip even when the row it sits
-                on is filled */}
-            <span className="flex size-6 items-center justify-center rounded-md border border-hairline/50 bg-inset text-[12px] font-medium text-ink-secondary">
+            {/* `control` is the chip tone every skin guarantees on a card; the
+                hairline keeps it a chip even on a row that is itself filled */}
+            <span className="flex size-6 items-center justify-center rounded-md border border-hairline/50 bg-control text-[12px] font-medium text-ink-secondary">
               {LETTERS[i]}
             </span>
             {opt}
