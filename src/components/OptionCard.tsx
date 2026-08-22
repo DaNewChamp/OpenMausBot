@@ -50,12 +50,18 @@ export function OptionCard({
             className={cn(
               "flex w-full items-center gap-3 px-3 py-3 text-left text-[15px] text-ink",
               i > 0 && "border-t border-hairline/40",
+              // `raised` is the wrong fill here: the light skins define it as
+              // pure white, the same value as the card underneath, so a
+              // hovered or answered row used to be invisible. `raised-hover`
+              // is the one tone every skin guarantees stands off a surface.
               card.answered === opt
-                ? "bg-raised"
-                : "hover:bg-raised/60 disabled:hover:bg-transparent",
+                ? "bg-raised-hover"
+                : "hover:bg-raised-hover/60 disabled:hover:bg-transparent",
             )}
           >
-            <span className="flex size-6 items-center justify-center rounded-md bg-raised text-[12px] font-medium text-ink-secondary">
+            {/* the hairline keeps the letter a chip even when the row it sits
+                on is filled */}
+            <span className="flex size-6 items-center justify-center rounded-md border border-hairline/50 bg-inset text-[12px] font-medium text-ink-secondary">
               {LETTERS[i]}
             </span>
             {opt}
