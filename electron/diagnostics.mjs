@@ -34,6 +34,8 @@ const CREDENTIAL_TOKEN_FORMATS = [
 ];
 const KEY_VALUE_PAIR =
   /\b([A-Za-z0-9_.-]*(?:api[_-]?key|apikey|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?key|private[_-]?key)s?)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s"',;)\]}]+)/gi;
+const AUTHORIZATION =
+  /\b(authorization)\s*[:=]\s*(?:"|')?([A-Za-z][A-Za-z0-9_-]*\s+[A-Za-z0-9._~+/=-]+)(?:"|')?/gi;
 const BEARER = /(\bbearer\s+)([A-Za-z0-9._~+/=-]{8,})/gi;
 const PEM_BLOCK =
   /(-----BEGIN [A-Z ]*PRIVATE KEY-----)[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----)/g;
@@ -54,6 +56,7 @@ export function redactSecretsInLine(line) {
       (_match, key, value) => `${key}=${mask(unquote(value))}`,
     );
   }
+  out = out.replace(AUTHORIZATION, (_match, key, value) => `${key}=${mask(value)}`);
   out = out.replace(BEARER, (_match, lead, token) => `${lead}${mask(token)}`);
   out = out.replace(PEM_BLOCK, (_match, open, close) => `${open}«redacted private key»${close}`);
   out = out.replace(KEY_VALUE_PAIR, (_match, key, value) =>
@@ -61,6 +64,18 @@ export function redactSecretsInLine(line) {
   );
   for (const format of CREDENTIAL_TOKEN_FORMATS) out = out.replace(format, (found) => mask(found));
   return out;
+}
+
+/** Decode a bounded log buffer without exporting the partial first line that
+ * may begin before the read boundary. */
+export function decodeLogTail(buffer, truncated = false) {
+  if (!Buffer.isBuffer(buffer)) return { tail: "", bytes: 0 };
+  let complete = buffer;
+  if (truncated) {
+    const newline = buffer.indexOf(0x0a);
+    complete = newline < 0 ? buffer.subarray(0, 0) : buffer.subarray(newline + 1);
+  }
+  return { tail: complete.toString("utf8"), bytes: complete.length };
 }
 
 const APP_INFO_KEYS = ["version", "platform", "arch", "electron", "node", "packaged", "uptimeSeconds"];
@@ -118,7 +133,7 @@ export function buildDiagnosticsReport({
   lines.push("");
   lines.push(logTail && logTail.trim() ? "## Server log tail — known credential patterns auto-masked" : "## Server log tail");
   if (logTail && logTail.trim()) {
-    for (const line of logTail.split(/\r?\n/)) lines.push(redactSecretsInLine(line));
+    for (const line of redactSecretsInLine(logTail).split(/\r?\n/)) lines.push(line);
   } else {
     lines.push("(server log unavailable)");
   }

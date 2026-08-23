@@ -3,8 +3,13 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 
 const require = createRequire(import.meta.url);
-const { buildDiagnosticsReport, diagnosticsFileName, redactSecretsInLine, CREDENTIAL_ENV_NAMES } =
-  require("./diagnostics.mjs");
+const {
+  buildDiagnosticsReport,
+  decodeLogTail,
+  diagnosticsFileName,
+  redactSecretsInLine,
+  CREDENTIAL_ENV_NAMES,
+} = require("./diagnostics.mjs");
 
 // The desktop shell cannot import TypeScript, so its credential list is a
 // hand copy of server/config.ts WORKSPACE_CREDENTIAL_ENV. This test is the
@@ -108,6 +113,38 @@ describe("buildDiagnosticsReport", () => {
     expect(report).toContain("«redacted");
   });
 
+  it.each(["Bearer abcdefghijklmnop", "Basic dXNlcjpwYXNzd29yZA=="])(
+    "masks the full Authorization credential for %s",
+    (authorization) => {
+      const report = buildDiagnosticsReport({
+        appInfo,
+        configSummary: {},
+        logTail: `request Authorization: ${authorization}`,
+      });
+      expect(report).not.toContain(authorization);
+      expect(report).not.toContain(authorization.split(" ")[1]);
+      expect(report).toContain("Authorization=«redacted");
+    },
+  );
+
+  it("masks a multiline PEM private key as one value", () => {
+    const report = buildDiagnosticsReport({
+      appInfo,
+      configSummary: {},
+      logTail: [
+        "loading credential",
+        "-----BEGIN PRIVATE KEY-----",
+        "super-secret-line-one",
+        "super-secret-line-two",
+        "-----END PRIVATE KEY-----",
+        "ready",
+      ].join("\n"),
+    });
+    expect(report).not.toContain("super-secret-line-one");
+    expect(report).not.toContain("super-secret-line-two");
+    expect(report).toContain("«redacted private key»");
+  });
+
   it("leaves ordinary log lines untouched", () => {
     const line = "[2026-08-22T20:00:00.000Z] [out] fork server/index.js port=8799 spawned pid=4242";
     expect(redactSecretsInLine(line)).toBe(line);
@@ -124,6 +161,22 @@ describe("buildDiagnosticsReport", () => {
   it("keeps long prose lines that merely mention a key by name", () => {
     const line = "user asked whether the XAI_API_KEY variable needs to be set manually";
     expect(redactSecretsInLine(line)).toBe(line);
+  });
+});
+
+describe("decodeLogTail", () => {
+  it("preserves the full buffer when the read starts at the beginning", () => {
+    expect(decodeLogTail(Buffer.from("first\nsecond"), false)).toEqual({ tail: "first\nsecond", bytes: 12 });
+  });
+
+  it("drops a credential assignment split by a bounded tail read", () => {
+    const decoded = decodeLogTail(Buffer.from("RET=split-secret\nserver ready\n"), true);
+    expect(decoded).toEqual({ tail: "server ready\n", bytes: 13 });
+    expect(decoded.tail).not.toContain("split-secret");
+  });
+
+  it("returns an empty tail when a truncated buffer has no complete line", () => {
+    expect(decodeLogTail(Buffer.from("partial-secret"), true)).toEqual({ tail: "", bytes: 0 });
   });
 });
 

@@ -8,7 +8,7 @@ import { createAndroidDeviceController } from "./android-device.mjs";
 import { finishSpeech, startSpeech, stopSpeech } from "./speech.mjs";
 import { openBlankTerminal } from "./terminal-launch.mjs";
 import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
-import { buildDiagnosticsReport, diagnosticsFileName } from "./diagnostics.mjs";
+import { buildDiagnosticsReport, decodeLogTail, diagnosticsFileName } from "./diagnostics.mjs";
 import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace-credentials.mjs";
 import { activateExistingWindow } from "./single-instance.mjs";
 import capabilitiesModule from "./capabilities.cjs";
@@ -232,7 +232,7 @@ function readLogTail(logPath) {
     try {
       const buffer = Buffer.alloc(size - start);
       fs.readSync(handle, buffer, 0, buffer.length, start);
-      return { tail: buffer.toString("utf8"), bytes: buffer.length };
+      return decodeLogTail(buffer, start > 0);
     } finally {
       fs.closeSync(handle);
     }
@@ -694,11 +694,18 @@ ipcMain.handle("desktop:export-diagnostics", async (event) => {
     filters: [{ name: "Text", extensions: ["txt"] }],
   });
   if (result.canceled || !result.filePath) return null;
-  // `mode` only applies when a file is first created. Secure an existing
-  // destination before overwriting it, then verify the final mode as well.
-  if (process.platform !== "win32" && fs.existsSync(result.filePath)) fs.chmodSync(result.filePath, 0o600);
-  fs.writeFileSync(result.filePath, report, { mode: 0o600 });
-  if (process.platform !== "win32") fs.chmodSync(result.filePath, 0o600);
+  if (process.platform === "win32") {
+    fs.writeFileSync(result.filePath, report, { mode: 0o600 });
+  } else {
+    const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW;
+    const handle = fs.openSync(result.filePath, flags, 0o600);
+    try {
+      fs.fchmodSync(handle, 0o600);
+      fs.writeFileSync(handle, report, "utf8");
+    } finally {
+      fs.closeSync(handle);
+    }
+  }
   return result.filePath;
 });
 
