@@ -361,9 +361,20 @@ export interface AppState {
   /** 1:1 queue-fallback lines waiting for drain; keyed by threadId.
    * Each entry is identified by the server queueId, not by text. */
   pendingQueued: Record<string, Array<{ queueId: string; text: string }>>;
-  /** queueIds whose drain frame beat the POST continuation. One-shot:
-   * a late pendingQueued for the same id must not resurrect the chip. */
+  /** queueIds whose drain frame beat the POST continuation. One-shot and
+   * bounded to a short event window so other clients cannot grow it forever. */
   consumedQueueIds: Record<string, true>;
+}
+
+const MAX_CONSUMED_QUEUE_IDS = 64;
+
+function rememberConsumedQueueId(consumed: Record<string, true>, queueId: string): Record<string, true> {
+  const next = { ...consumed, [queueId]: true as const };
+  const overflow = Object.keys(next).length - MAX_CONSUMED_QUEUE_IDS;
+  if (overflow > 0) {
+    for (const id of Object.keys(next).slice(0, overflow)) delete next[id];
+  }
+  return next;
 }
 
 export type BotAnnouncement = Omit<Bot, "messages"> & { messages?: Message[] };
@@ -927,7 +938,7 @@ export function reducer(state: AppState, action: Action): AppState {
       if (at < 0) {
         return {
           ...state,
-          consumedQueueIds: { ...state.consumedQueueIds, [action.queueId]: true },
+          consumedQueueIds: rememberConsumedQueueId(state.consumedQueueIds, action.queueId),
         };
       }
       const rest = prev.filter((_, i) => i !== at);

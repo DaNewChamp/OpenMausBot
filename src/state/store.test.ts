@@ -220,4 +220,29 @@ describe("pending queued chip", () => {
     expect(late.pendingQueued).toEqual({});
     expect(late.consumedQueueIds).toEqual({});
   });
+
+  it("bounds unmatched queue tombstones from other clients", () => {
+    const withBot = reducer(initialState, { type: "botPatched", bot });
+    let state = withBot;
+    for (let index = 0; index < 100; index += 1) {
+      state = reducer(state, {
+        type: "consumePendingQueued",
+        threadId: "t1",
+        queueId: `foreign-${index}`,
+      });
+    }
+
+    expect(Object.keys(state.consumedQueueIds)).toHaveLength(64);
+    expect(state.consumedQueueIds["foreign-0"]).toBeUndefined();
+    expect(state.consumedQueueIds["foreign-99"]).toBe(true);
+
+    const late = reducer(state, {
+      type: "pendingQueued",
+      threadId: "t1",
+      queueId: "foreign-99",
+      text: "already drained",
+    });
+    expect(late.pendingQueued).toEqual({});
+    expect(late.consumedQueueIds["foreign-99"]).toBeUndefined();
+  });
 });
