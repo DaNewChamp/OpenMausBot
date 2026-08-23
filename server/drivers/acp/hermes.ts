@@ -110,7 +110,7 @@ function nonEmptyDotenvValue(text: string, name: string): string | null {
     if (trailing && !trailing.startsWith("#")) return null;
     return raw.slice(1, closing).trim() || null;
   }
-  return raw.replace(/[ \\t]+#.*$/, "").trim() || null;
+  return raw.replace(/[ \t]+#.*$/, "").trim() || null;
 }
 
 /** Model Hermes' own config will use, when a remote provider is configured.
@@ -187,20 +187,33 @@ async function fetchHermesAcpModels(
     }
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let hardKillTimer: ReturnType<typeof setTimeout> | undefined;
     const done = (out: { id: string; label: string; custom: true }[]) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
       try {
-        child.kill();
+        if (child.kill()) {
+          hardKillTimer = setTimeout(() => {
+            try {
+              child.kill("SIGKILL");
+            } catch {
+              /* already gone */
+            }
+          }, 1_000);
+          hardKillTimer.unref?.();
+        }
       } catch {
         /* already gone */
       }
       resolve(out);
     };
-    timer = setTimeout(() => done([]), 25_000);
+    timer = setTimeout(() => done([]), 5_000);
     child.once("error", () => done([]));
-    child.once("close", () => done([]));
+    child.once("close", () => {
+      if (hardKillTimer) clearTimeout(hardKillTimer);
+      done([]);
+    });
 
     let buf = "";
     let id = 0;
