@@ -399,6 +399,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // is not expanded, matching the claude/grok/codex product-fleet probe.
   const PRODUCT_FLEET_ADDITIONS = {
     cursor: { driver: "cursorAgent" },
+    openaiCompat: { driver: "openai-compat" },
     ...CUSTOM_ONLY,
   } as const;
   const configured = cfg.instances && Object.keys(cfg.instances).length ? cfg.instances : null;

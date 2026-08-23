@@ -42,7 +42,6 @@ export interface OpenAICompatConfig {
 function decodeConfig(raw: unknown): OpenAICompatConfig {
   const o = (raw ?? {}) as Record<string, unknown>;
   const envUrl = process.env.OPENAI_COMPAT_URL;
-  const envKey = process.env.OPENAI_COMPAT_API_KEY;
   return {
     url:
       typeof o.url === "string" && o.url
@@ -50,12 +49,7 @@ function decodeConfig(raw: unknown): OpenAICompatConfig {
         : envUrl
           ? envUrl.replace(/\/+$/, "")
           : "https://openrouter.ai/api/v1",
-    apiKeyEnv:
-      typeof o.apiKeyEnv === "string" && o.apiKeyEnv
-        ? o.apiKeyEnv
-        : envKey
-          ? "OPENAI_COMPAT_API_KEY"
-          : "OPENAI_COMPAT_API_KEY",
+    apiKeyEnv: typeof o.apiKeyEnv === "string" && o.apiKeyEnv ? o.apiKeyEnv : "OPENAI_COMPAT_API_KEY",
   };
 }
 
@@ -233,7 +227,9 @@ export const OpenAICompatDriver: ProviderDriver<OpenAICompatConfig> = {
       appendNative(threadId, {
         dir: "out",
         source: "openai-compat.chat.completions",
-        msg: { model: turn.model, messages },
+        // Native logs are diagnostic artifacts users commonly attach to
+        // issues. Keep routing metadata, not prompts or transcript content.
+        msg: { model: turn.model ?? catalog.default, messageCount: messages.length },
       });
 
       emit({ ...base(threadId, turnId), type: "turn.started" });
@@ -264,7 +260,7 @@ export const OpenAICompatDriver: ProviderDriver<OpenAICompatConfig> = {
           appendNative(threadId, {
             dir: "in",
             source: "openai-compat.chat.completions",
-            msg: { text, usage },
+            msg: { textLength: text.length, usage },
           });
           if (text.trim()) {
             emit({
@@ -288,6 +284,7 @@ export const OpenAICompatDriver: ProviderDriver<OpenAICompatConfig> = {
             ok: true,
             stopReason: null,
             cost: null,
+            ...(usage ? { usage } : {}),
           });
         } catch (e) {
           active.delete(threadId);
@@ -327,7 +324,9 @@ export const OpenAICompatDriver: ProviderDriver<OpenAICompatConfig> = {
       driverKind: DRIVER_KIND,
       displayName: input.displayName,
       enabled: input.enabled,
-      models: catalog,
+      get models() {
+        return catalog;
+      },
       refreshModels: fetchModels,
       snapshot,
       adapter: {
