@@ -286,9 +286,9 @@ export const PiDriver: ProviderDriver<PiConfig> = {
 
       /** Emit buffered assistant text as its own item, then clear it. */
       const flushAssistantText = () => {
-        if (!assistantText.trim()) return;
         const text = assistantText;
         assistantText = "";
+        if (!text.trim()) return;
         emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text });
       };
 
