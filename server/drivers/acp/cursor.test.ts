@@ -309,6 +309,15 @@ describe("resolveCursorAcpModelId", () => {
     );
   });
 
+  it("maps a display name onto its parameterised id", () => {
+    expect(
+      resolveCursorAcpModelId(
+        [{ modelId: "gpt-5.3-codex[reasoning=medium,fast=false]", name: "Codex 5.3" }],
+        "Codex 5.3",
+      ),
+    ).toBe("gpt-5.3-codex[reasoning=medium,fast=false]");
+  });
+
   it("passes an already-parameterised id straight through", () => {
     expect(resolveCursorAcpModelId(ADVERTISED, "grok-4.6[effort=high,fast=true]")).toBe(
       "grok-4.6[effort=high,fast=true]",
