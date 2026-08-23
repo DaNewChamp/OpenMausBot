@@ -25,6 +25,7 @@ export type BotUpdatePatch = Partial<
     | "approvePeerComms"
     | "composio"
     | "modelSelection"
+    | "mcpServers"
   >
 > & {
   /** Rides the PATCH body only: the server's proof that the local-auto
