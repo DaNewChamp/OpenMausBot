@@ -50,7 +50,7 @@ describe("buildDiagnosticsReport", () => {
     expect(report).toContain("(server log unavailable)");
   });
 
-  it("drops non-scalar, secret-named and credential-shaped summary values", () => {
+  it("drops strings, non-scalars and credential-shaped summary values", () => {
     const report = buildDiagnosticsReport({
       appInfo,
       configSummary: {
@@ -68,8 +68,20 @@ describe("buildDiagnosticsReport", () => {
     expect(report).not.toContain("hunter2");
     expect(report).not.toContain("driver");
     expect(report).not.toContain("environment");
-    expect(report).toContain("profile.name=Ada");
+    expect(report).not.toContain("profile.name=");
+    expect(report).not.toContain("Ada");
     expect(report).not.toContain("note=");
+  });
+
+  it("never includes an absolute log path in the report heading", () => {
+    const report = buildDiagnosticsReport({
+      appInfo,
+      configSummary: {},
+      logTail: "server ready",
+      logPath: "/Users/ada/Library/Logs/OpenMausBot/server.log",
+    });
+    expect(report).toContain("## Server log tail");
+    expect(report).not.toContain("/Users/ada");
   });
 
   it.each(CREDENTIAL_ENV_NAMES)("masks any value riding on %s in the log tail", (name) => {

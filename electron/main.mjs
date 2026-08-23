@@ -247,7 +247,9 @@ function readLogTail(logPath) {
 // file is safe to paste into a public issue even if a future log line ever
 // carried a secret.
 async function gatherDiagnostics() {
-  const serverStatus = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/config`)
+  const serverStatus = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/config`, {
+    signal: AbortSignal.timeout(3_000),
+  })
     .then((res) => (res.ok ? res.json() : null))
     .catch(() => null);
   const logPath = path.join(LOG_DIR, "server.log");
@@ -264,7 +266,6 @@ async function gatherDiagnostics() {
     },
     configSummary: serverStatus ?? {},
     logTail: log?.tail ?? "",
-    logPath: log ? logPath : "",
   });
 }
 
@@ -693,7 +694,11 @@ ipcMain.handle("desktop:export-diagnostics", async (event) => {
     filters: [{ name: "Text", extensions: ["txt"] }],
   });
   if (result.canceled || !result.filePath) return null;
+  // `mode` only applies when a file is first created. Secure an existing
+  // destination before overwriting it, then verify the final mode as well.
+  if (process.platform !== "win32" && fs.existsSync(result.filePath)) fs.chmodSync(result.filePath, 0o600);
   fs.writeFileSync(result.filePath, report, { mode: 0o600 });
+  if (process.platform !== "win32") fs.chmodSync(result.filePath, 0o600);
   return result.filePath;
 });
 

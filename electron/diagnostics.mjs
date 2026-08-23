@@ -32,8 +32,6 @@ const CREDENTIAL_TOKEN_FORMATS = [
   /\bAIza[0-9A-Za-z_-]{30,}/g,
   /\bnpm_[A-Za-z0-9]{20,}/g,
 ];
-const SECRET_NAME =
-  /(?:api[_-]?key|apikey|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?key|private[_-]?key)/i;
 const KEY_VALUE_PAIR =
   /\b([A-Za-z0-9_.-]*(?:api[_-]?key|apikey|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?key|private[_-]?key)s?)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s"',;)\]}]+)/gi;
 const BEARER = /(\bbearer\s+)([A-Za-z0-9._~+/=-]{8,})/gi;
@@ -68,26 +66,15 @@ export function redactSecretsInLine(line) {
 const APP_INFO_KEYS = ["version", "platform", "arch", "electron", "node", "packaged", "uptimeSeconds"];
 
 // A config summary entry is publishable only when it carries no credential:
-// booleans and finite numbers always pass; strings must be short, not
-// secret-named, and free of token formats. Everything else (objects beyond
-// flattening, arrays, nulls) never reaches the file.
+// Only booleans and finite numbers pass. Strings can contain names, paths,
+// account identifiers, or other personal data even when the field name is
+// not credential-shaped, so they never reach the file. Everything else
+// (objects beyond flattening, arrays, nulls) is dropped too.
 const isFiniteNumber = (value) => Number.isFinite(value) && Object.prototype.toString.call(value) === "[object Number]";
 
-function summaryAllows(key, value) {
+function summaryAllows(value) {
   if (Object.prototype.toString.call(value) === "[object Boolean]") return true;
-  if (isFiniteNumber(value)) return true;
-  if (Object.prototype.toString.call(value) !== "[object String]") return false;
-  const leaf = key.slice(key.lastIndexOf(".") + 1);
-  // `key`/`keys` alone are too common as prose to regex on values, but as a
-  // *field name* they mean credential here (xai.key, tts.key) — drop them.
-  if (/^(?:.*[_.-])?keys?$/i.test(leaf)) return false;
-  if (SECRET_NAME.test(leaf)) return false;
-  if (CREDENTIAL_ENV_NAMES.some((name) => key.toUpperCase().includes(name))) return false;
-  if (value.length > 64) return false;
-  return CREDENTIAL_TOKEN_FORMATS.every((format) => {
-    format.lastIndex = 0;
-    return !format.test(value);
-  });
+  return isFiniteNumber(value);
 }
 
 function flattenSummary(input, prefix = "", depth = 0, out = {}) {
@@ -106,7 +93,6 @@ export function buildDiagnosticsReport({
   appInfo = {},
   configSummary = {},
   logTail,
-  logPath = "",
   now = new Date().toISOString(),
 } = {}) {
   const lines = [];
@@ -124,17 +110,13 @@ export function buildDiagnosticsReport({
   const summary = flattenSummary(configSummary);
   let shown = 0;
   for (const key of Object.keys(summary).sort()) {
-    if (!summaryAllows(key, summary[key])) continue;
+    if (!summaryAllows(summary[key])) continue;
     lines.push(`${key}=${summary[key]}`);
     shown += 1;
   }
   if (!shown) lines.push("(no configuration summary available)");
   lines.push("");
-  lines.push(
-    logTail && logTail.trim()
-      ? `## Server log tail${logPath ? ` (${logPath})` : ""} — secrets auto-masked`
-      : "## Server log tail",
-  );
+  lines.push(logTail && logTail.trim() ? "## Server log tail — known credential patterns auto-masked" : "## Server log tail");
   if (logTail && logTail.trim()) {
     for (const line of logTail.split(/\r?\n/)) lines.push(redactSecretsInLine(line));
   } else {
