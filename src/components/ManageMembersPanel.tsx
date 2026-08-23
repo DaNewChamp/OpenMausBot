@@ -19,6 +19,8 @@ export function ManageMembersPanel({
 }) {
   const { state, dispatch } = useStore();
   const [picked, setPicked] = useState<Set<string>>(() => new Set(group.memberIds));
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const openedMemberIds = useRef([...group.memberIds]);
   const dialogRef = useRef<HTMLDivElement>(null);
 
   // Archived bots stay listed while they are still members — otherwise a
@@ -79,6 +81,13 @@ export function ManageMembersPanel({
 
   const save = () => {
     if (!memberIds.length) return;
+    const opened = openedMemberIds.current;
+    const rosterChanged =
+      opened.length !== group.memberIds.length || opened.some((id, index) => id !== group.memberIds[index]);
+    if (rosterChanged) {
+      setSaveError("This room's members changed while the panel was open. Close it and try again.");
+      return;
+    }
     if (changed) {
       dispatch({ type: "patchGroup", groupId: group.id, patch: { memberIds } });
       track("room_members_changed", {
@@ -106,6 +115,11 @@ export function ManageMembersPanel({
         <div className="mb-3 truncate text-[13px] text-ink-secondary">{group.name}</div>
         <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint="Create a bot first — rooms are made of bots." />
         {!memberIds.length && <div className="mt-2 text-[12px] text-ink-secondary">A room needs at least one bot.</div>}
+        {saveError && (
+          <div role="alert" className="mt-2 text-[12px] text-danger">
+            {saveError}
+          </div>
+        )}
         <div className="mt-3 flex gap-2">
           <button
             onClick={onClose}
