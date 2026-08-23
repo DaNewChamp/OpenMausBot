@@ -192,6 +192,10 @@ describe("BoxAgentDriver turns (fake API)", () => {
     await instance.adapter.interruptTurn("t-cancel");
     const done = await recorder.until((e) => e.type === "turn.completed");
     expect(done).toMatchObject({ ok: false, stopReason: "interrupted" });
+    const assistantIndex = recorder.events.findIndex(
+      (event) => event.type === "item.completed" && (event as { itemType: string }).itemType === "assistant_text",
+    );
+    expect(assistantIndex).toBeLessThan(recorder.events.indexOf(done));
     const texts = recorder.events
       .filter((e) => e.type === "item.completed" && (e as { itemType: string }).itemType === "assistant_text")
       .map((e) => (e as { text: string }).text);
