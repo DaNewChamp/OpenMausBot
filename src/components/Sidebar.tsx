@@ -420,6 +420,7 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
         <div className="mb-3 text-[15px] font-semibold text-ink">New Channel</div>
         <input
           autoFocus
+          maxLength={100}
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
