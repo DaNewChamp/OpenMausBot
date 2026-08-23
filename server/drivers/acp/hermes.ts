@@ -97,6 +97,22 @@ export function hermesAcpModelId(modelId: string | null | undefined): string | n
  */
 export const HERMES_CONFIG_MODEL_ID = "hermes-default";
 
+function nonEmptyDotenvValue(text: string, name: string): string | null {
+  const match = new RegExp(`^[ \\t]*(?:export[ \\t]+)?${name}[ \\t]*=[ \\t]*([^\\r\\n]*)$`, "m").exec(text);
+  if (!match) return null;
+  const raw = match[1].trim();
+  if (!raw || raw.startsWith("#")) return null;
+  const quote = raw[0];
+  if (quote === '"' || quote === "'") {
+    const closing = raw.indexOf(quote, 1);
+    if (closing < 0) return null;
+    const trailing = raw.slice(closing + 1).trim();
+    if (trailing && !trailing.startsWith("#")) return null;
+    return raw.slice(1, closing).trim() || null;
+  }
+  return raw.replace(/[ \\t]+#.*$/, "").trim() || null;
+}
+
 /** Model Hermes' own config will use, when a remote provider is configured.
  *
  * Hermes is a BYOK harness and OpenMausBot only ever offered it *local* hosts
@@ -125,8 +141,7 @@ export function hermesConfiguredModel(
   }
   // Only an uncommented, non-empty assignment counts; the shipped file has the
   // key present but commented out, and that must not read as "configured".
-  const keyed = /^[ \t]*OPENROUTER_API_KEY[ \t]*=[ \t]*(\S+)/m.exec(secrets);
-  if (!keyed) return null;
+  if (!nonEmptyDotenvValue(secrets, "OPENROUTER_API_KEY")) return null;
 
   let model = "";
   try {
@@ -170,8 +185,12 @@ async function fetchHermesAcpModels(
     } catch {
       return resolve([]);
     }
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const done = (out: { id: string; label: string; custom: true }[]) => {
-      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
       try {
         child.kill();
       } catch {
@@ -179,20 +198,29 @@ async function fetchHermesAcpModels(
       }
       resolve(out);
     };
-    const timer = setTimeout(() => done([]), 25_000);
-    child.on("error", () => done([]));
+    timer = setTimeout(() => done([]), 25_000);
+    child.once("error", () => done([]));
+    child.once("close", () => done([]));
 
     let buf = "";
     let id = 0;
     const send = (method: string, params: unknown) => {
       id += 1;
-      child.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+      try {
+        if (!child.stdin?.writable) {
+          done([]);
+          return 0;
+        }
+        child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`, (error) => {
+          if (error) done([]);
+        });
+      } catch {
+        done([]);
+        return 0;
+      }
       return id;
     };
-    const initId = send("initialize", {
-      protocolVersion: 1,
-      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
-    });
+    let initId = 0;
     let sessionId = 0;
     child.stdout?.on("data", (chunk) => {
       buf += String(chunk);
@@ -206,8 +234,9 @@ async function fetchHermesAcpModels(
         } catch {
           continue;
         }
-        if (msg?.id === initId && msg.result) {
-          sessionId = send("session/new", { cwd: env.HOME || "/tmp", mcpServers: [] });
+        if (msg?.id === initId) {
+          if (!msg.result) return done([]);
+          sessionId = send("session/new", { cwd: env.HOME || env.USERPROFILE || homedir(), mcpServers: [] });
         } else if (sessionId && msg?.id === sessionId) {
           const list = Array.isArray(msg.result?.models?.availableModels)
             ? msg.result.models.availableModels
@@ -224,6 +253,10 @@ async function fetchHermesAcpModels(
           );
         }
       }
+    });
+    initId = send("initialize", {
+      protocolVersion: 1,
+      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
     });
   });
 }

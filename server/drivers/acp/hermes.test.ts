@@ -39,6 +39,15 @@ describe("hermesConfiguredModel", () => {
     expect(hermesConfiguredModel(env)).toBeNull();
   });
 
+  it.each([
+    "OPENROUTER_API_KEY=\n",
+    'OPENROUTER_API_KEY=""\n',
+    "OPENROUTER_API_KEY='' # intentionally blank\n",
+    "OPENROUTER_API_KEY=   # configured later\n",
+  ])("does not treat a blank key as configured: %j", (line) => {
+    expect(hermesConfiguredModel(home(line))).toBeNull();
+  });
+
   it("returns null when there is no .env at all, leaving local-only setups unchanged", () => {
     const root = mkdtempSync(join(tmpdir(), "omb-hermes-bare-"));
     dirs.push(root);
@@ -47,6 +56,7 @@ describe("hermesConfiguredModel", () => {
 
   it("still offers the model when config.yaml is unreadable, with a generic label", () => {
     const env = home("OPENROUTER_API_KEY=sk-or-v1-test\n");
+    mkdirSync(join(env.HERMES_HOME, "config.yaml"));
     expect(hermesConfiguredModel(env)).toEqual({
       id: HERMES_CONFIG_MODEL_ID,
       label: "Hermes default (config)",
