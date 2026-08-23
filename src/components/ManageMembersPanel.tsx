@@ -2,15 +2,24 @@
 // from the member mauses in the room header and pre-ticked with who is
 // already in. Membership is the only thing this touches — the transcript
 // keeps every message a departing bot already sent.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { track } from "@/lib/analytics";
 import { useStore, type Group } from "@/state/store";
 import { BotPickerList } from "./BotPickerList";
 import { nextMemberIds } from "@/lib/room-members";
 
-export function ManageMembersPanel({ group, onClose }: { group: Group; onClose: () => void }) {
+export function ManageMembersPanel({
+  group,
+  onClose,
+  triggerRef,
+}: {
+  group: Group;
+  onClose: () => void;
+  triggerRef: RefObject<HTMLButtonElement | null>;
+}) {
   const { state, dispatch } = useStore();
   const [picked, setPicked] = useState<Set<string>>(() => new Set(group.memberIds));
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   // Archived bots stay listed while they are still members — otherwise a
   // room could keep a member you have no way to remove.
@@ -20,10 +29,38 @@ export function ManageMembersPanel({ group, onClose }: { group: Group; onClose: 
   );
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusable = () =>
+      [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter(
+        (element) => !element.hasAttribute("hidden"),
+      );
+    focusable()[0]?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const controls = focusable();
+      if (!controls.length) return event.preventDefault();
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    dialog.addEventListener("keydown", onKey);
+    return () => {
+      dialog.removeEventListener("keydown", onKey);
+      triggerRef.current?.focus();
+    };
+  }, [onClose, triggerRef]);
 
   const toggle = (id: string) =>
     setPicked((prev) => {
@@ -59,6 +96,7 @@ export function ManageMembersPanel({ group, onClose }: { group: Group; onClose: 
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={`Manage members of ${group.name}`}

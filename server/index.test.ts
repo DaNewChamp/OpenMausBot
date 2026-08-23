@@ -358,6 +358,23 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("deduplicates repeated room members while preserving their first-seen order", async () => {
+    const [first, second] = await Promise.all([api("POST", "/api/bots"), api("POST", "/api/bots")]).then(
+      (created) => created.map((response) => response.body.bot),
+    );
+    const room = (await api("POST", "/api/groups", { name: "Unique roster", memberIds: [first.id] })).body.group;
+    try {
+      const patched = await api("PATCH", `/api/groups/${room.id}`, {
+        memberIds: [second.id, first.id, second.id, first.id],
+      });
+      expect(patched.status).toBe(200);
+      expect(patched.body.group.memberIds).toEqual([second.id, first.id]);
+    } finally {
+      await api("DELETE", `/api/groups/${room.id}`);
+      for (const bot of [first, second]) await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
   it("keeps direct-message channels a fixed pair at the API boundary", async () => {
     const attempted = await api("PATCH", "/api/groups/test-dm", { memberIds: ["test-bot-a"] });
     expect(attempted.status).toBe(400);

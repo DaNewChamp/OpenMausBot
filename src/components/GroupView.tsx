@@ -360,6 +360,8 @@ export function GroupView({ group }: { group: Group }) {
   const [bulletinDraft, setBulletinDraft] = useState(group.bulletin);
   const [folderOpen, setFolderOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
+  const membersTriggerRef = useRef<HTMLButtonElement>(null);
+  const closeMembers = useCallback(() => setMembersOpen(false), []);
 
   const members = useMemo(
     () => group.memberIds.map((id) => state.bots.find((b) => b.id === id)).filter((b): b is Bot => Boolean(b)),
@@ -491,7 +493,9 @@ export function GroupView({ group }: { group: Group }) {
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <GroupCallOverlay group={group} members={members} />
-      {membersOpen && !group.dm && <ManageMembersPanel group={group} onClose={() => setMembersOpen(false)} />}
+      {membersOpen && !group.dm && (
+        <ManageMembersPanel group={group} onClose={closeMembers} triggerRef={membersTriggerRef} />
+      )}
       {/* Header: static member mauses; a ring + dot marks the working bot. */}
       <div
         className={cn(
@@ -513,6 +517,7 @@ export function GroupView({ group }: { group: Group }) {
             // The roster lives where you already look to see who is in the
             // room; a dashed + says the row is editable without shouting.
             <button
+              ref={membersTriggerRef}
               type="button"
               onClick={() => setMembersOpen(true)}
               title="Manage members"

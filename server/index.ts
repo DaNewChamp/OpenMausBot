@@ -3123,7 +3123,11 @@ const server = createServer(async (req, res) => {
       if (Array.isArray(body.memberIds)) {
         // A DM is the pair it was opened for; only real rooms have a roster.
         if (existing.dm) return json(res, 400, { error: "direct-message channels cannot change members" });
-        const ids = body.memberIds.filter((id: unknown): id is string => typeof id === "string" && Boolean(store.bot(id)));
+        const ids = [
+          ...new Set(
+            body.memberIds.filter((id: unknown): id is string => typeof id === "string" && Boolean(store.bot(id))),
+          ),
+        ];
         if (!ids.length) return json(res, 400, { error: "a room needs at least one bot" });
         patch.memberIds = ids;
       }
