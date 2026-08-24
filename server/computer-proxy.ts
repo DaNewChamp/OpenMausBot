@@ -36,6 +36,7 @@ import {
   type CropRegion,
 } from "./computer-observation.ts";
 import { CONTROL_REFUSAL, createControlClient } from "./control-client.ts";
+import { boundToolText } from "./tool-output.ts";
 import {
   ensureRemoteCuaCommand,
   REMOTE_CUA_EXECUTABLE,
@@ -47,6 +48,9 @@ import {
 
 const BOX_API = process.env.OGB_BOX_API ?? "https://ascii.dev/api/box/v1";
 const boxId = process.env.OGB_BOX_ID ?? "";
+// Only for spilling oversized output into this bot's workspace. Absent on an
+// older harness, which just means the output is truncated rather than saved.
+const botId = process.env.OMB_BOT_ID ?? "";
 const token = process.env.OGB_BOX_TOKEN ?? "";
 
 // Who-is-driving: while the person holds control in the app, every tool
@@ -412,8 +416,18 @@ async function frameFrom(out: RunOut): Promise<Frame | null> {
 const send = (obj: unknown): void => {
   process.stdout.write(JSON.stringify(obj) + "\n");
 };
+// A browser snapshot of a busy page or the stdout of an unbounded command
+// can run to hundreds of kilobytes. Bound it here, at the one place every
+// text result leaves this proxy, so no individual tool has to remember to.
 const text = (id: unknown, t: string, isError = false): void =>
-  send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: t }], isError: isError || undefined } });
+  send({
+    jsonrpc: "2.0",
+    id,
+    result: {
+      content: [{ type: "text", text: boundToolText(t, botId ? { botId } : undefined) }],
+      isError: isError || undefined,
+    },
+  });
 
 /** An action result: the text plus the frame the action produced. When
  * the pixels are byte-identical to the frame the model just saw, the
@@ -443,7 +457,9 @@ function observed(
     id,
     result: {
       content: [
-        { type: "text", text: note },
+        // the caption rides the same bound as every other text result — a
+        // caller that puts command output in `note` must not slip the cap
+        { type: "text", text: boundToolText(note, botId ? { botId } : undefined) },
         { type: "image", data: frame.data, mimeType: frame.mime },
       ],
     },

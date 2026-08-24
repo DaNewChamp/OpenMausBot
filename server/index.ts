@@ -227,8 +227,8 @@ function agentsIntegration(botId: string, threadId: string, depth: number) {
   };
 }
 
-function phoneIntegration() {
-  const env: Record<string, string> = { ...AGENTS_NODE_FLAG };
+function phoneIntegration(botId: string) {
+  const env: Record<string, string> = { ...AGENTS_NODE_FLAG, OMB_BOT_ID: botId };
   if (process.env.OMB_ADB_PATH) env.OMB_ADB_PATH = process.env.OMB_ADB_PATH;
   if (process.env.OMB_RESOURCES_PATH) env.OMB_RESOURCES_PATH = process.env.OMB_RESOURCES_PATH;
   if (process.env.PH_ANDROID_SERIAL) env.PH_ANDROID_SERIAL = process.env.PH_ANDROID_SERIAL;
@@ -1489,7 +1489,7 @@ async function startTurn(
         availableSkills(),
       );
       if (selectedSkills.some((skill) => skill.manifest.requiredCapabilities.includes("phoneMcp"))) {
-        integrations.phone = phoneIntegration();
+        integrations.phone = phoneIntegration(bot.id);
       }
       // the user's connected apps, but only to a driver that can mount
       // them — a key in the config says the connections exist, not that
@@ -1641,6 +1641,7 @@ async function startTurn(
               kind: "box",
               boxId: b.id,
               token: cfg.box!.token!,
+              botId: bot.id,
               control: controlIntegration(bot.id),
             };
             computerKind = "box";
@@ -1973,7 +1974,7 @@ async function runGroupMemberTurn(
     availableSkills(),
   );
   if (selectedSkills.some((skill) => skill.manifest.requiredCapabilities.includes("phoneMcp"))) {
-    integrations.phone = phoneIntegration();
+    integrations.phone = phoneIntegration(bot.id);
   }
   try {
     if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {

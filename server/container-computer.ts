@@ -1131,11 +1131,12 @@ export function setupCommands(
  * bypass it and mount Cua Driver's official MCP server through
  * containerComputerMcp(). */
 export function computerProxyEnv(
-  computer: { boxId?: string; token?: string; control?: { url: string; token: string } },
+  computer: { boxId?: string; token?: string; botId?: string; control?: { url: string; token: string } },
 ): NodeJS.ProcessEnv {
   return {
     OGB_BOX_ID: computer.boxId ?? "",
     OGB_BOX_TOKEN: computer.token ?? "",
+    ...(computer.botId ? { OMB_BOT_ID: computer.botId } : {}),
     ...(computer.control
       ? { OMB_CONTROL_URL: computer.control.url, OMB_CONTROL_TOKEN: computer.control.token }
       : {}),
