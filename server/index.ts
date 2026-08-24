@@ -75,7 +75,8 @@ import { RETRY_MAX_ATTEMPTS } from "./drivers/retry.ts";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
 import { searchMessages } from "./message-db.ts";
-import { _loadPending, discardDelegations, drainDelegations, pendingThreads, queueDelegation, type QueueResult } from "./delegations.ts";
+import { promptWithReply, transcriptText } from "./replies.ts";
+import { _loadPending, discardDelegations, drainDelegations, pendingDelegationSnapshot, pendingThreads, queueDelegation, type QueueResult } from "./delegations.ts";
 import { drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
@@ -106,6 +107,14 @@ import {
   writeMemoryFile,
   MEMORY_FILE_MAX_BYTES,
 } from "./workspace.ts";
+import {
+  readSectionContext,
+  sectionContextKey,
+  sectionContextLabel,
+  sectionContextSystemPrompt,
+  writeSectionContext,
+  SECTION_CONTEXT_MAX_BYTES,
+} from "./section-context.ts";
 import {
   installSkill,
   listSkills,
@@ -1346,6 +1355,8 @@ async function startTurn(
      * The prompt is control-plane context: it reaches the provider without
      * masquerading as another message authored by the user. */
     cardContinuation?: boolean;
+    /** Earlier text message this user turn is replying to. */
+    replyTo?: Message;
     onDispatchError?: (message: string) => void;
   },
 ) {
@@ -1395,17 +1406,24 @@ async function startTurn(
   if (!userMessage) {
     userMessage = opts?.cardContinuation
       ? { id: `card-${randomUUID()}`, at: Date.now(), role: "user", kind: "text", text }
-      : store.appendMessage(threadId, { role: "user", kind: "text", text });
+      : store.appendMessage(threadId, { role: "user", kind: "text", text, replyToId: opts?.replyTo?.id });
   }
 
   // transcript for API-backed drivers: settled text turns on the ACTIVE
   // branch only — abandoned forks never reach the model
   const skipTranscript = new Set<string>([userMessage.id, ...(opts?.excludeMessageIds ?? [])]);
-  const transcript = store
-    .activePath(threadId)
+  const activeMessages = store.activePath(threadId);
+  // A flat reply may deliberately point across a fork in the same thread.
+  // Resolve its quote from full storage, while the replay itself remains
+  // strictly limited to the selected branch below.
+  const messagesById = new Map(store.messagesFor(threadId).map((message) => [message.id, message]));
+  const transcript = activeMessages
     .filter((m) => m.kind === "text" && m.text && !skipTranscript.has(m.id))
     .slice(-40)
-    .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), text: m.text! }));
+    .map((m) => ({
+      role: m.role === "user" ? ("user" as const) : ("assistant" as const),
+      text: transcriptText(m, messagesById, cfg.profile?.name?.trim() || "User"),
+    }));
 
   // After a rewind (edit / branch switch) the provider's native session
   // still contains the abandoned branch: start a fresh session instead of
@@ -1423,7 +1441,7 @@ async function startTurn(
     !rewound &&
     engineIsFresh({ instanceId, lastInstanceId: task.lastInstanceId, resumeCursors: task.resumeCursors, transcript });
   const { turnText, resume } = buildTurnContext({
-    text,
+    text: promptWithReply(text, opts?.replyTo, cfg.profile?.name?.trim() || "User"),
     transcript,
     rewound,
     fresh,
@@ -1707,6 +1725,7 @@ async function startTurn(
             : "") +
           (coordinationPrompt ? ` ${coordinationPrompt}` : "") +
           credentialPrompt +
+          sectionContextSystemPrompt(bot.section) +
           (privateWorkspace ? memorySystemPrompt(bot.id) + skillsSystemPrompt(bot.id) : "") +
           skillInstructions +
           packagePlaybooks +
@@ -1831,11 +1850,12 @@ const GROUP_CONTEXT_MESSAGES = 30;
 const MAX_GROUP_HOPS = 1;
 
 function serializeRoomContext(threadId: string, userName: string): string {
-  return store
-    .messagesFor(threadId)
+  const messages = store.messagesFor(threadId);
+  const messagesById = new Map(messages.map((message) => [message.id, message]));
+  return messages
     .filter((m) => m.kind === "text" && m.text)
     .slice(-GROUP_CONTEXT_MESSAGES)
-    .map((m) => `${m.role === "user" ? userName : (m.from?.name ?? "Bot")}: ${m.text}`)
+    .map((m) => `${m.role === "user" ? userName : (m.from?.name ?? "Bot")}: ${transcriptText(m, messagesById, userName)}`)
     .join("\n");
 }
 
@@ -1978,7 +1998,9 @@ async function runGroupMemberTurn(
   // room, not of whichever member happened to speak first.
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id));
   const roomSystem =
-    (workspace ? `${system}\n${memorySystemPrompt(bot.id).trim()}${skillsSystemPrompt(bot.id)}` : system) +
+    system +
+    sectionContextSystemPrompt(bot.section) +
+    (workspace ? `\n${memorySystemPrompt(bot.id).trim()}${skillsSystemPrompt(bot.id)}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace) }) +
     installedPlaybookInstructions(text, bot.playbooks);
 
@@ -2076,13 +2098,13 @@ async function runGroupMemberTurn(
   return true;
 }
 
-function startGroupTurn(groupId: string, text: string) {
+function startGroupTurn(groupId: string, text: string, replyTo?: Message) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   if (roomSetupPending(group)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
   }
-  store.appendMessage(group.threadId, { role: "user", kind: "text", text });
+  store.appendMessage(group.threadId, { role: "user", kind: "text", text, replyToId: replyTo?.id });
 
   const members = group.memberIds
     .map((id) => store.bot(id))
@@ -2160,6 +2182,16 @@ function roomSetupPending(group: GroupRecord): boolean {
     group.setupSkippedAt == null &&
     store.messagesFor(group.threadId).length === 0
   );
+}
+
+function resolveReplyTarget(threadId: string, value: unknown): Message | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") throw Object.assign(new Error("replyToId must be a message id"), { status: 400 });
+  const target = store.messagesFor(threadId).find((message) => message.id === value);
+  if (!target || target.kind !== "text" || !target.text?.trim()) {
+    throw Object.assign(new Error("the message being replied to is no longer available"), { status: 404 });
+  }
+  return target;
 }
 
 const CONNECTOR_SLUG = /^[a-z0-9][a-z0-9_-]{0,80}$/;
@@ -2969,6 +3001,39 @@ const server = createServer(async (req, res) => {
       return json(res, 404, { error: "unknown internal endpoint" });
     }
 
+    // Live Team Map metadata. Prompts and replies never leave their
+    // transcripts: this projection carries only ids, status relationships,
+    // optional delegation labels, and timestamps.
+    if (method === "GET" && path === "/api/team-map") {
+      const visible = new Set(store.bots.filter((bot) => !bot.hidden).map((bot) => bot.id));
+      const collaborations = store.groups
+        .filter(
+          (group) =>
+            group.dm === true &&
+            group.memberIds.length === 2 &&
+            group.memberIds.every((botId) => visible.has(botId)),
+        )
+        .map((group) => ({
+          groupId: group.id,
+          botIds: [group.memberIds[0], group.memberIds[1]] as [string, string],
+          lastAt: store.messagesFor(group.threadId).at(-1)?.at ?? group.createdAt,
+        }))
+        .sort((a, b) => b.lastAt - a.lastAt);
+      const queued = pendingDelegationSnapshot().flatMap((item) => {
+        const source = store.botByThread(item.sourceThreadId);
+        if (!source || !visible.has(source.id) || !visible.has(item.toBotId)) return [];
+        return [{ sourceBotId: source.id, targetBotId: item.toBotId, reason: item.reason }];
+      });
+      const running = [...delegationWatch.entries()].flatMap(([threadId, watch]) => {
+        if (!visible.has(watch.toBotId)) return [];
+        const channel = watch.channelId ? store.group(watch.channelId) : undefined;
+        const sourceBotId = channel?.memberIds.find((botId) => botId !== watch.toBotId);
+        if (!sourceBotId || !visible.has(sourceBotId)) return [];
+        return [{ sourceBotId, targetBotId: watch.toBotId, threadId, groupId: channel?.id }];
+      });
+      return json(res, 200, { collaborations, queued, running });
+    }
+
     // ── routines calendar ────────────────────────────────────────────────
     if (path === "/api/routines" && method === "GET") {
       const fromParam = url.searchParams.get("from");
@@ -3225,6 +3290,10 @@ const server = createServer(async (req, res) => {
       const q = url.searchParams.get("q") ?? "";
       const rawLimit = url.searchParams.get("limit");
       const limit = rawLimit ? Math.min(Math.max(Number(rawLimit) || 0, 1), 100) : 40;
+      const threadId = url.searchParams.get("threadId")?.trim() || undefined;
+      if (threadId && !store.botByThread(threadId) && !store.groupByThread(threadId)) {
+        return json(res, 404, { error: "no such conversation" });
+      }
       // whether each hit sits on its thread's visible branch — a click on
       // one that does not has to switch versions first (and only then)
       const activePaths = new Map<string, Set<string>>();
@@ -3233,7 +3302,7 @@ const server = createServer(async (req, res) => {
         if (!ids) activePaths.set(threadId, (ids = new Set(store.activePath(threadId).map((m) => m.id))));
         return ids.has(messageId);
       };
-      const hits = searchMessages(q, limit)
+      const hits = searchMessages(q, limit, threadId)
         .map((hit) => {
           const bot = store.botByThread(hit.threadId);
           const group = bot ? undefined : store.groupByThread(hit.threadId);
@@ -3755,7 +3824,10 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const text = String(body.text ?? "").trim();
       if (!text) return json(res, 400, { error: "text required" });
-      startGroupTurn(m[1], text);
+      const group = store.group(m[1]);
+      if (!group) return json(res, 404, { error: "no such group" });
+      const replyTo = resolveReplyTarget(group.threadId, body.replyToId);
+      startGroupTurn(group.id, text, replyTo);
       return json(res, 202, { ok: true });
     }
     m = path.match(/^\/api\/groups\/([\w-]+)\/interrupt$/);
@@ -4115,6 +4187,49 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
 
+    // ── section context: a user-owned team brief ────────────────────────
+    // Bots receive this in their system context, but no agent tool can write
+    // it. That keeps one bot from silently changing every teammate's future
+    // turns. The section query parameter is required even for General (""),
+    // so a malformed client cannot accidentally read or replace that brief.
+    if (path === "/api/section-context" && (method === "GET" || method === "PUT")) {
+      if (!url.searchParams.has("section")) return json(res, 400, { error: "section is required" });
+      const requested = url.searchParams.get("section") ?? "";
+      const section = sectionContextKey(requested);
+      if (section.length > 60) return json(res, 400, { error: "section must be at most 60 characters" });
+      const exists =
+        section === "" ||
+        store.bots.some((bot) => !bot.hidden && sectionKey(bot.section) === section) ||
+        store.groups.some((group) => sectionKey(group.section) === section);
+      if (!exists) return json(res, 404, { error: "no such section" });
+
+      if (method === "GET") {
+        const context = readSectionContext(section);
+        return json(res, 200, {
+          section,
+          label: sectionContextLabel(section),
+          text: context?.text ?? "",
+          updatedAt: context?.updatedAt ?? null,
+          maxBytes: SECTION_CONTEXT_MAX_BYTES,
+        });
+      }
+
+      const parsed = z.object({ text: z.string() }).safeParse(await readBody(req));
+      if (!parsed.success) return json(res, 400, { error: "text must be a string" });
+      if (Buffer.byteLength(parsed.data.text, "utf8") > SECTION_CONTEXT_MAX_BYTES) {
+        return json(res, 400, { error: `section context is capped at ${SECTION_CONTEXT_MAX_BYTES / 1000}KB` });
+      }
+      const context = writeSectionContext(section, parsed.data.text);
+      return json(res, 200, {
+        ok: true,
+        section,
+        label: sectionContextLabel(section),
+        text: context?.text ?? "",
+        updatedAt: context?.updatedAt ?? null,
+        maxBytes: SECTION_CONTEXT_MAX_BYTES,
+      });
+    }
+
     // ── bot memory: MEMORY.md + memory/ topic files ─────────────────────
     // The files already belong to the user (plain markdown in the bot's
     // workspace); these routes only make them visible without a trip to
@@ -4182,23 +4297,35 @@ const server = createServer(async (req, res) => {
       if (!text) return json(res, 400, { error: "text required" });
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      const replyTo = resolveReplyTarget(bot.threadId, body.replyToId);
       // Claude can accept the message inside its live turn. If the write
       // loses a race with turn settlement, or the engine cannot steer, the
       // existing server-side queue records it atomically for the next turn.
       if (bot.busy) {
         const instance = registry.get(bot.modelSelection.instanceId);
         if (instance?.adapter.capabilities.queueing && instance.adapter.steer) {
-          const steered = await instance.adapter.steer(bot.threadId, text).catch(() => false);
+          const steered = await instance.adapter
+            .steer(bot.threadId, promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"))
+            .catch(() => false);
           if (steered) {
             clearUnattended(bot.id);
-            store.appendMessage(bot.threadId, { role: "user", kind: "text", text, steered: true });
+            store.appendMessage(bot.threadId, {
+              role: "user",
+              kind: "text",
+              text,
+              replyToId: replyTo?.id,
+              steered: true,
+            });
             return json(res, 202, { ok: true, steered: true });
           }
         }
-        const queued = queueSteeredMessage(bot, text);
+        const queued = queueSteeredMessage(bot, text, {
+          replyToId: replyTo?.id,
+          prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
+        });
         return json(res, 202, { ok: true, queued: true, queueId: queued.id, threadId: bot.threadId });
       }
-      await startTurn(bot.id, text);
+      await startTurn(bot.id, text, { replyTo });
       return json(res, 202, { ok: true });
     }
 
@@ -4230,7 +4357,8 @@ const server = createServer(async (req, res) => {
       const message = store.branchMessage(bot.threadId, messageId, text);
       if (!message) return json(res, 404, { error: "no such message" });
       store.patchBot(bot.id, { rewound: true });
-      await startTurn(bot.id, text, { userMessage: message });
+      const replyTo = message.replyToId ? resolveReplyTarget(bot.threadId, message.replyToId) : undefined;
+      await startTurn(bot.id, text, { userMessage: message, replyTo });
       return json(res, 202, { ok: true });
     }
 

@@ -3,7 +3,7 @@
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
 import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Check, ChevronDown, Folder, FolderOpen, Loader2, Pin, PinOff, Plus, X } from "lucide-react";
+import { ArrowDown, Check, ChevronDown, Folder, FolderOpen, Loader2, MessageSquareReply, Pin, PinOff, Plus, Search, X } from "lucide-react";
 import {
   api,
   useStore,
@@ -19,8 +19,11 @@ import { normalizeState } from "@/lib/mascot";
 import { effectiveDefaultResponder, groupResponseHint } from "@/lib/group-routing";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { Composer } from "./Composer";
+import { ChatFindBar } from "./ChatFindBar";
+import { ReplyQuote } from "./ReplyQuote";
 import { ConnectorCard } from "./ConnectorCard";
 import { SecretRequestCard } from "./SecretRequestCard";
+import { AttachedImageGallery } from "./AttachmentPreview";
 import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { ApprovalCard } from "./ApprovalCard";
@@ -31,6 +34,7 @@ import { useFocusMessage } from "@/lib/focus-message";
 import { shortPath } from "@/lib/short-path";
 import { BOTTOM_FOLLOW_THRESHOLD, shouldResumeBottomFollow } from "@/lib/bottom-follow";
 import { showWorkingDots } from "@/lib/turn-tail";
+import { splitAttachedImages } from "@/lib/composer-attachments";
 import {
   TRANSCRIPT_WINDOW_SIZE,
   expandWindowStart,
@@ -92,12 +96,18 @@ const Transcript = memo(function Transcript({
   group,
   members,
   messages,
+  transcript,
+  onReply,
 }: {
   group: Group;
   members: Bot[];
   /** The windowed suffix of group.messages — the boundary lives in GroupView. */
   messages: Message[];
+  /** Full room transcript, used to resolve quoted messages outside the mounted window. */
+  transcript: Message[];
+  onReply: (message: Message) => void;
 }) {
+  const { dispatch } = useStore();
   const memberOf = (id?: string) => members.find((b) => b.id === id);
   const textMessages = messages;
   return (
@@ -106,6 +116,7 @@ const Transcript = memo(function Transcript({
         const prev = textMessages[i - 1];
         const newDay = !prev || new Date(prev.at).toDateString() !== new Date(m.at).toDateString();
         const user = m.role === "user";
+        const attachedImages = user && m.text ? splitAttachedImages(m.text) : null;
         const newCluster = !prev || prev.role !== m.role || prev.from?.botId !== m.from?.botId || newDay;
         const row =
           // a member can hit a permission ask mid-turn; without this the
@@ -136,6 +147,15 @@ const Transcript = memo(function Transcript({
             <div className={cn("group flex w-full flex-col", user ? "items-end" : "items-start")}>
               <div className={cn("flex w-full items-end gap-1.5", user ? "justify-end" : "justify-start")}>
                 {user && <ReactionBar threadId={group.threadId} message={m} />}
+                <button
+                  type="button"
+                  onClick={() => onReply(m)}
+                  aria-label="Reply to message"
+                  title="Reply"
+                  className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+                >
+                  <MessageSquareReply size={14} />
+                </button>
                 <PinToggle group={group} message={m} />
                 <div
                   className={cn(
@@ -144,7 +164,29 @@ const Transcript = memo(function Transcript({
                   )}
                   title={new Date(m.at).toLocaleString()}
                 >
-                  {user ? m.text : <ChatMarkdown text={m.text} />}
+                  {m.replyToId && (() => {
+                    const target = transcript.find((candidate) => candidate.id === m.replyToId);
+                    return target ? (
+                      <div className="mb-2">
+                        <ReplyQuote
+                          message={target}
+                          fallbackName="Bot"
+                          compact
+                          onJump={() =>
+                            dispatch({ type: "focusMessage", threadId: group.threadId, messageId: target.id })
+                          }
+                        />
+                      </div>
+                    ) : null;
+                  })()}
+                  {user ? (
+                    <>
+                      {attachedImages && attachedImages.images.length > 0 && (
+                        <AttachedImageGallery paths={attachedImages.images} />
+                      )}
+                      {attachedImages?.display ?? m.text}
+                    </>
+                  ) : <ChatMarkdown text={m.text} />}
                 </div>
                 {!user && <ReactionBar threadId={group.threadId} message={m} />}
                 <span className="self-end pb-1 text-[11px] tabular-nums text-ink-secondary/70 opacity-0 transition-opacity group-hover:opacity-100">
@@ -712,8 +754,22 @@ export function GroupView({ group }: { group: Group }) {
   const [bulletinDraft, setBulletinDraft] = useState(group.bulletin);
   const [folderOpen, setFolderOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
   const membersTriggerRef = useRef<HTMLButtonElement>(null);
   const closeMembers = useCallback(() => setMembersOpen(false), []);
+  useEffect(() => setFindOpen(false), [group.threadId]);
+  useEffect(() => setReplyTo(null), [group.threadId]);
+  useEffect(() => {
+    const onFind = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        setFindOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onFind);
+    return () => window.removeEventListener("keydown", onFind);
+  }, []);
 
   const members = useMemo(
     () => group.memberIds.map((id) => state.bots.find((b) => b.id === id)).filter((b): b is Bot => Boolean(b)),
@@ -861,6 +917,19 @@ export function GroupView({ group }: { group: Group }) {
       >
         <span className="text-[15px] font-semibold text-ink">{group.name}</span>
         <div className="flex items-center gap-1.5" style={noDrag}>
+          <button
+            type="button"
+            onClick={() => setFindOpen((open) => !open)}
+            aria-label="Find in conversation"
+            aria-pressed={findOpen}
+            className={cn(
+              "rounded-md p-1.5 hover:bg-raised",
+              findOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
+            )}
+            title="Find in conversation (⌘F)"
+          >
+            <Search size={18} />
+          </button>
           <GroupCallButton group={group} members={members} />
           {!setupPending && !group.dm && <RoomWorkingFolderChip group={group} onToggle={() => setFolderOpen((open) => !open)} />}
           {!setupPending && !group.dm && <DefaultResponderSelect group={group} members={members} />}
@@ -885,6 +954,8 @@ export function GroupView({ group }: { group: Group }) {
           )}
         </div>
       </div>
+
+      {findOpen && <ChatFindBar threadId={group.threadId} onClose={() => setFindOpen(false)} />}
 
       {/* Bulletin: one pinned line; click to edit */}
       {!setupPending && <div className="mx-auto w-full max-w-[900px] px-5">
@@ -1031,7 +1102,13 @@ export function GroupView({ group }: { group: Group }) {
               </button>
             </div>
           )}
-          <Transcript group={group} members={members} messages={windowedMessages} />
+          <Transcript
+            group={group}
+            members={members}
+            messages={windowedMessages}
+            transcript={group.messages}
+            onReply={setReplyTo}
+          />
           {laterCount > 0 && (
             <div className="flex justify-center">
               <button
@@ -1080,7 +1157,14 @@ export function GroupView({ group }: { group: Group }) {
         </button>
       )}
 
-      <Composer key={group.id} group={group} members={members} locked={setupPending} />
+      <Composer
+        key={group.id}
+        group={group}
+        members={members}
+        locked={setupPending}
+        replyTo={replyTo}
+        onClearReply={() => setReplyTo(null)}
+      />
     </main>
   );
 }
