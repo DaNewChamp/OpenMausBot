@@ -68,4 +68,36 @@ describe("team import preview", () => {
       ],
     });
   });
+
+  it("previews a portable Markdown playbook", () => {
+    const preview = teamImportPreview(`---
+botmrr: 1
+name: Lead Desk
+summary: Find qualified conversations.
+agents:
+  - key: scout
+    name: Scout
+    title: Researcher
+chiefOfStaff: scout
+rooms: []
+playbooks: []
+routines: []
+requirements:
+  apps:
+    - label: Reddit
+---
+
+# Lead Desk
+
+## Activation
+
+Create the team.`);
+
+    expect(preview).toMatchObject({
+      kind: "package",
+      name: "Lead Desk",
+      chiefOfStaff: "Scout",
+      apps: [{ label: "Reddit", optional: false }],
+    });
+  });
 });

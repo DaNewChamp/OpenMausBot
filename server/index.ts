@@ -105,7 +105,7 @@ import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./rou
 import { fetchBotDirectory, matchDirectoryBots, type MatchedDirectoryBot } from "./bot-directory.ts";
 import { scoutProject, suggestTeam } from "./project-scout.ts";
 import { fetchGithubTeam, fetchLibraryTeam, fetchTeamCatalog } from "./team-library.ts";
-import { isBotPackage, packageAgentAsMember, parseBotPackage } from "./bot-package.ts";
+import { isBotPackage, packageAgentAsMember, parseBotPackage, renderBotPackageMarkdown } from "./bot-package.ts";
 import { createTeamManifest, importedMemberProfile, parseTeamManifest } from "./team-manifest.ts";
 import { readThreadEvents } from "./thread-events.ts";
 import { listenWebhookIngress, webhookCredential, type WebhookIngress } from "./webhook-ingress.ts";
@@ -3136,13 +3136,18 @@ const server = createServer(async (req, res) => {
       if (memberIds.length === 0) return json(res, 400, { error: "Create a bot before exporting your team" });
       try {
         if (body.format === "package") {
-          return json(res, 200, createBotPackageExport({
+          const document = createBotPackageExport({
             name,
             authorName: profileName,
             bots: store.bots,
             groups: store.groups,
             routines: routines!.listRoutines(),
-          }));
+          });
+          return json(res, 200, {
+            name: document.package.name,
+            members: document.package.agents.length,
+            markdown: renderBotPackageMarkdown(document),
+          });
         }
         return json(
           res,

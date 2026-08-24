@@ -224,12 +224,15 @@ export function TeamLibraryPanel({
 
   const readFile = async (file: File) => {
     if (file.size > MAX_TEAM_FILE_BYTES) throw new Error("That team file is too large.");
-    let manifest: unknown;
-    try {
-      manifest = JSON.parse(await file.text());
-    } catch (cause) {
-      if (cause instanceof SyntaxError) throw new Error("That team file is not valid JSON.");
-      throw cause;
+    const raw = await file.text();
+    let manifest: unknown = raw;
+    if (!file.name.toLowerCase().endsWith(".md")) {
+      try {
+        manifest = JSON.parse(raw);
+      } catch (cause) {
+        if (cause instanceof SyntaxError) throw new Error("That legacy team file is not valid JSON.");
+        throw cause;
+      }
     }
     previewManifest(teamImportPreview(manifest), "file");
   };
@@ -453,9 +456,9 @@ export function TeamLibraryPanel({
             <p className={cn("mt-1 text-[13px] text-ink-secondary", pending && "ml-9")}>
                 {pending
                   ? pending.kind === "package"
-                    ? `${pending.members.length} bots · complete package`
+                    ? `${pending.members.length} bots · portable Markdown playbook`
                     : `${pending.members.length} ready-to-load bots`
-                  : "Start with a complete package or bring your own."}
+                  : "Start with a complete playbook or bring your own."}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
@@ -536,7 +539,7 @@ export function TeamLibraryPanel({
                     </>
                   )
                 ) : (
-                  pending.kind === "package" ? "Review the complete setup, then install it." : "No channel is created—you can make one later if you want."
+                  pending.kind === "package" ? "Review the complete setup, then activate the playbook." : "No channel is created—you can make one later if you want."
                 )}
               </div>
               <button
@@ -548,7 +551,7 @@ export function TeamLibraryPanel({
                 {importing
                   ? "Loading…"
                   : pending.kind === "package" && currentBotCount === 0
-                    ? "Install package"
+                    ? "Activate playbook"
                     : currentBotCount === 0
                     ? "Load team"
                     : importMode === "replace"
@@ -675,7 +678,7 @@ export function TeamLibraryPanel({
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".json,.mausteam.json,.mauspack.json,application/json"
+                    accept=".md,.json,.mausteam.json,text/markdown,application/json"
                     className="hidden"
                     onChange={(event) => {
                       const file = event.currentTarget.files?.[0];
@@ -707,7 +710,7 @@ export function TeamLibraryPanel({
                     >
                       <UploadCloud size={27} className="text-accent" />
                       <span className="mt-3 text-[14px] font-medium text-ink">Choose a team file</span>
-                      <span className="mt-1 text-[12.5px] text-ink-secondary">or drop a .mauspack.json / .mausteam.json here</span>
+                      <span className="mt-1 text-[12.5px] text-ink-secondary">or drop a BotMRR .md / legacy .mausteam.json here</span>
                     </button>
 
                     <div className="flex min-h-56 flex-col justify-center rounded-2xl bg-raised/25 px-6">

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import { schemaIssue, type JsonValue } from "./schema.ts";
 import type { MausColor } from "./store.ts";
@@ -6,6 +7,7 @@ import type { TeamManifestMember } from "./team-manifest.ts";
 
 export const BOT_PACKAGE_FORMAT = "openmaus.package" as const;
 export const BOT_PACKAGE_VERSION = 1 as const;
+export const BOTMRR_MARKDOWN_VERSION = 1 as const;
 
 const COLORS = [
   "green",
@@ -121,15 +123,42 @@ export type BotPackageAgent = BotPackageDefinition["agents"][number];
 export type BotPackagePlaybook = NonNullable<BotPackageDefinition["playbooks"]>[number];
 
 export function isBotPackage(value: unknown): boolean {
+  if (typeof value === "string") return /^---\r?\n[\s\S]*?\bbotmrr:\s*1\b/m.test(value);
   return Boolean(value) && typeof value === "object" && !Array.isArray(value) &&
     (value as { format?: unknown }).format === BOT_PACKAGE_FORMAT;
+}
+
+function markdownDocument(markdown: string): ParsedBotPackage {
+  if (Buffer.byteLength(markdown) > 1_000_000) throw new Error("The bot playbook is too large");
+  const frontmatter = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!frontmatter) throw new Error("This Markdown is missing YAML frontmatter");
+  let metadata: unknown;
+  try {
+    metadata = parseYaml(frontmatter[1]);
+  } catch {
+    throw new Error("This Markdown has invalid YAML frontmatter");
+  }
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    throw new Error("This Markdown is missing its BotMRR blueprint");
+  }
+  const { botmrr, ...definition } = metadata as Record<string, unknown>;
+  if (botmrr !== BOTMRR_MARKDOWN_VERSION) throw new Error("BotMRR Markdown version is not supported");
+  for (const heading of ["Activation", "Mission", "Outcomes", "Connections", "Team", "Chief of Staff", "Completion rule"]) {
+    if (!markdown.includes(`## ${heading}`)) throw new Error(`This Markdown is missing its ${heading} section`);
+  }
+  return {
+    format: BOT_PACKAGE_FORMAT,
+    version: BOT_PACKAGE_VERSION,
+    package: definition as BotPackageDefinition,
+  };
 }
 
 /** Parse and cross-reference one complete, portable package. Unknown fields
  * are stripped; ids, grants, credentials, paths, model selections, and
  * runtime state therefore cannot ride through the package boundary. */
 export function parseBotPackage(value: JsonValue | ParsedBotPackage): ParsedBotPackage {
-  const parsed = packageSchema.safeParse(value);
+  const source = typeof value === "string" ? markdownDocument(value) : value;
+  const parsed = packageSchema.safeParse(source);
   if (!parsed.success) throw new Error(schemaIssue(parsed.error, "This is not a bot package"));
   const pkg = parsed.data.package;
 
@@ -167,6 +196,62 @@ export function parseBotPackage(value: JsonValue | ParsedBotPackage): ParsedBotP
     if (!agents.has(routine.agent)) throw new Error(`Routine ${routine.key} references unknown agent: ${routine.agent}`);
   }
   return parsed.data;
+}
+
+const list = (values: string[]) => values.map((value) => `- ${value}`).join("\n");
+
+/** Render the public artifact. The frontmatter enables deterministic imports;
+ * the body is deliberately complete enough for any Chief-of-Staff agent to
+ * run without OpenMausBot or another proprietary parser. */
+export function renderBotPackageMarkdown(document: ParsedBotPackage): string {
+  const pkg = parseBotPackage(document).package;
+  const frontmatter = stringifyYaml({ botmrr: BOTMRR_MARKDOWN_VERSION, ...pkg }, { lineWidth: 0 }).trim();
+  const agents = pkg.agents.map((agent) => [
+    `### ${agent.name} — ${agent.title || "Specialist"}`,
+    `**Role key:** \`${agent.key}\``,
+    agent.playbooks?.length ? `**Use these playbooks:** ${agent.playbooks.map((key) => `\`${key}\``).join(", ")}` : "",
+    "",
+    agent.description,
+  ].filter(Boolean).join("\n\n")).join("\n\n");
+  const rooms = (pkg.rooms ?? []).map((room) => [
+    `### ${room.name}`,
+    `**Members:** ${room.members.map((key) => `\`${key}\``).join(", ")}`,
+    `**Default responder:** ${room.defaultResponder.kind === "agent" ? `\`${room.defaultResponder.agent}\`` : room.defaultResponder.kind}`,
+    "",
+    room.bulletin,
+  ].join("\n\n")).join("\n\n");
+  const routines = (pkg.routines ?? []).map((routine) => [
+    `### ${routine.name}`,
+    `**Owner:** \`${routine.agent}\`  `,
+    `**Schedule:** ${routine.schedule.type === "daily" ? `${routine.schedule.time} on weekdays ${routine.schedule.weekdays.join(", ")}` : `once at ${routine.schedule.at}`}  `,
+    "**Initial state:** paused — the user must enable it",
+    "",
+    routine.prompt,
+  ].join("\n")).join("\n\n");
+  const playbooks = (pkg.playbooks ?? []).map((playbook) => [
+    `### ${playbook.name}`,
+    `**Playbook key:** \`${playbook.key}\`  `,
+    `**Use when:** ${playbook.triggers.join(", ")}`,
+    "",
+    playbook.summary,
+    "",
+    playbook.instructions,
+  ].join("\n")).join("\n\n");
+  const examples = (pkg.examples ?? []).map((example) => [
+    `### ${example.title}`,
+    "**Ask**",
+    "",
+    example.input,
+    "",
+    "**Expected result**",
+    "",
+    example.output,
+  ].join("\n")).join("\n\n");
+  const connections = pkg.requirements.apps.length
+    ? pkg.requirements.apps.map((app) => `- **${app.label}${app.optional ? " (optional)" : ""}:** ${app.reason}`).join("\n")
+    : "- No connected apps are required.";
+
+  return `---\n${frontmatter}\n---\n\n# ${pkg.name}\n\n${pkg.tagline}\n\n> **Give this file to your Chief of Staff.** It is the complete team blueprint. Any agent system can run it; OpenMausBot can also install it directly.\n\n## Activation\n\nYou are the Chief of Staff for this blueprint. Read the whole document before acting. Confirm the user's goal and any missing inputs, then create or delegate to the specialist roles below. Preserve their names, ownership, boundaries, shared-room rules, and playbooks. If your platform cannot literally spawn agents, perform the roles one at a time and keep their outputs clearly separated.\n\nNever request pasted passwords or secret keys. Use the platform's normal connection flow. Do not send messages, publish content, spend money, delete data, or enable a schedule without the user's explicit approval. All routines start paused.\n\n## Mission\n\n${pkg.summary}\n\n## Outcomes\n\n${list(pkg.outcomes)}\n\n## Connections\n\n${connections}\n\n## Team\n\n${agents}\n\n## Chief of Staff\n\nThe Chief of Staff role is \`${pkg.chiefOfStaff ?? pkg.agents[0].key}\`. This role owns delegation, synthesis, conflict resolution, and the final answer to the user.\n${rooms ? `\n## Shared rooms\n\n${rooms}\n` : ""}${routines ? `\n## Suggested routines\n\n${routines}\n` : ""}${playbooks ? `\n## Playbooks\n\n${playbooks}\n` : ""}${examples ? `\n## Example job\n\n${examples}\n` : ""}\n## Completion rule\n\nReturn one clear result to the user, distinguish evidence from inference, cite source links when the work uses external material, and state what still needs human approval or a connected app.\n`;
 }
 
 export function packageAgentAsMember(agent: BotPackageAgent): TeamManifestMember {

@@ -914,6 +914,12 @@ describe("harness HTTP API", () => {
     ]));
     expect(exported.body.team).not.toHaveProperty("room");
     expect(JSON.stringify(exported.body)).not.toMatch(/Archived|autoApprove|alwaysAllow|modelSelection|threadId/);
+    const markdownExport = await api("POST", "/api/teams/export", { name: "Field Team", format: "package" });
+    expect(markdownExport.status).toBe(200);
+    expect(markdownExport.body).toMatchObject({ name: "Field Team", members: visibleNames.length });
+    expect(markdownExport.body.markdown).toContain("## Activation");
+    expect(markdownExport.body.markdown).toContain("Give this file to your Chief of Staff");
+    expect(markdownExport.body.markdown).not.toMatch(/Archived|autoApprove|alwaysAllow|modelSelection|threadId/);
     expect((await api("GET", "/api/bots")).body.groups).toHaveLength(roomsBefore);
     expect((await api("POST", "/api/teams/export", {})).body.team.name).toBe("My OpenMaus Team");
 

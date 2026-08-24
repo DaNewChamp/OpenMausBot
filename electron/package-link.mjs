@@ -22,7 +22,7 @@ export function packageUrlFromDeepLink(rawValue) {
     packageUrl.password ||
     packageUrl.port ||
     !ALLOWED_PACKAGE_HOSTS.has(packageUrl.hostname) ||
-    !packageUrl.pathname.endsWith(".json")
+    !packageUrl.pathname.match(/\.(?:md|json)$/)
   ) return null;
   return packageUrl.toString();
 }

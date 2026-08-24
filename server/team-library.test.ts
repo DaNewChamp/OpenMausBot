@@ -78,9 +78,11 @@ describe("team library", () => {
 
   it("normalizes public GitHub repository, blob, and raw links", () => {
     expect(githubManifestUrls("https://github.com/acme/team")).toEqual([
-      "https://raw.githubusercontent.com/acme/team/main/package.mauspack.json",
+      "https://raw.githubusercontent.com/acme/team/main/botmrr.md",
+      "https://raw.githubusercontent.com/acme/team/main/team.md",
       "https://raw.githubusercontent.com/acme/team/main/team.mausteam.json",
-      "https://raw.githubusercontent.com/acme/team/master/package.mauspack.json",
+      "https://raw.githubusercontent.com/acme/team/master/botmrr.md",
+      "https://raw.githubusercontent.com/acme/team/master/team.md",
       "https://raw.githubusercontent.com/acme/team/master/team.mausteam.json",
     ]);
     expect(githubManifestUrls("https://github.com/acme/team/blob/main/presets/seo.mausteam.json")).toEqual([
@@ -90,7 +92,7 @@ describe("team library", () => {
       "https://raw.githubusercontent.com/acme/team/main/team.mausteam.json",
     ]);
     expect(() => githubManifestUrls("http://example.com/team.json")).toThrow("public HTTPS GitHub");
-    expect(() => githubManifestUrls("https://github.com/acme/team/blob/main/run.sh")).toThrow("JSON team file");
+    expect(() => githubManifestUrls("https://github.com/acme/team/blob/main/run.sh")).toThrow("Markdown playbook");
   });
 
   it("falls back from main to master for a repository link", async () => {
@@ -103,6 +105,6 @@ describe("team library", () => {
     const loaded = await fetchGithubTeam("https://github.com/acme/team", fetcher);
     if (loaded.format !== "openmaus.team") throw new Error("expected a legacy team");
     expect(loaded.team.members[0]?.name).toBe("Ada");
-    expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(fetcher).toHaveBeenCalledTimes(6);
   });
 });

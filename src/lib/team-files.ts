@@ -1,38 +1,35 @@
 import { api } from "@/state/store";
 
-interface ExportedPackage {
-  package: {
-    name: string;
-    agents: unknown[];
-  };
+interface ExportedPlaybook {
+  name: string;
+  members: number;
+  markdown: string;
 }
 
-function downloadManifest(manifest: ExportedPackage): { name: string; members: number } {
+function downloadPlaybook(playbook: ExportedPlaybook): { name: string; members: number } {
   const slug =
-    manifest.package.name
+    playbook.name
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "") || "openmaus-package";
-  const blob = new Blob([`${JSON.stringify(manifest, null, 2)}\n`], { type: "application/json" });
+      .replace(/^-|-$/g, "") || "botmrr-team";
+  const blob = new Blob([playbook.markdown], { type: "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `${slug}.mauspack.json`;
+  link.download = `${slug}.md`;
   document.body.appendChild(link);
   link.click();
   link.remove();
-  // There is no browser event for "download has consumed this URL". Keep it
-  // alive long enough for slower engines to start reading, then clean it up.
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  return { name: manifest.package.name, members: manifest.package.agents.length };
+  return { name: playbook.name, members: playbook.members };
 }
 
-/** Export every active sidebar bot in one click. The server excludes hidden bots. */
+/** Export every active sidebar bot as one portable Chief-of-Staff Markdown. */
 export async function downloadAllBots(): Promise<{ name: string; members: number }> {
-  const manifest = (await api("/api/teams/export", {
+  const playbook = (await api("/api/teams/export", {
     method: "POST",
     body: JSON.stringify({ format: "package" }),
-  })) as ExportedPackage;
-  return downloadManifest(manifest);
+  })) as ExportedPlaybook;
+  return downloadPlaybook(playbook);
 }

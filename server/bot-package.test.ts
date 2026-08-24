@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { packageAgentAsMember, parseBotPackage } from "./bot-package.ts";
+import { packageAgentAsMember, parseBotPackage, renderBotPackageMarkdown } from "./bot-package.ts";
 
 const validPackage: any = {
   format: "openmaus.package",
@@ -61,6 +61,18 @@ describe("bot packages", () => {
       title: "Research Lead",
       description: "Own the brief.",
       appearance: { color: "purple" },
+    });
+  });
+
+  it("round-trips one Chief-of-Staff-readable Markdown playbook", () => {
+    const markdown = renderBotPackageMarkdown(parseBotPackage(validPackage));
+    expect(markdown).toContain("## Activation");
+    expect(markdown).toContain("Give this file to your Chief of Staff");
+    expect(markdown).not.toContain("autoApprove");
+    expect(parseBotPackage(markdown).package).toMatchObject({
+      id: "research-desk",
+      chiefOfStaff: "lead",
+      agents: [{ key: "lead", name: "Ada" }],
     });
   });
 
