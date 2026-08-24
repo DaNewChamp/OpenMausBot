@@ -36,6 +36,7 @@ import {
   type CropRegion,
 } from "./computer-observation.ts";
 import { CONTROL_REFUSAL, createControlClient } from "./control-client.ts";
+import { blockedToolNote, classifyBlockPage, type BlockHit } from "./bot-block.ts";
 import { boundToolText } from "./tool-output.ts";
 import {
   ensureRemoteCuaCommand,
@@ -204,6 +205,18 @@ async function waitForNavigation(
   }
   observations.noteVerification(false);
   return { ok: false, targets };
+}
+
+/** The first target that is a challenge page we are confident about.
+ * A `low`-confidence hit is deliberately ignored here: a reCAPTCHA frame is
+ * usually embedded in a page the agent can still work with, and turning that
+ * into a hard stop would cost more turns than it saves. */
+function blockedTarget(targets: readonly BrowserTarget[]): BlockHit | undefined {
+  for (const target of targets) {
+    const hit = classifyBlockPage({ url: target.url, title: target.title });
+    if (hit?.confidence === "high") return hit;
+  }
+  return undefined;
 }
 
 const ENV = 'export DISPLAY=${DISPLAY:-:0}';
@@ -899,6 +912,8 @@ async function call(id: unknown, name: string, args: any) {
       const snapshot = JSON.parse(out.stdout) as SemanticBrowserSnapshot;
       if (!Array.isArray(snapshot.elements) || typeof snapshot.url !== "string") throw new Error("invalid snapshot");
       semanticBrowserUrl = snapshot.url;
+      const snapshotBlock = classifyBlockPage({ url: snapshot.url, title: snapshot.title });
+      if (snapshotBlock?.confidence === "high") return text(id, blockedToolNote(snapshotBlock), true);
       semanticBrowserRefs = new Set(snapshot.elements.map((element) => element.ref));
       observations.noteStructuredObservation();
       const publicUrl = safeBrowserUrl(snapshot.url) ?? "URL unavailable";
@@ -932,6 +947,8 @@ async function call(id: unknown, name: string, args: any) {
       return text(id, "wait_for_navigation needs a valid http(s) URL", true);
     }
     const result = await waitForNavigation(url);
+    const blocked = blockedTarget(result.targets);
+    if (blocked) return text(id, blockedToolNote(blocked), true);
     return text(
       id,
       result.ok
@@ -1027,6 +1044,10 @@ async function call(id: unknown, name: string, args: any) {
     observations.noteAction();
     const out = await runOnBox(command, 60_000);
     const verification = await waitForNavigation(normalized, 1);
+    // a challenge page is not the destination, however the navigation
+    // "verified" — say so instead of handing back a screenshot of a wall
+    const blocked = blockedTarget(verification.targets);
+    if (blocked) return text(id, blockedToolNote(blocked), true);
     const current = verification.targets.map((target) => target.url).join(", ") || "unavailable";
     const note = verification.ok
       ? `opened and navigation verified: ${publicUrl}`
