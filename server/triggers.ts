@@ -178,13 +178,17 @@ export function normalizeWebhookEvent(
   headers: Record<string, string | undefined>,
   payload: JsonValue,
 ): NormalizedEvent | null {
+  // Slack is checked first because it is identifiable from the BODY alone.
+  // The header a caller passes here is whatever the ingress read out of
+  // x-github-event / x-webhook-event / x-event-type, so a Slack delivery that
+  // happens to carry one of those must not be dragged down the GitHub path.
+  const slack = slackPayloadSchema.safeParse(payload);
+  if (slack.success && slack.data.type === "event_callback") return normalizeSlack(slack.data);
   const githubEvent = trimmed(headers["x-github-event"]);
   if (githubEvent) {
     const parsed = githubPayloadSchema.safeParse(payload);
     return parsed.success ? normalizeGithub(githubEvent, parsed.data) : null;
   }
-  const slack = slackPayloadSchema.safeParse(payload);
-  if (slack.success && slack.data.type === "event_callback") return normalizeSlack(slack.data);
   return null;
 }
 

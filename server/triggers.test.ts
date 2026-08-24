@@ -69,6 +69,14 @@ describe("normalizeWebhookEvent — slack", () => {
     expect(event?.kind).toBe("mention");
   });
 
+  it("is recognised from the body even when a generic event header is present", () => {
+    const event = normalizeWebhookEvent(
+      { "x-github-event": "message" },
+      { type: "event_callback", event: { type: "message", channel: "C1", text: "hi" } },
+    );
+    expect(event).toMatchObject({ source: "slack", kind: "message", channel: "C1" });
+  });
+
   it("ignores a bot's own message so a bot cannot trigger itself in a loop", () => {
     expect(
       normalizeWebhookEvent({}, { type: "event_callback", event: { type: "message", channel: "C1", bot_id: "B1", text: "hi" } }),
