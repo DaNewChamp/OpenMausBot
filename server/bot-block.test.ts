@@ -6,7 +6,7 @@
 // records. The negative cases below are the ones that matter most.
 import { describe, expect, it } from "vitest";
 
-import { classifyBlockPage } from "./bot-block.ts";
+import { BLOCK_HELP_WINDOW_MS, classifyBlockPage, createBlockHelpGate } from "./bot-block.ts";
 
 describe("classifyBlockPage", () => {
   const blocked: Array<[string, string, string]> = [
@@ -63,5 +63,25 @@ describe("classifyBlockPage", () => {
 
   it("tolerates a missing title", () => {
     expect(classifyBlockPage({ url: "https://example.com/" })).toBeUndefined();
+  });
+});
+
+describe("createBlockHelpGate", () => {
+  it("asks once per host, then holds off for the window", () => {
+    let now = 1_000_000;
+    const gate = createBlockHelpGate(() => now);
+    expect(gate.shouldAsk("shop.example.com")).toBe(true);
+    expect(gate.shouldAsk("shop.example.com")).toBe(false);
+    now += BLOCK_HELP_WINDOW_MS - 1;
+    expect(gate.shouldAsk("shop.example.com")).toBe(false);
+    now += 2;
+    expect(gate.shouldAsk("shop.example.com")).toBe(true);
+  });
+
+  it("tracks hosts independently — being stuck on one is not being stuck on another", () => {
+    const gate = createBlockHelpGate(() => 0);
+    expect(gate.shouldAsk("a.example.com")).toBe(true);
+    expect(gate.shouldAsk("b.example.com")).toBe(true);
+    expect(gate.shouldAsk("a.example.com")).toBe(false);
   });
 });

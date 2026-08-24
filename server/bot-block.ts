@@ -104,3 +104,27 @@ export function blockedToolNote(hit: BlockHit): string {
     "Stop here and ask the user to open the computer and get past it themselves, then continue once they say it is done.",
   ].join(" ");
 }
+
+/** How long one host stays "already asked about". A blocked agent retries,
+ * and each retry is another hit — without this the person gets a stream of
+ * takeover buzzes for one wall. */
+export const BLOCK_HELP_WINDOW_MS = 10 * 60 * 1_000;
+
+export interface BlockHelpGate {
+  /** True the first time this host blocks us, and again once the window
+   * has passed — the person may have walked away from the first ask. */
+  shouldAsk(host: string): boolean;
+}
+
+export function createBlockHelpGate(now: () => number = Date.now): BlockHelpGate {
+  const askedAt = new Map<string, number>();
+  return {
+    shouldAsk(host: string): boolean {
+      const at = now();
+      const last = askedAt.get(host);
+      if (last !== undefined && at - last <= BLOCK_HELP_WINDOW_MS) return false;
+      askedAt.set(host, at);
+      return true;
+    },
+  };
+}
