@@ -1,8 +1,14 @@
 export interface PendingTeamImport {
   manifest: unknown;
+  kind: "team" | "package";
   name: string;
   description: string;
   members: Array<{ name: string; title: string }>;
+  chiefOfStaff?: string;
+  rooms: number;
+  playbooks: number;
+  routines: number;
+  apps: Array<{ label: string; optional: boolean }>;
 }
 
 /** Small client-side preview only; the server remains the trust boundary. */
@@ -11,10 +17,9 @@ export function teamImportPreview(manifest: unknown): PendingTeamImport {
     throw new Error("This file does not contain a team.");
   }
   const root = manifest as Record<string, unknown>;
-  if (root.format !== "openmaus.team") throw new Error("This is not an OpenMaus team file.");
-  if (root.version !== 1 && root.version !== 2) {
-    throw new Error(`Team file version ${String(root.version)} is not supported.`);
-  }
+  if (root.format === "openmaus.package") return packagePreview(root, manifest);
+  if (root.format !== "openmaus.team") throw new Error("This is not an OpenMaus team or bot package.");
+  if (root.version !== 1 && root.version !== 2) throw new Error(`Team file version ${String(root.version)} is not supported.`);
   if (!root.team || typeof root.team !== "object" || Array.isArray(root.team)) {
     throw new Error("This team file is missing its team definition.");
   }
@@ -37,8 +42,58 @@ export function teamImportPreview(manifest: unknown): PendingTeamImport {
   });
   return {
     manifest,
+    kind: "team",
     name: team.name.trim(),
     description: typeof team.description === "string" ? team.description.trim() : "",
     members,
+    rooms: root.version === 1 && team.room && typeof team.room === "object" ? 1 : 0,
+    playbooks: 0,
+    routines: 0,
+    apps: [],
+  };
+}
+
+function packagePreview(root: Record<string, unknown>, manifest: unknown): PendingTeamImport {
+  if (root.version !== 1) throw new Error(`Bot package version ${String(root.version)} is not supported.`);
+  if (!root.package || typeof root.package !== "object" || Array.isArray(root.package)) {
+    throw new Error("This bot package is missing its definition.");
+  }
+  const pkg = root.package as Record<string, unknown>;
+  if (typeof pkg.name !== "string" || !pkg.name.trim()) throw new Error("This bot package does not have a name.");
+  if (!Array.isArray(pkg.agents) || pkg.agents.length === 0) throw new Error("This bot package has no bots.");
+  if (pkg.agents.length > 200) throw new Error("This bot package has too many bots.");
+  const members = pkg.agents.map((agent, index) => {
+    if (!agent || typeof agent !== "object" || Array.isArray(agent)) throw new Error(`Bot ${index + 1} is invalid.`);
+    const value = agent as Record<string, unknown>;
+    if (typeof value.name !== "string" || !value.name.trim()) throw new Error(`Bot ${index + 1} does not have a name.`);
+    return { name: value.name.trim(), title: typeof value.title === "string" ? value.title.trim() : "" };
+  });
+  const chiefKey = typeof pkg.chiefOfStaff === "string" ? pkg.chiefOfStaff : undefined;
+  const chief = chiefKey
+    ? (pkg.agents as Array<Record<string, unknown>>).find((agent) => agent.key === chiefKey)?.name
+    : undefined;
+  const requirements = pkg.requirements && typeof pkg.requirements === "object" && !Array.isArray(pkg.requirements)
+    ? pkg.requirements as Record<string, unknown>
+    : {};
+  const apps = Array.isArray(requirements.apps)
+    ? requirements.apps.flatMap((app) => {
+        if (!app || typeof app !== "object" || Array.isArray(app)) return [];
+        const value = app as Record<string, unknown>;
+        return typeof value.label === "string"
+          ? [{ label: value.label.trim(), optional: value.optional === true }]
+          : [];
+      })
+    : [];
+  return {
+    manifest,
+    kind: "package",
+    name: pkg.name.trim(),
+    description: typeof pkg.summary === "string" ? pkg.summary.trim() : "",
+    members,
+    ...(typeof chief === "string" ? { chiefOfStaff: chief } : {}),
+    rooms: Array.isArray(pkg.rooms) ? pkg.rooms.length : 0,
+    playbooks: Array.isArray(pkg.playbooks) ? pkg.playbooks.length : 0,
+    routines: Array.isArray(pkg.routines) ? pkg.routines.length : 0,
+    apps,
   };
 }

@@ -30,4 +30,42 @@ describe("team import preview", () => {
       teamImportPreview({ format: "openmaus.team", version: 2, team: { name: "Empty", members: [] } }),
     ).toThrow("no members");
   });
+
+  it("previews the complete package setup before installation", () => {
+    const preview = teamImportPreview({
+      format: "openmaus.package",
+      version: 1,
+      package: {
+        name: "Lead Desk",
+        summary: "Find qualified conversations.",
+        agents: [
+          { key: "scout", name: "Scout", title: "Researcher" },
+          { key: "writer", name: "Writer", title: "Outreach" },
+        ],
+        chiefOfStaff: "scout",
+        rooms: [{}],
+        playbooks: [{}, {}],
+        routines: [{}],
+        requirements: {
+          apps: [
+            { label: "Reddit" },
+            { label: "Google Sheets", optional: true },
+          ],
+        },
+      },
+    });
+
+    expect(preview).toMatchObject({
+      kind: "package",
+      name: "Lead Desk",
+      chiefOfStaff: "Scout",
+      rooms: 1,
+      playbooks: 2,
+      routines: 1,
+      apps: [
+        { label: "Reddit", optional: false },
+        { label: "Google Sheets", optional: true },
+      ],
+    });
+  });
 });

@@ -1,4 +1,5 @@
 import { parseJson, type JsonValue } from "./schema.ts";
+import { isBotPackage, parseBotPackage, type ParsedBotPackage } from "./bot-package.ts";
 import { parseTeamManifest, type ParsedTeamManifest } from "./team-manifest.ts";
 
 export const TEAM_LIBRARY_REPOSITORY = "https://github.com/milind-soni/openmausbot-teams";
@@ -13,6 +14,10 @@ export interface TeamCatalogEntry {
   name: string;
   summary: string;
   category: string;
+  outcome?: string;
+  setupMinutes?: number;
+  featured?: boolean;
+  package?: string;
   manifest: string;
   readme: string;
   members: number;
@@ -82,6 +87,14 @@ export function parseTeamCatalog(value: unknown): TeamCatalog {
       name: text(raw.name, `${field}.name`, 100),
       summary: text(raw.summary, `${field}.summary`, 300),
       category: text(raw.category, `${field}.category`, 80),
+      ...(typeof raw.outcome === "string" ? { outcome: text(raw.outcome, `${field}.outcome`, 300) } : {}),
+      ...(typeof raw.setupMinutes === "number" && Number.isSafeInteger(raw.setupMinutes) && raw.setupMinutes > 0 && raw.setupMinutes <= 240
+        ? { setupMinutes: raw.setupMinutes }
+        : {}),
+      ...(typeof raw.featured === "boolean" ? { featured: raw.featured } : {}),
+      ...(raw.package !== undefined
+        ? { package: relativeFile(raw.package, `${field}.package`, ".mauspack.json", "packages/") }
+        : {}),
       manifest: relativeFile(raw.manifest, `${field}.manifest`, ".mausteam.json", prefix),
       readme: relativeFile(raw.readme, `${field}.readme`, "README.md", prefix),
       members:
@@ -129,13 +142,19 @@ export async function fetchTeamCatalog(fetcher: Fetcher = fetch): Promise<TeamCa
   return parseTeamCatalog(await fetchJson(TEAM_LIBRARY_CATALOG_URL, MAX_CATALOG_BYTES, fetcher));
 }
 
-export async function fetchLibraryTeam(slug: string, fetcher: Fetcher = fetch): Promise<ParsedTeamManifest> {
+export type ParsedShareableTeam = ParsedTeamManifest | ParsedBotPackage;
+
+function parseShareable(value: JsonValue): ParsedShareableTeam {
+  return isBotPackage(value) ? parseBotPackage(value) : parseTeamManifest(value);
+}
+
+export async function fetchLibraryTeam(slug: string, fetcher: Fetcher = fetch): Promise<ParsedShareableTeam> {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw new Error("That team name is invalid");
   const catalog = await fetchTeamCatalog(fetcher);
   const entry = catalog.teams.find((team) => team.slug === slug);
   if (!entry) throw Object.assign(new Error("That library team was not found"), { status: 404 });
-  const value = await fetchJson(`${TEAM_LIBRARY_RAW_ROOT}/${entry.manifest}`, MAX_MANIFEST_BYTES, fetcher);
-  return parseTeamManifest(value);
+  const value = await fetchJson(`${TEAM_LIBRARY_RAW_ROOT}/${entry.package ?? entry.manifest}`, MAX_MANIFEST_BYTES, fetcher);
+  return parseShareable(value);
 }
 
 function safeSegment(value: string): boolean {
@@ -160,7 +179,9 @@ export function githubManifestUrls(input: string): string[] {
     if (parts.length === 2) {
       const [owner, repo] = parts;
       return [
+        `https://raw.githubusercontent.com/${owner}/${repo}/main/package.mauspack.json`,
         `https://raw.githubusercontent.com/${owner}/${repo}/main/team.mausteam.json`,
+        `https://raw.githubusercontent.com/${owner}/${repo}/master/package.mauspack.json`,
         `https://raw.githubusercontent.com/${owner}/${repo}/master/team.mausteam.json`,
       ];
     }
@@ -179,16 +200,16 @@ export function githubManifestUrls(input: string): string[] {
   throw new Error("Paste a GitHub repository or JSON file link");
 }
 
-export async function fetchGithubTeam(input: string, fetcher: Fetcher = fetch): Promise<ParsedTeamManifest> {
+export async function fetchGithubTeam(input: string, fetcher: Fetcher = fetch): Promise<ParsedShareableTeam> {
   const urls = githubManifestUrls(input);
   let lastError: unknown;
   for (const url of urls) {
     try {
-      return parseTeamManifest(await fetchJson(url, MAX_MANIFEST_BYTES, fetcher));
+      return parseShareable(await fetchJson(url, MAX_MANIFEST_BYTES, fetcher));
     } catch (error) {
       lastError = error;
       if ((error as { status?: number }).status !== 404) throw error;
     }
   }
-  throw lastError ?? new Error("No team.mausteam.json file was found in that repository");
+  throw lastError ?? new Error("No package.mauspack.json or team.mausteam.json file was found in that repository");
 }

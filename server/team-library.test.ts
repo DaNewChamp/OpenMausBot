@@ -71,13 +71,16 @@ describe("team library", () => {
     }) as unknown as typeof fetch;
 
     const loaded = await fetchLibraryTeam("engineering", fetcher);
+    if (loaded.format !== "openmaus.team") throw new Error("expected a legacy team");
     expect(loaded.team.name).toBe("Engineering");
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("normalizes public GitHub repository, blob, and raw links", () => {
     expect(githubManifestUrls("https://github.com/acme/team")).toEqual([
+      "https://raw.githubusercontent.com/acme/team/main/package.mauspack.json",
       "https://raw.githubusercontent.com/acme/team/main/team.mausteam.json",
+      "https://raw.githubusercontent.com/acme/team/master/package.mauspack.json",
       "https://raw.githubusercontent.com/acme/team/master/team.mausteam.json",
     ]);
     expect(githubManifestUrls("https://github.com/acme/team/blob/main/presets/seo.mausteam.json")).toEqual([
@@ -92,11 +95,14 @@ describe("team library", () => {
 
   it("falls back from main to master for a repository link", async () => {
     const fetcher = vi.fn(async (url: string | URL | Request) =>
-      String(url).includes("/main/") ? response({}, 404) : response(manifest),
+      String(url).endsWith("team.mausteam.json") && String(url).includes("/master/")
+        ? response(manifest)
+        : response({}, 404),
     ) as unknown as typeof fetch;
 
     const loaded = await fetchGithubTeam("https://github.com/acme/team", fetcher);
+    if (loaded.format !== "openmaus.team") throw new Error("expected a legacy team");
     expect(loaded.team.members[0]?.name).toBe("Ada");
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(4);
   });
 });
