@@ -114,6 +114,8 @@ contextBridge.exposeInMainWorld("ogb", {
     if (pendingPackageInstallUrl) cb(pendingPackageInstallUrl);
     return () => packageInstallListeners.delete(cb);
   },
+  /** Mirrors durable unread state into the native Dock/taskbar badge. */
+  setUnreadCount: (count) => ipcRenderer.send("desktop:unread-count", count),
   /** Live VNC/noVNC in a sandboxed window owned by the app window. */
   desktopViewer: {
     open: (url, title, contextId) => ipcRenderer.invoke("desktop-viewer:open", url, title, contextId),
