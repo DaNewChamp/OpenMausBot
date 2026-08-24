@@ -18,6 +18,7 @@ import {
   type CredentialTargetId,
 } from "../shared/credential-request.ts";
 
+import { actionFromEvent, appendAction, readActions } from "./action-audit.ts";
 import { approvalKey, autoVerdict } from "./auto-approve.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
@@ -795,6 +796,14 @@ bus.subscribe((event: RuntimeEvent) => {
     const message = store.appendMessage(event.threadId, group && m.role === "bot" ? { ...m, from: speaker } : m);
     return message;
   };
+
+  // The per-bot activity ledger. In a group the actor is the speaking
+  // member, not the room — a room does not run tools.
+  const actorId = bot?.id ?? speaker?.botId;
+  if (actorId) {
+    const action = actionFromEvent(event, actorId);
+    if (action) appendAction(DATA_DIR, action);
+  }
 
   switch (event.type) {
     case "session.started":
@@ -3950,6 +3959,13 @@ const server = createServer(async (req, res) => {
       const visible = wireBot(bot);
       broadcast({ kind: "bot", bot: visible });
       return json(res, 200, { bot: visible });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/audit$/);
+    if (m && method === "GET") {
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const limit = pageSize(url.searchParams.get("limit"));
+      if (limit === null) return json(res, 400, { error: "limit must be a non-negative integer" });
+      return json(res, 200, { actions: readActions(DATA_DIR, m[1], limit ?? DEFAULT_PAGE) });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/always-allow$/);
     if (m && method === "POST") {
