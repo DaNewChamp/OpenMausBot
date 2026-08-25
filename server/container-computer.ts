@@ -1133,12 +1133,16 @@ export function setupCommands(
 export function computerProxyEnv(
   computer: { boxId?: string; token?: string; botId?: string; control?: { url: string; token: string } },
 ): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     OGB_BOX_ID: computer.boxId ?? "",
     OGB_BOX_TOKEN: computer.token ?? "",
-    ...(computer.botId ? { OMB_BOT_ID: computer.botId } : {}),
-    ...(computer.control
-      ? { OMB_CONTROL_URL: computer.control.url, OMB_CONTROL_TOKEN: computer.control.token }
-      : {}),
   };
+  // Only for spilling oversized tool output into this bot's workspace; an
+  // older harness omits it and the proxy truncates instead of saving.
+  if (computer.botId) env.OMB_BOT_ID = computer.botId;
+  if (computer.control) {
+    env.OMB_CONTROL_URL = computer.control.url;
+    env.OMB_CONTROL_TOKEN = computer.control.token;
+  }
+  return env;
 }

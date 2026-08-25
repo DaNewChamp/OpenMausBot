@@ -211,17 +211,18 @@ async function waitForNavigation(
 // and the person should not get a buzz for every retry against one wall.
 const blockHelpGate = createBlockHelpGate();
 
-/** Tell the agent to stop, and ask the person for their hands through the
- * channel that already exists for exactly this — request_help surfaces the
- * plea in the computer panel and buzzes a takeover notification. */
-function reportBlocked(id: unknown, hit: BlockHit): void {
+/** What to tell the agent, and — at most once per host per window — a plea
+ * for the person's hands through the channel that already exists for exactly
+ * this: request_help surfaces it in the computer panel and buzzes a takeover
+ * notification. */
+function blockedNoteAskingForHelp(hit: BlockHit): string {
   const note = blockedToolNote(hit);
   if (blockHelpGate.shouldAsk(hit.host)) {
     // fire and forget: a control channel that is down must not turn a
     // recognised block into a failed tool call
     void control.requestHelp(note).catch(() => null);
   }
-  return text(id, note, true);
+  return note;
 }
 
 /** The first target that is a challenge page we are confident about.
@@ -930,7 +931,7 @@ async function call(id: unknown, name: string, args: any) {
       if (!Array.isArray(snapshot.elements) || typeof snapshot.url !== "string") throw new Error("invalid snapshot");
       semanticBrowserUrl = snapshot.url;
       const snapshotBlock = classifyBlockPage({ url: snapshot.url, title: snapshot.title });
-      if (snapshotBlock?.confidence === "high") return reportBlocked(id, snapshotBlock);
+      if (snapshotBlock?.confidence === "high") return text(id, blockedNoteAskingForHelp(snapshotBlock), true);
       semanticBrowserRefs = new Set(snapshot.elements.map((element) => element.ref));
       observations.noteStructuredObservation();
       const publicUrl = safeBrowserUrl(snapshot.url) ?? "URL unavailable";
@@ -965,7 +966,7 @@ async function call(id: unknown, name: string, args: any) {
     }
     const result = await waitForNavigation(url);
     const blocked = blockedTarget(result.targets);
-    if (blocked) return reportBlocked(id, blocked);
+    if (blocked) return text(id, blockedNoteAskingForHelp(blocked), true);
     return text(
       id,
       result.ok
@@ -1064,7 +1065,7 @@ async function call(id: unknown, name: string, args: any) {
     // a challenge page is not the destination, however the navigation
     // "verified" — say so instead of handing back a screenshot of a wall
     const blocked = blockedTarget(verification.targets);
-    if (blocked) return reportBlocked(id, blocked);
+    if (blocked) return text(id, blockedNoteAskingForHelp(blocked), true);
     const current = verification.targets.map((target) => target.url).join(", ") || "unavailable";
     const note = verification.ok
       ? `opened and navigation verified: ${publicUrl}`
