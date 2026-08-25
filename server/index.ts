@@ -4303,6 +4303,20 @@ const server = createServer(async (req, res) => {
           error: "Auto mode on this computer requires confirming the warning first (acknowledgeLocalAuto)",
         });
       }
+      // Same discipline as autoApprove: these decide what happens without a
+      // person, so they are validated rather than copied through.
+      if (body.autoReview !== undefined) {
+        if (body.autoReview !== "off" && body.autoReview !== "shadow" && body.autoReview !== "enforce") {
+          return json(res, 400, { error: "autoReview must be off, shadow, or enforce" });
+        }
+        patch.autoReview = body.autoReview;
+      }
+      if (body.memorySynthesis !== undefined) {
+        if (body.memorySynthesis !== true && body.memorySynthesis !== false) {
+          return json(res, 400, { error: "memorySynthesis must be true or false" });
+        }
+        patch.memorySynthesis = body.memorySynthesis;
+      }
       if (body.approvePeerComms !== undefined) {
         if (typeof body.approvePeerComms !== "boolean") {
           return json(res, 400, { error: "approvePeerComms must be true or false" });

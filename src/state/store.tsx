@@ -197,6 +197,9 @@ export interface Bot {
   cwd?: string;
   /** auto mode: the bot approves its own tool permissions */
   autoApprove?: boolean;
+  /** "off" | "shadow" | "enforce"; anything else reads as off. */
+  autoReview?: string;
+  memorySynthesis?: boolean;
   /** tools this bot may always use without asking */
   alwaysAllow?: string[];
   /** speak this bot's replies aloud as they settle */

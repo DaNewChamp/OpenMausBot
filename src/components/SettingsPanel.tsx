@@ -337,6 +337,8 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
         | "avatarUrl"
         | "avatarCrop"
         | "autoApprove"
+        | "autoReview"
+        | "memorySynthesis"
         | "speakReplies"
         | "voice"
         | "chiefOfStaff"
@@ -699,6 +701,69 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                 className={cn(
                   "absolute top-[3px] size-5 rounded-full bg-white transition-all",
                   bot.autoApprove ? "left-[21px]" : "left-[3px]",
+                )}
+              />
+            </button>
+          </div>
+
+          {/* Auto-review sits under Auto mode on purpose: it is the same
+              question — how much does this bot decide without you — one step
+              further along. Shadow exists so the answer can be measured
+              before it is trusted. */}
+          <div className="rounded-xl bg-card p-4">
+            <div className="text-[15px] font-medium text-ink">Auto-review approvals</div>
+            <div className="mt-0.5 text-[13px] text-ink-secondary">
+              Let a model answer the approval cards you would obviously have allowed. It never touches anything
+              destructive, anything involving credentials, or a question this bot asks you — those still stop for you.
+            </div>
+            <div className="mt-3 flex gap-1 rounded-lg bg-inset p-0.5">
+              {(
+                [
+                  ["off", "Off", "Every approval comes to you."],
+                  ["shadow", "Watch", "Cards still come to you. Its verdicts are only recorded, so you can compare."],
+                  ["enforce", "On", "It answers the obvious ones. The rest still come to you."],
+                ] as const
+              ).map(([value, label, hint]) => {
+                const current = bot.autoReview === "shadow" || bot.autoReview === "enforce" ? bot.autoReview : "off";
+                return (
+                  <button
+                    key={value}
+                    title={hint}
+                    onClick={() => patch({ autoReview: value })}
+                    className={cn(
+                      "flex-1 rounded-md px-2.5 py-1.5 text-[13px] font-medium",
+                      current === value ? "bg-raised text-ink" : "text-ink-secondary hover:text-ink",
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
+            <div>
+              <div className="text-[15px] font-medium text-ink">Remember on its own</div>
+              <div className="mt-0.5 text-[13px] text-ink-secondary">
+                After you talk, this bot writes durable facts into its memory without being asked. It only ever edits
+                its own section of MEMORY.md — anything you wrote there by hand is left alone.
+              </div>
+            </div>
+            <button
+              role="switch"
+              aria-checked={Boolean(bot.memorySynthesis)}
+              aria-label="Remember on its own"
+              onClick={() => patch({ memorySynthesis: !bot.memorySynthesis })}
+              className={cn(
+                "relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors",
+                bot.memorySynthesis ? "bg-accent" : "bg-control",
+              )}
+            >
+              <span
+                className={cn(
+                  "absolute top-[3px] size-5 rounded-full bg-white transition-all",
+                  bot.memorySynthesis ? "left-[21px]" : "left-[3px]",
                 )}
               />
             </button>
