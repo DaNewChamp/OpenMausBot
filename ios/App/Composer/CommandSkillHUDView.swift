@@ -26,6 +26,7 @@ public struct CommandSkillHUDView: View {
     public let onSelectCommand: (CommandSkillItem) -> Void
     
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.conversationTypography) private var typography
     
     public static let defaultCommands: [CommandSkillItem] = [
         CommandSkillItem(
@@ -143,10 +144,10 @@ public struct CommandSkillHUDView: View {
         HStack {
             HStack(spacing: 5) {
                 Image(systemName: "command")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(typography.codeLabel.weight(.bold))
                     .foregroundColor(accentColor)
                 Text("SLASH COMMANDS")
-                    .font(.system(size: 9.5, weight: .heavy, design: .monospaced))
+                    .font(typography.codeLabel.weight(.heavy))
                     .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
             }
             
@@ -175,27 +176,29 @@ private struct CommandCardView: View {
     let cmd: CommandSkillItem
     let isDark: Bool
     let action: () -> Void
+    @Environment(\.conversationTypography) private var typography
     
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
                     Image(systemName: cmd.iconName)
-                        .font(.system(size: 11, weight: .bold))
+                        .font(typography.codeLabel.weight(.bold))
                         .foregroundColor(cmd.brandColor)
                     Text(cmd.title)
-                        .font(.system(size: 11.5, weight: .bold))
+                        .font(typography.compact.weight(.bold))
                         .foregroundColor(isDark ? .white : Color(hex: "#0F172A"))
                 }
                 
                 Text(cmd.description)
-                    .font(.system(size: 9.5))
+                    .font(typography.compact)
                     .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
             }
             .padding(8)
-            .frame(width: 145, height: 60, alignment: .topLeading)
+            .frame(minHeight: 60, alignment: .topLeading)
+            .frame(width: 145, alignment: .topLeading)
             .background(isDark ? Color.white.opacity(0.06) : Color.black.opacity(0.04))
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(

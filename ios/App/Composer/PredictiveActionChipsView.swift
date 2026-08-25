@@ -19,6 +19,7 @@ public struct PredictiveActionChipsView: View {
     public let onSelectChip: (ActionChipItem) -> Void
     
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.conversationTypography) private var typography
     
     public static let defaultChips: [ActionChipItem] = [
         ActionChipItem(title: "Show diff", icon: "arrow.triangle.pull", prompt: "Show latest git diff"),
@@ -49,11 +50,11 @@ public struct PredictiveActionChipsView: View {
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: chip.icon)
-                                .font(.system(size: 10, weight: .bold))
+                                .font(typography.codeLabel.weight(.bold))
                                 .foregroundColor(accentColor)
                             
                             Text(chip.title)
-                                .font(.caption2.weight(.semibold))
+                                .font(typography.compact.weight(.semibold))
                                 .foregroundColor(isDark ? Color(hex: "#E2E8F0") : Color(hex: "#334155"))
                         }
                         .padding(.horizontal, 9)

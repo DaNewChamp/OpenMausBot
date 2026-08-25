@@ -23,6 +23,7 @@ struct ChatView: View {
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("conversationTextSize") private var conversationTextSize = ConversationTextSize.standard.rawValue
     @State private var draft = ""
@@ -242,7 +243,10 @@ struct ChatView: View {
             InteractivePopGestureEnabler()
                 .frame(width: 0, height: 0)
         }
-        .conversationTypography(ConversationTypography(size: selectedConversationTextSize))
+        .conversationTypography(ConversationTypography(
+            size: selectedConversationTextSize,
+            dynamicTypeSize: dynamicTypeSize
+        ))
         .navigationDestination(isPresented: $showingComputer) {
             if case let .bot(bot) = current { ComputerView(bot: bot) }
         }
@@ -313,7 +317,7 @@ struct ChatView: View {
     }
 
     private var chatTypography: ConversationTypography {
-        ConversationTypography(size: selectedConversationTextSize)
+        ConversationTypography(size: selectedConversationTextSize, dynamicTypeSize: dynamicTypeSize)
     }
 
     // MARK: - Header
