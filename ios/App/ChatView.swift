@@ -4,6 +4,8 @@
 // option cards, screenshots. This renders those and nothing else; it does
 // not re-derive anything from provider events, because the server already
 // did that and having two folds is how two clients start disagreeing.
+// Consecutive tool chips are grouped only for layout: one disclosure, every
+// message id still a scroll target so search lands on the same chip.
 import SwiftUI
 import CompanionCore
 // Unconditional, because the uses below are: `Color(uiColor:)` and
@@ -37,6 +39,11 @@ struct ChatView: View {
     @State private var islandExpanded = false
     @State private var islandVisible = false
     @State private var facePhase: CGFloat = 0
+    /// Manual disclosure state, keyed by the run's first message id. Failures
+    /// open on their own; a tap here is what keeps a success open or a
+    /// failure shut after later chips land on the same run.
+    @State private var openedToolRuns: Set<String> = []
+    @State private var closedToolRuns: Set<String> = []
 
     /// The live bubble's scroll target. A constant because there is at most
     /// one per chat and it has no message id to borrow.
@@ -107,25 +114,55 @@ struct ChatView: View {
                             .padding(.vertical, 8)
                         }
 
-                        ForEach(Array(transcript.enumerated()), id: \.element.id) { index, message in
+                        ForEach(transcriptRows(in: transcript)) { row in
                             VStack(alignment: .leading, spacing: 6) {
                                 // a gap in time is worth marking; a timestamp
                                 // on every message is just noise
-                                if startsANewStretch(at: index, in: transcript) {
-                                    Text(RelativeStamp.separator(message.date))
+                                if startsANewStretch(at: row.startIndex, in: transcript) {
+                                    Text(RelativeStamp.separator(row.firstMessage.date))
                                         .font(.system(size: 12, weight: .medium))
                                         .foregroundStyle(Color.secondary.opacity(0.7))
                                         .frame(maxWidth: .infinity)
                                         .padding(.top, 10)
                                         .padding(.bottom, 4)
                                 }
-                                MessageRow(
-                                    chat: current,
-                                    message: message,
-                                    endsRun: endsRun(at: index, in: transcript)
-                                )
+                                switch row.segment {
+                                case .message(let message):
+                                    MessageRow(
+                                        chat: current,
+                                        message: message,
+                                        endsRun: endsRun(at: row.startIndex, in: transcript)
+                                    )
+                                case .toolRun(let run):
+                                    ToolRunDisclosure(
+                                        run: run,
+                                        isExpanded: ToolRunGrouping.isExpanded(
+                                            run,
+                                            opened: openedToolRuns,
+                                            closed: closedToolRuns
+                                        ),
+                                        onToggle: { toggleToolRun(run) }
+                                    )
+                                }
                             }
-                            .id(message.id)
+                            .id(row.id)
+                            .overlay(alignment: .top) {
+                                // Extra ids for chips absorbed into the run.
+                                // The first id is the row itself, so search
+                                // to any step still lands on this disclosure.
+                                if case .toolRun(let run) = row.segment {
+                                    VStack(spacing: 0) {
+                                        ForEach(Array(run.messageIds.dropFirst()), id: \.self) { id in
+                                            Color.clear
+                                                .frame(height: 1)
+                                                .id(id)
+                                        }
+                                    }
+                                    .frame(maxHeight: 1, alignment: .top)
+                                    .accessibilityHidden(true)
+                                    .allowsHitTesting(false)
+                                }
+                            }
                         }
 
                         // The reply as it is typed. It sits after the last
@@ -524,6 +561,33 @@ struct ChatView: View {
         return out
     }
 
+    private func transcriptRows(in messages: [Message]) -> [ChatTranscriptRow] {
+        var startIndex = 0
+        return ToolRunGrouping.segments(in: messages).map { segment in
+            let row = ChatTranscriptRow(segment: segment, startIndex: startIndex)
+            startIndex += row.messageCount
+            return row
+        }
+    }
+
+    private func toggleToolRun(_ run: ToolRun) {
+        Haptics.selection()
+        withAnimation(.easeInOut(duration: 0.22)) {
+            let expanded = ToolRunGrouping.isExpanded(
+                run,
+                opened: openedToolRuns,
+                closed: closedToolRuns
+            )
+            if expanded {
+                openedToolRuns.remove(run.id)
+                closedToolRuns.insert(run.id)
+            } else {
+                closedToolRuns.remove(run.id)
+                openedToolRuns.insert(run.id)
+            }
+        }
+    }
+
     /// True when this message opens a fresh stretch of conversation — the
     /// first one, or one that follows a gap of half an hour or more.
     private func startsANewStretch(at index: Int, in messages: [Message]) -> Bool {
@@ -827,6 +891,24 @@ struct MessageRow: View {
     }
 }
 
+private struct ChatTranscriptRow: Identifiable {
+    let segment: TranscriptSegment
+    let startIndex: Int
+
+    var id: String { segment.id }
+
+    var messageCount: Int { segment.messageIds.count }
+
+    var firstMessage: Message {
+        switch segment {
+        case .message(let message):
+            return message
+        case .toolRun(let run):
+            return run.messages[0]
+        }
+    }
+}
+
 private struct ShareFile: Identifiable {
     let url: URL
     var id: String { url.path }
@@ -973,8 +1055,159 @@ struct TextBubble: View {
     }
 }
 
-/// A tool the bot ran. Deliberately quiet — these are the bulk of a busy
-/// transcript and they are context, not content.
+/// Neighbouring tool chips as one disclosure. Collapsed successes are a
+/// quiet "Worked · N steps"; a single success is just its spoken label;
+/// live work is one updating row; failures start open. Raw names sit one
+/// tap deeper and are selectable.
+private struct ToolRunDisclosure: View {
+    let run: ToolRun
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    @State private var revealedRawNames: Set<String> = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button(action: onToggle) {
+                HStack(spacing: 8) {
+                    headerStatus
+                    Text(run.headerTitle)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.secondary.opacity(0.65))
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(run.headerTitle)
+            .accessibilityHint(isExpanded ? "Hides the tool steps" : "Shows the tool steps")
+
+            if isExpanded {
+                expandedBody
+                    .padding(.leading, 22)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.leading, 2)
+        .padding(.vertical, 1)
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var headerStatus: some View {
+        if !run.isSettled {
+            ProgressView()
+                .controlSize(.mini)
+                .frame(width: 12, height: 12)
+        } else if run.hasFailure {
+            Image(systemName: "xmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Color.red)
+                .frame(width: 12, height: 12)
+        } else {
+            Image(systemName: "checkmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Color.secondary)
+                .frame(width: 12, height: 12)
+        }
+    }
+
+    @ViewBuilder
+    private var expandedBody: some View {
+        if run.messages.count == 1, let tool = run.messages.first?.tool {
+            // One chip: the header already said the friendly label, so
+            // expanding is the raw name and nothing else.
+            rawName(tool.name)
+        } else {
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(run.messages, id: \.id) { message in
+                    if let tool = message.tool {
+                        stepRow(message: message, tool: tool)
+                    }
+                }
+            }
+        }
+    }
+
+    private func stepRow(message: Message, tool: ToolActivity) -> some View {
+        let revealed = revealedRawNames.contains(message.id)
+        return VStack(alignment: .leading, spacing: 2) {
+            Button {
+                Haptics.selection()
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    if revealed {
+                        revealedRawNames.remove(message.id)
+                    } else {
+                        revealedRawNames.insert(message.id)
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    stepStatus(tool)
+                    Text(ToolRunGrouping.displayLabel(for: tool))
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.primary.opacity(0.85))
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Color.secondary.opacity(0.55))
+                        .rotationEffect(.degrees(revealed ? 90 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(ToolRunGrouping.displayLabel(for: tool))
+            .accessibilityHint(revealed ? "Hides the raw tool name" : "Shows the raw tool name")
+
+            if revealed {
+                rawName(tool.name)
+                    .padding(.leading, 20)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func stepStatus(_ tool: ToolActivity) -> some View {
+        if tool.ok == nil {
+            ProgressView()
+                .controlSize(.mini)
+                .frame(width: 12, height: 12)
+        } else if tool.ok == false {
+            Image(systemName: "xmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Color.red)
+                .frame(width: 12, height: 12)
+        } else {
+            Image(systemName: "checkmark")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.secondary)
+                .frame(width: 12, height: 12)
+        }
+    }
+
+    private func rawName(_ name: String) -> some View {
+        Text(name)
+            .font(.system(size: 12, design: .monospaced))
+            .foregroundStyle(Color.secondary)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Raw tool name")
+            .accessibilityValue(name)
+    }
+}
+
+/// A leftover activity the grouping did not absorb — usually a bot-to-bot
+/// comm chip. Deliberately quiet; these are context, not content.
 struct ActivityChip: View {
     let tool: ToolActivity?
 

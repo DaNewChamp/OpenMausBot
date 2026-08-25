@@ -710,6 +710,16 @@ public struct CompanionClient: Sendable {
         ).bot
     }
 
+    /// Paired-safe model switch. The harness validates instance and model
+    /// against the currently advertised catalog; this client never sends
+    /// effort or execution-policy fields.
+    public func updateModel(botId: String, patch: BotModelPatch) async throws -> Bot {
+        try await send(
+            try makeRequest("PATCH", "/api/bots/\(botId)/model", encodedBody: patch),
+            as: BotResponse.self
+        ).bot
+    }
+
     public func uploadAvatar(data: Data, mime: String) async throws -> String {
         let allowed = ["image/png", "image/jpeg", "image/gif", "image/webp"]
         guard allowed.contains(mime), data.count <= 10 * 1_024 * 1_024 else {

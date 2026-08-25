@@ -269,6 +269,11 @@ describe("the sidecar in front of an unmodified harness", () => {
     const botId = body.bots[0].id;
     expect((await device("PATCH", `/api/bots/${botId}`, { body: { autoApprove: true } })).status).toBe(404);
     expect((await device("PATCH", `/api/groups/not-a-room`, { body: { unread: false } })).status).toBe(404);
+    const modelSwitch = await device("PATCH", `/api/bots/${botId}/model`, {
+      body: { instanceId: "ghost", model: "ghost-1" },
+    });
+    expect(modelSwitch.status, "paired model switch was blocked by the sidecar").not.toBe(403);
+    expect(modelSwitch.status, "paired model switch never reached the harness").not.toBe(404);
   });
 
   it("lets a device answer an approval, and manage its own chats", async () => {

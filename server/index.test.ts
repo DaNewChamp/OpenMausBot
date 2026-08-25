@@ -928,6 +928,127 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("switches a bot's model only against currently advertised catalogs", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const instances = (await api("GET", "/api/instances")).body.instances;
+    const claude = instances.find((instance: { instanceId: string }) => instance.instanceId === "claude");
+    expect(claude?.models?.options?.length).toBeGreaterThan(0);
+    const next = claude.models.options.find((option: { id: string }) => option.id !== bot.modelSelection.model)
+      ?? claude.models.options[0];
+
+    expect((await api("PATCH", `/api/bots/${bot.id}/model`, {
+      instanceId: claude.instanceId,
+      model: next.id,
+      autoApprove: true,
+    })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}/model`, {
+      modelSelection: { instanceId: claude.instanceId, model: next.id },
+    })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}/model`, {
+      instanceId: "not-advertised",
+      model: next.id,
+    })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}/model`, {
+      instanceId: "claude",
+      model: "totally-made-up-model",
+    })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}/model`, {
+      instanceId: "ghost",
+      model: "ghost-1",
+    })).status).toBe(400);
+    expect((await api("PATCH", "/api/bots/does-not-exist/model", {
+      instanceId: "claude",
+      model: next.id,
+    })).status).toBe(404);
+
+    const switched = await api("PATCH", `/api/bots/${bot.id}/model`, {
+      instanceId: claude.instanceId,
+      model: next.id,
+    });
+    expect(switched.status).toBe(200);
+    expect(switched.body.bot.modelSelection).toMatchObject({
+      instanceId: claude.instanceId,
+      model: next.id,
+    });
+    await api("DELETE", `/api/bots/${bot.id}`);
+  });
+
+  it("preserves effort on a paired model switch only when the target still offers it", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const instances = (await api("GET", "/api/instances")).body.instances;
+    const claude = instances.find((instance: { instanceId: string }) => instance.instanceId === "claude");
+    const next = claude.models.options.find((option: { id: string }) => option.id !== bot.modelSelection.model)
+      ?? claude.models.options[0];
+
+    await api("PATCH", `/api/bots/${bot.id}`, {
+      modelSelection: { instanceId: "ghost", model: "ghost-1", effort: "high" },
+    });
+    const preserved = await api("PATCH", `/api/bots/${bot.id}/model`, {
+      instanceId: "claude",
+      model: next.id,
+    });
+    expect(preserved.status).toBe(200);
+    expect(preserved.body.bot.modelSelection).toEqual({
+      instanceId: "claude",
+      model: next.id,
+      effort: "high",
+    });
+
+    await api("PATCH", `/api/bots/${bot.id}`, {
+      modelSelection: { instanceId: "ghost", model: "ghost-1", effort: "none" },
+    });
+    const cleared = await api("PATCH", `/api/bots/${bot.id}/model`, {
+      instanceId: "claude",
+      model: claude.models.default,
+    });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.bot.modelSelection).toEqual({
+      instanceId: "claude",
+      model: claude.models.default,
+    });
+    expect(cleared.body.bot.modelSelection.effort).toBeUndefined();
+    await api("DELETE", `/api/bots/${bot.id}`);
+  });
+
+  it("refuses a paired model switch while the bot is working, except a no-op reselect", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const instances = (await api("GET", "/api/instances")).body.instances;
+    const claude = instances.find((instance: { instanceId: string }) => instance.instanceId === "claude");
+    const currentModel = claude.models.default;
+    const next = claude.models.options.find((option: { id: string }) => option.id !== currentModel)
+      ?? claude.models.options[0];
+    await api("PATCH", `/api/bots/${bot.id}/model`, {
+      instanceId: "claude",
+      model: currentModel,
+    });
+    rmSync(fakeClaudeDump, { force: true });
+    try {
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "stay busy" })).status).toBe(202);
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
+      expect((await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id).busy).toBe(true);
+
+      const busySwitch = await api("PATCH", `/api/bots/${bot.id}/model`, {
+        instanceId: "claude",
+        model: next.id,
+      });
+      expect(busySwitch.status).toBe(409);
+      expect(busySwitch.body.error).toContain("already working");
+
+      const same = await api("PATCH", `/api/bots/${bot.id}/model`, {
+        instanceId: "claude",
+        model: currentModel,
+      });
+      expect(same.status).toBe(200);
+      expect(same.body.bot.modelSelection.model).toBe(currentModel);
+    } finally {
+      await api("POST", `/api/bots/${bot.id}/interrupt`);
+      await expect.poll(async () => {
+        return (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id)?.busy;
+      }, { timeout: 5_000 }).toBeFalsy();
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
   it("exports every visible bot and imports the team without creating a room", async () => {
     const first = (await api("POST", "/api/bots")).body.bot;
     const second = (await api("POST", "/api/bots")).body.bot;

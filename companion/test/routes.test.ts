@@ -50,6 +50,7 @@ describe("what the app may do", () => {
     ["PATCH", "/api/bots/bot_123/tasks/th_1"],
     ["DELETE", "/api/bots/bot_123/tasks/th_1"],
     ["PATCH", "/api/bots/bot_123/profile"],
+    ["PATCH", "/api/bots/bot_123/model"],
     ["POST", "/api/bots/bot_123/avatar/generate"],
     ["POST", "/api/bots/bot_123/computer/join"],
     ["POST", "/api/groups/room-1/messages"],
@@ -149,6 +150,9 @@ describe("what it may not", () => {
     expect(allowed("POST", "/api/threads/th_1/messages")).toBe(false);
     expect(allowed("GET", "/api/groups/room-1")).toBe(false);
     expect(allowed("PATCH", "/api/bots/bot_123")).toBe(false);
+    expect(allowed("PATCH", "/api/bots/bot_123/model")).toBe(true);
+    expect(allowed("PUT", "/api/bots/bot_123/model")).toBe(false);
+    expect(allowed("PATCH", "/api/bots/bot_123/model/extra")).toBe(false);
     expect(allowed("PATCH", "/api/bots/bot_123/profile/execution-policy")).toBe(false);
     expect(allowed("PUT", "/api/config")).toBe(false);
     expect(allowed("GET", "/api/attachments/../config.json")).toBe(false);

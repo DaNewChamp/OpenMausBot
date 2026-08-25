@@ -446,6 +446,37 @@ public struct Instance: Codable, Hashable, Identifiable, Sendable {
     public var models: ModelCatalog
 
     public var id: String { instanceId }
+
+    /// What the profile picker shows for this advertised engine.
+    public var pickerTitle: String {
+        let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? driverKind : name
+    }
+
+    public func modelLabel(for modelId: String) -> String {
+        models.options.first(where: { $0.id == modelId })?.label ?? modelId
+    }
+}
+
+/// Helpers over `GET /api/instances` so the profile picker only offers
+/// currently advertised catalogs, matching the paired-safe model route.
+public enum AdvertisedModelCatalog {
+    public static func selectableInstances(from instances: [Instance]) -> [Instance] {
+        instances.filter { !$0.models.options.isEmpty }
+    }
+
+    public static func instance(id: String, in instances: [Instance]) -> Instance? {
+        instances.first { $0.instanceId == id }
+    }
+
+    public static func alignedModel(instanceId: String, currentModel: String, in instances: [Instance]) -> String {
+        guard let instance = instance(id: instanceId, in: instances) else { return currentModel }
+        if instance.models.options.contains(where: { $0.id == currentModel }) { return currentModel }
+        if instance.models.options.contains(where: { $0.id == instance.models.default }) {
+            return instance.models.default
+        }
+        return instance.models.options.first?.id ?? currentModel
+    }
 }
 
 public struct InstanceList: Codable, Sendable {
@@ -490,6 +521,16 @@ public struct ConfigStatus: Codable, Sendable {
 }
 
 // MARK: - Agent profiles, voices, routines, and notifications
+
+public struct BotModelPatch: Encodable, Sendable {
+    public var instanceId: String
+    public var model: String
+
+    public init(instanceId: String, model: String) {
+        self.instanceId = instanceId
+        self.model = model
+    }
+}
 
 public struct BotProfilePatch: Encodable, Sendable {
     /// `nil` means "leave the field alone". Profile actions deliberately send

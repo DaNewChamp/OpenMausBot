@@ -756,10 +756,38 @@ final class Session: ObservableObject {
 
     // MARK: - Agent profile
 
+    enum ModelCatalogLoadResult: Sendable {
+        case loaded([Instance])
+        case failed(String)
+        case cancelled
+    }
+
     func updateProfile(_ patch: BotProfilePatch, for bot: Bot) async -> Bot? {
         guard let client else { return nil }
         do {
             let updated = try await client.updateProfile(botId: bot.id, patch: patch)
+            guard !Task.isCancelled else { return nil }
+            state.apply(.bot(updated))
+            return updated
+        } catch {
+            if !Task.isCancelled { actionError = error.localizedDescription }
+            return nil
+        }
+    }
+
+    func loadInstances() async -> ModelCatalogLoadResult {
+        guard let client else { return .failed("This computer is offline.") }
+        do {
+            return .loaded(try await client.instances())
+        } catch {
+            return Task.isCancelled ? .cancelled : .failed(error.localizedDescription)
+        }
+    }
+
+    func updateModel(_ patch: BotModelPatch, for bot: Bot) async -> Bot? {
+        guard let client else { return nil }
+        do {
+            let updated = try await client.updateModel(botId: bot.id, patch: patch)
             guard !Task.isCancelled else { return nil }
             state.apply(.bot(updated))
             return updated

@@ -28,6 +28,7 @@ import {
   generateAvatarImage,
   snapshotAvatarGenerationState,
 } from "./avatar-image.ts";
+import { guardedBotModelSwitch, parseBotModelPatch } from "./bot-model.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
@@ -3939,6 +3940,38 @@ const server = createServer(async (req, res) => {
       const bot = store.patchBot(m[1], parsed.patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const visible = wireBot(bot);
+      broadcast({ kind: "bot", bot: visible });
+      return json(res, 200, { bot: visible });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/model$/);
+    if (m && method === "PATCH") {
+      // Paired-safe model switch. The general bot PATCH can change execution
+      // policy; this route accepts only an advertised instance+model pair.
+      const parsed = parseBotModelPatch(await readBody(req));
+      if (!parsed.ok) return json(res, 400, { error: parsed.error });
+      const existing = store.bot(m[1]);
+      if (!existing) return json(res, 404, { error: "no such bot" });
+      const current = existing.modelSelection;
+      if (current.instanceId === parsed.patch.instanceId && current.model === parsed.patch.model) {
+        const visible = wireBot(existing);
+        return json(res, 200, { bot: visible });
+      }
+      if (existing.busy) {
+        return json(res, 409, { error: "the bot is already working — interrupt it first" });
+      }
+      resetPathCache();
+      const switched = await guardedBotModelSwitch({
+        requested: parsed.patch,
+        describe: () => registry.describe(),
+        current: () => store.bot(existing.id) ?? null,
+        patch: (id, selection) => store.patchBot(id, { modelSelection: selection }),
+      });
+      if (switched.kind === "missing") return json(res, 404, { error: "no such bot" });
+      if (switched.kind === "busy") {
+        return json(res, 409, { error: "the bot is already working — interrupt it first" });
+      }
+      if (switched.kind === "invalid") return json(res, 400, { error: switched.error });
+      const visible = wireBot(switched.bot);
       broadcast({ kind: "bot", bot: visible });
       return json(res, 200, { bot: visible });
     }

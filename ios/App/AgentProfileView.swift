@@ -22,7 +22,15 @@ struct AgentProfileView: View {
     @State private var prompt = ""
     @State private var voices: [Voice] = []
     @State private var config: ConfigStatus?
+    @State private var instances: [Instance] = []
+    @State private var instancesLoading = true
+    @State private var instancesError: String?
+    @State private var pickedInstanceId: String
+    @State private var pickedModel: String
     @State private var busy = false
+    @State private var savingModel = false
+    @State private var modelSaveTask: Task<Void, Never>?
+    @State private var modelSaveRevision = 0
     @State private var player: AVAudioPlayer?
     @State private var baseline: ProfileFormSnapshot
 
@@ -35,6 +43,8 @@ struct AgentProfileView: View {
         _crop = State(initialValue: bot.avatarCrop ?? .mascot)
         _voice = State(initialValue: bot.voice ?? "")
         _speakReplies = State(initialValue: bot.speakReplies == true)
+        _pickedInstanceId = State(initialValue: bot.modelSelection.instanceId)
+        _pickedModel = State(initialValue: bot.modelSelection.model)
         _baseline = State(initialValue: ProfileFormSnapshot(bot: bot))
     }
 
@@ -43,6 +53,12 @@ struct AgentProfileView: View {
     private var voiceConfigured: Bool { config?.isTTSConfigured == true }
     private var hasWorkspaceDefaultVoice: Bool { config?.hasWorkspaceDefaultVoice == true }
     private var selectedVoiceCanSpeak: Bool { config?.canSpeak(agentVoice: voice) == true }
+    private var advertisedInstances: [Instance] { AdvertisedModelCatalog.selectableInstances(from: instances) }
+    private var pickedInstance: Instance? { AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances) }
+    private var modelsForPickedInstance: [ModelOption] { pickedInstance?.models.options ?? [] }
+    private var modelSwitchBlocked: Bool { busy || savingModel || current.busy == true || instancesLoading }
+    private var currentProviderTitle: String { pickedInstance?.pickerTitle ?? pickedInstanceId }
+    private var currentModelTitle: String { pickedInstance?.modelLabel(for: pickedModel) ?? pickedModel }
 
     var body: some View {
         NavigationStack {
@@ -104,6 +120,71 @@ struct AgentProfileView: View {
                 }
 
                 Section {
+                    if instancesLoading {
+                        ProgressView("Loading models")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityLabel("Loading models")
+                    } else if let instancesError {
+                        Label(instancesError, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Could not load models")
+                            .accessibilityValue(instancesError)
+                        Button("Try again") { Task { await loadInstances() } }
+                            .disabled(busy || savingModel)
+                    } else {
+                        Picker("Provider", selection: providerSelection) {
+                            ForEach(advertisedInstances) { instance in
+                                Text(instance.pickerTitle).tag(instance.instanceId)
+                            }
+                            if advertisedInstances.contains(where: { $0.instanceId == pickedInstanceId }) == false {
+                                Text(currentProviderTitle).tag(pickedInstanceId)
+                            }
+                        }
+                        .disabled(modelSwitchBlocked || advertisedInstances.isEmpty)
+                        .accessibilityLabel("Provider")
+                        .accessibilityValue(currentProviderTitle)
+                        .accessibilityHint(current.busy == true
+                            ? "Interrupt this agent before switching models"
+                            : "Choose which engine this agent uses")
+
+                        Picker("Model", selection: modelSelection) {
+                            ForEach(modelsForPickedInstance) { option in
+                                Text(option.label).tag(option.id)
+                            }
+                            if modelsForPickedInstance.contains(where: { $0.id == pickedModel }) == false {
+                                Text(currentModelTitle).tag(pickedModel)
+                            }
+                        }
+                        .disabled(modelSwitchBlocked || modelsForPickedInstance.isEmpty)
+                        .accessibilityLabel("Model")
+                        .accessibilityValue(currentModelTitle)
+                        .accessibilityHint(current.busy == true
+                            ? "Interrupt this agent before switching models"
+                            : "Choose the model this agent uses")
+
+                        if savingModel {
+                            Label("Saving model…", systemImage: "arrow.triangle.2.circlepath")
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel("Saving model")
+                        } else if current.busy == true {
+                            Label("Interrupt this agent before switching models.", systemImage: "info.circle")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Model")
+                } footer: {
+                    if instancesLoading {
+                        Text("Loading advertised providers and models from the paired computer.")
+                    } else if advertisedInstances.isEmpty {
+                        Text("Providers and models are configured on your computer. This phone can only pick from catalogs the computer currently advertises.")
+                    } else {
+                        Text("Currently \(currentProviderTitle) · \(currentModelTitle). Switching uses the advertised catalog on your computer; provider keys stay there.")
+                    }
+                }
+
+                Section {
                     if voiceConfigured {
                         Picker("Voice", selection: $voice) {
                             if hasWorkspaceDefaultVoice {
@@ -160,10 +241,11 @@ struct AgentProfileView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
             }
-            .overlay { if busy { ProgressView().controlSize(.large) } }
+            .overlay { if busy || savingModel { ProgressView().controlSize(.large) } }
             .task {
                 async let status = session.configStatus()
                 async let options = session.voiceOptions()
+                await loadInstances()
                 let loadedConfig = await status
                 config = loadedConfig
                 voices = await options
@@ -171,11 +253,129 @@ struct AgentProfileView: View {
                     speakReplies = false
                 }
             }
+            .onChange(of: current.modelSelection) { _, selection in
+                pickedInstanceId = selection.instanceId
+                pickedModel = selection.model
+            }
             .onChange(of: photo) { _, item in
                 guard let item else { return }
                 Task { await upload(item) }
             }
+            .onDisappear {
+                modelSaveTask?.cancel()
+            }
         }
+    }
+
+    private var providerSelection: Binding<String> {
+        Binding(
+            get: { pickedInstanceId },
+            set: { newId in
+                pickedInstanceId = newId
+                pickedModel = AdvertisedModelCatalog.alignedModel(
+                    instanceId: newId,
+                    currentModel: pickedModel,
+                    in: instances
+                )
+                scheduleModelSave()
+            }
+        )
+    }
+
+    private var modelSelection: Binding<String> {
+        Binding(
+            get: { pickedModel },
+            set: { newModel in
+                pickedModel = newModel
+                scheduleModelSave()
+            }
+        )
+    }
+
+    private func loadInstances() async {
+        instancesLoading = true
+        defer { instancesLoading = false }
+        switch await session.loadInstances() {
+        case let .loaded(loaded):
+            guard !loaded.isEmpty else {
+                instances = []
+                instancesError = "No models are advertised by the paired computer."
+                return
+            }
+            instances = loaded
+            instancesError = nil
+            pickedInstanceId = current.modelSelection.instanceId
+            pickedModel = AdvertisedModelCatalog.alignedModel(
+                instanceId: pickedInstanceId,
+                currentModel: current.modelSelection.model,
+                in: loaded
+            )
+        case let .failed(message):
+            instances = []
+            instancesError = message
+        case .cancelled:
+            return
+        }
+    }
+
+    private func scheduleModelSave() {
+        modelSaveRevision &+= 1
+        let revision = modelSaveRevision
+        modelSaveTask?.cancel()
+
+        let selection = current.modelSelection
+        guard pickedInstanceId != selection.instanceId || pickedModel != selection.model else {
+            savingModel = false
+            modelSaveTask = nil
+            return
+        }
+        guard current.busy != true else {
+            pickedInstanceId = selection.instanceId
+            pickedModel = selection.model
+            savingModel = false
+            modelSaveTask = nil
+            session.actionError = "Interrupt this agent before switching models."
+            return
+        }
+
+        savingModel = true
+        modelSaveTask = Task { @MainActor in
+            await saveModelIfNeeded(revision: revision, previous: selection)
+            if modelSaveRevision == revision {
+                modelSaveTask = nil
+            }
+        }
+    }
+
+    private func saveModelIfNeeded(revision: Int, previous: ModelSelection) async {
+        defer {
+            if modelSaveRevision == revision {
+                savingModel = false
+            }
+        }
+        guard modelSaveRevision == revision else { return }
+        let requested = BotModelPatch(instanceId: pickedInstanceId, model: pickedModel)
+        guard requested.instanceId != previous.instanceId || requested.model != previous.model else { return }
+
+        guard let updated = await session.updateModel(requested, for: current) else {
+            // A newer picker value owns the form now. If another client
+            // changed the bot while this request was in flight, follow that
+            // server state rather than rolling back over it.
+            guard modelSaveRevision == revision else { return }
+            let latest = current.modelSelection
+            if latest.instanceId == requested.instanceId && latest.model == requested.model {
+                pickedInstanceId = previous.instanceId
+                pickedModel = previous.model
+            } else {
+                pickedInstanceId = latest.instanceId
+                pickedModel = latest.model
+            }
+            return
+        }
+
+        guard modelSaveRevision == revision else { return }
+        pickedInstanceId = updated.modelSelection.instanceId
+        pickedModel = updated.modelSelection.model
     }
 
     private func profilePatch() -> BotProfilePatch {
