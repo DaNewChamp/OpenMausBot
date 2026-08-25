@@ -24,6 +24,7 @@ struct ChatView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("conversationTextSize") private var conversationTextSize = ConversationTextSize.standard.rawValue
     @State private var draft = ""
     @State private var showingTasks = false
     @State private var showingComputer = false
@@ -34,12 +35,6 @@ struct ChatView: View {
     @State private var commRoom: Room?
     @FocusState private var composerFocused: Bool
     @StateObject private var dictation = SpeechDictation()
-    /// The opening beat: the island grows with the bot's face in it, then
-    /// shrinks away as the face settles into the header. `facePhase` is 1
-    /// with the face in the island, 0 with it home in the header.
-    @State private var islandExpanded = false
-    @State private var islandVisible = false
-    @State private var facePhase: CGFloat = 0
     /// Manual disclosure state, keyed by the run's first message id. Failures
     /// open on their own; a tap here is what keeps a success open or a
     /// failure shut after later chips land on the same run.
@@ -121,7 +116,7 @@ struct ChatView: View {
                                 // on every message is just noise
                                 if startsANewStretch(at: row.startIndex, in: transcript) {
                                     Text(RelativeStamp.separator(row.firstMessage.date))
-                                        .font(.system(size: 12, weight: .medium))
+                                        .font(chatTypography.compact)
                                         .foregroundStyle(Color.secondary.opacity(0.7))
                                         .frame(maxWidth: .infinity)
                                         .padding(.top, 10)
@@ -203,42 +198,6 @@ struct ChatView: View {
                 // scrolls under the face and name, which float over it.
                 .safeAreaInset(edge: .top, spacing: 0) { headerBar }
                 .overlay(alignment: .top) { headerFace }
-                .overlay(alignment: .top) {
-                    // One face, in one layer, measured from the screen's top
-                    // edge: it sits in the island while that is open and
-                    // glides into its header slot when the island lets go.
-                    let topInset = IslandGeometry.topInset
-                    let hasIsland = IslandGeometry.hasIsland(topInset: topInset)
-                    let islandSide: CGFloat = 220
-                    // centred in the part of the square the hardware island does not cover
-                    let islandFaceCentre = IslandGeometry.top + IslandGeometry.size.height + (islandSide - IslandGeometry.size.height) / 2
-                    let headerFaceCentre = topInset + 26
-                    let faceSize = 60 + 72 * facePhase
-                    let faceCentre = headerFaceCentre + (islandFaceCentre - headerFaceCentre) * facePhase
-                    ZStack(alignment: .top) {
-                        if islandVisible {
-                            IslandShell(expanded: islandExpanded, hasIsland: hasIsland, expandedSize: CGSize(width: islandSide, height: islandSide)) {
-                                Color.clear
-                            }
-                        }
-                        ChatAvatarView(chat: current, size: faceSize, state: MausState.forChat(current, in: session.state), animated: MausState.forChat(current, in: session.state).showsActivity || islandExpanded, comets: islandExpanded)
-                            .offset(y: faceCentre - faceSize / 2)
-                            .allowsHitTesting(false)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .top)
-                    .ignoresSafeArea(edges: .top)
-                }
-                .task {
-                    // grow, hold a beat, shrink — the face rides along
-                    guard !reduceMotion else { return }
-                    islandVisible = true
-                    try? await Task.sleep(for: .milliseconds(40))
-                    withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { islandExpanded = true; facePhase = 1 }
-                    try? await Task.sleep(for: .milliseconds(1000))
-                    withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) { islandExpanded = false; facePhase = 0 }
-                    try? await Task.sleep(for: .milliseconds(600))
-                    islandVisible = false
-                }
                 // A conversation grows from the bottom: a transcript shorter
                 // than the screen rests at the bottom, and opening a chat
                 // starts on the newest message rather than the oldest.
@@ -279,6 +238,11 @@ struct ChatView: View {
         .overlay(alignment: .bottom) { plusSheet }
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
+        .background {
+            InteractivePopGestureEnabler()
+                .frame(width: 0, height: 0)
+        }
+        .conversationTypography(ConversationTypography(size: selectedConversationTextSize))
         .navigationDestination(isPresented: $showingComputer) {
             if case let .bot(bot) = current { ComputerView(bot: bot) }
         }
@@ -344,6 +308,14 @@ struct ChatView: View {
         }
     }
 
+    private var selectedConversationTextSize: ConversationTextSize {
+        ConversationTextSize(rawValue: conversationTextSize) ?? .standard
+    }
+
+    private var chatTypography: ConversationTypography {
+        ConversationTypography(size: selectedConversationTextSize)
+    }
+
     // MARK: - Header
 
     /// Back on the left with the rest-of-app unread count, the bot's
@@ -406,21 +378,18 @@ struct ChatView: View {
     /// between the two buttons.
     private var headerFace: some View {
         VStack(spacing: 6) {
-            // Always here, following the island's face while that one is
-            // the source: when the island lets go, this one flies home.
-            // The face itself is drawn by the island layer above so there is
-            // still only one animated avatar. This transparent seat becomes
-            // its independent profile button once the opening transition has
-            // settled.
             if case .bot = current {
                 Button { showingProfile = true } label: {
-                    Color.clear
+                    ChatAvatarView(
+                        chat: current,
+                        size: 60,
+                        state: MausState.forChat(current, in: session.state),
+                        animated: !reduceMotion && MausState.forChat(current, in: session.state).showsActivity
+                    )
                         .frame(width: 60, height: 60)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .allowsHitTesting(!islandVisible)
-                .accessibilityHidden(islandVisible)
                 .accessibilityLabel("Open \(current.name) profile")
                 .accessibilityHint("Edits this agent's identity, avatar, notifications, and voice")
             } else {
@@ -454,7 +423,7 @@ struct ChatView: View {
             .glassCapsule()
             .accessibilityLabel(current.isBot ? "Open \(current.name) profile" : "Open \(current.name) chat options")
         }
-        .padding(.top, -4)
+        .padding(.top, max(0, IslandGeometry.topInset - 4))
     }
 
     // MARK: - The + sheet
@@ -642,7 +611,7 @@ struct ChatView: View {
         VStack(spacing: 6) {
             if let error = dictation.error {
                 Text(error)
-                    .font(.system(size: 13))
+                    .font(chatTypography.detail)
                     .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 4)
@@ -718,7 +687,7 @@ struct ChatView: View {
                             axis: .vertical
                         )
                             .lineLimit(1...5)
-                            .font(.system(size: 17))
+                            .font(chatTypography.body)
                             .padding(.vertical, 11)
                             .focused($composerFocused)
                             .submitLabel(.send)
@@ -791,6 +760,7 @@ struct MessageRow: View {
     var endsRun = true
     var onOpenComm: (String) -> Void = { _ in }
     @EnvironmentObject private var session: Session
+    @Environment(\.conversationTypography) private var typography
     @State private var editingText = ""
     @State private var showingEdit = false
 
@@ -810,7 +780,7 @@ struct MessageRow: View {
                         Button("\(group.emoji) \(group.count)") {
                             Task { await session.react(to: message, in: chat.threadId, emoji: group.emoji) }
                         }
-                        .font(.system(size: 13))
+                        .font(typography.detail)
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.capsule)
                         .tint(group.mine ? Color.accentColor : Color.secondary)
@@ -831,7 +801,7 @@ struct MessageRow: View {
                     } label: { Image(systemName: "chevron.right") }
                     .disabled(index + 1 >= versions.count || bot.busy == true)
                 }
-                .font(.system(size: 12, weight: .medium))
+                .font(typography.compact)
                 .foregroundStyle(Color.secondary)
             }
         }
@@ -934,6 +904,7 @@ struct TextBubble: View {
     let message: Message
     let chat: Chat
     var tailed = true
+    @Environment(\.conversationTypography) private var typography
 
     private var parsedDiff: (filename: String, diff: String)? {
         guard message.role != .user, let source = message.text else { return nil }
@@ -1020,7 +991,7 @@ struct TextBubble: View {
             VStack(alignment: .leading, spacing: 4) {
                 if let speaker, !mine {
                     Text(speaker.name)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 13 * typography.scale, weight: .semibold))
                         .foregroundStyle(MausPalette.color(speaker.color))
                 }
                 // Bots get markdown, you do not — the same split the desktop
@@ -1032,7 +1003,7 @@ struct TextBubble: View {
                     SQLResultTableView(columns: table.headers, rows: table.rows)
                 } else if mine {
                     Text(message.text ?? "")
-                        .font(.system(size: 17))
+                        .font(typography.body)
                         .foregroundStyle(BubbleColor.mineText)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1071,6 +1042,7 @@ private struct ToolRunDisclosure: View {
     let onToggle: () -> Void
 
     @State private var revealedRawNames: Set<String> = []
+    @Environment(\.conversationTypography) private var typography
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1078,7 +1050,7 @@ private struct ToolRunDisclosure: View {
                 HStack(spacing: 8) {
                     headerStatus
                     Text(run.headerTitle)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(typography.detail.weight(.medium))
                         .foregroundStyle(Color.secondary)
                         .multilineTextAlignment(.leading)
                         .lineLimit(1)
@@ -1159,7 +1131,7 @@ private struct ToolRunDisclosure: View {
                 HStack(spacing: 8) {
                     stepStatus(tool)
                     Text(ToolRunGrouping.displayLabel(for: tool))
-                        .font(.system(size: 13))
+                        .font(typography.detail)
                         .foregroundStyle(Color.primary.opacity(0.85))
                         .multilineTextAlignment(.leading)
                         .lineLimit(2)
@@ -1203,7 +1175,7 @@ private struct ToolRunDisclosure: View {
 
     private func rawName(_ name: String) -> some View {
         Text(name)
-            .font(.system(size: 12, design: .monospaced))
+            .font(typography.code)
             .foregroundStyle(Color.secondary)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1221,6 +1193,7 @@ struct CommActivityRow: View {
     let onOpen: (String) -> Void
 
     @EnvironmentObject private var session: Session
+    @Environment(\.conversationTypography) private var typography
 
     private var peer: Bot? { session.state.bot(presentation.peerBotId) }
 
@@ -1233,7 +1206,7 @@ struct CommActivityRow: View {
                     MausAvatar(color: comm.withColor, size: 18, state: .happy, animated: false)
                 }
                 Text(presentation.title)
-                    .font(.system(size: 13))
+                    .font(typography.detail)
                     .foregroundStyle(Color.secondary)
                     .multilineTextAlignment(.leading)
                     .lineLimit(1)
@@ -1277,6 +1250,7 @@ struct CardView: View {
     let chat: Chat
     let message: Message
     @EnvironmentObject private var session: Session
+    @Environment(\.conversationTypography) private var typography
     @State private var answering = false
 
     /// The option this card offers that means "go ahead".
@@ -1306,16 +1280,16 @@ struct CardView: View {
             VStack(alignment: .leading, spacing: 10) {
                 if card.isPending {
                     Label("\(chat.name) is waiting on you", systemImage: "hand.raised.fill")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(typography.detail.weight(.semibold))
                         .foregroundStyle(tint)
                 }
                 Text(card.title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 16 * typography.scale, weight: .semibold))
                     .foregroundStyle(Color.primary)
                     .fixedSize(horizontal: false, vertical: true)
                 if !card.subtitle.isEmpty {
                     Text(card.subtitle)
-                        .font(.system(size: 15))
+                        .font(.system(size: 15 * typography.scale))
                         .foregroundStyle(Color.secondary)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1323,7 +1297,7 @@ struct CardView: View {
 
                 if let held = card.held {
                     Label(held, systemImage: "exclamationmark.shield")
-                        .font(.system(size: 13))
+                        .font(typography.detail)
                         .foregroundStyle(.orange)
                 }
 
@@ -1338,7 +1312,7 @@ struct CardView: View {
                                 }
                             } label: {
                                 Text(option)
-                                    .font(.system(size: 15, weight: .semibold))
+                                    .font(.system(size: 15 * typography.scale, weight: .semibold))
                                     .foregroundStyle(Self.isRefusal(option) ? Color.primary : .white)
                                     .frame(maxWidth: .infinity)
                                     .frame(height: 40)
@@ -1371,14 +1345,14 @@ struct CardView: View {
                                 answering = false
                             }
                         }
-                        .font(.system(size: 12))
+                        .font(typography.compact)
                         .foregroundStyle(Color.secondary)
                         .frame(maxWidth: .infinity)
                         .disabled(answering)
                     }
                 } else if let answered = card.answered {
                     Label(answered, systemImage: "checkmark.circle")
-                        .font(.system(size: 14))
+                        .font(.system(size: 14 * typography.scale))
                         .foregroundStyle(Color.secondary)
                 }
             }

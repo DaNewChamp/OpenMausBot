@@ -8,6 +8,7 @@ public struct SkillExecutionReceiptView: View {
     public let output: String
     
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.conversationTypography) private var typography
     @State private var isExpanded: Bool = false
     
     public init(
@@ -38,16 +39,16 @@ public struct SkillExecutionReceiptView: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "wrench.and.screwdriver.fill")
-                        .font(.system(size: 11))
+                        .font(.system(size: 11 * typography.scale))
                         .foregroundColor(Color(hex: "#8B5CF6"))
                     
                     Text(skillName)
-                        .font(.caption2.weight(.bold))
+                        .font(.system(size: 12 * typography.scale, weight: .bold))
                         .foregroundColor(isDark ? Color(hex: "#F8FAFC") : Color(hex: "#0F172A"))
                     
                     if durationMs > 0 {
                         Text("• \(durationMs)ms")
-                            .font(.system(size: 9.5, design: .monospaced))
+                            .font(.system(size: 9.5 * typography.scale, design: .monospaced))
                             .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
                     }
                     
@@ -57,7 +58,7 @@ public struct SkillExecutionReceiptView: View {
                     
                     if hasDetails {
                         Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(.system(size: 9 * typography.scale, weight: .bold))
                             .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
                     }
                 }
@@ -74,10 +75,10 @@ public struct SkillExecutionReceiptView: View {
                     if !parameters.isEmpty {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("INPUT")
-                                .font(.system(size: 8.5, weight: .heavy, design: .monospaced))
+                                .font(.system(size: 8.5 * typography.scale, weight: .heavy, design: .monospaced))
                                 .foregroundColor(Color(hex: "#8B5CF6"))
                             Text(parameters)
-                                .font(.system(size: 10, design: .monospaced))
+                                .font(.system(size: 10 * typography.scale, design: .monospaced))
                                 .foregroundColor(isDark ? Color(hex: "#E2E8F0") : Color(hex: "#1E293B"))
                         }
                     }
@@ -85,10 +86,10 @@ public struct SkillExecutionReceiptView: View {
                     if !output.isEmpty {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("OUTPUT")
-                                .font(.system(size: 8.5, weight: .heavy, design: .monospaced))
+                                .font(.system(size: 8.5 * typography.scale, weight: .heavy, design: .monospaced))
                                 .foregroundColor(Color(hex: "#10B981"))
                             Text(output)
-                                .font(.system(size: 10, design: .monospaced))
+                                .font(.system(size: 10 * typography.scale, design: .monospaced))
                                 .foregroundColor(isDark ? Color(hex: "#E2E8F0") : Color(hex: "#1E293B"))
                                 .lineLimit(6)
                         }
@@ -128,9 +129,9 @@ public struct SkillExecutionReceiptView: View {
         HStack(spacing: 3) {
             Circle()
                 .fill(status == "success" ? Color.green : (status == "running" ? Color.orange : Color.red))
-                .frame(width: 5, height: 5)
+                .frame(width: 5 * typography.scale, height: 5 * typography.scale)
             Text(status.capitalized)
-                .font(.system(size: 9, weight: .bold))
+                .font(.system(size: 9 * typography.scale, weight: .bold))
                 .foregroundColor(status == "success" ? Color.green : (status == "running" ? Color.orange : Color.red))
         }
         .padding(.horizontal, 6)

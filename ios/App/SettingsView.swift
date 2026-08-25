@@ -8,6 +8,7 @@ import CompanionCore
 
 struct SettingsView: View {
     @EnvironmentObject private var session: Session
+    @AppStorage("conversationTextSize") private var conversationTextSize = ConversationTextSize.standard.rawValue
     @State private var confirmingSignOut = false
     @State private var editingAddress = false
     @State private var addressText = ""
@@ -58,6 +59,19 @@ struct SettingsView: View {
                 Text("Workspace")
             } footer: {
                 Text("Manage routine schedules, view connected accounts, and add Work, Personal, or client aliases here. Provider keys, webhook secrets, account revocation, pairing, Local VM, and agent execution policy stay on your computer.")
+            }
+
+            Section {
+                Picker("Conversation text size", selection: $conversationTextSize) {
+                    Text("Small").tag(ConversationTextSize.small.rawValue)
+                    Text("Standard").tag(ConversationTextSize.standard.rawValue)
+                    Text("Large").tag(ConversationTextSize.large.rawValue)
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Text("Appearance")
+            } footer: {
+                Text("Adjusts message text, Markdown, tool details, and the composer without changing navigation or avatar sizes.")
             }
 
             Section {

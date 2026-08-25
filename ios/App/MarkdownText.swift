@@ -19,6 +19,7 @@ struct MarkdownText: View {
     /// layout — a caret bolted on outside would put it on its own line the
     /// moment the reply ends in a list item.
     var caret: Bool = false
+    @Environment(\.conversationTypography) private var typography
 
     var body: some View {
         let blocks = Markdown.blocks(source)
@@ -34,14 +35,14 @@ struct MarkdownText: View {
         switch block {
         case let .paragraph(text):
             inline(text, tail: tail)
-                .font(.system(size: 17))
+                .font(typography.body)
                 .fixedSize(horizontal: false, vertical: true)
 
         case let .heading(level, text):
             // Three sizes, not six. A chat bubble is not a document, and an
             // h4 that looks exactly like body text is a heading that failed.
             inline(text, tail: tail)
-                .font(.system(size: level <= 1 ? 21 : level == 2 ? 19 : 17, weight: .semibold))
+                .font(level <= 1 ? typography.heading1 : level == 2 ? typography.heading2 : typography.heading3)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 2)
 
@@ -57,7 +58,7 @@ struct MarkdownText: View {
                     .fill(Color.secondary.opacity(0.4))
                     .frame(width: 3)
                 inline(text, tail: tail)
-                    .font(.system(size: 17))
+                    .font(typography.body)
                     .foregroundStyle(Color.secondary)
             }
             .fixedSize(horizontal: false, vertical: true)
@@ -66,7 +67,7 @@ struct MarkdownText: View {
             VStack(alignment: .leading, spacing: 4) {
                 if let language, !language.isEmpty {
                     Text(language)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .font(typography.codeLabel)
                         .foregroundStyle(Color.secondary)
                 }
                 // Horizontal scroll rather than wrapping: wrapped code is
@@ -74,7 +75,7 @@ struct MarkdownText: View {
                 // indentation is most of what a snippet is saying.
                 ScrollView(.horizontal, showsIndicators: false) {
                     (Text(text) + caretText(tail))
-                        .font(.system(size: 14, design: .monospaced))
+                        .font(typography.code)
                         .textSelection(.enabled)
                 }
             }
@@ -93,10 +94,10 @@ struct MarkdownText: View {
     private func marker(_ symbol: String, indent: Int, text: String, tail: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(symbol)
-                .font(.system(size: 17))
+                .font(typography.body)
                 .foregroundStyle(Color.secondary)
                 .frame(minWidth: 16, alignment: .trailing)
-            inline(text, tail: tail).font(.system(size: 17))
+            inline(text, tail: tail).font(typography.body)
         }
         .padding(.leading, CGFloat(indent) * 14)
         .fixedSize(horizontal: false, vertical: true)
