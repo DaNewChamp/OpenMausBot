@@ -29,6 +29,10 @@ export const SYNTHESIS_CLOSE = "<!-- /maus:synthesized -->";
  * conversation. */
 export const SYNTHESIS_DEBOUNCE_MS = 15_000;
 
+/** Nothing is waiting on this — the turn already settled — so it can be
+ * more patient than auto-review, which holds a person's attention. */
+export const SYNTHESIS_TIMEOUT_MS = 30_000;
+
 /** The block's own budget, well inside MEMORY_MAX_BYTES so the hand-written
  * part of the file always has room. */
 export const MAX_SYNTHESIZED_BYTES = 8_000;

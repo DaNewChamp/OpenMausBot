@@ -27,6 +27,15 @@ import {
   shouldReview,
 } from "./auto-review.ts";
 import { askHelper, resolveHelper } from "./helper-instance.ts";
+import {
+  SYNTHESIS_DEBOUNCE_MS,
+  SYNTHESIS_TIMEOUT_MS,
+  buildSynthesisPrompt,
+  parseSynthesisOutput,
+  readSynthesized,
+  writeSynthesized,
+  type Evidence,
+} from "./memory-synthesis.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { attachmentExists, extensionForMime, IMAGE_MAX_BYTES, readAttachment, saveImage, type SavedAttachment } from "./attachments.ts";
@@ -783,6 +792,74 @@ void (async () => {
   }
 })();
 
+/** Was the last turn on this thread started by the person at the keyboard?
+ * Set at dispatch, read when the turn settles. */
+const firstHandTurns = new Map<string, boolean>();
+/** Debounce timers, one per bot: a person often sends three messages in a
+ * row and each settle should not re-read the same conversation. */
+const synthesisTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** How far back the last sweep for this bot already looked. */
+const synthesisCursor = new Map<string, number>();
+
+/** Collect the settled user/assistant pairs on a thread that no sweep has
+ * seen yet. A pair needs both halves: a question with no answer teaches
+ * nothing, and an answer with no question has no context to be judged in. */
+function synthesisEvidence(threadId: string, since: number) {
+  const messages = store.messagesFor(threadId).filter((m) => m.kind === "text" && (m.text ?? "").trim() !== "");
+  const evidence: Evidence[] = [];
+  let cursor = since;
+  let pendingUser: string | null = null;
+  for (const message of messages) {
+    const at = message.at;
+    if (at <= since) continue;
+    cursor = Math.max(cursor, at);
+    if (message.role === "user") pendingUser = message.text ?? "";
+    else if (pendingUser !== null) {
+      evidence.push({ user: pendingUser, assistant: message.text ?? "" });
+      pendingUser = null;
+    }
+  }
+  return { evidence, cursor };
+}
+
+/** One synthesis sweep for a bot. Fails silently at every step: no setting,
+ * no helper, nothing new to look at, an unreadable answer, or a MEMORY.md
+ * that cannot be safely rewritten all mean the file is left exactly as it is.
+ * A memory that quietly misses a fact is a small loss; a memory that
+ * overwrites something the person wrote by hand is not. */
+async function runMemorySynthesis(botId: string, threadId: string): Promise<void> {
+  try {
+    const bot = store.bot(botId);
+    if (!bot?.memorySynthesis) return;
+    const since = synthesisCursor.get(botId) ?? 0;
+    const { evidence, cursor } = synthesisEvidence(threadId, since);
+    if (evidence.length === 0) return;
+    const helper = resolveHelper(bot.modelSelection.instanceId, registry.instances());
+    if (!helper) return;
+
+    const markdown = readMemoryFile(botId).text;
+    const sections = readSynthesized(markdown);
+    if (sections === "ambiguous") return;
+    const existing = sections === "missing" ? "" : sections.body;
+
+    const answer = await askHelper(helper, buildSynthesisPrompt(evidence, existing), SYNTHESIS_TIMEOUT_MS);
+    const facts = parseSynthesisOutput(answer);
+    // null is a failure to read; [] is a real answer meaning "nothing durable
+    // here", which is the common case. Both leave the file alone, but only
+    // the second one advances the cursor — a failed sweep should retry.
+    if (facts === null) return;
+    synthesisCursor.set(botId, cursor);
+    if (facts.length === 0) return;
+
+    const body = [existing, ...facts.map((fact) => `- ${fact}`)].filter((part) => part.trim() !== "").join("\n");
+    const next = writeSynthesized(markdown, body);
+    if (next === null) return;
+    writeMemoryFile(botId, next);
+  } catch {
+    // synthesis must never take down a settled turn
+  }
+}
+
 /** Ask the classifier about a card that is already on screen, and settle it
  * if the answer is a clean allow and the bot is in `enforce`.
  *
@@ -1135,6 +1212,23 @@ bus.subscribe((event: RuntimeEvent) => {
       turnUsage.set(event.threadId, { input: event.input, output: event.output });
       break;
     case "turn.completed": {
+      // Memory synthesis, debounced. Only for a turn the person actually
+      // started: the memory prompt promises them that only first-hand
+      // verified facts are recorded, so a webhook payload, a listener event,
+      // a connector resume, or another bot's message is never evidence.
+      if (bot?.memorySynthesis && firstHandTurns.get(event.threadId) === true) {
+        const botId = bot.id;
+        const threadId = event.threadId;
+        const existing = synthesisTimers.get(botId);
+        if (existing) clearTimeout(existing);
+        const timer = setTimeout(() => {
+          synthesisTimers.delete(botId);
+          void runMemorySynthesis(botId, threadId);
+        }, SYNTHESIS_DEBOUNCE_MS);
+        // a pending sweep must never hold the process open at shutdown
+        timer.unref?.();
+        synthesisTimers.set(botId, timer);
+      }
       const reply = lastReply.get(event.threadId) ?? "";
       lastReply.delete(event.threadId);
       const lastReported = turnUsage.get(event.threadId);
@@ -1492,6 +1586,14 @@ async function startTurn(
   if (opts?.automationSource === "webhook" || opts?.unattended) markUnattended(bot.id);
   // a person typing into this bot ends the unattended window immediately
   else if (opts?.automationSource === undefined && !opts?.commsDepth && !opts?.cardContinuation) clearUnattended(bot.id);
+  // Whether THIS turn came from the person at the keyboard. Memory synthesis
+  // reads it at settle time: the memory prompt promises the user that only
+  // facts they verified get recorded, so a webhook payload, a listener event,
+  // or another bot's message is never evidence.
+  firstHandTurns.set(
+    threadId,
+    opts?.automationSource === undefined && !opts?.commsDepth && !opts?.cardContinuation && !opts?.unattended,
+  );
   const task = store.taskByThread(bot.id, threadId);
   if (!task) throw Object.assign(new Error("no such task"), { status: 404 });
   const commsDepth = opts?.commsDepth ?? 0;

@@ -314,6 +314,10 @@ export interface BotRecord {
    * decision log can be compared against what you actually clicked before
    * "enforce" is trusted. Absent or unrecognised reads as "off". */
   autoReview?: string;
+  /** Memory synthesis: after a turn settles, look at what was said and write
+   * durable facts into MEMORY.md's synthesized block. Off unless switched on:
+   * it writes to a file the user owns. */
+  memorySynthesis?: boolean;
   /** Tools this bot may always use without asking, even outside auto mode
    * (set by "Always allow" on an approval card). */
   alwaysAllow?: string[];
