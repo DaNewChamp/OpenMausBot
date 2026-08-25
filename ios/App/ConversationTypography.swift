@@ -21,16 +21,20 @@ struct ConversationTypography: Equatable {
         self.init(scale: size.scale, dynamicTypeSize: dynamicTypeSize)
     }
 
-    var body: Font { system(size: 17, relativeTo: .body) }
-    var heading1: Font { system(size: 21, relativeTo: .title2, weight: .semibold) }
-    var heading2: Font { system(size: 19, relativeTo: .headline, weight: .semibold) }
-    var heading3: Font { system(size: 17, relativeTo: .headline, weight: .semibold) }
-    var code: Font { system(size: 14, relativeTo: .footnote, design: .monospaced) }
-    var codeLabel: Font { system(size: 11, relativeTo: .caption2, weight: .medium, design: .monospaced) }
-    var detail: Font { system(size: 13, relativeTo: .footnote) }
-    var compact: Font { system(size: 12, relativeTo: .caption1, weight: .medium) }
+    var body: Font { font(size: 17, relativeTo: .body) }
+    var heading1: Font { font(size: 21, relativeTo: .title2, weight: .semibold) }
+    var heading2: Font { font(size: 19, relativeTo: .headline, weight: .semibold) }
+    var heading3: Font { font(size: 17, relativeTo: .headline, weight: .semibold) }
+    var code: Font { font(size: 14, relativeTo: .footnote, design: .monospaced) }
+    var codeLabel: Font { font(size: 11, relativeTo: .caption2, weight: .medium, design: .monospaced) }
+    var detail: Font { font(size: 13, relativeTo: .footnote) }
+    var compact: Font { font(size: 12, relativeTo: .caption1, weight: .medium) }
 
-    private func system(
+    /// Returns a chat-content font that combines the user's conversation-size
+    /// preference with the current Dynamic Type category. Keep this helper
+    /// available to cards so their text follows the same scaling contract as
+    /// Markdown and message bubbles.
+    func font(
         size: CGFloat,
         relativeTo textStyle: UIFont.TextStyle,
         weight: Font.Weight = .regular,

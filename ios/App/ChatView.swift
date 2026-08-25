@@ -995,7 +995,7 @@ struct TextBubble: View {
             VStack(alignment: .leading, spacing: 4) {
                 if let speaker, !mine {
                     Text(speaker.name)
-                        .font(.system(size: 13 * typography.scale, weight: .semibold))
+                        .font(typography.font(size: 13, relativeTo: .subheadline, weight: .semibold))
                         .foregroundStyle(MausPalette.color(speaker.color))
                 }
                 // Bots get markdown, you do not — the same split the desktop
@@ -1288,12 +1288,12 @@ struct CardView: View {
                         .foregroundStyle(tint)
                 }
                 Text(card.title)
-                    .font(.system(size: 16 * typography.scale, weight: .semibold))
+                    .font(typography.font(size: 16, relativeTo: .headline, weight: .semibold))
                     .foregroundStyle(Color.primary)
                     .fixedSize(horizontal: false, vertical: true)
                 if !card.subtitle.isEmpty {
                     Text(card.subtitle)
-                        .font(.system(size: 15 * typography.scale))
+                        .font(typography.font(size: 15, relativeTo: .subheadline))
                         .foregroundStyle(Color.secondary)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1316,7 +1316,7 @@ struct CardView: View {
                                 }
                             } label: {
                                 Text(option)
-                                    .font(.system(size: 15 * typography.scale, weight: .semibold))
+                                    .font(typography.font(size: 15, relativeTo: .subheadline, weight: .semibold))
                                     .foregroundStyle(Self.isRefusal(option) ? Color.primary : .white)
                                     .frame(maxWidth: .infinity)
                                     .frame(height: 40)
@@ -1356,7 +1356,7 @@ struct CardView: View {
                     }
                 } else if let answered = card.answered {
                     Label(answered, systemImage: "checkmark.circle")
-                        .font(.system(size: 14 * typography.scale))
+                        .font(typography.font(size: 14, relativeTo: .footnote))
                         .foregroundStyle(Color.secondary)
                 }
             }

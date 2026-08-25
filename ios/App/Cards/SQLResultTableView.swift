@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 public struct SQLResultTableView: View {
     public let title: String
@@ -7,6 +8,7 @@ public struct SQLResultTableView: View {
     public let rawQuery: String?
     
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.conversationTypography) private var typography
     
     public init(
         title: String = "DATA TABLE",
@@ -31,14 +33,14 @@ public struct SQLResultTableView: View {
                         .font(.system(size: 11))
                         .foregroundColor(Color(hex: "#3ECF8E"))
                     Text(title.uppercased())
-                        .font(.system(size: 9.5, weight: .heavy))
+                        .font(typography.font(size: 9.5, relativeTo: .caption2, weight: .heavy))
                         .foregroundColor(Color(hex: "#3ECF8E"))
                 }
                 
                 Spacer()
                 
                 Text("\(rows.count) rows")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(typography.font(size: 10, relativeTo: .caption2, weight: .bold))
                     .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2.5)
@@ -49,7 +51,7 @@ public struct SQLResultTableView: View {
             // Raw Query if present
             if let query = rawQuery, !query.isEmpty {
                 Text(query)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(typography.font(size: 10, relativeTo: .footnote, design: .monospaced))
                     .foregroundColor(isDark ? Color(hex: "#F8FAFC") : Color(hex: "#0F172A"))
                     .lineLimit(2)
                     .padding(6)
@@ -64,7 +66,7 @@ public struct SQLResultTableView: View {
                     HStack(spacing: 12) {
                         ForEach(Array(columns.enumerated()), id: \.offset) { _, col in
                             Text(col.uppercased())
-                                .font(.system(size: 9.5, weight: .heavy, design: .monospaced))
+                                .font(typography.font(size: 9.5, relativeTo: .caption2, weight: .heavy, design: .monospaced))
                                 .foregroundColor(Color(hex: "#3ECF8E"))
                                 .frame(minWidth: 65, alignment: .leading)
                         }
@@ -79,7 +81,7 @@ public struct SQLResultTableView: View {
                             ForEach(Array(columns.indices), id: \.self) { colIdx in
                                 let val = colIdx < row.count ? row[colIdx] : ""
                                 Text(val)
-                                    .font(.system(size: 10, design: .monospaced))
+                                    .font(typography.font(size: 10, relativeTo: .footnote, design: .monospaced))
                                     .foregroundColor(isDark ? Color(hex: "#E2E8F0") : Color(hex: "#1E293B"))
                                     .frame(minWidth: 65, alignment: .leading)
                             }
@@ -103,7 +105,7 @@ public struct SQLResultTableView: View {
                         Image(systemName: "doc.on.doc")
                         Text("Copy CSV")
                     }
-                    .font(.caption2.weight(.medium))
+                    .font(typography.font(size: 11, relativeTo: .caption2, weight: .medium))
                     .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
                 }
                 .buttonStyle(.plain)

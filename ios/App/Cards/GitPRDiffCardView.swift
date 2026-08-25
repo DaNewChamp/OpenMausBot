@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 public struct GitPRDiffCardView: View {
     public let filename: String
@@ -7,6 +8,7 @@ public struct GitPRDiffCardView: View {
     public let deletions: Int
     
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.conversationTypography) private var typography
     @State private var showDiff: Bool = true
     @State private var showAllLines: Bool = false
 
@@ -45,7 +47,7 @@ public struct GitPRDiffCardView: View {
                     .foregroundColor(Color(hex: "#22C55E"))
                 
                 Text(filename)
-                    .font(.caption.weight(.bold))
+                    .font(typography.font(size: 12, relativeTo: .caption1, weight: .bold))
                     .foregroundColor(isDark ? Color(hex: "#F8FAFC") : Color(hex: "#0F172A"))
                     .lineLimit(1)
                 
@@ -54,10 +56,10 @@ public struct GitPRDiffCardView: View {
                 // Diff Delta (+ / -)
                 HStack(spacing: 4) {
                     Text("+\(additions)")
-                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                        .font(typography.font(size: 10.5, relativeTo: .caption2, weight: .bold, design: .monospaced))
                         .foregroundColor(Color(hex: "#22C55E"))
                     Text("-\(deletions)")
-                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                        .font(typography.font(size: 10.5, relativeTo: .caption2, weight: .bold, design: .monospaced))
                         .foregroundColor(Color(hex: "#EF4444"))
                 }
                 .padding(.horizontal, 6)
@@ -79,7 +81,7 @@ public struct GitPRDiffCardView: View {
                             Image(systemName: showDiff ? "chevron.down" : "chevron.right")
                                 .font(.system(size: 9, weight: .bold))
                             Text(showDiff ? "Hide Diff" : "View Diff")
-                                .font(.caption2.weight(.semibold))
+                                .font(typography.font(size: 11, relativeTo: .caption2, weight: .semibold))
                             Spacer()
                         }
                         .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
@@ -105,7 +107,7 @@ public struct GitPRDiffCardView: View {
                                 withAnimation(.easeInOut(duration: 0.2)) { showAllLines.toggle() }
                                 Haptics.selection()
                             }
-                            .font(.caption2.weight(.semibold))
+                            .font(typography.font(size: 11, relativeTo: .caption2, weight: .semibold))
                             .buttonStyle(.plain)
                             .accessibilityHint("The copied diff always includes every line")
                         }
@@ -124,7 +126,7 @@ public struct GitPRDiffCardView: View {
                         Image(systemName: "doc.on.doc")
                         Text("Copy Diff")
                     }
-                    .font(.caption2.weight(.medium))
+                    .font(typography.font(size: 11, relativeTo: .caption2, weight: .medium))
                     .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
                 }
                 .buttonStyle(.plain)
@@ -162,7 +164,7 @@ public struct GitPRDiffCardView: View {
         let isHeader = line.hasPrefix("@@") || line.hasPrefix("diff")
         
         Text(line)
-            .font(.system(size: 10, design: .monospaced))
+            .font(typography.font(size: 10, relativeTo: .footnote, design: .monospaced))
             .foregroundColor(
                 isAddition ? Color(hex: "#4ADE80") :
                 isDeletion ? Color(hex: "#F87171") :
