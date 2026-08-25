@@ -31,6 +31,7 @@ struct ChatView: View {
     @State private var showingProfile = false
     @State private var showCommandHUD = false
     @State private var shareFile: ShareFile?
+    @State private var commRoom: Room?
     @FocusState private var composerFocused: Bool
     @StateObject private var dictation = SpeechDictation()
     /// The opening beat: the island grows with the bot's face in it, then
@@ -131,7 +132,10 @@ struct ChatView: View {
                                     MessageRow(
                                         chat: current,
                                         message: message,
-                                        endsRun: endsRun(at: row.startIndex, in: transcript)
+                                        endsRun: endsRun(at: row.startIndex, in: transcript),
+                                        onOpenComm: { groupId in
+                                            commRoom = session.state.rooms.first { $0.id == groupId }
+                                        }
                                     )
                                 case .toolRun(let run):
                                     ToolRunDisclosure(
@@ -277,6 +281,9 @@ struct ChatView: View {
         .navigationBarBackButtonHidden(true)
         .navigationDestination(isPresented: $showingComputer) {
             if case let .bot(bot) = current { ComputerView(bot: bot) }
+        }
+        .navigationDestination(item: $commRoom) { room in
+            ChatView(chat: .room(room))
         }
         .task(id: threadId) {
             // opening a chat is what marks it read, exactly as on the desktop
@@ -782,6 +789,7 @@ struct MessageRow: View {
     let message: Message
     /// Last bubble of a run from the same side: the one that gets the tail.
     var endsRun = true
+    var onOpenComm: (String) -> Void = { _ in }
     @EnvironmentObject private var session: Session
     @State private var editingText = ""
     @State private var showingEdit = false
@@ -795,12 +803,6 @@ struct MessageRow: View {
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
             content
-
-            if let comm = message.comm {
-                Label("Messaged \(comm.withName)", systemImage: "arrow.up.right.bubble")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.secondary)
-            }
 
             if let reactions = message.reactions, !reactions.isEmpty {
                 HStack(spacing: 6) {
@@ -869,7 +871,11 @@ struct MessageRow: View {
         case .options:
             CardView(chat: chat, message: message)
         case .activity:
-            ActivityChip(tool: message.tool)
+            if let row = CommActivityPresentation(message: message), let comm = message.comm {
+                CommActivityRow(presentation: row, comm: comm, onOpen: onOpenComm)
+            } else {
+                ActivityChip(tool: message.tool)
+            }
         case .screen:
             ScreenShot(threadId: chat.threadId, message: message)
         case .unknown:
@@ -1203,6 +1209,48 @@ private struct ToolRunDisclosure: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityLabel("Raw tool name")
             .accessibilityValue(name)
+    }
+}
+
+/// A settled bot-to-bot message that opens the room where the exchange lives.
+/// Communication is navigation, not a running tool receipt, so the row keeps
+/// one quiet title and the peer's identity rather than showing a spinner.
+struct CommActivityRow: View {
+    let presentation: CommActivityPresentation
+    let comm: CommChip
+    let onOpen: (String) -> Void
+
+    @EnvironmentObject private var session: Session
+
+    private var peer: Bot? { session.state.bot(presentation.peerBotId) }
+
+    var body: some View {
+        Button { onOpen(presentation.groupId) } label: {
+            HStack(spacing: 8) {
+                if let peer {
+                    BotAvatarView(bot: peer, size: 18, state: .happy, animated: false)
+                } else {
+                    MausAvatar(color: comm.withColor, size: 18, state: .happy, animated: false)
+                }
+                Text(presentation.title)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.secondary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.secondary.opacity(0.6))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .background(Capsule().fill(Color.secondary.opacity(0.1)))
+        .accessibilityLabel(presentation.title)
+        .accessibilityHint("Open the conversation with \(peer?.name ?? comm.withName)")
     }
 }
 
