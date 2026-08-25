@@ -62,8 +62,14 @@ function messageOf(error: Error | { message?: unknown } | string): string {
 
 export class WakeQueue {
   readonly #pending = new Map<string, Wake>();
+  // Declared and assigned, not a constructor parameter property: the server
+  // runs under `node --experimental-strip-types`, which strips annotations
+  // without synthesizing the field a parameter property implies.
+  readonly #runtime: WakeRuntime;
 
-  constructor(private readonly runtime: WakeRuntime) {}
+  constructor(runtime: WakeRuntime) {
+    this.#runtime = runtime;
+  }
 
   get size(): number {
     return this.#pending.size;
@@ -75,17 +81,17 @@ export class WakeQueue {
   }
 
   dispatch(wake: Wake): void {
-    const owner = this.runtime.owner(wake.botId, wake.threadId);
+    const owner = this.#runtime.owner(wake.botId, wake.threadId);
     // no owner: the bot or its place in this thread is gone. Nothing to wake,
     // and nothing to report — the surface that would show the failure went
     // with it.
     if (!owner) return;
     if (owner.busy) return this.requeue(wake);
     if (owner.groupId !== undefined) {
-      this.runtime.runGroupTurn(owner.groupId, wake, () => this.requeue(wake));
+      this.#runtime.runGroupTurn(owner.groupId, wake, () => this.requeue(wake));
       return;
     }
-    void this.runtime.runSoloTurn(wake).catch((error) => {
+    void this.#runtime.runSoloTurn(wake).catch((error) => {
       const message = messageOf(error);
       // the bot became busy between the idle check and the dispatch — that is
       // a race, not a failure, and the next drain will pick it up
@@ -102,7 +108,7 @@ export class WakeQueue {
     // again in the same pass.
     const runnable: Wake[] = [];
     for (const wake of this.#pending.values()) {
-      if (this.runtime.owner(wake.botId, wake.threadId)?.busy) continue;
+      if (this.#runtime.owner(wake.botId, wake.threadId)?.busy) continue;
       runnable.push(wake);
     }
     for (const wake of runnable) {
