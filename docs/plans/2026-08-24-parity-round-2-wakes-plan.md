@@ -242,7 +242,21 @@ from the routine's own text plus `buildEventContextBlock(event)`.
 
 ---
 
-## Task 3: Executor subagents
+## Task 3: Executor subagents — DEFERRED (2026-08-25)
+
+**Not built. Deferred by Omkar after Tasks 1–2 shipped**, and it should not be
+picked up without first answering the question that stopped it:
+
+> An executor runs headless, so when it raises a permission request there is
+> nobody to answer it. Three options, none obviously right: inherit the
+> parent's `autoApprove` (safe only for bots already in auto mode), mirror the
+> executor's cards into the parent's thread (visible, but the parent may be
+> mid-turn), or fail closed and have the executor report that it was blocked
+> (predictable, but cripples it for real work).
+
+The design below is what was planned; it stands, minus that decision.
+
+## Task 3 (original design): Executor subagents
 
 **Files:**
 - Create: `server/executors.ts`, `server/executors.test.ts`
