@@ -7,7 +7,8 @@
 // something nobody looked at.
 import { describe, expect, it } from "vitest";
 
-import { buildReviewPrompt, parseReviewVerdict, resolveAutoReviewMode } from "./auto-review.ts";
+import { buildReviewPrompt, parseReviewVerdict, resolveAutoReviewMode, shouldReview } from "./auto-review.ts";
+import type { AutoVerdictSource } from "./auto-approve.ts";
 
 describe("buildReviewPrompt", () => {
   const prompt = buildReviewPrompt({
@@ -108,5 +109,42 @@ describe("resolveAutoReviewMode", () => {
 
   it("treats an unknown stored value as off, so a newer build downgrades safely", () => {
     expect(resolveAutoReviewMode("aggressive")).toBe("off");
+  });
+});
+
+describe("shouldReview", () => {
+  // The whole safety property of auto-review is this list. Every source that
+  // is NOT no-grant is a decision something already made, and a classifier
+  // must not get to revisit it.
+  const everySource: AutoVerdictSource[] = [
+    "always-allow",
+    "auto-mode",
+    "unattended-block",
+    "local-computer-block",
+    "destructive-guard",
+    "sensitive-guard",
+    "no-grant",
+    "auto-review",
+    "auto-review-shadow",
+  ];
+
+  it("reviews only a no-grant verdict", () => {
+    for (const source of everySource) {
+      expect(shouldReview(source, "enforce")).toBe(source === "no-grant");
+    }
+  });
+
+  it("never reviews when the bot has it switched off", () => {
+    for (const source of everySource) {
+      expect(shouldReview(source, "off")).toBe(false);
+    }
+  });
+
+  it("reviews in shadow too — that is how shadow gathers anything to compare", () => {
+    expect(shouldReview("no-grant", "shadow")).toBe(true);
+  });
+
+  it("does not review when there was no verdict at all (a question, or an unknown asker)", () => {
+    expect(shouldReview(undefined, "enforce")).toBe(false);
   });
 });

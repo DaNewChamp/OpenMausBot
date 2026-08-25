@@ -85,7 +85,12 @@ export type AutoVerdictSource =
   | "local-computer-block"
   | "destructive-guard"
   | "sensitive-guard"
-  | "no-grant";
+  | "no-grant"
+  // A classifier answered a card that nothing granted and no guard stopped.
+  // It never appears in an AutoVerdict — auto-review runs AFTER autoVerdict
+  // has returned no-grant, and only writes these to the decision log.
+  | "auto-review"
+  | "auto-review-shadow";
 
 export interface AutoVerdict {
   /** Chip text when the bot may answer itself, null when a human decides.

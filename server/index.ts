@@ -19,6 +19,14 @@ import {
 } from "../shared/credential-request.ts";
 
 import { approvalKey, autoVerdict } from "./auto-approve.ts";
+import {
+  AUTO_REVIEW_TIMEOUT_MS,
+  buildReviewPrompt,
+  parseReviewVerdict,
+  resolveAutoReviewMode,
+  shouldReview,
+} from "./auto-review.ts";
+import { askHelper, resolveHelper } from "./helper-instance.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { attachmentExists, extensionForMime, IMAGE_MAX_BYTES, readAttachment, saveImage, type SavedAttachment } from "./attachments.ts";
@@ -775,6 +783,81 @@ void (async () => {
   }
 })();
 
+/** Ask the classifier about a card that is already on screen, and settle it
+ * if the answer is a clean allow and the bot is in `enforce`.
+ *
+ * Fails closed at every step: no mode, no helper instance, no answer inside
+ * the deadline, an unreadable answer, a refusal, a card the user already
+ * answered, or a provider that no longer has the request — all of them leave
+ * the card exactly where it is, for a person. */
+async function reviewCard(args: {
+  asker: { id: string; name: string; title?: string; description?: string; autoReview?: string; modelSelection: { instanceId: string } };
+  threadId: string;
+  requestId: string;
+  messageId: string;
+  tool: string;
+  summary: string;
+  providerInstanceId?: string;
+}): Promise<void> {
+  const mode = resolveAutoReviewMode(args.asker.autoReview);
+  if (mode === "off") return;
+  try {
+    const helper = resolveHelper(args.asker.modelSelection.instanceId, registry.instances());
+    if (!helper) return;
+    const persona = [args.asker.name, args.asker.title, args.asker.description].filter(Boolean).join(" — ");
+    const prompt = buildReviewPrompt({ tool: args.tool, summary: args.summary, persona });
+    const answer = await askHelper(helper, prompt, AUTO_REVIEW_TIMEOUT_MS);
+    const reviewed = parseReviewVerdict(answer);
+    if (!reviewed) return;
+
+    // Shadow mode never answers anything. It exists so the decision log can
+    // be read against what the person actually clicked, before enforce is
+    // trusted with the same judgement.
+    if (mode === "shadow") {
+      appendDecision(DATA_DIR, {
+        threadId: args.threadId,
+        requestId: args.requestId,
+        botId: args.asker.id,
+        botName: args.asker.name,
+        tool: args.tool,
+        summary: args.summary,
+        decision: reviewed.allow ? "auto-approved" : "card-shown",
+        source: "auto-review-shadow",
+        rule: reviewed.reason,
+      });
+      return;
+    }
+    if (!reviewed.allow) return;
+
+    // The person may have answered while the classifier was thinking; their
+    // click is the authority and this must not write over it.
+    const card = store.messagesFor(args.threadId).find((m) => m.id === args.messageId)?.card;
+    if (!card || card.answered) return;
+
+    const instance = args.providerInstanceId
+      ? registry.get(args.providerInstanceId)
+      : registry.get(args.asker.modelSelection.instanceId);
+    if (!instance) return;
+    const outcome = await instance.adapter.respondToRequest(args.threadId, args.requestId, { behavior: "allow" });
+    // `unavailable` means nobody took the answer — the turn ended, or the
+    // user got there first. Either way nothing happened, so nothing is logged.
+    if (outcome === "unavailable") return;
+    appendDecision(DATA_DIR, {
+      threadId: args.threadId,
+      requestId: args.requestId,
+      botId: args.asker.id,
+      botName: args.asker.name,
+      tool: args.tool,
+      summary: args.summary,
+      decision: "auto-approved",
+      source: "auto-review",
+      rule: reviewed.reason,
+    });
+  } catch {
+    // A review that throws is a review that did not happen. The card stands.
+  }
+}
+
 bus.subscribe((event: RuntimeEvent) => {
   const localVmTarget = localVmThreadTargets.get(event.threadId);
   if (localVmTarget) {
@@ -958,6 +1041,30 @@ bus.subscribe((event: RuntimeEvent) => {
         },
       });
       if (event.requestId) askMessageByRequest.set(`${event.threadId}:${event.requestId}`, message.id);
+      // Auto-review, the last word before this card is a person's problem.
+      //
+      // It runs ONLY where autoVerdict returned no-grant: nothing granted
+      // this and, just as importantly, no guard stopped it. The destructive,
+      // sensitive, unattended and local-computer rules exist to outrank
+      // grants, and a classifier does not get to join that hierarchy.
+      //
+      // The card is shown FIRST and settled after, rather than holding the
+      // fold for the classifier. Blocking would stall the whole event bus,
+      // and a person staring at nothing for eight seconds is worse than one
+      // watching a card answer itself with a reason attached. If they click
+      // first, their answer wins — respondToRequest reports `unavailable`
+      // and nothing is written.
+      if (permission && asker && event.requestId && shouldReview(verdict?.source, resolveAutoReviewMode(asker.autoReview))) {
+        void reviewCard({
+          asker,
+          threadId: event.threadId,
+          requestId: event.requestId,
+          messageId: message.id,
+          tool: event.tool,
+          summary: event.summary,
+          providerInstanceId: event.providerInstanceId,
+        });
+      }
       // Every card that reaches a human is a decision too — "a rule sent
       // this to you, and here is which one". `question` marks the cards no
       // rule may ever answer; a permission card without a verdict (no known

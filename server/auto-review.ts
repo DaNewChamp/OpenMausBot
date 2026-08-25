@@ -55,6 +55,20 @@ export function resolveAutoReviewMode(stored: string | undefined): AutoReviewMod
   return stored === "shadow" || stored === "enforce" ? stored : "off";
 }
 
+/** The one gate that keeps auto-review out of the guard hierarchy.
+ *
+ * `no-grant` is the only source that means "nothing granted this AND nothing
+ * stopped it". Every other source is a decision already made — a grant that
+ * fired, or a guard that refused — and a classifier gets no say over either.
+ * Written as an allowlist, not a denylist: a source added to AutoVerdictSource
+ * later must be opted IN to review deliberately, never inherit it. */
+export function shouldReview(
+  verdictSource: string | undefined,
+  mode: AutoReviewMode,
+): boolean {
+  return mode !== "off" && verdictSource === "no-grant";
+}
+
 const BEGIN = "[BEGIN REQUEST]";
 const END = "[END REQUEST]";
 

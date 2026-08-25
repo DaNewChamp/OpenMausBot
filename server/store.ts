@@ -309,6 +309,11 @@ export interface BotRecord {
    * working instead of stopping to ask. Questions it asks YOU still come
    * through, and a short list of destructive commands still stops it. */
   autoApprove?: boolean;
+  /** Auto-review: let a classifier answer the cards a person would obviously
+   * have approved. "shadow" only records what it would have done, so the
+   * decision log can be compared against what you actually clicked before
+   * "enforce" is trusted. Absent or unrecognised reads as "off". */
+  autoReview?: string;
   /** Tools this bot may always use without asking, even outside auto mode
    * (set by "Always allow" on an approval card). */
   alwaysAllow?: string[];
