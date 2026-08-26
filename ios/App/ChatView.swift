@@ -18,6 +18,36 @@ import CompanionCore
 import UIKit
 import AVFoundation
 
+/// Conversation surfaces follow Grok's quiet, ink-on-charcoal canvas rather
+/// than the app-wide Liquid Glass treatment. Keeping the palette local to the
+/// conversation lets the rest of the app retain its existing chrome while a
+/// long transcript reads as one calm surface.
+private enum GrokConversationStyle {
+    static let background = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.071, green: 0.071, blue: 0.078, alpha: 1) // #121214
+            : UIColor(red: 0.965, green: 0.965, blue: 0.973, alpha: 1) // #F6F6F8
+    })
+
+    static let assistantBubble = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.118, green: 0.118, blue: 0.129, alpha: 1) // #1E1E21
+            : UIColor(red: 0.898, green: 0.898, blue: 0.914, alpha: 1) // #E5E5E9
+    })
+
+    static let controlSurface = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.145, green: 0.145, blue: 0.157, alpha: 1) // #252528
+            : UIColor(red: 0.882, green: 0.882, blue: 0.898, alpha: 1) // #E1E1E5
+    })
+
+    static let composerSurface = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.169, green: 0.169, blue: 0.184, alpha: 1) // #2B2B2F
+            : UIColor(red: 0.914, green: 0.914, blue: 0.929, alpha: 1) // #E9E9ED
+    })
+}
+
 struct ChatView: View {
     let chat: Chat
     @EnvironmentObject private var session: Session
@@ -94,7 +124,7 @@ struct ChatView: View {
                     // height exact and the anchor land on the newest message.
                     // A thread holds 50 messages until you ask for more, so
                     // there is nothing here worth being lazy about.
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 8) {
                         if session.state.hasMore[threadId] == true {
                             Button("Load earlier messages") {
                                 // keep the reader where they were: after older
@@ -119,10 +149,10 @@ struct ChatView: View {
                                    startsANewStretch(at: row.startIndex, in: transcript) {
                                     Text(RelativeStamp.separator(row.firstMessage.date))
                                         .font(chatTypography.compact)
-                                        .foregroundStyle(Color.secondary.opacity(0.7))
+                                        .foregroundStyle(Color.secondary.opacity(0.58))
                                         .frame(maxWidth: .infinity)
-                                        .padding(.top, 10)
-                                        .padding(.bottom, 4)
+                                        .padding(.top, 14)
+                                        .padding(.bottom, 6)
                                 }
                                 switch row.segment {
                                 case .message(let message):
@@ -196,7 +226,7 @@ struct ChatView: View {
                                 .accessibilityLabel("\(current.name) is working")
                         }
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, 20)
                     .padding(.vertical, 12)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -254,6 +284,7 @@ struct ChatView: View {
         .overlay(alignment: .bottom) { plusSheet }
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
+        .background(GrokConversationStyle.background.ignoresSafeArea())
         .background {
             InteractivePopGestureEnabler()
                 .frame(width: 0, height: 0)
@@ -349,17 +380,17 @@ struct ChatView: View {
 
     // MARK: - Header
 
-    /// A compact, native conversation bar. The old design put a large face in
-    /// an overlay above this row; it looked good in a still image but raced
-    /// navigation and covered the first transcript bubble. Keeping every
-    /// control inside the safe-area inset makes the bar deterministic.
+    /// A compact, centered Grok-style bar. The avatar/name capsule is a real
+    /// intrinsic-width control, not a full-width navigation title, so it stays
+    /// centered while long names truncate and navigation transitions cannot
+    /// leave a large face behind.
     private var headerBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Button { dismiss() } label: {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 17, weight: .semibold))
-                        .frame(width: 40, height: 40)
+                        .frame(width: 44, height: 44)
 
                     if unreadElsewhere > 0 {
                         Text(unreadElsewhere > 99 ? "99+" : "\(unreadElsewhere)")
@@ -372,15 +403,14 @@ struct ChatView: View {
                     }
                 }
                 .foregroundStyle(Color.primary)
-                .background(Circle().fill(Color.primary.opacity(0.10)))
-                .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                .background(Circle().fill(GrokConversationStyle.controlSurface))
                 .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Back")
             .accessibilityValue(unreadElsewhere > 0 ? "\(unreadElsewhere) unread elsewhere" : "")
 
-            Spacer(minLength: 2)
+            Spacer(minLength: 0)
 
             Button {
                 if current.isBot { showingProfile = true }
@@ -394,61 +424,63 @@ struct ChatView: View {
                         animated: !reduceMotion && MausState.forChat(current, in: session.state).showsActivity
                     )
                     Text(current.name)
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(Color.primary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
-                .frame(maxWidth: .infinity)
-                .contentShape(Rectangle())
+                .padding(.horizontal, 13)
+                .frame(minHeight: 44)
+                .background(Capsule().fill(GrokConversationStyle.controlSurface))
+                .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(current.isBot ? "Open \(current.name) profile" : "Open \(current.name) chat options")
             .accessibilityHint(current.isBot ? "Edits this agent's identity, avatar, notifications, and voice" : "Opens conversation options")
 
-            Spacer(minLength: 2)
+            Spacer(minLength: 0)
 
             if case .bot = current {
                 Button { showingComputer = true } label: {
                     Image(systemName: "display")
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(Color.primary)
-                        .frame(width: 40, height: 40)
+                        .frame(width: 44, height: 44)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .background(Circle().fill(Color.primary.opacity(0.10)))
-                .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                .background(Circle().fill(GrokConversationStyle.controlSurface))
                 .accessibilityLabel("Watch \(current.name)'s computer")
             } else {
                 Button { showingPlus = true } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Color.primary)
-                        .frame(width: 40, height: 40)
+                        .frame(width: 44, height: 44)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .background(Circle().fill(Color.primary.opacity(0.10)))
-                .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                .background(Circle().fill(GrokConversationStyle.controlSurface))
                 .accessibilityLabel("Open \(current.name) chat options")
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 20)
         .padding(.top, 8)
-        .padding(.bottom, 8)
+        .padding(.bottom, 10)
         .background {
             ZStack(alignment: .bottom) {
                 Rectangle()
-                    .fill(Color(uiColor: .systemBackground).opacity(0.94))
+                    .fill(GrokConversationStyle.background.opacity(0.96))
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .opacity(0.18)
                 LinearGradient(
-                    colors: [Color(uiColor: .systemBackground).opacity(0.28), .clear],
+                    colors: [GrokConversationStyle.background.opacity(0.24), .clear],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 14)
-                .offset(y: 14)
-                Divider().opacity(0.22)
+                .frame(height: 16)
+                .offset(y: 16)
             }
             .ignoresSafeArea(edges: .top)
             .allowsHitTesting(false)
@@ -789,99 +821,100 @@ struct ChatView: View {
                 .transition(reduceMotion ? .identity : .opacity)
             }
 
-            GlassGroup(spacing: 10) {
-                HStack(alignment: .bottom, spacing: 10) {
+            HStack(alignment: .bottom, spacing: 10) {
+                Button {
+                    dictation.stop()
+                    composerFocused = false
+                    setShowingPlus(!showingPlus)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 21, weight: .medium))
+                        .foregroundStyle(showingPlus ? Color.primary : Color.primary)
+                        .rotationEffect(.degrees(showingPlus ? 45 : 0))
+                        .frame(width: 48, height: 48)
+                        .background(Circle().fill(GrokConversationStyle.controlSurface))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(showingPlus ? "Close" : "More")
+
+                HStack(alignment: .bottom, spacing: 3) {
                     Button {
                         dictation.stop()
-                        composerFocused = false
-                        setShowingPlus(!showingPlus)
+                        updateState(.spring(response: 0.3, dampingFraction: 0.75)) {
+                            showCommandHUD.toggle()
+                        }
+                        Haptics.selection()
                     } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 20, weight: .medium))
-                            .foregroundStyle(showingPlus ? Color(uiColor: .systemBackground) : Color.primary)
-                            .rotationEffect(.degrees(showingPlus ? 45 : 0))
-                            .frame(width: 44, height: 44)
-                            .background(Circle().fill(showingPlus ? Color.primary : Color.clear))
-                            .contentShape(Circle())
+                        Image(systemName: "command")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(showCommandHUD ? Color.primary : Color.secondary.opacity(0.72))
+                            .frame(width: 27, height: 34)
                     }
                     .buttonStyle(.plain)
-                    .glassCapsule()
-                    .accessibilityLabel(showingPlus ? "Close" : "More")
+                    .accessibilityLabel("Slash commands")
+                    .padding(.leading, 5)
 
-                    HStack(alignment: .bottom, spacing: 6) {
-                        Button {
-                            dictation.stop()
-                            updateState(.spring(response: 0.3, dampingFraction: 0.75)) {
-                                showCommandHUD.toggle()
+                    TextField(
+                        dictation.isListening ? "Listening…" : "Ask \(current.name)",
+                        text: $draft,
+                        axis: .vertical
+                    )
+                        .lineLimit(1...5)
+                        .font(chatTypography.body)
+                        .padding(.vertical, 11)
+                        .focused($composerFocused)
+                        .submitLabel(.send)
+                        // Partial transcripts rebuild from a frozen base;
+                        // prevent competing edits without dimming the text.
+                        .allowsHitTesting(!dictation.isListening && !dictation.isStarting)
+                        .onChange(of: draft) { _, value in
+                            updateState(.easeInOut(duration: 0.15)) {
+                                showCommandHUD = value.hasPrefix("/")
                             }
-                            Haptics.selection()
-                        } label: {
-                            Image(systemName: "command")
-                                .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(showCommandHUD ? Color.primary : Color.secondary)
-                                .frame(width: 30, height: 32)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Slash commands")
-                        .padding(.leading, 6)
-                        .padding(.bottom, 6)
+                        .onKeyPress(.return, phases: .down) { press in
+                            guard !press.modifiers.contains(.shift) else { return .ignored }
+                            activatePrimaryAction()
+                            return .handled
+                        }
+                        .onSubmit { activatePrimaryAction() }
 
-                        TextField(
-                            dictation.isListening ? "Listening…" : "Ask \(current.name)",
-                            text: $draft,
-                            axis: .vertical
-                        )
-                            .lineLimit(1...5)
-                            .font(chatTypography.body)
-                            .padding(.vertical, 11)
-                            .focused($composerFocused)
-                            .submitLabel(.send)
-                            // Partial transcripts rebuild from a frozen base;
-                            // prevent competing edits without dimming the text.
-                            .allowsHitTesting(!dictation.isListening && !dictation.isStarting)
-                            .onChange(of: draft) { _, value in
-                                updateState(.easeInOut(duration: 0.15)) {
-                                    showCommandHUD = value.hasPrefix("/")
-                                }
-                            }
-                            .onKeyPress(.return, phases: .down) { press in
-                                guard !press.modifiers.contains(.shift) else { return .ignored }
-                                activatePrimaryAction()
-                                return .handled
-                            }
-                            .onSubmit { activatePrimaryAction() }
-
-                        Button {
-                            composerFocused = false
-                            dictation.toggle(capturing: draft)
-                        } label: {
-                            Image(systemName: dictation.isListening ? "mic.fill" : "mic")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(dictation.isListening ? Color.red : Color.primary)
-                                .frame(width: 32, height: 32)
-                                .background(
-                                    Circle().fill(
-                                        dictation.isListening
-                                            ? Color.red.opacity(0.2)
-                                            : Color.secondary.opacity(0.12)
-                                    )
+                    Button {
+                        composerFocused = false
+                        dictation.toggle(capturing: draft)
+                    } label: {
+                        Image(systemName: dictation.isListening ? "mic.fill" : "mic")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(dictation.isListening ? Color.red : Color.primary)
+                            .frame(width: 32, height: 32)
+                            .background(
+                                Circle().fill(
+                                    dictation.isListening
+                                        ? Color.red.opacity(0.2)
+                                        : Color.secondary.opacity(0.12)
                                 )
-                                .symbolEffect(.pulse, isActive: dictation.isListening && !reduceMotion)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.bottom, 6)
-                        .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
-
-                        primaryActionButton
+                            )
+                            .symbolEffect(.pulse, isActive: dictation.isListening && !reduceMotion)
                     }
-                    .frame(minHeight: 44)
-                    .glassCapsule(interactive: false)
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 7)
+                    .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
+
+                    primaryActionButton
                 }
+                .padding(.trailing, 3)
+                .frame(minHeight: 48)
+                .background(
+                    RoundedRectangle(cornerRadius: 25, style: .continuous)
+                        .fill(GrokConversationStyle.composerSurface)
+                )
             }
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
+        .background(GrokConversationStyle.background.opacity(0.98).ignoresSafeArea(edges: .bottom))
     }
 
     @ViewBuilder
@@ -1221,20 +1254,18 @@ struct TextBubble: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(.horizontal, customCard ? 0 : 15)
-            .padding(.vertical, customCard ? 0 : 11)
+            .padding(.horizontal, customCard ? 0 : 18)
+            .padding(.vertical, customCard ? 0 : 14)
             .background(
                 Group {
                     if !customCard {
-                        SpeechBubble(tail: tailed ? (mine ? .trailing : .leading) : .none)
-                            .fill(mine ? BubbleColor.mine : BubbleColor.theirs)
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .fill(mine ? BubbleColor.mine : GrokConversationStyle.assistantBubble)
                     }
                 }
             )
-            // leave room for the tail below, so the next row does not sit on it
-            .padding(.bottom, !customCard && tailed ? SpeechBubble.tailDrop() : 0)
 
-            if !mine { Spacer(minLength: 44) }
+            if !mine { Spacer(minLength: 18) }
         }
     }
 }
@@ -1484,14 +1515,31 @@ struct CommActivityRow: View {
 /// comm chip. Deliberately quiet; these are context, not content.
 struct ActivityChip: View {
     let tool: ToolActivity?
+    @Environment(\.conversationTypography) private var typography
 
     var body: some View {
         if let tool {
-            SkillExecutionReceiptView(
-                skillName: tool.name,
-                status: tool.ok.map { $0 ? "success" : "error" } ?? "running"
-            )
-            .padding(.leading, 2)
+            HStack(spacing: 8) {
+                Image(systemName: tool.ok == nil ? "hourglass" : tool.ok == true ? "checkmark" : "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(tool.ok == false ? Color.red : Color.secondary)
+                    .frame(width: 14, height: 14)
+                Text(ToolRunGrouping.displayLabel(for: tool))
+                    .font(typography.detail.weight(.medium))
+                    .foregroundStyle(Color.primary.opacity(0.86))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 8)
+                Text(tool.ok == nil ? "Running" : tool.ok == true ? "Done" : "Failed")
+                    .font(typography.compact)
+                    .foregroundStyle(tool.ok == false ? Color.red : Color.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Capsule().fill(GrokConversationStyle.controlSurface.opacity(0.74)))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(ToolRunGrouping.displayLabel(for: tool))
+            .accessibilityValue(tool.ok == nil ? "Running" : tool.ok == true ? "Done" : "Failed")
         }
     }
 }
@@ -1609,16 +1657,12 @@ struct CardView: View {
                         .foregroundStyle(Color.secondary)
                 }
             }
-            .padding(14)
+            .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(card.isPending ? tint.opacity(0.12) : Color.secondary.opacity(0.13))
+                    .fill(card.isPending ? tint.opacity(0.12) : GrokConversationStyle.assistantBubble)
             )
-            .overlay {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .strokeBorder(card.isPending ? tint : .clear, lineWidth: 1.5)
-            }
         }
     }
 }
@@ -1702,11 +1746,13 @@ struct StreamingBubble: View {
                         .foregroundStyle(Color.primary)
                 }
             }
-            .padding(.horizontal, 15)
-            .padding(.vertical, 11)
-            .background(SpeechBubble(tail: .leading).fill(BubbleColor.theirs))
-            .padding(.bottom, SpeechBubble.tailDrop())
-            Spacer(minLength: 44)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(GrokConversationStyle.assistantBubble)
+            )
+            Spacer(minLength: 18)
         }
         // No `.textSelection` on purpose: selecting text that is still growing
         // fights the reader, and the settled bubble a frame later is
