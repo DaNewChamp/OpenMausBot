@@ -176,23 +176,132 @@ public enum ConnectionAdvice {
 }
 
 extension Connection {
-    /// Every host this connection may dial, best first and never empty: the
-    /// stored `host` leads, then the pairing-time fallbacks, deduplicated
-    /// after the same normalization dialing applies.
+    /// `nil` is the compatibility policy for connections persisted before
+    /// route consent existed. Once present, only an explicitly selected kind
+    /// and hosted HTTPS may receive the pairing/device token.
+    public func allowsRouteKind(_ kind: CompanionEndpointKind) -> Bool {
+        guard let allowedRouteKinds else { return true }
+        return kind == .hosted || allowedRouteKinds.contains(kind)
+    }
+
+    /// Kind consent is sufficient for protected transports. A cleartext route
+    /// additionally has to be the exact origin shown for confirmation; another
+    /// address of the same local kind is not interchangeable.
+    public func allowsEndpoint(_ endpoint: CompanionEndpoint) -> Bool {
+        guard allowsRouteKind(endpoint.kind) else { return false }
+        guard endpoint.securityClass == .explicitLocal,
+              allowedRouteKinds != nil
+        else { return true }
+        return allowedLocalRouteURLs?.contains(endpoint.url) == true
+    }
+
+    public func endpointsAllowedByRoutePolicy(
+        _ candidates: [CompanionEndpoint]
+    ) -> [CompanionEndpoint] {
+        candidates.filter(allowsEndpoint)
+    }
+
+    /// Bind a new pairing to the route the QR/manual choice selected. Other
+    /// typed-invite fallbacks are advisory, not fresh consent. Hosted HTTPS is
+    /// always retained as a safe future upgrade.
+    public mutating func establishRoutePolicyFromInvite() {
+        let selected = activeEndpoint ?? CompanionEndpoint.direct(
+            host: host,
+            port: port,
+            priority: 0
+        )
+        switch selected {
+        case let endpoint? where endpoint.kind == .hosted:
+            allowedRouteKinds = [.hosted]
+            allowedLocalRouteURLs = []
+        case let endpoint? where endpoint.kind == .tailnet:
+            allowedRouteKinds = [.tailnet, .hosted]
+            allowedLocalRouteURLs = []
+        case let endpoint?:
+            allowedRouteKinds = [endpoint.kind, .hosted]
+            allowedLocalRouteURLs = [endpoint.url]
+        case nil:
+            allowedRouteKinds = [.hosted]
+            allowedLocalRouteURLs = []
+        }
+        if let endpoints {
+            self.endpoints = Array(endpointsAllowedByRoutePolicy(endpoints).prefix(8))
+        }
+        if let hosts {
+            self.hosts = Array(advertisedHostsAllowedByRoutePolicy(hosts).prefix(8))
+        }
+    }
+
+    /// Apply the routes returned when a pairing credential is redeemed without
+    /// widening the consent recorded from the invite carrying that credential.
+    public mutating func applyPairingAdvertisement(
+        hosts advertisedHosts: [String]?,
+        endpoints advertisedEndpoints: [CompanionEndpoint]?
+    ) {
+        if let advertisedHosts, !advertisedHosts.isEmpty {
+            hosts = Array(advertisedHostsAllowedByRoutePolicy(advertisedHosts).prefix(8))
+        }
+        if let advertisedEndpoints, !advertisedEndpoints.isEmpty {
+            let accepted = endpointsAllowedByRoutePolicy(advertisedEndpoints)
+            if !accepted.isEmpty { endpoints = Array(accepted.prefix(8)) }
+        }
+    }
+
+    /// A hand-entered replacement is fresh explicit consent. Reset rather than
+    /// widening the old policy: selected local permits that exact origin and
+    /// hosted, selected tailnet permits tailnet and hosted.
+    public mutating func resetRoutePolicy(selecting endpoint: CompanionEndpoint) {
+        let previousEndpoints = orderedEndpoints
+        allowedRouteKinds = [endpoint.kind, .hosted]
+        allowedLocalRouteURLs = endpoint.securityClass == .explicitLocal ? [endpoint.url] : []
+        activeEndpoint = endpoint
+        host = endpoint.host
+        port = endpoint.port
+        endpoints = [endpoint] + endpointsAllowedByRoutePolicy(previousEndpoints)
+            .filter { $0.url != endpoint.url }
+        hosts = Array(advertisedHostsAllowedByRoutePolicy(
+            [endpoint.host] + (hosts ?? [])
+        ).prefix(8))
+    }
+
+    private func advertisedHostsAllowedByRoutePolicy(_ candidates: [String]) -> [String] {
+        var seen = Set<String>()
+        return candidates.compactMap { raw -> String? in
+            let candidate = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !candidate.isEmpty,
+                  candidate.utf8.count <= 253,
+                  !candidate.contains(where: { $0.isWhitespace || "/?#".contains($0) })
+            else { return nil }
+            let normalized = Self.urlHost(candidate)
+            guard let endpoint = CompanionEndpoint.direct(
+                host: normalized,
+                port: port,
+                priority: 0
+            ), allowsEndpoint(endpoint) else { return nil }
+            return seen.insert(normalized).inserted ? normalized : nil
+        }
+    }
+
+    /// Every legacy host this connection may dial, best first. A policy-bound
+    /// hosted connection can legitimately return an empty list because its
+    /// complete HTTPS endpoint lives in `orderedEndpoints` instead.
     public var orderedHosts: [String] {
         var seen = Set<String>()
         var out: [String] = []
         for candidate in [host] + (hosts ?? []) {
             let normalized = Self.urlHost(candidate)
+            guard let endpoint = CompanionEndpoint.direct(
+                host: normalized,
+                port: port,
+                priority: 0
+            ), allowsEndpoint(endpoint) else { continue }
             if seen.insert(normalized).inserted { out.append(normalized) }
         }
         return out
     }
 
-    /// Every complete route in policy order. Typed endpoints win over the
-    /// legacy fields because they can represent hosted HTTPS. A connection
-    /// either walks that complete typed set or, for an older desktop, derives
-    /// direct routes from the legacy fields — never a lossy mixture of both.
+    /// Every complete route in policy order. Typed endpoints win over legacy
+    /// fields because they can represent hosted HTTPS.
     public var orderedEndpoints: [CompanionEndpoint] {
         var candidates = endpoints ?? []
         if !candidates.isEmpty {
@@ -210,48 +319,34 @@ extension Connection {
             }
         }
         var seen = Set<String>()
-        return candidates.filter { seen.insert($0.url).inserted }.prefix(8).map { $0 }
+        return endpointsAllowedByRoutePolicy(candidates)
+            .filter { seen.insert($0.url).inserted }
+            .prefix(8).map { $0 }
     }
 
     /// The subset an automatic pairing or authenticated reconnect may try.
-    /// The complete advertised list remains persisted in `orderedEndpoints`
-    /// so a person can explicitly choose a local route later.
     public var automaticEndpoints: [CompanionEndpoint] {
         CompanionEndpoint.automaticCandidates(from: orderedEndpoints)
     }
 
-    /// Apply an authenticated endpoint snapshot. The caller owns the exact
-    /// client carrying the current live stream; this value chooses what a
-    /// future reconnect or launch may dial.
-    ///
-    /// The advertised version of the active route is retained when present.
-    /// If it disappeared, a new protected route is a safe upgrade. With no
-    /// protected replacement, the exact old route remains the first candidate
-    /// instead of silently authorizing some other cleartext LAN address.
+    /// Apply an authenticated endpoint snapshot while retaining any currently
+    /// working route that remains within the explicit policy.
     public mutating func reconcile(_ metadata: CompanionConnectionMetadata) {
         let cleanedName = metadata.serverName.trimmingCharacters(in: .whitespacesAndNewlines)
             .filter { (!$0.isASCII && !$0.isNewline) || $0.asciiValue.map { $0 >= 32 && $0 != 127 } == true }
         if !cleanedName.isEmpty { name = String(cleanedName.prefix(80)) }
 
         if let advertisedHosts = metadata.hosts {
-            var seen = Set<String>()
-            hosts = advertisedHosts.compactMap { raw -> String? in
-                let candidate = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !candidate.isEmpty,
-                      candidate.utf8.count <= 253,
-                      !candidate.contains(where: { $0.isWhitespace || "/?#".contains($0) })
-                else { return nil }
-                let normalized = Self.urlHost(candidate)
-                return seen.insert(normalized).inserted ? normalized : nil
-            }.prefix(8).map { $0 }
+            hosts = Array(advertisedHostsAllowedByRoutePolicy(advertisedHosts).prefix(8))
         }
 
-        let previousActive = activeEndpoint
-        endpoints = metadata.endpoints
+        let previousActive = activeEndpoint.flatMap { allowsEndpoint($0) ? $0 : nil }
+        let refreshedEndpoints = endpointsAllowedByRoutePolicy(metadata.endpoints)
+        endpoints = refreshedEndpoints
         if let previousActive,
-           let refreshedActive = metadata.endpoints.first(where: { $0.url == previousActive.url }) {
+           let refreshedActive = refreshedEndpoints.first(where: { $0.url == previousActive.url }) {
             activeEndpoint = refreshedActive
-        } else if let protectedReplacement = metadata.endpoints.first(where: \.protectsCredentials) {
+        } else if let protectedReplacement = refreshedEndpoints.first(where: \.protectsCredentials) {
             activeEndpoint = protectedReplacement
         } else if let previousActive,
                   let retained = CompanionEndpoint(
@@ -260,11 +355,11 @@ extension Connection {
                       priority: 0
                   ) {
             activeEndpoint = retained
-            endpoints = [retained] + metadata.endpoints
+            endpoints = [retained] + refreshedEndpoints
                 .filter { $0.url != retained.url }
                 .prefix(7)
         } else {
-            activeEndpoint = metadata.endpoints.first
+            activeEndpoint = refreshedEndpoints.first
         }
         if let activeEndpoint {
             host = activeEndpoint.host
@@ -272,9 +367,7 @@ extension Connection {
         }
     }
 
-    /// A copy dialing `candidate` — same pairing, same port, different
-    /// address. The stored order is untouched; committing a winner is
-    /// `promote`, and only success earns it.
+    /// A copy dialing `candidate` without changing stored policy order.
     public func dialing(_ candidate: String) -> Connection {
         guard let endpoint = CompanionEndpoint.direct(host: candidate, port: port, priority: 10_000) else {
             return self
@@ -285,6 +378,7 @@ extension Connection {
     /// A copy dialing one complete route without changing its stored policy
     /// order or keychain identity.
     public func dialing(_ candidate: CompanionEndpoint) -> Connection {
+        guard allowsEndpoint(candidate) else { return self }
         var copy = self
         copy.activeEndpoint = candidate
         copy.host = candidate.host
@@ -292,19 +386,25 @@ extension Connection {
         return copy
     }
 
-    /// `winner` becomes the host dialed first from now on — the one that just
-    /// carried traffic, or the one the user typed in by hand.
+    /// `winner` becomes the host dialed first from now on — only a route
+    /// allowed by the consent policy can be promoted.
     public mutating func promote(_ winner: String) {
         let normalized = Self.urlHost(winner)
+        guard let endpoint = CompanionEndpoint.direct(
+            host: normalized,
+            port: port,
+            priority: 10_000
+        ), allowsEndpoint(endpoint) else { return }
         let rest = orderedHosts.filter { $0 != normalized }
         host = normalized
         hosts = [normalized] + rest
-        activeEndpoint = CompanionEndpoint.direct(host: normalized, port: port, priority: 10_000)
+        activeEndpoint = endpoint
     }
 
     /// Remember the route that worked without letting a cleartext fallback
-    /// jump ahead of a lower-priority hosted/tailnet route on the next launch.
+    /// jump ahead of a lower-priority protected route on the next launch.
     public mutating func promote(_ winner: CompanionEndpoint) {
+        guard allowsEndpoint(winner) else { return }
         activeEndpoint = winner
         host = winner.host
         port = winner.port

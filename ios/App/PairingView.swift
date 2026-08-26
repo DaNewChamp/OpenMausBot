@@ -25,7 +25,7 @@ struct PairingView: View {
     /// instead of creating an orphan device.
     @State private var pairRequestId: String?
     @State private var chosen: Connection?
-    @State private var pairing = false
+    @State private var submission = CompanionPairingSubmissionState()
     @State private var failure: String?
     @State private var showingScanner = false
     @State private var showManualInput = false
@@ -36,6 +36,8 @@ struct PairingView: View {
 
     // Radar pulse animation states
     @State private var radarPulse = false
+
+    private var pairing: Bool { submission.isInFlight }
 
     private let accentTint = Color(hex: "#38BDF8")
 
@@ -98,6 +100,7 @@ struct PairingView: View {
                     return nil
                 }
             }
+            .interactiveDismissDisabled(pairing)
             .task {
                 searchedLongEnough = false
                 do {
@@ -413,15 +416,15 @@ struct PairingView: View {
                 Text(connection.name)
                     .font(.title2.weight(.bold))
                     .foregroundColor(isDark ? .white : Color(hex: "#0F172A"))
-                Text(connection.displayAddress)
+                Text(connection.pairingConsentOrigin)
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
             }
 
             if let credential = scannedCredential {
-                Text(connection.activeEndpoint?.isSecure == true
-                    ? "Confirm this computer to establish an authenticated HTTPS companion connection."
-                    : "Confirm this computer to establish an authenticated companion connection. Use a trusted Wi-Fi network or a tailnet; OpenMausBot does not encrypt local Wi-Fi traffic.")
+                Text(connectionIsProtected(connection)
+                    ? "Confirm this computer to establish an encrypted companion connection."
+                    : "Confirm this computer on a trusted network. Local Wi-Fi traffic is authenticated but not encrypted.")
                     .font(.caption)
                     .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
                     .multilineTextAlignment(.center)
@@ -429,7 +432,7 @@ struct PairingView: View {
 
                 Button {
                     Haptics.selection()
-                    Task { await submit(connection, credential: credential) }
+                    beginSubmission(connection, credential: credential)
                 } label: {
                     HStack(spacing: 8) {
                         if pairing {
@@ -471,9 +474,9 @@ struct PairingView: View {
                             code = String(value.filter { $0.isASCII && $0.isNumber }.prefix(6))
                         }
 
-                    Button {
-                        Haptics.selection()
-                        Task { await submit(connection, credential: code) }
+                Button {
+                    Haptics.selection()
+                    beginSubmission(connection, credential: code)
                     } label: {
                         HStack(spacing: 8) {
                             if pairing {
@@ -506,6 +509,7 @@ struct PairingView: View {
             .font(.caption.weight(.semibold))
             .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
             .padding(.top, 4)
+            .disabled(!submission.allowsNavigation)
         }
         .padding(20)
         .frame(maxWidth: .infinity)
@@ -541,6 +545,7 @@ struct PairingView: View {
 
     @MainActor
     private func choose(_ service: Discovery.Found) async {
+        guard submission.allowsNavigation else { return }
         choiceGeneration += 1
         let generation = choiceGeneration
         failure = nil
@@ -555,10 +560,26 @@ struct PairingView: View {
         }
     }
 
+    @MainActor
+    private func beginSubmission(_ connection: Connection, credential: String) {
+        guard submission.begin() else { return }
+        Task { await submit(connection, credential: credential) }
+    }
+
+    @MainActor
     private func submit(_ connection: Connection, credential: String) async {
-        pairing = true
         failure = nil
-        defer { pairing = false }
+        defer {
+            submission.finish()
+            // A second deep link received during the commit must not replace
+            // the consent screen. If pairing failed, show it only after the
+            // in-flight request has fully settled; on success consume it.
+            if session.connection == nil {
+                accept(session.pairingInvite)
+            } else {
+                session.consumePairingInvite()
+            }
+        }
         let cameFromScanner = scannedCredential != nil
         let requestId = pairRequestId ?? UUID().uuidString
         pairRequestId = requestId
@@ -594,7 +615,7 @@ struct PairingView: View {
     }
 
     private func accept(_ invite: PairingInvite?) {
-        guard let invite else { return }
+        guard submission.allowsNavigation, let invite else { return }
         choiceGeneration += 1
         chosen = invite.connection
         scannedCredential = invite.credential
@@ -602,6 +623,12 @@ struct PairingView: View {
         code = ""
         failure = nil
         session.consumePairingInvite()
+    }
+
+    private func connectionIsProtected(_ connection: Connection) -> Bool {
+        connection.activeEndpoint?.protectsCredentials
+            ?? connection.automaticEndpoints.first?.protectsCredentials
+            ?? false
     }
 
     // MARK: - Helpers

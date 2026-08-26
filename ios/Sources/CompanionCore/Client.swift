@@ -150,8 +150,9 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
     public var port: Int
     /// Every other address the computer answered on at pairing time, best
     /// first — the tailnet name, the LAN address, the sidecar's mDNS name.
-    /// Optional so connections saved before fallbacks existed still decode;
-    /// read through `orderedHosts`, which is never empty.
+    /// Optional so connections saved before fallbacks existed still decode.
+    /// Policy-bound hosted connections may have no legacy HTTP host because
+    /// their complete route lives in `endpoints`.
     public var hosts: [String]?
     /// Complete route currently being dialed. Absent on connections saved by
     /// older app builds, where `host` + `port` still mean direct HTTP.
@@ -159,6 +160,14 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
     /// Full routes advertised by a newer desktop. Each carries its own scheme
     /// and port so hosted HTTPS can coexist with local HTTP fallbacks.
     public var endpoints: [CompanionEndpoint]?
+    /// Route kinds explicitly authorized by the pairing confirmation. `nil`
+    /// is retained for connections saved before route consent existed and
+    /// preserves their legacy behavior. New pairings always persist a policy.
+    public var allowedRouteKinds: Set<CompanionEndpointKind>?
+    /// Exact cleartext origins authorized by the pairing confirmation. A
+    /// cleartext route of the same kind is not interchangeable with another
+    /// address on a later network.
+    public var allowedLocalRouteURLs: Set<String>?
 
     public init(
         id: String = UUID().uuidString,
@@ -167,7 +176,9 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
         port: Int,
         hosts: [String]? = nil,
         activeEndpoint: CompanionEndpoint? = nil,
-        endpoints: [CompanionEndpoint]? = nil
+        endpoints: [CompanionEndpoint]? = nil,
+        allowedRouteKinds: Set<CompanionEndpointKind>? = nil,
+        allowedLocalRouteURLs: Set<String>? = nil
     ) {
         self.id = id
         self.name = name
@@ -176,6 +187,8 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
         self.hosts = hosts
         self.activeEndpoint = activeEndpoint
         self.endpoints = endpoints
+        self.allowedRouteKinds = allowedRouteKinds
+        self.allowedLocalRouteURLs = allowedLocalRouteURLs
     }
 
     /// The representation `URLComponents.host` accepts for a literal IPv6
@@ -284,14 +297,16 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
     /// LAN path is documented as trusted-network-only, and pinned TLS is what
     /// this needs before it could claim otherwise. See `docs/ios-companion.md`.
     public var baseURL: URL? {
-        if let endpoint = activeEndpoint?.baseURL { return endpoint }
-        var components = URLComponents()
-        components.scheme = "http"
-        // Normalize here too so connections saved by older builds with an
-        // unbracketed IPv6 host remain usable after an update.
-        components.host = Self.urlHost(host)
-        components.port = port
-        return components.url
+        if let activeEndpoint {
+            guard allowsEndpoint(activeEndpoint) else { return nil }
+            return activeEndpoint.baseURL
+        }
+        guard let direct = CompanionEndpoint.direct(
+            host: host,
+            port: port,
+            priority: 0
+        ), allowsEndpoint(direct) else { return nil }
+        return direct.baseURL
     }
 }
 
@@ -349,6 +364,7 @@ public struct PairingInvite: Equatable, Sendable {
             connection.endpoints = endpoints
             connection = connection.dialing(endpoints[0])
         }
+        connection.establishRoutePolicyFromInvite()
         return PairingInvite(connection: connection, credential: credential)
     }
 
@@ -1140,10 +1156,107 @@ public struct CompanionClient: Sendable {
         return url
     }
 
+    /// Open the OAuth page for one inline connector card. The card route is
+    /// scoped to the bot, transcript thread, and message so a phone cannot
+    /// authorize an app from another conversation by swapping one id.
+    public func authorizeConnectorCard(
+        botId: String,
+        threadId: String,
+        messageId: String
+    ) async throws -> URL {
+        guard Self.validConnectorIdentifier(botId),
+              Self.validConnectorIdentifier(threadId),
+              Self.validConnectorIdentifier(messageId)
+        else { throw APIError.badURL }
+        let response = try await send(
+            try makeRequest(
+                "POST",
+                "/api/bots/\(botId)/connector-cards/\(messageId)/authorize",
+                body: ["threadId": threadId]
+            ),
+            as: ConnectorAuthorizationResponse.self
+        )
+        guard let url = ConnectorAuthorizationURL.parse(response.url) else {
+            throw APIError.badURL
+        }
+        return url
+    }
+
+    /// Poll the status of an inline connector card after the OAuth browser
+    /// returns. The server also patches the transcript, but this response
+    /// lets a phone with a briefly paused stream update its card immediately.
+    public func connectorCardStatus(
+        botId: String,
+        threadId: String,
+        messageId: String
+    ) async throws -> ConnectorCardStatusResponse {
+        guard Self.validConnectorIdentifier(botId),
+              Self.validConnectorIdentifier(threadId),
+              Self.validConnectorIdentifier(messageId)
+        else { throw APIError.badURL }
+        return try await send(
+            try makeRequest(
+                "GET",
+                "/api/bots/\(botId)/connector-cards/\(messageId)/status",
+                query: [URLQueryItem(name: "threadId", value: threadId)]
+            ),
+            as: ConnectorCardStatusResponse.self
+        )
+    }
+
+    /// Ask the harness to continue the paused turn after every card sharing
+    /// its resume key is connected.
+    public func resumeConnectorCard(
+        botId: String,
+        threadId: String,
+        messageId: String
+    ) async throws -> ConnectorCardActionResponse {
+        guard Self.validConnectorIdentifier(botId),
+              Self.validConnectorIdentifier(threadId),
+              Self.validConnectorIdentifier(messageId)
+        else { throw APIError.badURL }
+        return try await send(
+            try makeRequest(
+                "POST",
+                "/api/bots/\(botId)/connector-cards/\(messageId)/resume",
+                body: ["threadId": threadId]
+            ),
+            as: ConnectorCardActionResponse.self
+        )
+    }
+
+    /// Dismiss an inline card without touching the underlying connected-app
+    /// account. Revocation remains a Mac-only action.
+    public func dismissConnectorCard(
+        botId: String,
+        threadId: String,
+        messageId: String
+    ) async throws -> ConnectorCardActionResponse {
+        guard Self.validConnectorIdentifier(botId),
+              Self.validConnectorIdentifier(threadId),
+              Self.validConnectorIdentifier(messageId)
+        else { throw APIError.badURL }
+        return try await send(
+            try makeRequest(
+                "POST",
+                "/api/bots/\(botId)/connector-cards/\(messageId)/dismiss",
+                body: ["threadId": threadId]
+            ),
+            as: ConnectorCardActionResponse.self
+        )
+    }
+
     /// Matches the companion's `[\w-]+` toolkit route component. JavaScript
     /// `\w` is ASCII here; Unicode letters must not become a confusing 404.
     private static func validConnectorSlug(_ value: String) -> Bool {
         !value.isEmpty && value.utf8.allSatisfy {
+            (48...57).contains($0) || (65...90).contains($0) ||
+                (97...122).contains($0) || $0 == 95 || $0 == 45
+        }
+    }
+
+    private static func validConnectorIdentifier(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 200 && value.utf8.allSatisfy {
             (48...57).contains($0) || (65...90).contains($0) ||
                 (97...122).contains($0) || $0 == 95 || $0 == 45
         }

@@ -42,6 +42,9 @@ final class Session: ObservableObject {
     /// One exact message the next opened chat should reveal.
     @Published private(set) var focusedMessageId: String?
     @Published private(set) var notificationAuthorization: UNAuthorizationStatus = .notDetermined
+    /// Distinguishes a real `.notDetermined` result from the in-memory value
+    /// used while UserNotifications is still resolving at launch.
+    @Published private(set) var notificationAuthorizationResolved = false
     /// A short-lived desktop handoff waiting for PairingView to present it.
     @Published private(set) var pairingInvite: PairingInvite?
 
@@ -193,8 +196,15 @@ final class Session: ObservableObject {
         deviceName: String,
         pairRequestId: String
     ) async throws {
+        var invited = connection
+        // QR invites already carry this policy. Manual entry arrives as a
+        // parsed Connection, so establish the same consent boundary before
+        // any health probe or one-time credential redemption.
+        if invited.allowedRouteKinds == nil {
+            invited.establishRoutePolicyFromInvite()
+        }
         let outcome = try await CompanionClient.pairFirstReachable(
-            connection: connection,
+            connection: invited,
             credential: credential,
             deviceName: deviceName,
             pairRequestId: pairRequestId
@@ -203,14 +213,10 @@ final class Session: ObservableObject {
         // prefer the name the computer calls itself over the Bonjour label
         var stored = outcome.connection
         if !paired.serverName.isEmpty { stored.name = paired.serverName }
-        // The computer knows every address it answers on, and what it says at
-        // redeem time beats whatever the invite carried. The route that just
-        // redeemed leads this live session; future launches return to the
-        // desktop's security-prioritized typed order.
-        if let hosts = paired.hosts, !hosts.isEmpty { stored.hosts = Array(hosts.prefix(8)) }
-        if let endpoints = paired.endpoints, !endpoints.isEmpty {
-            stored.endpoints = Array(endpoints.prefix(8))
-        }
+        // The computer may advertise every interface it answers on, but a
+        // pairing response cannot widen the exact route consent carried by
+        // the invite that redeemed this credential.
+        stored.applyPairingAdvertisement(hosts: paired.hosts, endpoints: paired.endpoints)
         let winner = outcome.connection.activeEndpoint ?? CompanionEndpoint.direct(
             host: outcome.connection.host,
             port: outcome.connection.port,
@@ -222,8 +228,25 @@ final class Session: ObservableObject {
         }
 
         try Keychain.save(paired.token, for: stored.id)
-        UserDefaults.standard.set(try? JSONEncoder().encode(stored), forKey: Self.connectionKey)
+        // Mark first-pair education before making this connection restorable.
+        // If the process stops between these writes, an orphan marker while
+        // unpaired is harmless; the reverse order could skip the prompt.
+        CompanionPairingCommitSequence.persist {
+            UserDefaults.standard.set(
+                true,
+                forKey: CompanionOnboardingPreferences.pendingNotificationOnboardingKey
+            )
+        } saveConnection: {
+            UserDefaults.standard.set(
+                try? JSONEncoder().encode(stored),
+                forKey: Self.connectionKey
+            )
+        }
 
+        pairingInvite = CompanionPairingInvitePolicy.nextInvite(
+            current: pairingInvite,
+            after: .pairingSucceeded
+        )
         self.connection = stored
         self.token = paired.token
         let liveRoutes = winner.map { route in
@@ -243,7 +266,10 @@ final class Session: ObservableObject {
     }
 
     func receivePairingURL(_ url: URL) {
-        guard status == .unpaired else {
+        guard CompanionPairingInvitePolicy.allowsIncomingInvite(
+            hasConnection: connection != nil,
+            pairingStateIsUnpaired: status == .unpaired
+        ) else {
             actionError = "This phone is already paired. Unpair it in Settings before connecting it to another computer."
             return
         }
@@ -251,11 +277,17 @@ final class Session: ObservableObject {
             actionError = "That pairing invitation is not valid. Start pairing again on your computer."
             return
         }
-        pairingInvite = invite
+        pairingInvite = CompanionPairingInvitePolicy.nextInvite(
+            current: pairingInvite,
+            after: .received(invite)
+        )
     }
 
     func consumePairingInvite() {
-        pairingInvite = nil
+        pairingInvite = CompanionPairingInvitePolicy.nextInvite(
+            current: pairingInvite,
+            after: .consumed
+        )
     }
 
     func signOut() {
@@ -265,9 +297,16 @@ final class Session: ObservableObject {
         endpointRefreshTask = nil
         restorePending = false
         pendingNotification = nil
+        pairingInvite = CompanionPairingInvitePolicy.nextInvite(
+            current: pairingInvite,
+            after: .signedOut
+        )
         if let id = connection?.id { Keychain.remove(id) }
         UserDefaults.standard.removeObject(forKey: Self.connectionKey)
         UserDefaults.standard.removeObject(forKey: Self.pinnedOverridesKey)
+        UserDefaults.standard.removeObject(
+            forKey: CompanionOnboardingPreferences.pendingNotificationOnboardingKey
+        )
         connection = nil
         client = nil
         token = nil
@@ -590,14 +629,15 @@ final class Session: ObservableObject {
     @discardableResult
     func updateAddress(_ text: String) -> Bool {
         guard var updated = connection, let parsed = Connection.parse(text) else { return false }
-        let existingRoutes = updated.orderedEndpoints
         guard let endpoint = parsed.activeEndpoint ?? CompanionEndpoint.direct(
             host: parsed.host,
             port: parsed.port,
             priority: 0
         ) else { return false }
-        updated.promote(endpoint)
-        updated.endpoints = [endpoint] + existingRoutes.filter { $0.url != endpoint.url }
+        // A hand-entered route is fresh explicit consent. Reset the old
+        // policy instead of allowing a local address to inherit protected or
+        // unrelated LAN fallbacks from the previous pairing.
+        updated.resetRoutePolicy(selecting: endpoint)
         connection = updated
         UserDefaults.standard.set(try? JSONEncoder().encode(updated), forKey: Self.connectionKey)
         rotation = CandidateRotation(
@@ -1185,8 +1225,126 @@ final class Session: ObservableObject {
         catch { actionError = error.localizedDescription; return nil }
     }
 
+    /// Start OAuth for a connector request already present in this transcript.
+    /// The server binds the action to the card's message and thread; the phone
+    /// only supplies those ids and never receives a credential payload.
+    func authorizeConnectorCard(chat: Chat, message: Message) async -> URL? {
+        guard let client, let botId = connectorBotId(for: chat, message: message) else {
+            actionError = "This connection card is no longer available."
+            return nil
+        }
+        do {
+            let url = try await client.authorizeConnectorCard(
+                botId: botId,
+                threadId: chat.threadId,
+                messageId: message.id
+            )
+            await refreshTranscript(threadId: chat.threadId, quietly: true)
+            return url
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+        } catch {
+            actionError = error.localizedDescription
+        }
+        return nil
+    }
+
+    /// Read the server's current OAuth state. A transcript refresh follows a
+    /// terminal state so a paused card changes even when SSE was interrupted
+    /// while the browser was in the foreground.
+    func connectorCardStatus(chat: Chat, message: Message) async -> ConnectorCardStatusResponse? {
+        guard let client, let botId = connectorBotId(for: chat, message: message) else { return nil }
+        do {
+            let response = try await client.connectorCardStatus(
+                botId: botId,
+                threadId: chat.threadId,
+                messageId: message.id
+            )
+            let failed = response.status?.range(
+                of: "failed|expired|revoked|error",
+                options: [.caseInsensitive, .regularExpression]
+            ) != nil
+            if response.connected || failed {
+                await refreshTranscript(threadId: chat.threadId, quietly: true)
+            }
+            return response
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+        } catch {
+            // Polling is best-effort. The card remains actionable and the
+            // next stream hydrate can still deliver the authoritative state.
+        }
+        return nil
+    }
+
+    func resumeConnectorCard(chat: Chat, message: Message) async -> Bool {
+        guard let client, let botId = connectorBotId(for: chat, message: message) else {
+            actionError = "This connection card is no longer available."
+            return false
+        }
+        do {
+            _ = try await client.resumeConnectorCard(
+                botId: botId,
+                threadId: chat.threadId,
+                messageId: message.id
+            )
+            await refreshTranscript(threadId: chat.threadId, quietly: true)
+            return true
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+        } catch {
+            actionError = error.localizedDescription
+        }
+        return false
+    }
+
+    func dismissConnectorCard(chat: Chat, message: Message) async -> Bool {
+        guard let client, let botId = connectorBotId(for: chat, message: message) else {
+            actionError = "This connection card is no longer available."
+            return false
+        }
+        do {
+            _ = try await client.dismissConnectorCard(
+                botId: botId,
+                threadId: chat.threadId,
+                messageId: message.id
+            )
+            await refreshTranscript(threadId: chat.threadId, quietly: true)
+            return true
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+        } catch {
+            actionError = error.localizedDescription
+        }
+        return false
+    }
+
+    /// Pull the current page after a browser authorization or card action.
+    /// This is deliberately a merge: it preserves any local scrollback while
+    /// replacing the patched card with the server's source of truth.
+    func refreshTranscript(threadId: String, quietly: Bool = false) async {
+        guard let client else { return }
+        do {
+            let page = try await client.messages(threadId: threadId, limit: 50)
+            guard !Task.isCancelled else { return }
+            state.merge(page, intoThread: threadId)
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+        } catch {
+            if !quietly { actionError = error.localizedDescription }
+        }
+    }
+
+    private func connectorBotId(for chat: Chat, message: Message) -> String? {
+        switch chat {
+        case let .bot(bot): return bot.id
+        case .room: return message.from?.botId
+        }
+    }
+
     func refreshNotificationAuthorization() async {
         notificationAuthorization = await NotificationCoordinator.shared.authorizationStatus()
+        notificationAuthorizationResolved = true
     }
 
     func enableNotifications() async {

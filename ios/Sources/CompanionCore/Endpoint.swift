@@ -180,4 +180,16 @@ extension Connection {
     public var displayAddress: String {
         activeEndpoint?.displayAddress ?? "\(host):\(port)"
     }
+
+    /// The normalized network origin shown on the pairing confirmation. It
+    /// intentionally contains no pairing code, query, path, or credential.
+    public var pairingConsentOrigin: String {
+        if let activeEndpoint { return activeEndpoint.url }
+
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = Self.urlHost(host.lowercased())
+        components.port = port
+        return components.url?.absoluteString ?? "\(host.lowercased()):\(port)"
+    }
 }

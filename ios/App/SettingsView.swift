@@ -5,6 +5,7 @@
 // account inventory/authorization without widening that boundary.
 import SwiftUI
 import CompanionCore
+import UIKit
 
 struct SettingsView: View {
     @EnvironmentObject private var session: Session
@@ -19,7 +20,16 @@ struct SettingsView: View {
             Section("Computer") {
                 if let connection = session.connection {
                     LabeledContent("Name", value: connection.name)
-                    LabeledContent("Address", value: connection.displayAddress)
+                    LabeledContent("Address", value: connection.pairingConsentOrigin)
+                    LabeledContent("Transport", value: routeDescription(for: connection))
+                    Button("Copy address") {
+                        UIPasteboard.general.string = connection.pairingConsentOrigin
+                    }
+                    if connection.activeEndpoint?.protectsCredentials == false {
+                        Text("Local connections are authenticated but not encrypted. Use a trusted network.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                     // The stored address can simply go stale — a tailnet name
                     // on a phone that left the tailnet, a LAN address after
                     // the router reshuffled. Editing it here keeps the
@@ -90,7 +100,7 @@ struct SettingsView: View {
             Section {
                 Button("Unpair this phone", role: .destructive) { confirmingSignOut = true }
             } footer: {
-                Text("Removes the pairing from this phone only. To stop it reaching the computer at all, remove the device in OpenMausBot → Settings → Companion.")
+                Text("Removes the pairing from this phone only. To stop it reaching the computer at all, remove the device in OpenMausBot → Settings → Companion. Changing the address creates a new explicit route choice and never adds another LAN fallback automatically.")
             }
 
             Section("Not here") {
@@ -134,6 +144,16 @@ struct SettingsView: View {
         case .unpaired: return "Not paired"
         case .unauthorized: return "Unpaired on the computer"
         case let .offline(reason): return reason
+        }
+    }
+
+    private func routeDescription(for connection: Connection) -> String {
+        switch connection.activeEndpoint?.kind {
+        case .hosted: return "HTTPS"
+        case .tailnet: return "Tailscale"
+        case .lan: return "Local network"
+        case .bonjour: return "Bonjour"
+        case nil: return "Legacy local"
         }
     }
 }
