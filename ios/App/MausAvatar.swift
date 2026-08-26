@@ -20,11 +20,11 @@ enum MausPalette {
     /// src/lib/mascot.ts — MAUS_COLORS
     private static let hex: [String: String] = [
         "green": "#009957",
-        "blue": "#377FE6",
+        "blue": "#0E74E0",
         "red": "#D94B52",
-        "orange": "#E78531",
+        "orange": "#FF6700",
         "purple": "#8057C8",
-        "cyan": "#0EA5C6",
+        "cyan": "#00A592",
         "pink": "#D84F8B",
         "yellow": "#D8A729",
         "teal": "#01A492",
@@ -284,9 +284,13 @@ struct MascotMarkClip: Shape {
         case "oval":
             return Path(ellipseIn: rect.insetBy(dx: 0, dy: rect.height * 0.16))
         case "square":
-            return Path(rect)
+            return Path(roundedRect: rect, cornerRadius: rect.width * 0.18)
         case "pill":
-            return Path(roundedRect: rect, cornerRadius: rect.height / 2)
+            // Grok's tablet mark is a horizontal pill. Keep the same
+            // normalized face box as the other marks so a saved character
+            // never jumps in size when it changes shape.
+            let tablet = rect.insetBy(dx: 0, dy: rect.height * 0.18)
+            return Path(roundedRect: tablet, cornerRadius: tablet.height / 2)
         case "triangle":
             var path = Path()
             path.move(to: CGPoint(x: rect.midX, y: rect.minY))
@@ -656,12 +660,24 @@ final class MausFaceEngine {
         if bodyMotion {
             bodyContext.concatenate(bodyTransform(MausFaceData.motion[state] ?? MausBodyMotion(), elapsed: elapsed))
         }
-        drawBody(in: &bodyContext, color: color, shape: shape, now: now)
+        drawBody(
+            in: &bodyContext,
+            color: color,
+            shape: shape,
+            animateFace: bodyMotion && state.showsActivity,
+            now: now
+        )
 
         for piece in pieces where piece.front { context.fill(piece.path, with: piece.shading) }
     }
 
-    private func drawBody(in context: inout GraphicsContext, color: String, shape: String, now: Date) {
+    private func drawBody(
+        in context: inout GraphicsContext,
+        color: String,
+        shape: String,
+        animateFace: Bool,
+        now: Date
+    ) {
         let body: Path
         if shape == "droplet" {
             body = MausSilhouette.inFaceBox
@@ -685,18 +701,52 @@ final class MausFaceEngine {
         context.translateBy(x: -MausFaceData.faceCentre.x, y: -MausFaceData.faceCentre.y)
 
         // A resting Grok mark is deliberately quiet: two fixed dark ovals,
-        // no smile, gaze, or expression morph. Working states may still move
-        // the body and orbit comets, but the identity remains recognisable.
-        let rings = [MausFaceData.ring(0, eye: 0), MausFaceData.ring(0, eye: 1)]
-
-        for ring in rings {
-            var path = Path()
-            for (i, p) in ring.enumerated() {
-                if i == 0 { path.move(to: p) } else { path.addLine(to: p) }
+        // no smile, gaze, or expression morph. The frame loop is only mounted
+        // for a real turn in progress; when it is mounted, use the engine's
+        // already-morphed rings, blink, gaze, and mouth instead of painting
+        // the resting expression over the live state.
+        let restingRings = [MausFaceData.ring(0, eye: 0), MausFaceData.ring(0, eye: 1)]
+        guard animateFace else {
+            for ring in restingRings {
+                context.fill(Self.ringPath(ring), with: .color(MausPalette.faceInk(color)))
             }
-            path.closeSubpath()
-            context.fill(path, with: .color(MausPalette.faceInk(color)))
+            return
         }
+
+        let gaze = displayedGaze()
+        let offset = CGPoint(x: gaze.x * lookAround, y: gaze.y * lookAround)
+        let rings = displayedRings().map { ring in
+            ring.map { CGPoint(x: $0.x + offset.x, y: $0.y + offset.y) }
+        }
+        let blink = blinkScale(now: now)
+        for ring in rings {
+            let centre = Self.centre(ring)
+            let blinked = ring.map {
+                CGPoint(x: $0.x, y: centre.y + ($0.y - centre.y) * blink)
+            }
+            context.fill(Self.ringPath(blinked), with: .color(MausPalette.faceInk(color)))
+        }
+
+        let mouthSpec = displayedMouth()
+        let mouth = Self.mouthPath(Self.mouthFrame(rings, mouthSpec), mouthSpec)
+        context.stroke(
+            mouth,
+            with: .color(MausPalette.faceInk(color)),
+            style: StrokeStyle(
+                lineWidth: MausFaceData.mouthStroke,
+                lineCap: .round,
+                lineJoin: .round
+            )
+        )
+    }
+
+    private static func ringPath(_ ring: [CGPoint]) -> Path {
+        var path = Path()
+        guard let first = ring.first else { return path }
+        path.move(to: first)
+        for point in ring.dropFirst() { path.addLine(to: point) }
+        path.closeSubpath()
+        return path
     }
 
     private struct FaceLayout {
@@ -721,18 +771,19 @@ final class MausFaceEngine {
         }
 
         // Fractions describe the safe patch of each silhouette, not the
-        // canvas. Narrow marks need smaller eyes; triangle moves them down
-        // into its wider body; cloud keeps them on the raised right lobe.
+        // canvas. The face keeps the same visual weight as Grok's 228-point
+        // marks, while the vertical allowance prevents a short oval/pill or
+        // a pointed triangle from cropping the eyes at compact sizes.
         let spec: (x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat)
         switch shape {
-        case "circle":   spec = (0.60, 0.46, 0.28, 0.27)
-        case "oval":     spec = (0.60, 0.50, 0.27, 0.31)
-        case "square":   spec = (0.60, 0.45, 0.27, 0.26)
-        case "pill":     spec = (0.60, 0.50, 0.24, 0.34)
-        case "triangle": spec = (0.58, 0.63, 0.22, 0.21)
-        case "hexagon":  spec = (0.60, 0.49, 0.26, 0.25)
-        case "cloud":    spec = (0.62, 0.48, 0.23, 0.27)
-        default:          spec = (0.60, 0.48, 0.26, 0.25)
+        case "circle":   spec = (0.50, 0.46, 0.38, 0.36)
+        case "oval":     spec = (0.50, 0.48, 0.38, 0.40)
+        case "square":   spec = (0.50, 0.46, 0.38, 0.36)
+        case "pill":     spec = (0.50, 0.50, 0.34, 0.42)
+        case "triangle": spec = (0.50, 0.46, 0.30, 0.34)
+        case "hexagon":  spec = (0.50, 0.47, 0.36, 0.36)
+        case "cloud":    spec = (0.56, 0.48, 0.34, 0.44)
+        default:          spec = (0.50, 0.48, 0.36, 0.36)
         }
 
         let scale = min(
