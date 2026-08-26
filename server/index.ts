@@ -4546,6 +4546,10 @@ const server = createServer(async (req, res) => {
         if (!responder) return json(res, 400, { error: "invalid default responder" });
         patch.defaultResponder = responder;
       }
+      if (body.pinned !== undefined) {
+        if (typeof body.pinned !== "boolean") return json(res, 400, { error: "pinned must be true or false" });
+        patch.pinned = body.pinned;
+      }
       if (body.cwd !== undefined) {
         if (existing.dm) return json(res, 400, { error: "direct-message channels cannot have a working folder" });
         if (existing.pinnedCwd !== undefined) {
@@ -4883,6 +4887,9 @@ const server = createServer(async (req, res) => {
       }
       const patch: Record<string, unknown> = {};
       Object.assign(patch, profile.patch);
+      if (body.pinned !== undefined && typeof body.pinned !== "boolean") {
+        return json(res, 400, { error: "pinned must be true or false" });
+      }
       let section: string | undefined | null;
       if (body.section !== undefined) {
         if (body.section === null) section = null;

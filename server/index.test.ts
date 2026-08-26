@@ -688,9 +688,24 @@ describe("harness HTTP API", () => {
       expect(pinnedBot.status).toBe(200);
       expect(pinnedBot.body.bot).toMatchObject({ id: bot.id, pinned: true });
 
+      // Older paired servers use the general PATCH route. It accepts the
+      // same single Boolean pin field without loosening any other mutation
+      // validation.
+      const legacyBot = await api("PATCH", `/api/bots/${bot.id}`, { pinned: false });
+      expect(legacyBot.status).toBe(200);
+      expect(legacyBot.body.bot).toMatchObject({ id: bot.id, pinned: false });
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { pinned: "yes" })).status).toBe(400);
+      expect((await api("PATCH", `/api/bots/${bot.id}/pin`, { pinned: true })).status).toBe(200);
+
       const pinnedRoom = await api("PATCH", `/api/groups/${room.id}/pin`, { pinned: true });
       expect(pinnedRoom.status).toBe(200);
       expect(pinnedRoom.body.group).toMatchObject({ id: room.id, pinned: true });
+
+      const legacyRoom = await api("PATCH", `/api/groups/${room.id}`, { pinned: false });
+      expect(legacyRoom.status).toBe(200);
+      expect(legacyRoom.body.group).toMatchObject({ id: room.id, pinned: false });
+      expect((await api("PATCH", `/api/groups/${room.id}`, { pinned: "yes" })).status).toBe(400);
+      expect((await api("PATCH", `/api/groups/${room.id}/pin`, { pinned: true })).status).toBe(200);
 
       expect((await api("PATCH", `/api/bots/${bot.id}/pin`, { pinned: true, autoApprove: true })).status).toBe(400);
       expect((await api("PATCH", `/api/groups/${room.id}/pin`, { pinned: "yes" })).status).toBe(400);

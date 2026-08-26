@@ -722,9 +722,16 @@ public struct CompanionClient: Sendable {
 
     /// Paired-safe conversation pinning. This narrow route accepts only the
     /// Boolean pin value; the server returns the authoritative bot record.
+    /// Older paired servers predate the narrow route and answer with their
+    /// exact route-not-found response. In that one case only, retry the
+    /// legacy general PATCH, whose body is still restricted to this one
+    /// field. A 404 for a missing bot, or any other failure, must not be
+    /// retried as it could hide a real server error.
     public func setPinned(_ pinned: Bool, botId: String) async throws -> Bot {
-        try await send(
-            try makeRequest("PATCH", "/api/bots/\(botId)/pin", encodedBody: ChatPinPatch(pinned: pinned)),
+        try await setPinned(
+            pinned,
+            narrowPath: "/api/bots/\(botId)/pin",
+            legacyPath: "/api/bots/\(botId)",
             as: BotResponse.self
         ).bot
     }
@@ -827,10 +834,37 @@ public struct CompanionClient: Sendable {
     /// Paired-safe conversation pinning for a room. The state is applied by
     /// the app only after this server acknowledgement is decoded.
     public func setPinned(_ pinned: Bool, roomId: String) async throws -> Room {
-        try await send(
-            try makeRequest("PATCH", "/api/groups/\(roomId)/pin", encodedBody: ChatPinPatch(pinned: pinned)),
+        try await setPinned(
+            pinned,
+            narrowPath: "/api/groups/\(roomId)/pin",
+            legacyPath: "/api/groups/\(roomId)",
             as: RoomResponse.self
         ).group
+    }
+
+    private func setPinned<Response: Decodable>(
+        _ pinned: Bool,
+        narrowPath: String,
+        legacyPath: String,
+        as type: Response.Type
+    ) async throws -> Response {
+        let patch = ChatPinPatch(pinned: pinned)
+        do {
+            return try await send(
+                try makeRequest("PATCH", narrowPath, encodedBody: patch),
+                as: type
+            )
+        } catch let error as APIError where Self.isMissingRoute(error, path: narrowPath) {
+            return try await send(
+                try makeRequest("PATCH", legacyPath, encodedBody: patch),
+                as: type
+            )
+        }
+    }
+
+    private static func isMissingRoute(_ error: APIError, path: String) -> Bool {
+        guard case let .status(code, message) = error, code == 404 else { return false }
+        return message == "no route: PATCH \(path)"
     }
 
     public func send(
