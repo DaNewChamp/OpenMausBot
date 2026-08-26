@@ -6,6 +6,7 @@ private final class ProfileRequestStub: URLProtocol {
     static var responseBody = Data()
     static var statusCode = 200
     static var responseSequence: [(statusCode: Int, body: Data)] = []
+    static var transportError: Error?
     static var capturedRequest: URLRequest?
     static var capturedRequests: [URLRequest] = []
     static var capturedBody: Data?
@@ -20,6 +21,10 @@ private final class ProfileRequestStub: URLProtocol {
         let body = Self.readBody(from: request)
         Self.capturedBody = body
         Self.capturedBodies.append(body)
+        if let error = Self.transportError {
+            client?.urlProtocol(self, didFailWithError: error)
+            return
+        }
         let payload = Self.responseSequence.isEmpty
             ? (statusCode: Self.statusCode, body: Self.responseBody)
             : Self.responseSequence.removeFirst()
@@ -63,6 +68,7 @@ final class ProfileClientTests: XCTestCase {
         ProfileRequestStub.capturedBodies = []
         ProfileRequestStub.statusCode = 200
         ProfileRequestStub.responseSequence = []
+        ProfileRequestStub.transportError = nil
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ProfileRequestStub.self]
         session = URLSession(configuration: configuration)
@@ -123,6 +129,136 @@ final class ProfileClientTests: XCTestCase {
         XCTAssertEqual(body.keys.sorted(), ["color", "mascotShape"])
         XCTAssertEqual(body["color"] as? String, "purple")
         XCTAssertEqual(body["mascotShape"] as? String, "hexagon")
+    }
+
+    func testProfileClientFallsBackToLegacyBotPatchForExplicitUnsupportedAppearance() async throws {
+        ProfileRequestStub.responseSequence = [
+            (400, Data(#"{"error":"Unsupported profile field: color"}"#.utf8)),
+            (200, Self.botResponse),
+        ]
+
+        let result = try await client.updateProfileWithCompatibility(
+            botId: "avatar-bot",
+            patch: BotProfilePatch(color: "purple", mascotShape: .hexagon)
+        )
+
+        guard case let .updated(updated) = result else {
+            return XCTFail("the legacy route should preserve an authoritative update")
+        }
+        XCTAssertEqual(updated.id, "avatar-bot")
+        XCTAssertEqual(
+            ProfileRequestStub.capturedRequests.compactMap { $0.url?.path },
+            ["/api/bots/avatar-bot/profile", "/api/bots/avatar-bot"]
+        )
+        let data = try XCTUnwrap(ProfileRequestStub.capturedBodies.last ?? nil)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(body.keys.sorted(), ["color", "mascotShape"])
+    }
+
+    func testProfileClientDoesNotFallbackForAuthenticationFailure() async throws {
+        ProfileRequestStub.responseSequence = [
+            (401, Data(#"{"error":"not paired"}"#.utf8)),
+        ]
+
+        do {
+            _ = try await client.updateProfileWithCompatibility(
+                botId: "avatar-bot",
+                patch: BotProfilePatch(color: "purple")
+            )
+            XCTFail("authentication failures must not trigger the broad route")
+        } catch let error as APIError {
+            guard case let .status(code, message) = error else {
+                return XCTFail("unexpected API error: \(error)")
+            }
+            XCTAssertEqual(code, 401)
+            XCTAssertEqual(message, "not paired")
+        }
+        XCTAssertEqual(ProfileRequestStub.capturedRequests.count, 1)
+    }
+
+    func testProfileClientDoesNotFallbackForArbitraryValidationFailure() async throws {
+        ProfileRequestStub.responseSequence = [
+            (400, Data(#"{"error":"color must be green"}"#.utf8)),
+        ]
+
+        do {
+            _ = try await client.updateProfileWithCompatibility(
+                botId: "avatar-bot",
+                patch: BotProfilePatch(color: "purple")
+            )
+            XCTFail("validation failures must not trigger the broad route")
+        } catch let error as APIError {
+            guard case let .status(code, message) = error else {
+                return XCTFail("unexpected API error: \(error)")
+            }
+            XCTAssertEqual(code, 400)
+            XCTAssertEqual(message, "color must be green")
+        }
+        XCTAssertEqual(ProfileRequestStub.capturedRequests.count, 1)
+    }
+
+    func testProfileClientDoesNotFallbackForTransportFailure() async throws {
+        ProfileRequestStub.transportError = URLError(.timedOut)
+
+        do {
+            _ = try await client.updateProfileWithCompatibility(
+                botId: "avatar-bot",
+                patch: BotProfilePatch(color: "purple")
+            )
+            XCTFail("transport failures must not trigger the broad route")
+        } catch let error as APIError {
+            guard case .transport = error else {
+                return XCTFail("unexpected API error: \(error)")
+            }
+        }
+        XCTAssertEqual(ProfileRequestStub.capturedRequests.count, 1)
+    }
+
+    func testProfileClientRetainsAppearanceWhenLegacyRouteIsForbidden() async throws {
+        ProfileRequestStub.responseSequence = [
+            (400, Data(#"{"error":"unsupported profile field: color"}"#.utf8)),
+            (403, Data(#"{"error":"forbidden: route not allowed"}"#.utf8)),
+        ]
+
+        let result = try await client.updateProfileWithCompatibility(
+            botId: "avatar-bot",
+            patch: BotProfilePatch(color: "purple")
+        )
+
+        guard case let .pendingAppearance(fields) = result else {
+            return XCTFail("a policy-denied legacy route should leave appearance pending")
+        }
+        XCTAssertEqual(fields, ["color"])
+        XCTAssertEqual(
+            ProfileRequestStub.capturedRequests.compactMap { $0.url?.path },
+            ["/api/bots/avatar-bot/profile", "/api/bots/avatar-bot"]
+        )
+    }
+
+    func testProfileClientStillSavesOtherFieldsWhenAppearanceIsPending() async throws {
+        ProfileRequestStub.responseSequence = [
+            (400, Data(#"{"error":"unsupported profile field: color"}"#.utf8)),
+            (403, Data(#"{"error":"forbidden: route not allowed"}"#.utf8)),
+            (200, Self.botResponse),
+        ]
+
+        let result = try await client.updateProfileWithCompatibility(
+            botId: "avatar-bot",
+            patch: BotProfilePatch(name: "Updated", color: "purple")
+        )
+
+        guard case let .updatedWithPendingAppearance(updated, fields) = result else {
+            return XCTFail("safe identity fields should still be saved")
+        }
+        XCTAssertEqual(updated.id, "avatar-bot")
+        XCTAssertEqual(fields, ["color"])
+        XCTAssertEqual(
+            ProfileRequestStub.capturedRequests.compactMap { $0.url?.path },
+            ["/api/bots/avatar-bot/profile", "/api/bots/avatar-bot", "/api/bots/avatar-bot/profile"]
+        )
+        let data = try XCTUnwrap(ProfileRequestStub.capturedBodies.last ?? nil)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(body.keys.sorted(), ["name"])
     }
 
     func testProfileClientDecodesAnUnknownMascotShapeToTheSafeDefault() async throws {

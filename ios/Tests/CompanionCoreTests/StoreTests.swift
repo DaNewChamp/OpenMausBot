@@ -309,6 +309,61 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(state.conversationSummaries.first?.pinned ?? true)
     }
 
+    func testLocalAppearanceOverrideSurvivesHydrationWhenServerOmitsIt() throws {
+        let source = try hydrated()
+        var bot = try XCTUnwrap(source.bots.first)
+        bot.color = "green"
+        bot.mascotShape = nil
+
+        var state = CompanionState()
+        state.appearanceOverrides.set(
+            BotAppearanceOverride(color: "purple", mascotShape: .hexagon),
+            for: "bot:\(bot.id)"
+        )
+        state.hydrate(Fleet(bots: [bot], groups: []))
+
+        XCTAssertEqual(state.bot(bot.id)?.color, "purple")
+        XCTAssertEqual(state.bot(bot.id)?.mascotShape, .hexagon)
+        XCTAssertEqual(state.appearanceOverrides.value(for: "bot:\(bot.id)")?.color, "purple")
+        XCTAssertEqual(state.appearanceOverrides.value(for: "bot:\(bot.id)")?.mascotShape, .hexagon)
+    }
+
+    func testAuthoritativeServerAppearanceReconcilesEachLocalField() throws {
+        let source = try hydrated()
+        var bot = try XCTUnwrap(source.bots.first)
+        bot.color = "green"
+        bot.mascotShape = nil
+
+        var state = CompanionState()
+        state.bots = [bot]
+        state.setLocalAppearance(
+            BotAppearanceOverride(color: "purple", mascotShape: .hexagon),
+            for: "bot:\(bot.id)"
+        )
+
+        bot.color = "purple"
+        bot.mascotShape = .hexagon
+        state.apply(.bot(bot))
+
+        XCTAssertEqual(state.bot(bot.id)?.color, "purple")
+        XCTAssertEqual(state.bot(bot.id)?.mascotShape, .hexagon)
+        XCTAssertNil(state.appearanceOverrides.value(for: "bot:\(bot.id)"))
+    }
+
+    func testLocalAppearanceOverridesStayBoundedAndEncode() throws {
+        var overrides = BotAppearanceOverrides()
+        for index in 0...BotAppearanceOverrides.maxEntries {
+            overrides.set(BotAppearanceOverride(color: "purple"), for: "bot:\(index)")
+        }
+        XCTAssertLessThanOrEqual(overrides.count, BotAppearanceOverrides.maxEntries)
+
+        let reloaded = try JSONDecoder().decode(
+            BotAppearanceOverrides.self,
+            from: JSONEncoder().encode(overrides)
+        )
+        XCTAssertEqual(reloaded.count, overrides.count)
+    }
+
     func testLocalPinOverridesStayBounded() {
         var overrides = ConversationPinOverrides()
         for index in 0...ConversationPinOverrides.maxEntries {

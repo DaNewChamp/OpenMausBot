@@ -34,6 +34,7 @@ struct ChatListView: View {
                         if query.isEmpty {
                             if !pinnedChats.isEmpty {
                                 PinnedChatShelf(summaries: pinnedChats) { chat in
+                                    Haptics.selection()
                                     path.append(chat)
                                 }
                                 .padding(.top, 10)
@@ -52,7 +53,10 @@ struct ChatListView: View {
                             ForEach(searchHits) { hit in
                                 Button {
                                     Task {
-                                        if let chat = await session.open(hit) { path.append(chat) }
+                                        if let chat = await session.open(hit) {
+                                            Haptics.selection()
+                                            path.append(chat)
+                                        }
                                     }
                                 } label: {
                                     SearchHitRow(hit: hit)
@@ -75,6 +79,7 @@ struct ChatListView: View {
                                 )
                             }
                             .buttonStyle(.plain)
+                            .simultaneousGesture(TapGesture().onEnded { Haptics.selection() })
                             .pinRowActions(for: summary, session: session)
                         }
                     }
@@ -103,7 +108,10 @@ struct ChatListView: View {
                 NeedsYouIsland(
                     update: session.state.updates.first { $0.kind == .needsYou },
                     hasIsland: IslandGeometry.hasIsland(topInset: geo.safeAreaInsets.top)
-                ) { chat in path.append(chat) }
+                ) { chat in
+                    Haptics.selection()
+                    path.append(chat)
+                }
             }
             .accessibilityAction(named: "Show updates") {
                 showingUpdates = true

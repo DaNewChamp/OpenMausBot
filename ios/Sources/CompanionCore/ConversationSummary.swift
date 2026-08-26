@@ -43,6 +43,63 @@ public struct ConversationPinOverrides: Codable, Equatable, Sendable {
     }
 }
 
+/// Appearance choices retained on the phone while an older paired server is
+/// upgraded. Values are deliberately scoped by the owning bot's stable id;
+/// the app persists the containing map under the paired connection id so a
+/// different computer can never inherit an earlier computer's pending style.
+public struct BotAppearanceOverride: Codable, Equatable, Sendable {
+    public var color: String?
+    public var mascotShape: MascotShape?
+
+    public init(color: String? = nil, mascotShape: MascotShape? = nil) {
+        self.color = color
+        self.mascotShape = mascotShape
+    }
+
+    public var isEmpty: Bool { color == nil && mascotShape == nil }
+}
+
+/// Bounded device-local appearance overrides. These are a compatibility
+/// buffer, not a second source of truth: whenever the server echoes a
+/// pending value, the corresponding entry is removed.
+public struct BotAppearanceOverrides: Codable, Equatable, Sendable {
+    public static let maxEntries = 128
+
+    private var values: [String: BotAppearanceOverride]
+
+    public init(values: [String: BotAppearanceOverride] = [:]) {
+        self.values = values
+        trim()
+    }
+
+    public var count: Int { values.count }
+    public var entries: [String: BotAppearanceOverride] { values }
+
+    public func value(for stableID: String) -> BotAppearanceOverride? {
+        values[stableID]
+    }
+
+    public mutating func set(_ override: BotAppearanceOverride, for stableID: String) {
+        guard !override.isEmpty else {
+            values.removeValue(forKey: stableID)
+            return
+        }
+        values[stableID] = override
+        trim(preserving: stableID)
+    }
+
+    public mutating func remove(for stableID: String) {
+        values.removeValue(forKey: stableID)
+    }
+
+    private mutating func trim(preserving stableID: String? = nil) {
+        guard values.count > Self.maxEntries else { return }
+        for candidate in values.keys.sorted() where values.count > Self.maxEntries {
+            if candidate != stableID { values.removeValue(forKey: candidate) }
+        }
+    }
+}
+
 /// The app-independent projection used to populate a conversation roster.
 /// Keeping this beside the state fold makes ordering identical on every view
 /// and gives the package tests the same policy the app renders.

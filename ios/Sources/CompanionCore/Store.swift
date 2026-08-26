@@ -39,6 +39,9 @@ public struct CompanionState: Sendable {
     /// Pin choices retained on the phone when an older paired server exposes
     /// neither the narrow pin route nor the legacy general PATCH route.
     public var pinnedOverrides = ConversationPinOverrides()
+    /// Character choices retained on the phone when an older paired server
+    /// rejects appearance fields on the paired-safe profile route.
+    public var appearanceOverrides = BotAppearanceOverrides()
 
     public init() {}
 
@@ -110,6 +113,7 @@ public struct CompanionState: Sendable {
             } else if let local = pinnedOverrides.value(for: stableID) {
                 bots[index].pinned = local
             }
+            bots[index] = applyingAppearanceOverride(to: bots[index], stableID: stableID)
         }
         for index in rooms.indices {
             let stableID = "room:\(rooms[index].id)"
@@ -228,11 +232,11 @@ public struct CompanionState: Sendable {
                     merged.activeLeafId = bot.activeLeafId ?? previous.activeLeafId
                 }
                 if merged.pinned == nil { merged.pinned = pinnedOverrides.value(for: stableID) }
-                bots[index] = merged
+                bots[index] = applyingAppearanceOverride(to: merged, stableID: stableID)
             } else {
                 var merged = bot
                 if merged.pinned == nil { merged.pinned = pinnedOverrides.value(for: stableID) }
-                bots.append(merged)
+                bots.append(applyingAppearanceOverride(to: merged, stableID: stableID))
                 if messages[merged.threadId] == nil {
                     messages[merged.threadId] = merged.messages ?? []
                 }
@@ -252,6 +256,7 @@ public struct CompanionState: Sendable {
                 clearStream(threadId)
                 clearScreen(botId)
                 pinnedOverrides.remove(for: "bot:\(botId)")
+                appearanceOverrides.remove(for: "bot:\(botId)")
                 bots.remove(at: index)
             }
 
@@ -361,6 +366,18 @@ public struct CompanionState: Sendable {
         }
     }
 
+    /// Keep a pending character choice visible while the paired server is
+    /// upgraded. The next authoritative bot frame reconciles each field that
+    /// the server now echoes and removes it from the override map.
+    public mutating func setLocalAppearance(_ override: BotAppearanceOverride, for stableID: String) {
+        appearanceOverrides.set(override, for: stableID)
+        guard stableID.hasPrefix("bot:"),
+              let botID = stableID.split(separator: ":", maxSplits: 1).last,
+              let index = bots.firstIndex(where: { $0.id == botID })
+        else { return }
+        bots[index] = applyingAppearanceOverride(to: bots[index], stableID: stableID)
+    }
+
     /// Append, unless we already hold it. Replaying a resumed stream can
     /// legitimately deliver a message twice — the cursor is the last frame
     /// *received*, and a frame in flight when the socket dropped arrives
@@ -373,6 +390,30 @@ public struct CompanionState: Sendable {
             thread.append(message)
         }
         messages[threadId] = thread
+    }
+
+    /// Overlay only fields that are still pending. When an authoritative
+    /// response finally includes one, retire that field instead of allowing a
+    /// stale local value to shadow the server forever.
+    private mutating func applyingAppearanceOverride(to bot: Bot, stableID: String) -> Bot {
+        guard var override = appearanceOverrides.value(for: stableID) else { return bot }
+        var merged = bot
+        if let color = override.color {
+            if bot.color == color {
+                override.color = nil
+            } else {
+                merged.color = color
+            }
+        }
+        if let shape = override.mascotShape {
+            if bot.mascotShape == shape {
+                override.mascotShape = nil
+            } else {
+                merged.mascotShape = shape
+            }
+        }
+        appearanceOverrides.set(override, for: stableID)
+        return merged
     }
 }
 

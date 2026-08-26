@@ -130,6 +130,7 @@ struct AgentProfileView: View {
                 if let config, !config.canSpeak(agentVoice: voice) {
                     speakReplies = false
                 }
+                await session.retryPendingAppearanceOverrides()
             }
             .onChange(of: current.modelSelection) { _, selection in
                 pickedInstanceId = selection.instanceId
@@ -337,6 +338,14 @@ struct AgentProfileView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 18)
+
+            if let notice = session.appearanceSaveNotice(for: current) {
+                Label(notice, systemImage: "iphone.and.arrow.forward")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 18)
+                    .accessibilityLabel("Character appearance pending synchronization")
+            }
         }
         .padding(.top, 26)
     }

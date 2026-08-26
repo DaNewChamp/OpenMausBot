@@ -102,6 +102,7 @@ final class Session: ObservableObject {
 
     private static let connectionKey = "companion.connection"
     private static let pinnedOverridesKey = "companion.pinned-overrides"
+    private static let appearanceOverridesBaseKey = "companion.appearance-overrides"
 
     private static func loadPinnedOverrides() -> ConversationPinOverrides {
         guard let data = UserDefaults.standard.data(forKey: pinnedOverridesKey),
@@ -114,6 +115,25 @@ final class Session: ObservableObject {
         UserDefaults.standard.set(
             try? JSONEncoder().encode(state.pinnedOverrides),
             forKey: Self.pinnedOverridesKey
+        )
+    }
+
+    private static func appearanceOverridesKey(for connectionID: String) -> String {
+        "\(appearanceOverridesBaseKey).\(connectionID)"
+    }
+
+    private static func loadAppearanceOverrides(for connectionID: String) -> BotAppearanceOverrides {
+        guard let data = UserDefaults.standard.data(forKey: appearanceOverridesKey(for: connectionID)),
+              let overrides = try? JSONDecoder().decode(BotAppearanceOverrides.self, from: data)
+        else { return BotAppearanceOverrides() }
+        return overrides
+    }
+
+    private func persistAppearanceOverrides() {
+        guard let connectionID = connection?.id else { return }
+        UserDefaults.standard.set(
+            try? JSONEncoder().encode(state.appearanceOverrides),
+            forKey: Self.appearanceOverridesKey(for: connectionID)
         )
     }
 
@@ -177,6 +197,7 @@ final class Session: ObservableObject {
         guard let stored else { return } // no token: genuinely not paired
 
         connection = saved
+        state.appearanceOverrides = Self.loadAppearanceOverrides(for: saved.id)
         token = stored
         // New connections honor the desktop's transport policy. Automatic
         // walking is credential-safe: protected routes stay protected, while
@@ -301,7 +322,10 @@ final class Session: ObservableObject {
             current: pairingInvite,
             after: .signedOut
         )
-        if let id = connection?.id { Keychain.remove(id) }
+        if let id = connection?.id {
+            Keychain.remove(id)
+            UserDefaults.standard.removeObject(forKey: Self.appearanceOverridesKey(for: id))
+        }
         UserDefaults.standard.removeObject(forKey: Self.connectionKey)
         UserDefaults.standard.removeObject(forKey: Self.pinnedOverridesKey)
         UserDefaults.standard.removeObject(
@@ -485,8 +509,10 @@ final class Session: ObservableObject {
                         continue
                     }
                     let previousOverrides = state.pinnedOverrides
+                    let previousAppearanceOverrides = state.appearanceOverrides
                     state.apply(frame)
                     if state.pinnedOverrides != previousOverrides { persistPinnedOverrides() }
+                    if state.appearanceOverrides != previousAppearanceOverrides { persistAppearanceOverrides() }
                     if case let .notify(notification) = frame.frame {
                         NotificationCoordinator.shared.deliver(notification, sequence: frame.seq)
                     }
@@ -523,8 +549,11 @@ final class Session: ObservableObject {
         guard let client else { return }
         let fleet = try await client.fleet(messages: 50)
         log.info("hydrated \(fleet.bots.count, privacy: .public) bots, \(fleet.groups.count, privacy: .public) rooms")
+        let previousAppearanceOverrides = state.appearanceOverrides
         state.hydrate(fleet)
         persistPinnedOverrides()
+        if state.appearanceOverrides != previousAppearanceOverrides { persistAppearanceOverrides() }
+        await retryPendingAppearanceOverrides(using: client)
         NotificationCoordinator.shared.setBadge(state.unreadCount)
     }
 
@@ -969,14 +998,75 @@ final class Session: ObservableObject {
     func updateProfile(_ patch: BotProfilePatch, for bot: Bot) async -> Bot? {
         guard let client else { return nil }
         do {
-            let updated = try await client.updateProfile(botId: bot.id, patch: patch)
+            let result = try await client.updateProfileWithCompatibility(botId: bot.id, patch: patch)
             guard !Task.isCancelled else { return nil }
-            state.apply(.bot(updated))
-            return updated
+            switch result {
+            case let .updated(updated):
+                state.apply(.bot(updated))
+                return updated
+            case let .updatedWithPendingAppearance(updated, fields):
+                state.apply(.bot(updated))
+                retainPendingAppearance(fields: fields, from: patch, for: bot.id)
+                return state.bot(bot.id) ?? updated
+            case let .pendingAppearance(fields):
+                retainPendingAppearance(fields: fields, from: patch, for: bot.id)
+                return state.bot(bot.id) ?? bot
+            }
         } catch {
             if !Task.isCancelled { actionError = error.localizedDescription }
             return nil
         }
+    }
+
+    /// Keep character choices visible when the paired sidecar has not yet
+    /// learned the newer profile fields. The override is scoped to this
+    /// connection and bot, persisted by the session, and retired as soon as
+    /// an authoritative response echoes either field.
+    private func retainPendingAppearance(fields: Set<String>, from patch: BotProfilePatch, for botID: String) {
+        var override = state.appearanceOverrides.value(for: "bot:\(botID)") ?? BotAppearanceOverride()
+        if fields.contains("color"), let color = patch.color { override.color = color }
+        if fields.contains("mascotShape"), let shape = patch.mascotShape { override.mascotShape = shape }
+        state.setLocalAppearance(override, for: "bot:\(botID)")
+        persistAppearanceOverrides()
+    }
+
+    func appearanceSaveNotice(for bot: Bot) -> String? {
+        guard state.appearanceOverrides.value(for: "bot:\(bot.id)") != nil else { return nil }
+        return "Saved on this phone · syncs everywhere when the computer is updated"
+    }
+
+    /// Retry pending appearance writes after a completed full hydrate. This
+    /// is intentionally quiet: an older sidecar can reject the same fields
+    /// until it is upgraded, and that is not an actionable error on every
+    /// reconnect. A successful response flows through the normal state fold,
+    /// which reconciles and removes each matching local field.
+    func retryPendingAppearanceOverrides() async {
+        guard let client else { return }
+        await retryPendingAppearanceOverrides(using: client)
+    }
+
+    private func retryPendingAppearanceOverrides(using client: CompanionClient) async {
+        for (stableID, override) in state.appearanceOverrides.entries {
+            guard stableID.hasPrefix("bot:"),
+                  let botID = stableID.split(separator: ":", maxSplits: 1).last,
+                  let bot = state.bot(String(botID))
+            else { continue }
+            let patch = BotProfilePatch(color: override.color, mascotShape: override.mascotShape)
+            do {
+                let result = try await client.updateProfileWithCompatibility(botId: bot.id, patch: patch)
+                guard !Task.isCancelled else { return }
+                switch result {
+                case let .updated(updated), let .updatedWithPendingAppearance(updated, fields: _):
+                    state.apply(.bot(updated))
+                case .pendingAppearance:
+                    break
+                }
+            } catch {
+                // Keep the pending choice. The next foreground hydrate or
+                // profile open will retry once the route is available.
+            }
+        }
+        persistAppearanceOverrides()
     }
 
     func loadInstances() async -> ModelCatalogLoadResult {

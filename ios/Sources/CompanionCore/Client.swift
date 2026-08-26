@@ -882,10 +882,102 @@ public struct CompanionClient: Sendable {
     /// desktop's general bot PATCH. No execution policy or provider secret can
     /// be reached through this request.
     public func updateProfile(botId: String, patch: BotProfilePatch) async throws -> Bot {
-        return try await send(
+        switch try await updateProfileWithCompatibility(botId: botId, patch: patch) {
+        case let .updated(bot), let .updatedWithPendingAppearance(bot, fields: _):
+            return bot
+        case .pendingAppearance:
+            throw APIError.transport("This computer does not support saving character appearance yet.")
+        }
+    }
+
+    /// Write a profile through the paired-safe route, then narrowly retry the
+    /// same validated body through the legacy bot PATCH only when that route
+    /// explicitly rejects a newer appearance field. A sidecar may refuse the
+    /// broad route; in that case the caller can retain only the appearance
+    /// fields as a device-local pending override while applying other fields.
+    public func updateProfileWithCompatibility(
+        botId: String,
+        patch: BotProfilePatch
+    ) async throws -> ProfileUpdateResult {
+        do {
+            let updated = try await updateProfileThroughProfileRoute(botId: botId, patch: patch)
+            return .updated(updated)
+        } catch let error as APIError {
+            guard let rejected = Self.unsupportedAppearanceField(in: error) else {
+                throw error
+            }
+            let fields = Self.appearanceFields(in: patch)
+            guard fields.contains(rejected), !fields.isEmpty else { throw error }
+
+            do {
+                let updated = try await updateProfileThroughLegacyRoute(botId: botId, patch: patch)
+                return .updated(updated)
+            } catch let legacyError as APIError {
+                guard Self.legacyProfileRouteUnavailable(legacyError) else { throw legacyError }
+
+                var safePatch = patch
+                safePatch.color = nil
+                safePatch.mascotShape = nil
+                if Self.hasNonAppearanceFields(safePatch) {
+                    let updated = try await updateProfileThroughProfileRoute(botId: botId, patch: safePatch)
+                    return .updatedWithPendingAppearance(updated, fields: fields)
+                }
+                return .pendingAppearance(fields: fields)
+            }
+        }
+    }
+
+    private func updateProfileThroughProfileRoute(botId: String, patch: BotProfilePatch) async throws -> Bot {
+        try await send(
             try makeRequest("PATCH", "/api/bots/\(botId)/profile", encodedBody: patch),
             as: BotResponse.self
         ).bot
+    }
+
+    private func updateProfileThroughLegacyRoute(botId: String, patch: BotProfilePatch) async throws -> Bot {
+        try await send(
+            try makeRequest("PATCH", "/api/bots/\(botId)", encodedBody: patch),
+            as: BotResponse.self
+        ).bot
+    }
+
+    private static func unsupportedAppearanceField(in error: APIError) -> String? {
+        guard case let .status(code, message) = error, code == 400,
+              let message
+        else { return nil }
+        let prefix = "unsupported profile field:"
+        let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalized.hasPrefix(prefix) else { return nil }
+        let field = normalized.dropFirst(prefix.count).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard field == "color" || field == "mascotshape" else { return nil }
+        return field == "mascotshape" ? "mascotShape" : "color"
+    }
+
+    private static func appearanceFields(in patch: BotProfilePatch) -> Set<String> {
+        var fields = Set<String>()
+        if patch.color != nil { fields.insert("color") }
+        if patch.mascotShape != nil { fields.insert("mascotShape") }
+        return fields
+    }
+
+    private static func legacyProfileRouteUnavailable(_ error: APIError) -> Bool {
+        guard case let .status(code, message) = error else { return false }
+        let normalized = message?.lowercased() ?? ""
+        switch code {
+        case 403:
+            return normalized.isEmpty || normalized.contains("forbidden") || normalized.contains("not allowed")
+        case 404:
+            guard !normalized.contains("no such bot") else { return false }
+            return normalized.isEmpty || normalized.contains("no route") || normalized.contains("cannot") || normalized.contains("not found")
+        default:
+            return false
+        }
+    }
+
+    private static func hasNonAppearanceFields(_ patch: BotProfilePatch) -> Bool {
+        patch.name != nil || patch.title != nil || patch.description != nil ||
+            patch.notifications != nil || patch.avatarUrl != nil || patch.avatarCrop != nil ||
+            patch.voice != nil || patch.speakReplies != nil
     }
 
     /// Paired-safe model switch. The harness validates instance and model

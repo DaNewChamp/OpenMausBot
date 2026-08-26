@@ -756,6 +756,16 @@ public struct BotProfilePatch: Encodable, Sendable {
     }
 }
 
+/// The result of a paired-safe profile write. A few older sidecars expose the
+/// profile route but reject the newer character fields; callers may keep
+/// those fields as a device-local pending override while still applying the
+/// rest of the profile authoritatively.
+public enum ProfileUpdateResult: Sendable {
+    case updated(Bot)
+    case updatedWithPendingAppearance(Bot, fields: Set<String>)
+    case pendingAppearance(fields: Set<String>)
+}
+
 public struct Voice: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var label: String
