@@ -1,9 +1,9 @@
 // The roster.
 //
-// Messages-shaped: a quiet native header, your groups across the top, every
-// bot below with the unread dot in the bot's own colour at the left edge, and
-// a single low-contrast Updates bar floating at the bottom. The transcript
-// and roster remain the visual focus; chrome should not compete with them.
+// A quiet, Grok-shaped home: your profile and two actions at the top, pinned
+// faces in a generous hero row, then one clean list of every other chat. The
+// transcript and roster remain the visual focus; chrome should not compete
+// with them.
 import SwiftUI
 import CompanionCore
 
@@ -22,9 +22,6 @@ struct ChatListView: View {
     @State private var showingNewGroup = false
     @FocusState private var searchFocused: Bool
 
-    /// Room for the floating bar, so the last row can scroll clear of it.
-    private static let barClearance: CGFloat = 96
-
     var body: some View {
         NavigationStack(path: $path) {
             GeometryReader { geo in
@@ -39,23 +36,18 @@ struct ChatListView: View {
                                 PinnedChatShelf(summaries: pinnedChats) { chat in
                                     path.append(chat)
                                 }
-                                .padding(.top, 2)
-                                .padding(.bottom, 8)
+                                .padding(.top, 10)
+                                .padding(.bottom, 20)
                             }
-                            groupsStrip
-                            sectionLabel("Bots")
-                                .padding(.top, 18)
-                                .padding(.bottom, 4)
                         }
 
                         if !query.isEmpty, !searchHits.isEmpty {
                             HStack {
-                                sectionLabel("Messages")
                                 Spacer()
                                 if searching { ProgressView().controlSize(.small) }
                             }
-                            .padding(.top, 10)
-                            .padding(.bottom, 4)
+                            .frame(height: 1)
+                            .padding(.horizontal, 24)
 
                             ForEach(searchHits) { hit in
                                 Button {
@@ -66,11 +58,8 @@ struct ChatListView: View {
                                     SearchHitRow(hit: hit)
                                 }
                                 .buttonStyle(.plain)
-                                .padding(.horizontal, 16)
+                                .padding(.horizontal, 24)
                             }
-                            sectionLabel("Chats")
-                                .padding(.top, 14)
-                                .padding(.bottom, 4)
                         }
 
                         let rows = chats
@@ -89,7 +78,7 @@ struct ChatListView: View {
                             .pinRowActions(for: summary, session: session)
                         }
                     }
-                    .padding(.bottom, Self.barClearance)
+                    .padding(.bottom, 24)
                 }
                 .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: pinnedChats.map(\.id))
                 .refreshable { await session.refresh() }
@@ -109,7 +98,6 @@ struct ChatListView: View {
             }
             // top-aligned: the roster fills downward from the header
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .overlay(alignment: .bottom) { bottomBar }
             // a bot that stopped for you grows out of the island
             .overlay(alignment: .top) {
                 NeedsYouIsland(
@@ -117,7 +105,11 @@ struct ChatListView: View {
                     hasIsland: IslandGeometry.hasIsland(topInset: geo.safeAreaInsets.top)
                 ) { chat in path.append(chat) }
             }
+            .accessibilityAction(named: "Show updates") {
+                showingUpdates = true
             }
+            }
+            .background(RosterBackground().ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Chat.self) { ChatView(chat: $0) }
             .onChange(of: session.notificationChat) { _, chat in
@@ -173,150 +165,116 @@ struct ChatListView: View {
     // MARK: - Header
 
     /// The roster chrome follows the mobile reference: your profile on the
-    /// left, a quiet Chats title, and search/new-chat actions on the right.
-    /// These are deliberately simple controls instead of three competing
-    /// glass pills; the list itself should stay visually calm.
+    /// left and search/new-chat actions on the right. There is intentionally
+    /// no centered title; the pinned faces and chat names provide the visual
+    /// anchor instead.
     private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            NavigationLink { SettingsView() } label: {
-                ProfileAvatar(name: session.connection?.name ?? "You", size: 28)
-                    .frame(width: 40, height: 40)
-            }
-            .buttonStyle(.plain)
-            .background(Circle().fill(Color.primary.opacity(0.10)))
-            .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
-            .accessibilityLabel("Settings")
-
-            Spacer(minLength: 8)
-
-            VStack(spacing: 2) {
-                Text("Chats")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color.primary)
-                Text(headerSubtitle)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 8)
-
-            RosterHeaderButton(systemImage: "magnifyingglass", accessibilityLabel: "Search") {
-                searchOpen = true
-                searchFocused = true
-            }
-
-            RosterHeaderButton(systemImage: "plus", accessibilityLabel: "New bot") {
-                Task {
-                    if let bot = await session.createBot() { path.append(Chat.bot(bot)) }
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 10)
-    }
-
-    private var headerSubtitle: String {
-        let name = session.connection?.name ?? "Not paired"
-        switch session.status {
-        case .live: return "\(name) · connected"
-        case .connecting: return "\(name) · connecting…"
-        case .offline: return "\(name) · offline"
-        case .unauthorized: return "\(name) · unpaired"
-        case .unpaired: return "Not paired"
-        }
-    }
-
-    // MARK: - Groups
-
-    private var groupsStrip: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionLabel("Groups")
-            ScrollView(.horizontal, showsIndicators: false) {
+        Group {
+            if searchOpen {
                 HStack(spacing: 8) {
-                    ForEach(session.state.rooms.filter { $0.pinned != true }) { room in
-                        let chat = Chat.room(room)
-                        NavigationLink(value: Chat.room(room)) {
-                            GroupTile(room: room)
-                        }
-                        .buttonStyle(.plain)
-                        .pinContextActions(for: chat, pinned: room.pinned ?? false, session: session)
-                    }
-                    Button {
-                        showingNewGroup = true
-                    } label: {
-                        GroupTile(room: nil)
+                    searchField
+                    Button("Cancel") { closeSearch() }
+                        .font(.system(size: 17))
+                        .foregroundStyle(Color.primary)
+                        .padding(.horizontal, 4)
+                        .frame(minHeight: 44)
+                        .accessibilityLabel("Close search")
+                }
+            } else {
+                HStack(alignment: .center, spacing: 10) {
+                    NavigationLink { SettingsView() } label: {
+                        ProfileAvatar(name: session.connection?.name ?? "You", size: 30)
+                            .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("New group")
-                }
-                .padding(.horizontal, 16)
-            }
-        }
-        .padding(.top, 2)
-    }
-
-    // MARK: - Bottom bar
-
-    private var bottomBar: some View {
-        GlassGroup(spacing: 8) {
-            HStack(spacing: 8) {
-                if searchOpen {
-                    HStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(Color.secondary)
-                        TextField("Search chats", text: $query)
-                            .font(.system(size: 17))
-                            .submitLabel(.search)
-                            .autocorrectionDisabled()
-                            .focused($searchFocused)
-                        if !query.isEmpty {
+                    .background(Circle().fill(Color.primary.opacity(0.10)))
+                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                    .accessibilityLabel("Settings")
+                    .contextMenu {
+                        if !session.state.updates.isEmpty {
                             Button {
-                                query = ""
+                                showingUpdates = true
                             } label: {
-                                Image(systemName: "xmark.circle.fill").foregroundStyle(Color.secondary)
+                                Label("Show updates", systemImage: "bell.badge")
                             }
-                            .buttonStyle(.plain)
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .frame(height: 52)
-                    .rosterCapsule()
 
-                    Button("Cancel") {
-                        query = ""
-                        searchOpen = false
-                        searchFocused = false
-                    }
-                    .font(.system(size: 17))
-                    .foregroundStyle(Color.primary)
-                    .padding(.horizontal, 16)
-                    .frame(height: 52)
-                    .rosterCapsule()
-                } else {
-                    UpdatesPill(updates: session.state.updates) { showingUpdates = true }
-                        .frame(height: 52)
+                    Spacer(minLength: 8)
 
-                    GlassButton(systemImage: "magnifyingglass", size: 48, weight: .semibold) {
-                        searchOpen = true
+                    RosterHeaderButton(systemImage: "magnifyingglass", accessibilityLabel: "Search") {
+                        withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
+                            searchOpen = true
+                        }
                         searchFocused = true
                     }
-                    .accessibilityLabel("Search")
 
-                    GlassButton(systemImage: "square.and.pencil", size: 48, weight: .medium) {
-                        Task {
-                            if let bot = await session.createBot() { path.append(Chat.bot(bot)) }
+                    Menu {
+                        Button {
+                            Task {
+                                if let bot = await session.createBot() { path.append(Chat.bot(bot)) }
+                            }
+                        } label: {
+                            Label("New bot", systemImage: "bubble.left.and.bubble.right")
                         }
+                        Button {
+                            showingNewGroup = true
+                        } label: {
+                            Label("New group", systemImage: "person.2")
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(Color.primary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Circle())
                     }
-                    .accessibilityLabel("New bot")
+                    .buttonStyle(.plain)
+                    .background(Circle().fill(Color.primary.opacity(0.10)))
+                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                    .accessibilityLabel("New conversation")
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
-        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: searchOpen)
+        .padding(.horizontal, 24)
+        .padding(.top, 8)
+        .padding(.bottom, searchOpen ? 8 : 12)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.24), value: searchOpen)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.secondary)
+            TextField("Search chats", text: $query)
+                .font(.system(size: 17))
+                .submitLabel(.search)
+                .autocorrectionDisabled()
+                .focused($searchFocused)
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity)
+        .frame(height: 46)
+        .rosterCapsule()
+    }
+
+    private func closeSearch() {
+        query = ""
+        searchFocused = false
+        withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
+            searchOpen = false
+        }
     }
 
     // MARK: - Data
@@ -324,12 +282,9 @@ struct ChatListView: View {
     private var chats: [ChatSummary] {
         let all = session.state.chatSummaries
         guard !query.isEmpty else {
-            // rooms live in the strip; the list is bots
-            return all.filter {
-                guard !$0.pinned else { return false }
-                if case .bot = $0.chat { return true }
-                return false
-            }
+            // Pinned chats live in the hero shelf; the list below is one
+            // unified stream of every remaining bot and room.
+            return all.filter { !$0.pinned }
         }
         return all.filter {
             $0.chat.name.localizedCaseInsensitiveContains(query)
@@ -347,13 +302,6 @@ struct ChatListView: View {
         Set(session.state.pendingApprovals.compactMap { session.state.chat(forThread: $0.threadId)?.id })
     }
 
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text.uppercased())
-            .font(.system(size: 13, weight: .semibold))
-            .tracking(0.4)
-            .foregroundStyle(Color.secondary)
-            .padding(.horizontal, 20)
-    }
 }
 
 /// A quiet circular action for the roster header. Keeping the fill opaque-ish
@@ -380,8 +328,8 @@ private struct RosterHeaderButton: View {
 }
 
 private extension View {
-    /// A low-contrast surface for the roster's one persistent bottom control.
-    /// It keeps the hierarchy from turning into a wall of refractive glass.
+    /// A low-contrast surface for the search field. It keeps the hierarchy
+    /// from turning into a wall of refractive glass.
     func rosterCapsule() -> some View {
         background(Color.primary.opacity(0.09), in: Capsule())
             .overlay(Capsule().strokeBorder(Color.primary.opacity(0.11), lineWidth: 0.5))
@@ -408,18 +356,6 @@ private struct PinActionButton: View {
     }
 }
 
-private struct ChatPinContextActions: ViewModifier {
-    let chat: Chat
-    let pinned: Bool
-    @ObservedObject var session: Session
-
-    func body(content: Content) -> some View {
-        content.contextMenu {
-            PinActionButton(chat: chat, pinned: pinned, session: session)
-        }
-    }
-}
-
 private struct ChatPinRowActions: ViewModifier {
     let chat: Chat
     let pinned: Bool
@@ -441,66 +377,76 @@ private extension View {
         modifier(ChatPinRowActions(chat: summary.chat, pinned: summary.pinned, session: session))
     }
 
-    func pinContextActions(for chat: Chat, pinned: Bool, session: Session) -> some View {
-        modifier(ChatPinContextActions(chat: chat, pinned: pinned, session: session))
-    }
 }
 
 // MARK: - Rows and tiles
 
-/// A room as a round tile: the first two members' mascots stacked, its name
-/// beneath. `nil` is the "make one" tile.
-struct GroupTile: View {
-    let room: Room?
+/// The list avatar keeps rooms recognizable without giving them a generic
+/// blue placeholder. A room's first three members are arranged like the
+/// stacked faces in the Grok roster; bots keep their own artwork and state.
+private struct RosterChatAvatar: View {
+    let chat: Chat
+    let size: CGFloat
+    let state: MausState
+    let animated: Bool
+
     @EnvironmentObject private var session: Session
 
     var body: some View {
-        VStack(spacing: 7) {
+        switch chat {
+        case let .bot(bot):
+            BotAvatarView(bot: bot, size: size, state: state, animated: animated)
+        case let .room(room):
+            let bots = room.memberIds.compactMap { session.state.bot($0) }
             ZStack {
-                if let room {
-                    Circle().fill(Color.secondary.opacity(0.14))
-                    let bots = memberBots(room)
-                    if let first = bots.first {
-                        BotAvatarView(bot: first, size: 34, state: .happy, animated: false)
-                            .offset(x: -9, y: -6)
-                    }
-                    if bots.count > 1 {
-                        BotAvatarView(bot: bots[1], size: 30, state: .happy, animated: false)
-                            .padding(2)
-                            .background(Circle().fill(Color(uiColor: .systemBackground)))
-                            .offset(x: 11, y: 9)
-                    }
-                    if room.unread {
-                        Circle()
-                            .fill(MausPalette.color("blue"))
-                            .frame(width: 10, height: 10)
-                            .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                            .padding(3)
-                    }
+                if bots.isEmpty {
+                    MausAvatar(color: "blue", size: size, state: state, animated: animated)
                 } else {
-                    Circle()
-                        .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
-                        .foregroundStyle(Color.secondary.opacity(0.6))
-                    Image(systemName: "plus")
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(Color.secondary)
+                    ForEach(Array(bots.prefix(3).enumerated()), id: \.element.id) { index, bot in
+                        BotAvatarView(
+                            bot: bot,
+                            size: bots.count == 1 ? size * 0.86 : size * 0.54,
+                            state: .idle,
+                            animated: animated
+                        )
+                        .padding(2)
+                        .background(Circle().fill(RosterBackground.color))
+                        .offset(offset(for: index, count: min(bots.count, 3)))
+                    }
                 }
             }
-            .frame(width: 64, height: 64)
-
-            Text(room?.name ?? "New group")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(room == nil ? Color.secondary : Color.primary)
-                .lineLimit(1)
+            .frame(width: size, height: size)
         }
-        .frame(width: 76)
-        .contentShape(Rectangle())
     }
 
-    private func memberBots(_ room: Room) -> [Bot] {
-        room.memberIds.compactMap { session.state.bot($0) }
+    private func offset(for index: Int, count: Int) -> CGSize {
+        switch count {
+        case 1: return .zero
+        case 2:
+            return CGSize(
+                width: index == 0 ? -size * 0.17 : size * 0.17,
+                height: index == 0 ? -size * 0.10 : size * 0.10
+            )
+        default:
+            switch index {
+            case 0: return CGSize(width: -size * 0.18, height: -size * 0.16)
+            case 1: return CGSize(width: size * 0.18, height: -size * 0.16)
+            default: return CGSize(width: 0, height: size * 0.17)
+            }
+        }
     }
+}
+
+/// A slightly lifted charcoal canvas in dark mode, while retaining the
+/// system background and contrast choices in light mode.
+private struct RosterBackground: View {
+    static let color = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.07, green: 0.07, blue: 0.07, alpha: 1)
+            : .systemBackground
+    })
+
+    var body: some View { Self.color }
 }
 
 struct ChatRow: View {
@@ -510,167 +456,85 @@ struct ChatRow: View {
     var state: MausState = .idle
     var waiting = false
     var last = false
+    @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            // the unread dot, in the bot's own colour, at the very edge
-            ZStack {
-                if chat.unread && !chat.busy {
-                    Circle()
-                        .fill(MausPalette.color(chat.color))
-                        .frame(width: 10, height: 10)
+        HStack(alignment: .top, spacing: 14) {
+            RosterChatAvatar(
+                chat: chat,
+                size: 56,
+                state: state,
+                animated: !reduceMotion && state.showsActivity
+            )
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(chat.name)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+
+                    Spacer(minLength: 6)
+
+                    Text(RelativeStamp.list(at))
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.secondary)
+                        .fixedSize()
                 }
-            }
-            .frame(width: 22)
-            .frame(maxHeight: .infinity)
 
-            HStack(alignment: .top, spacing: 12) {
-                ChatAvatarView(chat: chat, size: 46, state: state, animated: !reduceMotion && state.showsActivity)
-                    .padding(.top, 10)
+                HStack(alignment: .top, spacing: 8) {
+                    Text(preview.isEmpty ? " " : preview)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 7) {
-                        Text(chat.name)
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(Color.primary)
-                            .lineLimit(1)
-                            .layoutPriority(1)
+                    Spacer(minLength: 0)
 
-                        // the bot's job, the way the desktop shows it
-                        if !chat.subtitle.isEmpty {
-                            Text(chat.subtitle)
-                                .font(.system(size: 13))
-                                .foregroundStyle(Color.secondary)
-                                .lineLimit(1)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .background(Capsule().fill(Color.primary.opacity(0.08)))
-                        }
-
-                        Spacer(minLength: 4)
-
-                        Text(RelativeStamp.list(at))
-                            .font(.system(size: 14))
-                            .foregroundStyle(Color.secondary)
-                            .fixedSize()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.secondary.opacity(0.5))
-                    }
-
-                    HStack(alignment: .top, spacing: 8) {
-                        // one line for every bot, so the rows keep one rhythm
-                        Text(preview.isEmpty ? " " : preview)
-                            .font(.system(size: 15))
-                            .foregroundStyle(Color.secondary)
-                            .lineLimit(1)
-
-                        Spacer(minLength: 0)
-
-                        if chat.busy {
-                            ProgressView().controlSize(.mini).padding(.top, 3)
-                        }
-                    }
-
-                    if waiting {
-                        Label("Waiting on you", systemImage: "hand.raised.fill")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(MausPalette.color(chat.color)))
+                    if chat.busy {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .padding(.top, 2)
+                    } else if chat.unread {
+                        Circle()
+                            .fill(MausPalette.color(chat.color))
+                            .frame(width: 10, height: 10)
                             .padding(.top, 4)
                     }
                 }
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .overlay(alignment: .bottom) {
-                    if !last { Divider() }
-                }
-            }
-            .padding(.trailing, 16)
-        }
-        .padding(.leading, 6)
-        .contentShape(Rectangle())
-    }
-}
 
-/// The floating pill: who is doing what right now, at a glance.
-struct UpdatesPill: View {
-    let updates: [ChatUpdate]
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                if !updates.isEmpty {
-                    MascotStack(colors: Array(updates.prefix(3).map(\.chat.color)))
-                }
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 4) {
-                        if let first = updates.first {
-                            switch first.kind {
-                            case .needsYou:
-                                Image(systemName: "hand.raised.fill")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundStyle(MausPalette.color(first.chat.color))
-                                Text("\(first.chat.name) needs you")
-                            case .working:
-                                Text("\(first.chat.name) is working")
-                            case .toReview:
-                                Text("\(first.chat.name) has an update")
-                            }
-                        } else {
-                            Text("All quiet")
-                        }
-                    }
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(updates.isEmpty ? Color.secondary : Color.primary)
-                    .lineLimit(1)
-
-                    Text(subline)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.secondary)
+                if waiting {
+                    Label("Waiting on you", systemImage: "hand.raised.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(MausPalette.color(chat.color))
                         .lineLimit(1)
+                        .padding(.top, 2)
                 }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.up")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color.secondary)
             }
-            .padding(.leading, updates.isEmpty ? 16 : 7)
-            .padding(.trailing, 12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .rosterCapsule()
-        .accessibilityLabel("Updates")
-    }
-
-    private var subline: String {
-        guard let first = updates.first else { return "Nothing needs you" }
-        let rest = updates.count - 1
-        if rest == 0 { return first.line.isEmpty ? " " : first.line }
-        return rest == 1 ? "1 more update" : "\(rest) more updates"
-    }
-}
-
-/// Up to three mascots overlapping, the way a group of faces reads at a glance.
-struct MascotStack: View {
-    let colors: [String]
-    var size: CGFloat = 28
-    var overlap: CGFloat = 12
-
-    var body: some View {
-        HStack(spacing: -overlap) {
-            ForEach(Array(colors.enumerated()), id: \.offset) { _, color in
-                MausAvatar(color: color, size: size, state: .idle, animated: false)
-                    .padding(2)
-                    .background(Circle().fill(Color(uiColor: .systemBackground)))
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .bottom) {
+                if !last {
+                    Divider()
+                        .overlay(Color.primary.opacity(0.08))
+                }
             }
         }
+        .padding(.horizontal, 30)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(chat.name)
+        .accessibilityValue(accessibilityValue)
+    }
+
+    private var accessibilityValue: String {
+        if waiting { return "Waiting on you" }
+        if chat.busy { return "Working" }
+        if chat.unread { return "Unread" }
+        return preview
     }
 }
 

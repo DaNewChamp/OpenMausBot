@@ -2,8 +2,8 @@ import SwiftUI
 import CompanionCore
 
 /// The small, always-at-hand set of conversations the user chose to keep
-/// close. It follows the mobile reference: large faces, one-line names and a
-/// horizontal overflow rather than turning favorites into another tall list.
+/// close. It follows the mobile reference: large centered faces, one-line
+/// names, and a horizontal overflow only when the row cannot fit.
 struct PinnedChatShelf: View {
     let summaries: [ChatSummary]
     let open: (Chat) -> Void
@@ -12,33 +12,43 @@ struct PinnedChatShelf: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("PINNED")
-                .font(.system(size: 13, weight: .semibold))
-                .tracking(0.4)
-                .foregroundStyle(Color.secondary)
-                .padding(.horizontal, 20)
+        GeometryReader { proxy in
+            let tileWidth: CGFloat = 108
+            let spacing: CGFloat = 24
+            let capacity = max(1, Int((proxy.size.width - 48 + spacing) / (tileWidth + spacing)))
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 14) {
-                    ForEach(summaries) { summary in
-                        Button { open(summary.chat) } label: {
-                            PinnedChatTile(chat: summary.chat)
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            pinButton(for: summary)
-                        }
-                        .disabled(session.pendingPinnedChats.contains(summary.chat.stableID))
+            Group {
+                if summaries.count > capacity {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        tileRow(spacing: spacing)
+                            .padding(.horizontal, 24)
                     }
+                } else {
+                    tileRow(spacing: spacing)
+                        .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 2)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+        .frame(height: 132)
         .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: summaries.map(\.id))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Pinned conversations")
+    }
+
+    private func tileRow(spacing: CGFloat) -> some View {
+        HStack(alignment: .top, spacing: spacing) {
+            ForEach(summaries) { summary in
+                Button { open(summary.chat) } label: {
+                    PinnedChatTile(chat: summary.chat, animated: !reduceMotion)
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    pinButton(for: summary)
+                }
+                .disabled(session.pendingPinnedChats.contains(summary.chat.stableID))
+            }
+        }
     }
 
     @ViewBuilder
@@ -54,44 +64,35 @@ struct PinnedChatShelf: View {
 
 private struct PinnedChatTile: View {
     let chat: Chat
+    let animated: Bool
 
     var body: some View {
         VStack(spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
-                PinnedChatAvatar(chat: chat, size: 72)
-
-                Image(systemName: "pin.fill")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Color.primary)
-                    .frame(width: 20, height: 20)
-                    .background(Circle().fill(Color(uiColor: .secondarySystemBackground).opacity(0.92)))
-                    .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 1.5))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(1)
-                    .accessibilityHidden(true)
+                PinnedChatAvatar(chat: chat, size: 90, animated: animated)
 
                 if chat.busy {
                     ProgressView()
                         .controlSize(.mini)
                         .tint(.white)
-                        .frame(width: 20, height: 20)
+                        .frame(width: 22, height: 22)
                         .background(Circle().fill(Color.black.opacity(0.78)))
                         .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
                 } else if chat.unread {
                     Circle()
                         .fill(MausPalette.color(chat.color))
-                        .frame(width: 13, height: 13)
+                        .frame(width: 12, height: 12)
                         .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
                 }
             }
-            .frame(width: 76, height: 76)
+            .frame(width: 94, height: 94)
 
             Text(chat.name)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(Color.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(width: 88)
+                .frame(width: 108)
         }
         .contentShape(Rectangle())
         .accessibilityLabel(chat.name)
@@ -108,6 +109,7 @@ private struct PinnedChatTile: View {
 private struct PinnedChatAvatar: View {
     let chat: Chat
     let size: CGFloat
+    let animated: Bool
 
     @EnvironmentObject private var session: Session
 
@@ -118,10 +120,10 @@ private struct PinnedChatAvatar: View {
                 bot: bot,
                 size: size,
                 state: MausState.forChat(chat, in: session.state),
-                animated: false
+                animated: animated
             )
         case let .room(room):
-            RoomPinnedAvatar(room: room, size: size)
+            RoomPinnedAvatar(room: room, size: size, animated: animated)
         }
     }
 }
@@ -129,6 +131,7 @@ private struct PinnedChatAvatar: View {
 private struct RoomPinnedAvatar: View {
     let room: Room
     let size: CGFloat
+    let animated: Bool
 
     @EnvironmentObject private var session: Session
 
@@ -137,11 +140,11 @@ private struct RoomPinnedAvatar: View {
         ZStack {
             Circle().fill(Color.secondary.opacity(0.14))
             if bots.isEmpty {
-                MausAvatar(color: "blue", size: size * 0.66, state: .happy, animated: false)
+                MausAvatar(color: "blue", size: size * 0.66, state: .happy, animated: animated)
             } else {
                 ForEach(Array(bots.prefix(3).enumerated()), id: \.element.id) { index, bot in
                     let avatarSize = bots.count == 1 ? size * 0.72 : size * 0.48
-                    BotAvatarView(bot: bot, size: avatarSize, state: .happy, animated: false)
+                    BotAvatarView(bot: bot, size: avatarSize, state: .happy, animated: animated)
                         .padding(2)
                         .background(Circle().fill(Color(uiColor: .systemBackground)))
                         .offset(roomOffset(index: index, count: min(bots.count, 3), size: size))
