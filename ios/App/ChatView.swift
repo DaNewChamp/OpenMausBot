@@ -118,7 +118,8 @@ struct ChatView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 // a gap in time is worth marking; a timestamp
                                 // on every message is just noise
-                                if startsANewStretch(at: row.startIndex, in: transcript) {
+                                if !row.isRedundantCommNarration,
+                                   startsANewStretch(at: row.startIndex, in: transcript) {
                                     Text(RelativeStamp.separator(row.firstMessage.date))
                                         .font(chatTypography.compact)
                                         .foregroundStyle(Color.secondary.opacity(0.7))
@@ -128,14 +129,24 @@ struct ChatView: View {
                                 }
                                 switch row.segment {
                                 case .message(let message):
-                                    MessageRow(
-                                        chat: current,
-                                        message: message,
-                                        endsRun: endsRun(at: row.startIndex, in: transcript),
-                                        onOpenComm: { groupId in
-                                            commRoom = session.state.rooms.first { $0.id == groupId }
-                                        }
-                                    )
+                                    if row.isRedundantCommNarration {
+                                        // Keep the persisted message and its
+                                        // scroll identity, but let the comm
+                                        // activity row carry the visible and
+                                        // accessible handoff affordance.
+                                        Color.clear
+                                            .frame(width: 0, height: 0)
+                                            .accessibilityHidden(true)
+                                    } else {
+                                        MessageRow(
+                                            chat: current,
+                                            message: message,
+                                            endsRun: endsRun(at: row.startIndex, in: transcript),
+                                            onOpenComm: { groupId in
+                                                commRoom = session.state.rooms.first { $0.id == groupId }
+                                            }
+                                        )
+                                    }
                                 case .toolRun(let run):
                                     ToolRunDisclosure(
                                         run: run,
@@ -568,7 +579,21 @@ struct ChatView: View {
     private func transcriptRows(in messages: [Message]) -> [ChatTranscriptRow] {
         var startIndex = 0
         return ToolRunGrouping.segments(in: messages).map { segment in
-            let row = ChatTranscriptRow(segment: segment, startIndex: startIndex)
+            let isRedundantCommNarration: Bool
+            if case .message(let message) = segment {
+                isRedundantCommNarration = CommActivityPresentation.shouldSuppressNarration(
+                    message,
+                    in: messages,
+                    at: startIndex
+                )
+            } else {
+                isRedundantCommNarration = false
+            }
+            let row = ChatTranscriptRow(
+                segment: segment,
+                startIndex: startIndex,
+                isRedundantCommNarration: isRedundantCommNarration
+            )
             startIndex += row.messageCount
             return row
         }
@@ -1056,6 +1081,7 @@ struct MessageRow: View {
 private struct ChatTranscriptRow: Identifiable {
     let segment: TranscriptSegment
     let startIndex: Int
+    let isRedundantCommNarration: Bool
 
     var id: String { segment.id }
 

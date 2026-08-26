@@ -29,4 +29,33 @@ struct CommActivityPresentationTests {
         #expect(row.title == "Messaged @Risk")
         #expect(row.destinationAvailable == false)
     }
+
+    @Test
+    func testSuppressesExactProviderNarrationBesideCommActivity() throws {
+        let data = Data(#"""
+        [
+          {"id":"activity","role":"bot","kind":"activity","at":1,"tool":{"name":"Messaged @CIO"},"comm":{"groupId":"room-1","withBotId":"cio","withName":"CIO","withColor":"blue"}},
+          {"id":"narration","role":"bot","kind":"text","at":2,"parentId":"activity","text":"Messaged CIO"}
+        ]
+        """#.utf8)
+        let transcript = try JSONDecoder().decode([Message].self, from: data)
+        #expect(CommActivityPresentation.shouldSuppressNarration(transcript[1], in: transcript, at: 1))
+    }
+
+    @Test
+    func testKeepsSubstantiveNarrationAndRoomMessages() throws {
+        let data = Data(#"""
+        [
+          {"id":"activity","role":"bot","kind":"activity","at":1,"tool":{"name":"Messaged @CIO"},"comm":{"groupId":"room-1","withBotId":"cio","withName":"CIO","withColor":"blue"}},
+          {"id":"substantive","role":"bot","kind":"text","at":2,"parentId":"activity","text":"Messaged CIO that the report is ready"},
+          {"id":"room","role":"bot","kind":"text","at":3,"from":{"botId":"chief","name":"Chief","color":"orange"},"text":"Messaged CIO"},
+          {"id":"failed-activity","role":"bot","kind":"activity","at":4,"tool":{"name":"Messaged @CIO","ok":false},"comm":{"groupId":"room-2","withBotId":"cio","withName":"CIO","withColor":"blue"}},
+          {"id":"failure-detail","role":"bot","kind":"text","at":5,"parentId":"failed-activity","text":"Messaged CIO"}
+        ]
+        """#.utf8)
+        let transcript = try JSONDecoder().decode([Message].self, from: data)
+        #expect(!CommActivityPresentation.shouldSuppressNarration(transcript[1], in: transcript, at: 1))
+        #expect(!CommActivityPresentation.shouldSuppressNarration(transcript[2], in: transcript, at: 2))
+        #expect(!CommActivityPresentation.shouldSuppressNarration(transcript[4], in: transcript, at: 4))
+    }
 }
