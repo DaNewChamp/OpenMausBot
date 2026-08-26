@@ -90,13 +90,54 @@ describe("room turn cancellation", () => {
     releaseDispatch();
     const result = await pending;
 
-    expect(result.cancelled).toBe(true);
+    expect(result).toMatchObject({ cancelled: true, started: true });
     expect(interrupt).toHaveBeenCalledTimes(2);
     expect(stopped).toBe(true);
     // A room chain only advances when its member dispatch is not cancelled.
     const nextResponder = vi.fn();
     if (!result.cancelled) nextResponder();
     expect(nextResponder).not.toHaveBeenCalled();
+  });
+
+  it("reports a stopped dispatch rejection as not started so room ownership can be released", async () => {
+    const cancellation = new RoomTurnCancellation();
+    const run = cancellation.begin("thread-rejected");
+    const interrupt = vi.fn();
+    const dispatch = vi.fn(async () => {
+      // Model an adapter rejecting after Stop won the race but before it
+      // registered a provider turn. No turn.completed can arrive for this
+      // invocation, so the caller must release its room owner immediately.
+      cancellation.interrupt("thread-rejected");
+      throw new Error("stopped before provider registration");
+    });
+
+    const result = await dispatchRoomTurn(cancellation, run, dispatch, interrupt);
+
+    expect(result).toEqual({ cancelled: true, started: false });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(interrupt).toHaveBeenCalledTimes(2);
+
+    const room = {
+      busyBotId: "bot-1" as string | null,
+      activity: "working" as "working" | "idle",
+      speakerBotId: "bot-1" as string | null,
+      watchdogWatching: true,
+      queuedMessages: ["later"],
+    };
+    if (result.cancelled && !result.started) {
+      room.busyBotId = null;
+      room.activity = "idle";
+      room.speakerBotId = null;
+      room.watchdogWatching = false;
+      room.queuedMessages.shift();
+    }
+    expect(room).toEqual({
+      busyBotId: null,
+      activity: "idle",
+      speakerBotId: null,
+      watchdogWatching: false,
+      queuedMessages: [],
+    });
   });
 
   it("does not turn a normally finished dispatch into a cancellation", async () => {
@@ -113,7 +154,7 @@ describe("room turn cancellation", () => {
       interrupt,
     );
 
-    expect(result).toEqual({ value: { started: true }, cancelled: false });
+    expect(result).toEqual({ value: { started: true }, cancelled: false, started: true });
     expect(interrupt).not.toHaveBeenCalled();
   });
 });

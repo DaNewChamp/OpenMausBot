@@ -2075,7 +2075,11 @@ async function runGroupMemberTurn(
   // chained @mention can be routed afterwards
   let replyText = "";
   const timeoutMinutes = roomTurnTimeoutMinutes(cfg);
-  let dispatchStarted = false;
+  // A cancellation can race the adapter's asynchronous registration. A
+  // rejected dispatch has no provider turn to emit `turn.completed`, while a
+  // resolved dispatch may have one winding down after its interrupt. Keep
+  // that distinction for the cleanup decision below.
+  let providerTurnStarted = false;
   const outcome = await new Promise<"settled" | "dispatch_failed" | "stalled" | "timed_out" | "cancelled">((resolve) => {
     let done = false;
     let unsub = () => {};
@@ -2112,7 +2116,6 @@ async function runGroupMemberTurn(
     unregisterStall = roomStallCompletions.register(group.threadId, () => finish("stalled"));
     watchdog.watch(group.threadId, bot.id);
     const dispatch = () => {
-      dispatchStarted = true;
       return instance.adapter.sendTurn({
         threadId: group.threadId,
         text,
@@ -2129,9 +2132,10 @@ async function runGroupMemberTurn(
           dispatch,
           () => instance.adapter.interruptTurn(group.threadId),
         )
-      : dispatch().then((value) => ({ value, cancelled: false }));
+      : dispatch().then((value) => ({ value, cancelled: false, started: true }));
     dispatched
       .then((result) => {
+        providerTurnStarted = result.started;
         if (result.cancelled) finish("cancelled");
       })
       .catch((err) => {
@@ -2158,9 +2162,11 @@ async function runGroupMemberTurn(
   // produces turn.completed (or the stall watchdog's grace fallback runs).
   // Do not clear busy or start the next member on that same thread early.
   if (outcome === "cancelled") {
-    // If cancellation won before the adapter was called, no provider can
-    // emit turn.completed to release the ownership markers we just set.
-    if (!dispatchStarted) {
+    // If cancellation won before the adapter registered a turn (including a
+    // dispatch rejection), no provider can emit turn.completed to release the
+    // ownership markers we just set. A successful registration remains owned
+    // until its interrupt produces that terminal event.
+    if (!providerTurnStarted) {
       watchdog.settle(group.threadId);
       clearRoomOwner();
     }

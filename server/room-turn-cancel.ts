@@ -13,6 +13,13 @@ export interface RoomTurnRun extends RoomTurnIdentity {
   cancelled: boolean;
 }
 
+export interface RoomTurnDispatchResult<T> {
+  value?: T;
+  cancelled: boolean;
+  /** True only when the adapter dispatch resolved and registered a provider turn. */
+  started: boolean;
+}
+
 export class RoomTurnCancellation {
   private readonly generations = new Map<string, number>();
   private readonly active = new Map<string, RoomTurnRun>();
@@ -112,13 +119,15 @@ export class RoomTurnCancellation {
  * register their active process asynchronously, so a Stop can arrive before
  * `dispatch` has made an interrupt visible. The cancellation callback fires
  * immediately, and the post-dispatch check fires once more after registration
- * has completed. No adapter contract change is required. */
+ * has completed. The result records whether dispatch resolved (`started`) so a
+ * rejected dispatch can release room ownership without waiting for an event
+ * that no provider turn can emit. No adapter contract change is required. */
 export async function dispatchRoomTurn<T>(
   cancellation: RoomTurnCancellation,
   run: RoomTurnRun,
   dispatch: () => Promise<T>,
   interrupt: () => Promise<void> | void,
-): Promise<{ value?: T; cancelled: boolean }> {
+): Promise<RoomTurnDispatchResult<T>> {
   const requestInterrupt = () => {
     try {
       void Promise.resolve(interrupt()).catch(() => {});
@@ -129,26 +138,26 @@ export async function dispatchRoomTurn<T>(
   };
   if (!cancellation.isActive(run.threadId, run) || cancellation.isCancelled(run.threadId, run)) {
     requestInterrupt();
-    return { cancelled: true };
+    return { cancelled: true, started: false };
   }
   let unregister = () => {};
   unregister = cancellation.onCancel(run.threadId, run, requestInterrupt);
   if (!cancellation.isActive(run.threadId, run) || cancellation.isCancelled(run.threadId, run)) {
     unregister();
     requestInterrupt();
-    return { cancelled: true };
+    return { cancelled: true, started: false };
   }
   try {
     const value = await dispatch();
     if (cancellation.isCancelled(run.threadId, run)) {
       requestInterrupt();
-      return { value, cancelled: true };
+      return { value, cancelled: true, started: true };
     }
-    return { value, cancelled: false };
+    return { value, cancelled: false, started: true };
   } catch (error) {
     if (cancellation.isCancelled(run.threadId, run)) {
       requestInterrupt();
-      return { cancelled: true };
+      return { cancelled: true, started: false };
     }
     throw error;
   } finally {
