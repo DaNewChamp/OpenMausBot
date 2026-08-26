@@ -9,6 +9,7 @@ import CompanionCore
 struct SettingsView: View {
     @EnvironmentObject private var session: Session
     @AppStorage("conversationTextSize") private var conversationTextSize = ConversationTextSize.standard.rawValue
+    @AppStorage("busySendDefault") private var busySendDefault = BusySendDefault.steer.rawValue
     @State private var confirmingSignOut = false
     @State private var editingAddress = false
     @State private var addressText = ""
@@ -72,6 +73,18 @@ struct SettingsView: View {
                 Text("Appearance")
             } footer: {
                 Text("Adjusts message text, Markdown, tool details, and the composer without changing navigation or avatar sizes.")
+            }
+
+            Section {
+                Picker("Default action", selection: $busySendDefault) {
+                    Text("Steer").tag(BusySendDefault.steer.rawValue)
+                    Text("Queue").tag(BusySendDefault.queue.rawValue)
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Text("While agent is working")
+            } footer: {
+                Text("Steer sends your next message into the active turn. Queue holds it until the current work finishes. Touch and hold Send for either choice at any time.")
             }
 
             Section {

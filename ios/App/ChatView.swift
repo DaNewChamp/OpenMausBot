@@ -26,7 +26,10 @@ struct ChatView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("conversationTextSize") private var conversationTextSize = ConversationTextSize.standard.rawValue
+    @AppStorage("busySendDefault") private var busySendDefault = BusySendDefault.steer.rawValue
     @State private var draft = ""
+    @State private var composerRequestGate = ComposerRequestGate()
+    @State private var pendingQueueNotices: [String: PendingQueueNotice] = [:]
     @State private var showingTasks = false
     @State private var showingComputer = false
     @State private var showingPlus = false
@@ -204,6 +207,7 @@ struct ChatView: View {
                 // starts on the newest message rather than the oldest.
                 .defaultScrollAnchor(.bottom)
                 .onChange(of: transcript.last?.id) { _, _ in
+                    reconcilePendingQueue(in: messages)
                     guard let last = transcript.last else { return }
                     withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                 }
@@ -269,6 +273,12 @@ struct ChatView: View {
             // initial task above will not run again, so clear that new unread
             // bit here rather than leaving a badge on an open conversation.
             if unread { Task { await session.markRead(current) } }
+        }
+        .onChange(of: session.status) { _, status in
+            // A reconnect refresh is authoritative. If the queue notice is
+            // no longer represented by the refreshed transcript, remove the
+            // local acknowledgement rather than leaving it forever.
+            if case .live = status { reconcilePendingQueue(in: messages, authoritativeRefresh: true) }
         }
         .onDisappear { dictation.stop() }
         .onChange(of: scenePhase) { _, phase in
@@ -587,25 +597,92 @@ struct ChatView: View {
         return next.kind != .text
     }
 
+    private var selectedBusySendDefault: BusySendDefault {
+        BusySendDefault(rawValue: busySendDefault)
+    }
+
+    private var primaryAction: ComposerPrimaryAction {
+        ComposerActionPolicy.action(
+            busy: current.busy,
+            draft: draft,
+            defaultMode: selectedBusySendDefault
+        )
+    }
+
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if case .send = primaryAction { return true }
+        return false
     }
 
     private var hasPendingApproval: Bool {
         messages.contains { $0.card?.isPending == true }
     }
 
-    private func submit(_ explicitText: String? = nil) {
+    private func submit(
+        _ explicitText: String? = nil,
+        mode explicitMode: MessageDeliveryMode? = nil
+    ) {
         // This also cancels an in-flight permission prompt before it can
         // open the microphone after the message has already been sent.
         dictation.stop()
         let text = (explicitText ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        draft = ""
+        guard !text.isEmpty, composerRequestGate.begin() else { return }
+        let target = current
+        let mode = explicitMode ?? (target.busy ? selectedBusySendDefault.deliveryMode : .auto)
         showCommandHUD = false
-        SoundEffects.playSent()
-        Haptics.impact(.medium)
-        Task { await session.send(text, to: current) }
+        Task { @MainActor in
+            let receipt = await session.send(text, to: target, mode: mode)
+            if let receipt, receipt.ok {
+                if let queueId = receipt.queueId {
+                    pendingQueueNotices[queueId] = PendingQueueNotice(
+                        queueId: queueId,
+                        text: text,
+                        threadId: target.threadId
+                    )
+                }
+                draft = ""
+                SoundEffects.playSent()
+                Haptics.impact(.medium)
+            }
+            composerRequestGate.end()
+        }
+    }
+
+    private func activatePrimaryAction() {
+        guard !composerRequestGate.isInFlight else { return }
+        switch primaryAction {
+        case .stop:
+            let target = current
+            guard composerRequestGate.begin() else { return }
+            dictation.stop()
+            Task { @MainActor in
+                await session.interrupt(chat: target)
+                composerRequestGate.end()
+            }
+        case .send(let mode):
+            submit(mode: mode)
+        case .none:
+            break
+        }
+    }
+
+    private func reconcilePendingQueue(in transcript: [Message], authoritativeRefresh: Bool = false) {
+        guard !pendingQueueNotices.isEmpty else { return }
+        if authoritativeRefresh {
+            pendingQueueNotices = pendingQueueNotices.filter { _, pending in
+                pending.threadId != threadId
+            }
+            return
+        }
+        let deliveredTexts = Set(
+            transcript
+                .filter { $0.role == .user }
+                .compactMap { $0.text?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        )
+        pendingQueueNotices = pendingQueueNotices.filter { _, pending in
+            guard pending.threadId == threadId else { return true }
+            return !deliveredTexts.contains(pending.text)
+        }
     }
 
     // MARK: - Composer
@@ -613,6 +690,21 @@ struct ChatView: View {
     /// A round + and a glass pill with dictation and send inside it.
     private var composer: some View {
         VStack(spacing: 6) {
+            let pendingCount = pendingQueueNotices.values.filter { $0.threadId == threadId }.count
+            if pendingCount > 0 {
+                Label(
+                    pendingCount == 1
+                        ? "Queued · waiting for current work"
+                        : "(pendingCount) queued · waiting for current work",
+                    systemImage: "clock.arrow.circlepath"
+                )
+                    .font(chatTypography.detail.weight(.medium))
+                    .foregroundStyle(Color.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 6)
+                    .accessibilityLabel("Message queued and waiting for current work")
+            }
+
             if let error = dictation.error {
                 Text(error)
                     .font(chatTypography.detail)
@@ -705,10 +797,10 @@ struct ChatView: View {
                             }
                             .onKeyPress(.return, phases: .down) { press in
                                 guard !press.modifiers.contains(.shift) else { return .ignored }
-                                submit()
+                                activatePrimaryAction()
                                 return .handled
                             }
-                            .onSubmit { submit() }
+                            .onSubmit { activatePrimaryAction() }
 
                         Button {
                             composerFocused = false
@@ -731,20 +823,7 @@ struct ChatView: View {
                         .padding(.bottom, 6)
                         .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
 
-                        Button { submit() } label: {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundStyle(canSend ? Color.white : Color.secondary)
-                                .frame(width: 32, height: 32)
-                                .background(
-                                    Circle().fill(canSend ? BubbleColor.mine : Color.secondary.opacity(0.18))
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!canSend)
-                        .padding(.trailing, 6)
-                        .padding(.bottom, 6)
-                        .animation(.easeOut(duration: 0.15), value: canSend)
+                        primaryActionButton
                     }
                     .frame(minHeight: 44)
                     .glassCapsule(interactive: false)
@@ -754,6 +833,68 @@ struct ChatView: View {
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
+    }
+
+    @ViewBuilder
+    private var primaryActionButton: some View {
+        switch primaryAction {
+        case .stop:
+            Button { activatePrimaryAction() } label: {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.white)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.red))
+            }
+            .buttonStyle(.plain)
+            .disabled(composerRequestGate.isInFlight)
+            .padding(.trailing, 6)
+            .padding(.bottom, 6)
+            .accessibilityLabel("Stop current work")
+            .accessibilityHint("Interrupts the active turn for this conversation")
+
+        case .send(let mode):
+            Button { submit(mode: mode) } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.white)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(BubbleColor.mine))
+            }
+            .buttonStyle(.plain)
+            .disabled(composerRequestGate.isInFlight)
+            .contextMenu {
+                Button {
+                    submit(mode: .steer)
+                } label: {
+                    Label("Steer now", systemImage: "arrow.turn.up.right")
+                }
+                Button {
+                    submit(mode: .queue)
+                } label: {
+                    Label("Queue after current work", systemImage: "clock.arrow.circlepath")
+                }
+            }
+            .padding(.trailing, 6)
+            .padding(.bottom, 6)
+            .accessibilityLabel(mode == .steer ? "Send and steer" : mode == .queue ? "Send and queue" : "Send")
+            .accessibilityHint("Touch and hold for explicit steer or queue choices")
+            .animation(.easeOut(duration: 0.15), value: canSend)
+
+        case .none:
+            Button { activatePrimaryAction() } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.secondary)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.secondary.opacity(0.18)))
+            }
+            .buttonStyle(.plain)
+            .disabled(true)
+            .padding(.trailing, 6)
+            .padding(.bottom, 6)
+            .accessibilityLabel("Send")
+        }
     }
 }
 
@@ -892,6 +1033,12 @@ private struct ChatTranscriptRow: Identifiable {
 private struct ShareFile: Identifiable {
     let url: URL
     var id: String { url.path }
+}
+
+private struct PendingQueueNotice: Equatable {
+    let queueId: String
+    let text: String
+    let threadId: String
 }
 
 private struct ActivityShareSheet: UIViewControllerRepresentable {
