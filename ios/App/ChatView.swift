@@ -209,7 +209,11 @@ struct ChatView: View {
                 .onChange(of: transcript.last?.id) { _, _ in
                     reconcilePendingQueue(in: messages)
                     guard let last = transcript.last else { return }
-                    withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                    if reduceMotion {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    } else {
+                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
                 }
                 // Follow the text as it arrives. Keyed on length rather than
                 // the string so this fires once per delta batch, and without
@@ -223,7 +227,11 @@ struct ChatView: View {
                     guard let messageId,
                           messages.contains(where: { $0.id == messageId })
                     else { return }
-                    withAnimation { proxy.scrollTo(messageId, anchor: .center) }
+                    if reduceMotion {
+                        proxy.scrollTo(messageId, anchor: .center)
+                    } else {
+                        withAnimation { proxy.scrollTo(messageId, anchor: .center) }
+                    }
                     session.consumeFocus(messageId)
                 }
                 .task {
@@ -457,12 +465,12 @@ struct ChatView: View {
             ZStack(alignment: .bottom) {
                 Color.black.opacity(0.35)
                     .ignoresSafeArea()
-                    .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showingPlus = false } }
+                    .onTapGesture { setShowingPlus(false) }
 
                 VStack(spacing: 0) {
                     ForEach(plusActions) { action in
                         Button {
-                            withAnimation(.snappy(duration: 0.28)) { showingPlus = false }
+                            setShowingPlus(false)
                             action.run()
                         } label: {
                             HStack(spacing: 16) {
@@ -496,9 +504,9 @@ struct ChatView: View {
                 .padding(.leading, 12)
                 .padding(.trailing, 44)
                 .padding(.bottom, 70)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(reduceMotion ? .identity : .move(edge: .bottom).combined(with: .opacity))
             }
-            .transition(.opacity)
+            .transition(reduceMotion ? .identity : .opacity)
         }
     }
 
@@ -568,7 +576,7 @@ struct ChatView: View {
 
     private func toggleToolRun(_ run: ToolRun) {
         Haptics.selection()
-        withAnimation(.easeInOut(duration: 0.22)) {
+        updateState(.easeInOut(duration: 0.22)) {
             let expanded = ToolRunGrouping.isExpanded(
                 run,
                 opened: openedToolRuns,
@@ -581,6 +589,18 @@ struct ChatView: View {
                 closedToolRuns.remove(run.id)
                 openedToolRuns.insert(run.id)
             }
+        }
+    }
+
+    private func setShowingPlus(_ value: Bool) {
+        updateState(.snappy(duration: 0.28)) { showingPlus = value }
+    }
+
+    private func updateState(_ animation: Animation, _ updates: () -> Void) {
+        if reduceMotion {
+            updates()
+        } else {
+            withAnimation(animation, updates)
         }
     }
 
@@ -746,12 +766,12 @@ struct ChatView: View {
                     default: submit(command.command)
                     }
                 }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(reduceMotion ? .identity : .move(edge: .bottom).combined(with: .opacity))
             } else if draft.isEmpty && !current.busy && !hasPendingApproval {
                 PredictiveActionChipsView(accentColor: MausPalette.color(current.color)) { chip in
                     submit(chip.prompt)
                 }
-                .transition(.opacity)
+                .transition(reduceMotion ? .identity : .opacity)
             }
 
             GlassGroup(spacing: 10) {
@@ -759,7 +779,7 @@ struct ChatView: View {
                     Button {
                         dictation.stop()
                         composerFocused = false
-                        withAnimation(.snappy(duration: 0.28)) { showingPlus.toggle() }
+                        setShowingPlus(!showingPlus)
                     } label: {
                         Image(systemName: "plus")
                             .font(.system(size: 20, weight: .medium))
@@ -776,7 +796,7 @@ struct ChatView: View {
                     HStack(alignment: .bottom, spacing: 6) {
                         Button {
                             dictation.stop()
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                            updateState(.spring(response: 0.3, dampingFraction: 0.75)) {
                                 showCommandHUD.toggle()
                             }
                             Haptics.selection()
@@ -805,7 +825,7 @@ struct ChatView: View {
                             // prevent competing edits without dimming the text.
                             .allowsHitTesting(!dictation.isListening && !dictation.isStarting)
                             .onChange(of: draft) { _, value in
-                                withAnimation(.easeInOut(duration: 0.15)) {
+                                updateState(.easeInOut(duration: 0.15)) {
                                     showCommandHUD = value.hasPrefix("/")
                                 }
                             }
@@ -831,7 +851,7 @@ struct ChatView: View {
                                             : Color.secondary.opacity(0.12)
                                     )
                                 )
-                                .symbolEffect(.pulse, isActive: dictation.isListening)
+                                .symbolEffect(.pulse, isActive: dictation.isListening && !reduceMotion)
                         }
                         .buttonStyle(.plain)
                         .padding(.bottom, 6)
@@ -1004,7 +1024,10 @@ struct MessageRow: View {
         case .options:
             CardView(chat: chat, message: message)
         case .activity:
-            if let row = CommActivityPresentation(message: message), let comm = message.comm {
+            let destinationAvailable = message.comm.map { comm in
+                session.state.rooms.contains { $0.id == comm.groupId }
+            } ?? false
+            if let row = CommActivityPresentation(message: message, destinationAvailable: destinationAvailable), let comm = message.comm {
                 CommActivityRow(presentation: row, comm: comm, onOpen: onOpenComm)
             } else {
                 ActivityChip(tool: message.tool)
@@ -1211,6 +1234,7 @@ private struct ToolRunDisclosure: View {
 
     @State private var revealedRawNames: Set<String> = []
     @Environment(\.conversationTypography) private var typography
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1239,7 +1263,7 @@ private struct ToolRunDisclosure: View {
             if isExpanded {
                 expandedBody
                     .padding(.leading, 22)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(.leading, 2)
@@ -1288,11 +1312,19 @@ private struct ToolRunDisclosure: View {
         return VStack(alignment: .leading, spacing: 2) {
             Button {
                 Haptics.selection()
-                withAnimation(.easeInOut(duration: 0.18)) {
+                if reduceMotion {
                     if revealed {
                         revealedRawNames.remove(message.id)
                     } else {
                         revealedRawNames.insert(message.id)
+                    }
+                } else {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        if revealed {
+                            revealedRawNames.remove(message.id)
+                        } else {
+                            revealedRawNames.insert(message.id)
+                        }
                     }
                 }
             } label: {
@@ -1366,32 +1398,69 @@ struct CommActivityRow: View {
     private var peer: Bot? { session.state.bot(presentation.peerBotId) }
 
     var body: some View {
-        Button { onOpen(presentation.groupId) } label: {
-            HStack(spacing: 8) {
-                if let peer {
-                    BotAvatarView(bot: peer, size: 18, state: .happy, animated: false)
-                } else {
-                    MausAvatar(color: comm.withColor, size: 18, state: .happy, animated: false)
-                }
-                Text(presentation.title)
-                    .font(typography.detail)
-                    .foregroundStyle(Color.secondary)
-                    .multilineTextAlignment(.leading)
+        rowContent
+            .background(Capsule().fill(Color.secondary.opacity(0.1)))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(accessibilityTitle)
+            .accessibilityHint(accessibilityHint)
+    }
+
+    @ViewBuilder
+    private var rowContent: some View {
+        if presentation.destinationAvailable {
+            Button { onOpen(presentation.groupId) } label: {
+                contentLabel
+            }
+            .buttonStyle(.plain)
+        } else {
+            contentLabel
+        }
+    }
+
+    private var contentLabel: some View {
+        HStack(spacing: 8) {
+            if let peer {
+                BotAvatarView(bot: peer, size: 18, state: .happy, animated: false)
+            } else {
+                // The server keeps the peer's display color on the activity,
+                // so a deleted/unloaded bot still has an honest visual identity.
+                MausAvatar(color: comm.withColor, size: 18, state: .happy, animated: false)
+            }
+            Text(presentation.title)
+                .font(typography.detail)
+                .foregroundStyle(Color.secondary)
+                .multilineTextAlignment(.leading)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if !presentation.destinationAvailable {
+                Text("Conversation unavailable")
+                    .font(typography.compact)
+                    .foregroundStyle(Color.secondary.opacity(0.75))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Spacer(minLength: 8)
+            }
+            Spacer(minLength: 8)
+            if presentation.destinationAvailable {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Color.secondary.opacity(0.6))
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
-        .background(Capsule().fill(Color.secondary.opacity(0.1)))
-        .accessibilityLabel(presentation.title)
-        .accessibilityHint("Open the conversation with \(peer?.name ?? comm.withName)")
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .contentShape(Capsule())
+    }
+
+    private var accessibilityTitle: String {
+        presentation.destinationAvailable
+            ? presentation.title
+            : "\(presentation.title), conversation unavailable"
+    }
+
+    private var accessibilityHint: String {
+        presentation.destinationAvailable
+            ? "Open the conversation with \(peer?.name ?? comm.withName)"
+            : "The conversation with \(peer?.name ?? comm.withName) is no longer available"
     }
 }
 

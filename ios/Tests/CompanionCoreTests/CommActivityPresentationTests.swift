@@ -20,4 +20,13 @@ struct CommActivityPresentationTests {
         let message = try! JSONDecoder().decode(Message.self, from: data)
         #expect(CommActivityPresentation(message: message) == nil)
     }
+
+    @Test
+    func testMissingRoomRemainsInformativeWithoutNavigationDestination() throws {
+        let data = Data(#"{"id":"m3","role":"bot","kind":"activity","at":1,"comm":{"groupId":"deleted-room","withBotId":"risk","withName":"Risk","withColor":"red"}}"#.utf8)
+        let message = try JSONDecoder().decode(Message.self, from: data)
+        let row = try #require(CommActivityPresentation(message: message, destinationAvailable: false))
+        #expect(row.title == "Messaged @Risk")
+        #expect(row.destinationAvailable == false)
+    }
 }

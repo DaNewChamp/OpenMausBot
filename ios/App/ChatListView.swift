@@ -314,7 +314,7 @@ struct ChatListView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
-        .animation(.snappy(duration: 0.25), value: searchOpen)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: searchOpen)
     }
 
     // MARK: - Data
@@ -476,6 +476,7 @@ struct ChatRow: View {
     var state: MausState = .idle
     var waiting = false
     var last = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -491,7 +492,7 @@ struct ChatRow: View {
             .frame(maxHeight: .infinity)
 
             HStack(alignment: .top, spacing: 14) {
-                ChatAvatarView(chat: chat, size: 52, state: state, animated: state.showsActivity)
+                ChatAvatarView(chat: chat, size: 52, state: state, animated: !reduceMotion && state.showsActivity)
                     .padding(.top, 12)
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -642,6 +643,7 @@ struct MascotStack: View {
 /// Connection state, shown only when it is not "fine".
 struct StatusBanner: View {
     @EnvironmentObject private var session: Session
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -656,7 +658,7 @@ struct StatusBanner: View {
                 banner("This phone was unpaired on the computer.", systemImage: "lock.slash", tint: .red)
             }
         }
-        .animation(.default, value: session.status)
+        .animation(reduceMotion ? nil : .default, value: session.status)
     }
 
     private func banner(_ text: String, systemImage: String, tint: Color) -> some View {
