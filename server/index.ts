@@ -38,7 +38,12 @@ import { parseChatPin } from "./chat-pin.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { runWhenRoomIdle } from "./room-queue.ts";
-import { RoomTurnCancellation, type RoomTurnRun } from "./room-turn-cancel.ts";
+import {
+  RoomTurnCancellation,
+  dispatchRoomTurn,
+  type RoomTurnIdentity,
+  type RoomTurnRun,
+} from "./room-turn-cancel.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { cloudBackendChangeError, vpsAliasChangeError } from "./cloud-backend.ts";
@@ -1082,11 +1087,21 @@ bus.subscribe((event: RuntimeEvent) => {
           clearVpsTurn();
         }
       }
-      const speaker = groupSpeakers.get(event.threadId);
       const group = store.groupByThread(event.threadId);
+      // A room can be deleted while its provider is winding down. Keep the
+      // speaker snapshot as the cleanup authority until turn.completed so a
+      // deleted room cannot leave its member busy forever.
+      const speaker = groupSpeakers.get(event.threadId);
       if (speaker && group?.busyBotId === speaker.botId) {
         groupSpeakers.delete(event.threadId);
         store.patchGroup(group.id, { busyBotId: null, unread: true });
+        const speakingBot = store.bot(speaker.botId);
+        if (speakingBot?.busy) {
+          store.setActivity(speakingBot.id, "idle");
+          store.patchBot(speakingBot.id, { unread: true });
+        }
+      } else if (speaker && !group) {
+        groupSpeakers.delete(event.threadId);
         const speakingBot = store.bot(speaker.botId);
         if (speakingBot?.busy) {
           store.setActivity(speakingBot.id, "idle");
@@ -1886,6 +1901,9 @@ const webhookIngressStatus = () => ({
 // a time — the transcript and streaming bubble stay coherent), each on a
 // fresh session with recent room context. A member's reply may @mention
 // teammates; those get one chained turn (hop 1), never deeper.
+// Key room work by the immutable transcript thread rather than the mutable
+// group id. A deleted room can be recreated with the same id; its new thread
+// must never inherit the old queue or cancellation generation.
 const groupQueues = new Map<string, Promise<void>>();
 /** Number of user message turns waiting in a room's serialized chain. The
  * promise map is intentionally retained after a room settles, so its
@@ -1949,7 +1967,7 @@ async function runGroupMemberTurn(
   const group = store.group(groupId);
   const bot = store.bot(botId);
   if (!group || !bot) return false;
-  if (roomRun && roomTurnCancellation.isCancelled(groupId, roomRun)) return false;
+  if (roomRun && roomTurnCancellation.isCancelled(group.threadId, roomRun)) return false;
   spoken.add(botId);
   const instance = registry.get(bot.modelSelection.instanceId);
   const userName = cfg.profile?.name?.trim() || "User";
@@ -2007,7 +2025,7 @@ async function runGroupMemberTurn(
     onDispatchError?.(message);
     return true;
   }
-  if (roomRun && roomTurnCancellation.isCancelled(groupId, roomRun)) return false;
+  if (roomRun && roomTurnCancellation.isCancelled(group.threadId, roomRun)) return false;
   store.setActivity(bot.id, "working");
 
   store.patchGroup(group.id, { busyBotId: bot.id }); // the store's change stream carries the frame
@@ -2057,7 +2075,8 @@ async function runGroupMemberTurn(
   // chained @mention can be routed afterwards
   let replyText = "";
   const timeoutMinutes = roomTurnTimeoutMinutes(cfg);
-  const outcome = await new Promise<"settled" | "dispatch_failed" | "stalled" | "timed_out">((resolve) => {
+  let dispatchStarted = false;
+  const outcome = await new Promise<"settled" | "dispatch_failed" | "stalled" | "timed_out" | "cancelled">((resolve) => {
     let done = false;
     let unsub = () => {};
     let unregisterStall = () => {};
@@ -2071,7 +2090,7 @@ async function runGroupMemberTurn(
       });
       finish("timed_out");
     });
-    const finish = (value: "settled" | "dispatch_failed" | "stalled" | "timed_out") => {
+    const finish = (value: "settled" | "dispatch_failed" | "stalled" | "timed_out" | "cancelled") => {
       if (done) return;
       done = true;
       deadline.stop();
@@ -2092,14 +2111,28 @@ async function runGroupMemberTurn(
     deadline.start();
     unregisterStall = roomStallCompletions.register(group.threadId, () => finish("stalled"));
     watchdog.watch(group.threadId, bot.id);
-    instance.adapter
-      .sendTurn({
+    const dispatch = () => {
+      dispatchStarted = true;
+      return instance.adapter.sendTurn({
         threadId: group.threadId,
         text,
         system: roomSystem,
         cwd,
         integrations,
         ...memberTurnSelection(bot.modelSelection),
+      });
+    };
+    const dispatched = roomRun
+      ? dispatchRoomTurn(
+          roomTurnCancellation,
+          roomRun,
+          dispatch,
+          () => instance.adapter.interruptTurn(group.threadId),
+        )
+      : dispatch().then((value) => ({ value, cancelled: false }));
+    dispatched
+      .then((result) => {
+        if (result.cancelled) finish("cancelled");
       })
       .catch((err) => {
         const message = err instanceof Error ? err.message : "turn failed";
@@ -2114,18 +2147,30 @@ async function runGroupMemberTurn(
         finish("dispatch_failed");
       });
   });
+  const clearRoomOwner = () => {
+    const currentGroup = store.groupByThread(group.threadId);
+    if (currentGroup?.id !== group.id || currentGroup.busyBotId !== bot.id) return;
+    groupSpeakers.delete(group.threadId);
+    store.patchGroup(currentGroup.id, { busyBotId: null, unread: true });
+    if (store.bot(bot.id)?.busy) store.setActivity(bot.id, "idle");
+  };
   // A timed-out provider still owns the room thread until its interrupt
   // produces turn.completed (or the stall watchdog's grace fallback runs).
   // Do not clear busy or start the next member on that same thread early.
+  if (outcome === "cancelled") {
+    // If cancellation won before the adapter was called, no provider can
+    // emit turn.completed to release the ownership markers we just set.
+    if (!dispatchStarted) {
+      watchdog.settle(group.threadId);
+      clearRoomOwner();
+    }
+    return false;
+  }
   if (outcome === "stalled" || outcome === "timed_out") return false;
   // turn.completed normally performs this cleanup. Only use the fallback
   // when this invocation still owns the room; otherwise it would emit a
   // duplicate group frame or clear a newer speaker's state.
-  if (store.group(group.id)?.busyBotId === bot.id) {
-    groupSpeakers.delete(group.threadId);
-    store.patchGroup(group.id, { busyBotId: null, unread: true });
-    if (store.bot(bot.id)?.busy) store.setActivity(bot.id, "idle");
-  }
+  clearRoomOwner();
   if (outcome === "dispatch_failed") {
     // No turn.completed follows a rejected room dispatch. Anything that was
     // queued while this bot briefly owned the room must be retried now.
@@ -2135,14 +2180,14 @@ async function runGroupMemberTurn(
   }
 
   // chained mentions: a member's reply can summon teammates — one hop only
-  if (roomRun && roomTurnCancellation.isCancelled(groupId, roomRun)) return false;
+  if (roomRun && roomTurnCancellation.isCancelled(group.threadId, roomRun)) return false;
   if (hop < MAX_GROUP_HOPS && replyText.trim()) {
     const members = group.memberIds
       .map((id) => store.bot(id))
       .filter((b): b is NonNullable<typeof b> => Boolean(b) && b!.id !== bot.id);
     for (const next of roomResponders(replyText, members, { kind: "mentions" })) {
       if (spoken.has(next.id)) continue;
-      if (roomRun && roomTurnCancellation.isCancelled(groupId, roomRun)) return false;
+      if (roomRun && roomTurnCancellation.isCancelled(group.threadId, roomRun)) return false;
       if (!(await runGroupMemberTurn(groupId, next.id, hop + 1, spoken, undefined, undefined, roomRun))) return false;
     }
   }
@@ -2160,7 +2205,8 @@ function startGroupTurn(
   if (roomSetupPending(group)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
   }
-  const busyAtEnqueue = Boolean(group.busyBotId) || (groupQueuePending.get(groupId) ?? 0) > 0;
+  const threadId = group.threadId;
+  const busyAtEnqueue = Boolean(group.busyBotId) || (groupQueuePending.get(threadId) ?? 0) > 0;
 
   const members = group.memberIds
     .map((id) => store.bot(id))
@@ -2215,31 +2261,36 @@ function startGroupTurn(
     return deliveryReceipt("started");
   }
 
-  const prev = groupQueues.get(groupId) ?? Promise.resolve();
-  groupQueuePending.set(groupId, (groupQueuePending.get(groupId) ?? 0) + 1);
+  const prev = groupQueues.get(threadId) ?? Promise.resolve();
+  groupQueuePending.set(threadId, (groupQueuePending.get(threadId) ?? 0) + 1);
   const next = prev.then(async () => {
     try {
       await runWhenRoomIdle(store, groupId, async () => {
-        const roomRun = roomTurnCancellation.begin(groupId);
+        const current = store.group(groupId);
+        // The room id is not the identity of a conversation. If this queue
+        // outlives deletion and the id is reused, the old user turn must not
+        // dispatch into the replacement room.
+        if (!current || current.threadId !== threadId) return;
+        const roomRun = roomTurnCancellation.begin(threadId);
         const spoken = new Set<string>();
         try {
           for (const responder of responders) {
-            if (roomTurnCancellation.isCancelled(groupId, roomRun)) break;
+            if (roomTurnCancellation.isCancelled(threadId, roomRun)) break;
             if (spoken.has(responder.id)) continue;
             if (!(await runGroupMemberTurn(groupId, responder.id, 0, spoken, undefined, undefined, roomRun))) break;
           }
         } finally {
-          roomTurnCancellation.finish(groupId, roomRun);
+          roomTurnCancellation.finish(threadId, roomRun);
         }
       });
     } finally {
-      const pending = (groupQueuePending.get(groupId) ?? 1) - 1;
-      if (pending > 0) groupQueuePending.set(groupId, pending);
-      else groupQueuePending.delete(groupId);
+      const pending = (groupQueuePending.get(threadId) ?? 1) - 1;
+      if (pending > 0) groupQueuePending.set(threadId, pending);
+      else groupQueuePending.delete(threadId);
     }
   });
-  groupQueues.set(groupId, next.catch(() => {}));
-  return deliveryReceipt(busyAtEnqueue ? "queued" : "started", { queueId, threadId: group.threadId });
+  groupQueues.set(threadId, next.catch(() => {}));
+  return deliveryReceipt(busyAtEnqueue ? "queued" : "started", { queueId, threadId });
 }
 
 function roomSetupPending(group: GroupRecord): boolean {
@@ -2266,9 +2317,20 @@ function resolveReplyTarget(threadId: string, value: unknown): Message | undefin
 }
 
 const CONNECTOR_SLUG = /^[a-z0-9][a-z0-9_-]{0,80}$/;
+type RoomResumeEntry = { roomRun?: RoomTurnIdentity };
+
+function roomRunIdentity(threadId: string): RoomTurnIdentity | undefined {
+  const run = roomTurnCancellation.current(threadId);
+  return run ? { threadId: run.threadId, generation: run.generation } : undefined;
+}
+
+function roomResumeCancelled(entry: RoomResumeEntry & { threadId: string }): boolean {
+  return Boolean(entry.roomRun && roomTurnCancellation.isCancelled(entry.threadId, entry.roomRun));
+}
+
 const pendingConnectorResumes = new Map<
   string,
-  { botId: string; threadId: string; resumeKey: string; labels: string[] }
+  { botId: string; threadId: string; resumeKey: string; labels: string[] } & RoomResumeEntry
 >();
 
 function connectorThread(botId: string, threadId: string) {
@@ -2301,29 +2363,53 @@ function markConnectorResumeFailed(threadId: string, resumeKey: string, error: s
   }
 }
 
-function dispatchConnectorResume(entry: { botId: string; threadId: string; resumeKey: string; labels: string[] }) {
+function dispatchConnectorResume(entry: { botId: string; threadId: string; resumeKey: string; labels: string[] } & RoomResumeEntry) {
   const owner = connectorThread(entry.botId, entry.threadId);
   if (!owner) return;
+  const roomRun = entry.roomRun ?? (owner.group ? roomRunIdentity(entry.threadId) : undefined);
+  const scopedEntry = roomRun ? { ...entry, roomRun } : entry;
+  if (roomResumeCancelled(scopedEntry)) {
+    markConnectorResumeFailed(entry.threadId, entry.resumeKey, "the room turn was stopped before the connection update could resume");
+    return;
+  }
   const names = entry.labels.join(", ");
   const prompt = `OpenMausBot connection update: the user securely connected ${names}. Continue the task that paused for this connection. Do not ask them to connect it again.`;
   if (owner.bot.busy) {
-    pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, entry);
+    pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, scopedEntry);
     return;
   }
   if (owner.group) {
-    const previous = groupQueues.get(owner.group.id) ?? Promise.resolve();
+    const threadId = owner.group.threadId;
+    const previous = groupQueues.get(threadId) ?? Promise.resolve();
+    groupQueuePending.set(threadId, (groupQueuePending.get(threadId) ?? 0) + 1);
     const next = previous.then(async () => {
-      const current = connectorThread(entry.botId, entry.threadId);
-      if (!current?.group) return;
-      if (current.bot.busy) {
-        pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, entry);
-        return;
+      try {
+        const current = connectorThread(entry.botId, entry.threadId);
+        if (!current?.group || current.group.threadId !== threadId) return;
+        if (roomResumeCancelled(scopedEntry)) {
+          markConnectorResumeFailed(entry.threadId, entry.resumeKey, "the room turn was stopped before the connection update could resume");
+          return;
+        }
+        if (current.bot.busy) {
+          pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, scopedEntry);
+          return;
+        }
+        const roomRun = roomTurnCancellation.begin(threadId);
+        try {
+          await runGroupMemberTurn(current.group.id, entry.botId, 0, new Set(), prompt, undefined, roomRun);
+        } finally {
+          roomTurnCancellation.finish(threadId, roomRun);
+        }
+      } finally {
+        const pending = (groupQueuePending.get(threadId) ?? 1) - 1;
+        if (pending > 0) groupQueuePending.set(threadId, pending);
+        else groupQueuePending.delete(threadId);
       }
-      await runGroupMemberTurn(current.group.id, entry.botId, 0, new Set(), prompt);
     });
-    groupQueues.set(owner.group.id, next.catch((error) => {
+    const tracked = next.catch((error) => {
       markConnectorResumeFailed(entry.threadId, entry.resumeKey, error instanceof Error ? error.message : String(error));
-    }));
+    });
+    groupQueues.set(threadId, tracked);
     return;
   }
   void startTurn(entry.botId, prompt, {
@@ -2353,6 +2439,10 @@ function drainConnectorResumes() {
   for (const [key, entry] of pendingConnectorResumes) {
     if (store.bot(entry.botId)?.busy) continue;
     pendingConnectorResumes.delete(key);
+    if (roomResumeCancelled(entry)) {
+      markConnectorResumeFailed(entry.threadId, entry.resumeKey, "the room turn was stopped before the connection update could resume");
+      continue;
+    }
     dispatchConnectorResume(entry);
   }
 }
@@ -2363,7 +2453,7 @@ type SecretResumeEntry = {
   messageId: string;
   label: string;
   outcome: "provided" | "dismissed";
-};
+} & RoomResumeEntry;
 const pendingSecretResumes = new Map<string, SecretResumeEntry>();
 
 function secretMessage(botId: string, threadId: string, messageId: string): Message | null {
@@ -2383,34 +2473,58 @@ function markSecretResumeFailed(threadId: string, messageId: string, error: stri
 function dispatchSecretResume(entry: SecretResumeEntry) {
   const owner = connectorThread(entry.botId, entry.threadId);
   if (!owner) return;
+  const roomRun = entry.roomRun ?? (owner.group ? roomRunIdentity(entry.threadId) : undefined);
+  const scopedEntry = roomRun ? { ...entry, roomRun } : entry;
+  if (roomResumeCancelled(scopedEntry)) {
+    markSecretResumeFailed(entry.threadId, entry.messageId, "the room turn was stopped before the credential update could resume");
+    return;
+  }
   const prompt =
     entry.outcome === "provided"
       ? `OpenMausBot credential update: the user securely provided ${entry.label}. Continue the task that paused for it. You do not receive the secret and must not ask them to paste it into chat.`
       : `OpenMausBot credential update: the user declined to provide ${entry.label}. Continue without it if possible, or briefly explain the limitation. Do not ask them to paste it into chat.`;
   if (owner.bot.busy) {
-    pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, entry);
+    pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, scopedEntry);
     return;
   }
   if (owner.group) {
-    const previous = groupQueues.get(owner.group.id) ?? Promise.resolve();
+    const threadId = owner.group.threadId;
+    const previous = groupQueues.get(threadId) ?? Promise.resolve();
+    groupQueuePending.set(threadId, (groupQueuePending.get(threadId) ?? 0) + 1);
     const next = previous.then(async () => {
-      const current = connectorThread(entry.botId, entry.threadId);
-      if (!current?.group) return;
-      if (current.bot.busy) {
-        pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, entry);
-        return;
+      try {
+        const current = connectorThread(entry.botId, entry.threadId);
+        if (!current?.group || current.group.threadId !== threadId) return;
+        if (roomResumeCancelled(scopedEntry)) {
+          markSecretResumeFailed(entry.threadId, entry.messageId, "the room turn was stopped before the credential update could resume");
+          return;
+        }
+        if (current.bot.busy) {
+          pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, scopedEntry);
+          return;
+        }
+        const roomRun = roomTurnCancellation.begin(threadId);
+        try {
+          await runGroupMemberTurn(
+            current.group.id,
+            entry.botId,
+            0,
+            new Set(),
+            prompt,
+            (message) => markSecretResumeFailed(entry.threadId, entry.messageId, message),
+            roomRun,
+          );
+        } finally {
+          roomTurnCancellation.finish(threadId, roomRun);
+        }
+      } finally {
+        const pending = (groupQueuePending.get(threadId) ?? 1) - 1;
+        if (pending > 0) groupQueuePending.set(threadId, pending);
+        else groupQueuePending.delete(threadId);
       }
-      await runGroupMemberTurn(
-        current.group.id,
-        entry.botId,
-        0,
-        new Set(),
-        prompt,
-        (message) => markSecretResumeFailed(entry.threadId, entry.messageId, message),
-      );
     });
     groupQueues.set(
-      owner.group.id,
+      threadId,
       next.catch((error) => {
         markSecretResumeFailed(
           entry.threadId,
@@ -2456,7 +2570,31 @@ function drainSecretResumes() {
   for (const [key, entry] of pendingSecretResumes) {
     if (store.bot(entry.botId)?.busy) continue;
     pendingSecretResumes.delete(key);
+    if (roomResumeCancelled(entry)) {
+      markSecretResumeFailed(entry.threadId, entry.messageId, "the room turn was stopped before the credential update could resume");
+      continue;
+    }
     dispatchSecretResume(entry);
+  }
+}
+
+/** Drop only card continuations owned by an interrupted room run. User
+ * messages queued for a later room turn are deliberately outside these maps
+ * and remain durable. Deleting a room passes no run and retires all of its
+ * continuations before the transcript disappears. */
+function dropPendingRoomResumes(threadId: string, run?: RoomTurnIdentity | null): void {
+  const matches = (entry: RoomResumeEntry) =>
+    run === undefined ||
+    (run !== null && entry.roomRun?.threadId === run.threadId && entry.roomRun.generation === run.generation);
+  for (const [key, entry] of pendingConnectorResumes) {
+    if (entry.threadId !== threadId || !matches(entry)) continue;
+    pendingConnectorResumes.delete(key);
+    markConnectorResumeFailed(threadId, entry.resumeKey, "the room turn was stopped before the connection update could resume");
+  }
+  for (const [key, entry] of pendingSecretResumes) {
+    if (entry.threadId !== threadId || !matches(entry)) continue;
+    pendingSecretResumes.delete(key);
+    markSecretResumeFailed(threadId, entry.messageId, "the room turn was stopped before the credential update could resume");
   }
 }
 
@@ -3890,11 +4028,23 @@ const server = createServer(async (req, res) => {
     if (m && method === "DELETE") {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such room" });
+      const threadId = group.threadId;
+      const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
+      const instance = busy ? registry.get(busy.modelSelection.instanceId) : undefined;
+      // Retire the immutable thread before removing the group. Any delayed
+      // room dispatch or card continuation now fails closed, even if this
+      // group id is later reused for a new conversation.
+      roomTurnCancellation.retire(threadId);
+      dropPendingRoomResumes(threadId);
+      groupQueues.delete(threadId);
+      groupQueuePending.delete(threadId);
+      await instance?.adapter.interruptTurn(threadId).catch(() => {});
+      closeOpenApprovals(threadId);
       lastReply.delete(group.threadId);
       store.deleteGroup(group.id);
       for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
         try {
-          unlinkSync(join(dir, `${group.threadId}.ndjson`));
+          unlinkSync(join(dir, `${threadId}.ndjson`));
         } catch {}
       }
       return json(res, 200, { ok: true });
@@ -3908,7 +4058,7 @@ const server = createServer(async (req, res) => {
       if (!group) return json(res, 404, { error: "no such group" });
       const mode = parseDeliveryModeFromBody(body);
       const replyTo = resolveReplyTarget(group.threadId, body.replyToId);
-      const roomBusy = Boolean(group.busyBotId) || (groupQueuePending.get(group.id) ?? 0) > 0;
+      const roomBusy = Boolean(group.busyBotId) || (groupQueuePending.get(group.threadId) ?? 0) > 0;
       const busyBot = group.busyBotId ? store.bot(group.busyBotId) : undefined;
       const busyInstance = busyBot ? registry.get(busyBot.modelSelection.instanceId) : undefined;
       const canSteer = Boolean(busyInstance?.adapter.capabilities.queueing && busyInstance.adapter.steer);
@@ -3943,11 +4093,17 @@ const server = createServer(async (req, res) => {
     if (m && method === "POST") {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such room" });
-      roomTurnCancellation.interrupt(group.id);
+      const threadId = group.threadId;
+      const interruptedRun = roomTurnCancellation.current(threadId);
+      roomTurnCancellation.interrupt(threadId);
+      // A connector/credential card may have completed while the provider
+      // was busy. Remove only continuations from this generation; a later
+      // queued user turn (or a continuation for another run) survives Stop.
+      dropPendingRoomResumes(threadId, interruptedRun);
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
       const instance = busy ? registry.get(busy.modelSelection.instanceId) : undefined;
-      await instance?.adapter.interruptTurn(group.threadId).catch(() => {});
-      closeOpenApprovals(group.threadId);
+      await instance?.adapter.interruptTurn(threadId).catch(() => {});
+      closeOpenApprovals(threadId);
       return json(res, 200, { ok: true });
     }
 

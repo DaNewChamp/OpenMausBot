@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { RoomTurnCancellation } from "./room-turn-cancel.ts";
+import { dispatchRoomTurn, RoomTurnCancellation } from "./room-turn-cancel.ts";
 
 describe("room turn cancellation", () => {
   it("cancels the active generation without cancelling a later queued run", () => {
@@ -32,5 +32,88 @@ describe("room turn cancellation", () => {
     expect(cancellation.isCancelled("room-3", second)).toBe(false);
     cancellation.interrupt("room-3");
     expect(cancellation.isCancelled("room-3", second)).toBe(true);
+  });
+
+  it("notifies a dispatch that is registering after Stop", () => {
+    const cancellation = new RoomTurnCancellation();
+    const run = cancellation.begin("thread-4");
+    const onCancel = vi.fn();
+    cancellation.onCancel("thread-4", run, onCancel);
+
+    expect(cancellation.interrupt("thread-4")).toBe(true);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(cancellation.isCancelled("thread-4", run)).toBe(true);
+    // The late registration gets the already-fired signal too.
+    const late = vi.fn();
+    cancellation.onCancel("thread-4", run, late);
+    expect(late).toHaveBeenCalledTimes(1);
+  });
+
+  it("retires deleted threads without poisoning a new immutable thread", () => {
+    const cancellation = new RoomTurnCancellation();
+    const deleted = cancellation.begin("thread-old");
+    expect(cancellation.retire("thread-old")).toBe(true);
+    expect(cancellation.current("thread-old")).toBeNull();
+    expect(cancellation.isCancelled("thread-old", deleted)).toBe(true);
+
+    const recreated = cancellation.begin("thread-new");
+    expect(recreated.generation).toBe(1);
+    expect(cancellation.isCancelled("thread-new", recreated)).toBe(false);
+    expect(cancellation.isCancelled("thread-new", deleted)).toBe(true);
+
+    cancellation.finish("thread-new", recreated);
+    const reusedThread = cancellation.begin("thread-old");
+    expect(reusedThread.generation).toBe(1);
+    expect(cancellation.isCancelled("thread-old", reusedThread)).toBe(false);
+    expect(cancellation.isCancelled("thread-old", deleted)).toBe(true);
+  });
+
+  it("re-interrupts after a delayed adapter registration and never advances", async () => {
+    const cancellation = new RoomTurnCancellation();
+    const run = cancellation.begin("thread-race");
+    let releaseDispatch!: () => void;
+    let registered = false;
+    let stopped = false;
+    const dispatch = () =>
+      new Promise<{ started: boolean }>((resolve) => {
+        releaseDispatch = () => {
+          registered = true;
+          resolve({ started: true });
+        };
+      });
+    const interrupt = vi.fn(async () => {
+      if (registered) stopped = true;
+    });
+
+    const pending = dispatchRoomTurn(cancellation, run, dispatch, interrupt);
+    cancellation.interrupt("thread-race");
+    releaseDispatch();
+    const result = await pending;
+
+    expect(result.cancelled).toBe(true);
+    expect(interrupt).toHaveBeenCalledTimes(2);
+    expect(stopped).toBe(true);
+    // A room chain only advances when its member dispatch is not cancelled.
+    const nextResponder = vi.fn();
+    if (!result.cancelled) nextResponder();
+    expect(nextResponder).not.toHaveBeenCalled();
+  });
+
+  it("does not turn a normally finished dispatch into a cancellation", async () => {
+    const cancellation = new RoomTurnCancellation();
+    const run = cancellation.begin("thread-finished");
+    const interrupt = vi.fn();
+    const result = await dispatchRoomTurn(
+      cancellation,
+      run,
+      async () => {
+        cancellation.finish("thread-finished", run);
+        return { started: true };
+      },
+      interrupt,
+    );
+
+    expect(result).toEqual({ value: { started: true }, cancelled: false });
+    expect(interrupt).not.toHaveBeenCalled();
   });
 });
