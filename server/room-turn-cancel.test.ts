@@ -63,7 +63,7 @@ describe("room turn cancellation", () => {
 
     cancellation.finish("thread-new", recreated);
     const reusedThread = cancellation.begin("thread-old");
-    expect(reusedThread.generation).toBe(1);
+    expect(reusedThread.generation).toBe(2);
     expect(cancellation.isCancelled("thread-old", reusedThread)).toBe(false);
     expect(cancellation.isCancelled("thread-old", deleted)).toBe(true);
   });
@@ -231,5 +231,56 @@ describe("room turn cancellation", () => {
 
     expect(result).toEqual({ value: { started: true }, cancelled: false, started: true });
     expect(interrupt).not.toHaveBeenCalled();
+  });
+
+  it("abandons a no-terminal run and rejects its late provider callbacks", () => {
+    const cancellation = new RoomTurnCancellation();
+    const first = cancellation.begin("thread-timeout");
+    expect(cancellation.registerTurn("thread-timeout", first, "provider-g1")).toBe(true);
+    expect(cancellation.abandon("thread-timeout", first)).toBe(true);
+    expect(cancellation.current("thread-timeout")).toBeNull();
+    expect(cancellation.runForTurn("thread-timeout", "provider-g1")).toBeNull();
+    expect(cancellation.isTurnBlocked("thread-timeout", "provider-g1")).toBe(true);
+    expect(cancellation.completeTurn("thread-timeout", "provider-g1", first.generation)).toBe(false);
+
+    const later = cancellation.begin("thread-timeout");
+    expect(later.generation).toBeGreaterThan(first.generation);
+    expect(cancellation.isCancelled("thread-timeout", later)).toBe(false);
+    expect(cancellation.registerTurn("thread-timeout", first, "late-g1")).toBe(false);
+  });
+
+  it("blocks a forgotten provider id from being rebound to a later generation", () => {
+    const cancellation = new RoomTurnCancellation();
+    const first = cancellation.begin("thread-late-event");
+    expect(cancellation.registerTurn("thread-late-event", first, "provider-old")).toBe(true);
+    cancellation.interrupt("thread-late-event");
+    cancellation.abandon("thread-late-event", first);
+
+    const later = cancellation.begin("thread-late-event");
+    expect(cancellation.isTurnBlocked("thread-late-event", "provider-old")).toBe(true);
+    expect(cancellation.registerTurn("thread-late-event", later, "provider-old")).toBe(false);
+    expect(cancellation.registerTurn("thread-late-event", later, "provider-new")).toBe(true);
+  });
+
+  it("treats a finished generation and an unknown turn id as cancelled", () => {
+    const cancellation = new RoomTurnCancellation();
+    const run = cancellation.begin("thread-finished-generation");
+    expect(cancellation.completeTurn("thread-finished-generation", "unknown", run.generation)).toBe(false);
+    expect(cancellation.isCancelled("thread-finished-generation", run)).toBe(false);
+    cancellation.finish("thread-finished-generation", run);
+    expect(cancellation.isTracked("thread-finished-generation", run)).toBe(false);
+
+    const later = cancellation.begin("thread-finished-generation");
+    expect(cancellation.completeTurn("thread-finished-generation", "unknown", later.generation)).toBe(false);
+    expect(cancellation.isCancelled("thread-finished-generation", later)).toBe(false);
+  });
+
+  it("keeps deletion generations monotonic when a thread id is reused", () => {
+    const cancellation = new RoomTurnCancellation();
+    const old = cancellation.begin("thread-reused");
+    expect(cancellation.retire("thread-reused")).toBe(true);
+    const fresh = cancellation.begin("thread-reused");
+    expect(fresh.generation).toBeGreaterThan(old.generation);
+    expect(cancellation.completeTurn("thread-reused", "old-terminal", old.generation)).toBe(false);
   });
 });

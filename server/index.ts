@@ -636,6 +636,10 @@ type RoomSpeakerActivity = {
 };
 const groupSpeakers = new Map<string, RoomSpeakerActivity>();
 const roomTurnActivities = new Map<string, RoomSpeakerActivity>();
+// A provider may emit turn.started before sendTurn resolves. This pending
+// identity lets the event fold bind that first frame, while preventing a late
+// unknown turn.started from an already-finished generation from borrowing G2.
+const pendingRoomTurnRuns = new Map<string, RoomTurnIdentity>();
 // EventBus delivers the same RuntimeEvent object to every listener. Keep the
 // immutable room identity on that object so a later listener (the room turn
 // waiter) can still distinguish a late G1 terminal after the main fold has
@@ -646,6 +650,10 @@ const botActivityOwners = new Map<
   | { kind: "room"; threadId: string; generation: number }
   | { kind: "task"; threadId: string }
 >();
+// Room cancellation is referenced by the stall watchdog, which is created
+// before the room-turn engine helpers below. Construct it up front so a stall
+// callback can safely cancel a generation even during early initialization.
+const roomTurnCancellation = new RoomTurnCancellation();
 
 function roomTurnActivityKey(threadId: string, turnId: string): string {
   return `${threadId}\u0000${turnId}`;
@@ -675,6 +683,22 @@ function roomActivityOwnerMatches(activity: RoomSpeakerActivity): boolean {
       owner.threadId === activity.roomRun.threadId &&
       owner.generation === activity.roomRun.generation,
   );
+}
+
+/** Store writes for a room must prove the durable group still owns this
+ * transcript. Store.appendMessage() creates an in-memory thread on demand,
+ * so delayed provider errors use this guard before writing after deletion. */
+function roomRunCanWrite(groupId: string, threadId: string, run?: RoomTurnIdentity): boolean {
+  const group = store.group(groupId);
+  if (!group || group.threadId !== threadId) return false;
+  return !run || (
+    roomTurnCancellation.isTracked(threadId, run) &&
+    !roomTurnCancellation.isCancelled(threadId, run)
+  );
+}
+
+function forgetPendingRoomTurn(threadId: string, run: RoomTurnIdentity): void {
+  if (sameRoomRun(pendingRoomTurnRuns.get(threadId), run)) pendingRoomTurnRuns.delete(threadId);
 }
 
 // The latest running token totals for the turn in flight on each thread.
@@ -710,13 +734,39 @@ const watchdog = new TurnWatchdog({
     repeats.settle(turn.threadId);
     const bot = store.bot(turn.botId);
     const instance = bot ? registry.get(bot.modelSelection.instanceId) : null;
+    const group = store.groupByThread(turn.threadId);
+    const speaker = groupSpeakers.get(turn.threadId);
+    const owner = botActivityOwners.get(turn.botId);
+    const ownsRoom = Boolean(
+      group &&
+        group.busyBotId === turn.botId &&
+        speaker?.botId === turn.botId &&
+        owner?.kind === "room" &&
+        owner.threadId === turn.threadId &&
+        speaker.roomRun &&
+        owner.generation === speaker.roomRun.generation,
+    );
+    const ownsTask = Boolean(
+      bot?.busy &&
+        owner?.kind === "task" &&
+        owner.threadId === turn.threadId,
+    );
+    // A room stall has no provider terminal to wait for. Cancel the exact
+    // active room generation now; the member-turn cleanup below releases the
+    // room queue while the adapter interrupt remains best-effort.
+    roomTurnCancellation.interrupt(turn.threadId);
     void instance?.adapter.interruptTurn(turn.threadId).catch(() => {});
     const minutes = Math.round(TURN_STALL_MS / 60_000);
-    store.appendMessage(turn.threadId, {
-      role: "bot",
-      kind: "activity",
-      tool: { name: `error: no activity for ${minutes} minutes — the turn was stopped`, ok: false },
-    });
+    // The durable target can disappear while an adapter is still stalled.
+    // Store.appendMessage() lazily creates a transcript for unknown threads,
+    // so only report the error while this exact room/task still owns it.
+    if (ownsRoom || ownsTask) {
+      store.appendMessage(turn.threadId, {
+        role: "bot",
+        kind: "activity",
+        tool: { name: `error: no activity for ${minutes} minutes — the turn was stopped`, ok: false },
+      });
+    }
     finalizeDelegationWatch(turn.threadId, false, "", "Delegated turn stalled and was stopped");
     turnUsage.delete(turn.threadId);
     roomStallCompletions.stall(turn.threadId);
@@ -879,9 +929,14 @@ bus.subscribe((event: RuntimeEvent) => {
   const bot = store.botByThread(event.threadId);
   const group = bot ? undefined : store.groupByThread(event.threadId);
   const currentRoomSpeaker = groupSpeakers.get(event.threadId);
+  const blockedRoomTurn = event.turnId
+    ? roomTurnCancellation.isTurnBlocked(event.threadId, event.turnId)
+    : false;
   const mappedActivity =
-    roomActivityForEvent(event) ??
-    (event.type === "turn.started" && event.turnId && currentRoomSpeaker?.roomRun
+    (!blockedRoomTurn ? roomActivityForEvent(event) : undefined) ??
+    (!blockedRoomTurn && event.type === "turn.started" && event.turnId && currentRoomSpeaker?.roomRun &&
+      pendingRoomTurnRuns.get(event.threadId) &&
+      sameRoomRun(pendingRoomTurnRuns.get(event.threadId), currentRoomSpeaker.roomRun)
       ? bindRoomTurnActivity(event.threadId, currentRoomSpeaker.roomRun, event.turnId, currentRoomSpeaker)
       : undefined);
   if (mappedActivity?.roomRun) {
@@ -893,9 +948,9 @@ bus.subscribe((event: RuntimeEvent) => {
   const speaker = mappedActivity ??
     (event.turnId
       ? undefined
-      : group
-        ? currentRoomSpeaker
-        : event.type === "turn.completed"
+      : event.type === "turn.completed"
+        ? undefined
+        : group
           ? currentRoomSpeaker
           : undefined);
   if (event.type === "turn.completed") {
@@ -907,7 +962,11 @@ bus.subscribe((event: RuntimeEvent) => {
     if (terminalRun) roomTurnCancellation.settle(event.threadId, terminalRun.generation);
     forgetRoomTurnActivity(event, terminalRun);
   }
-  if (!bot && !group && !speaker) return;
+  // Every room event must carry both an exact provider-turn mapping and the
+  // currently speaking member. Otherwise a late G1 callback could append
+  // into G2 (or a deleted room could be lazily recreated by Store).
+  if (!bot && group && (!mappedActivity || !sameRoomActivity(currentRoomSpeaker, mappedActivity))) return;
+  if (!bot && !group) return;
 
   const pushMessage = (m: Omit<Message, "id" | "at">) => {
     const message = store.appendMessage(event.threadId, group && m.role === "bot" ? { ...m, from: speaker } : m);
@@ -2031,7 +2090,6 @@ const groupQueues = new Map<string, Promise<void>>();
  * promise map is intentionally retained after a room settles, so its
  * presence alone cannot answer whether a new message is actually queued. */
 const groupQueuePending = new Map<string, number>();
-const roomTurnCancellation = new RoomTurnCancellation();
 const GROUP_CONTEXT_MESSAGES = 30;
 const MAX_GROUP_HOPS = 1;
 
@@ -2085,12 +2143,18 @@ function forgetRoomTurnActivity(event: RuntimeEvent, run?: RoomTurnIdentity): vo
   if (event.turnId) {
     const key = roomTurnActivityKey(event.threadId, event.turnId);
     const activity = roomTurnActivities.get(key);
-    if (!run || !activity || sameRoomRun(activity.roomRun, run)) roomTurnActivities.delete(key);
-    roomTurnCancellation.forgetTurn(event.threadId, event.turnId, run?.generation);
+    const exactRun = run ?? activity?.roomRun;
+    // An unmapped terminal is untrusted. In particular, do not blindly
+    // forget a turn id that a newer generation may have registered.
+    if (exactRun && (!activity || sameRoomRun(activity.roomRun, exactRun))) {
+      roomTurnActivities.delete(key);
+      roomTurnCancellation.forgetTurn(event.threadId, event.turnId, exactRun.generation);
+    }
   }
   if (run) {
     const usageKey = roomTurnUsageKey(run);
     roomTurnUsage.delete(usageKey);
+    forgetRoomCardRunsForRun(run);
   }
 }
 
@@ -2104,6 +2168,21 @@ function forgetRoomRunActivities(run: RoomTurnIdentity): void {
     if (activity.turnId) roomTurnCancellation.forgetTurn(run.threadId, activity.turnId, run.generation);
   }
   roomTurnUsage.delete(roomTurnUsageKey(run));
+  forgetRoomCardRunsForRun(run);
+}
+
+/** Remove every provider activity still attached to a deleted room thread.
+ * The durable group can disappear before a provider sends its terminal; no
+ * late event should then fold into (or recreate) that transcript. */
+function forgetRoomThreadActivities(threadId: string): void {
+  const runs = new Map<string, RoomTurnIdentity>();
+  for (const [key, activity] of roomTurnActivities) {
+    if (activity.roomRun?.threadId !== threadId) continue;
+    roomTurnActivities.delete(key);
+    if (activity.turnId) roomTurnCancellation.forgetTurn(threadId, activity.turnId, activity.roomRun.generation);
+    runs.set(roomTurnUsageKey(activity.roomRun), activity.roomRun);
+  }
+  for (const run of runs.values()) roomTurnUsage.delete(roomTurnUsageKey(run));
 }
 
 function roomRunFromProviderRequest(
@@ -2117,7 +2196,8 @@ function roomRunFromProviderRequest(
   if (requestedThread !== threadId || typeof generation !== "number" || !Number.isInteger(generation) || generation < 1) {
     return undefined;
   }
-  return { threadId, generation };
+  const run = { threadId, generation };
+  return roomTurnCancellation.isTracked(threadId, run) ? run : undefined;
 }
 
 function serializeRoomContext(threadId: string, userName: string): string {
@@ -2223,12 +2303,14 @@ async function runGroupMemberTurn(
     }
   } catch (error) {
     const message = `connected apps are unavailable — ${error instanceof Error ? error.message : String(error)}`;
-    store.appendMessage(group.threadId, {
-      role: "bot",
-      kind: "activity",
-      from: { botId: bot.id, name: bot.name, color: bot.color },
-      tool: { name: `error: ${message}`, ok: false },
-    });
+    if (roomRunCanWrite(group.id, group.threadId, roomRun)) {
+      store.appendMessage(group.threadId, {
+        role: "bot",
+        kind: "activity",
+        from: { botId: bot.id, name: bot.name, color: bot.color },
+        tool: { name: `error: ${message}`, ok: false },
+      });
+    }
     onDispatchError?.(message);
     return true;
   }
@@ -2304,13 +2386,22 @@ async function runGroupMemberTurn(
     let unsub = () => {};
     let unregisterStall = () => {};
     const deadline = new RoomTurnDeadline(timeoutMinutes, () => {
+      // Snapshot ownership before interrupt() marks the generation cancelled;
+      // a deleted room must not be resurrected by the timeout diagnostic.
+      const canReportTimeout = roomRunCanWrite(group.id, group.threadId, roomRun);
+      // Cancel the immutable generation as well as the provider process. This
+      // lets the room queue make progress when an adapter never emits its
+      // terminal event, while late callbacks remain generation-scoped.
+      roomTurnCancellation.interrupt(group.threadId);
       void instance.adapter.interruptTurn(group.threadId).catch(() => {});
-      store.appendMessage(group.threadId, {
-        role: "bot",
-        kind: "activity",
-        from: { botId: bot.id, name: bot.name, color: bot.color },
-        tool: { name: roomTurnTimeoutMessage(bot.name, timeoutMinutes), ok: false },
-      });
+      if (canReportTimeout) {
+        store.appendMessage(group.threadId, {
+          role: "bot",
+          kind: "activity",
+          from: { botId: bot.id, name: bot.name, color: bot.color },
+          tool: { name: roomTurnTimeoutMessage(bot.name, timeoutMinutes), ok: false },
+        });
+      }
       finish("timed_out");
     });
     const finish = (value: "settled" | "dispatch_failed" | "stalled" | "timed_out" | "cancelled") => {
@@ -2323,20 +2414,26 @@ async function runGroupMemberTurn(
     };
     unsub = bus.subscribe((e: RuntimeEvent) => {
       if (e.threadId !== group.threadId) return;
-      if (roomRun && e.turnId) {
-        const mappedRun = roomEventRuns.get(e) ?? roomActivityForEvent(e)?.roomRun ??
-          roomTurnCancellation.runForTurn(e.threadId, e.turnId);
+      if (roomRun) {
+        const mappedRun = e.turnId
+          ? roomEventRuns.get(e) ?? roomActivityForEvent(e)?.roomRun ??
+            roomTurnCancellation.runForTurn(e.threadId, e.turnId)
+          : undefined;
         // A shared transcript can carry a late event from a stopped room
         // generation. The bus fold records that event's immutable run on the
         // event object; reject it before it can finish this newer waiter.
         if (mappedRun && !sameRoomRun(mappedRun, roomRun)) return;
-        if (e.type === "turn.started" && mappedRun && sameRoomRun(mappedRun, roomRun)) {
+        // A room terminal without a turn id (or without an exact mapping) is
+        // ambiguous after a queued generation starts. Fail closed rather than
+        // allowing it to settle the wrong waiter.
+        if (e.type === "turn.completed" && (!e.turnId || !mappedRun || !sameRoomRun(mappedRun, roomRun))) return;
+        if (e.type === "turn.started" && e.turnId && mappedRun && sameRoomRun(mappedRun, roomRun)) {
           providerTurnId = e.turnId;
         }
         // One transcript can receive a late terminal event from a stopped
         // generation while a newer run is active. Once this invocation has
         // seen its own provider turn, ignore events from every other turn.
-        if (providerTurnId && e.turnId !== providerTurnId) return;
+        if (providerTurnId && e.turnId && e.turnId !== providerTurnId) return;
       }
       if (e.type === "item.completed" && e.itemType === "assistant_text") replyText += `\n${e.text}`;
       else if (e.type === "turn.completed") finish("settled");
@@ -2359,6 +2456,12 @@ async function runGroupMemberTurn(
         ...memberTurnSelection(bot.modelSelection),
       });
     };
+    if (roomRun) pendingRoomTurnRuns.set(group.threadId, { ...roomRun });
+    const clearPendingRoomTurn = () => {
+      if (roomRun && sameRoomRun(pendingRoomTurnRuns.get(group.threadId), roomRun)) {
+        pendingRoomTurnRuns.delete(group.threadId);
+      }
+    };
     const dispatched = roomRun
       ? dispatchRoomTurn(
           roomTurnCancellation,
@@ -2369,6 +2472,7 @@ async function runGroupMemberTurn(
       : dispatch().then((value) => ({ value, cancelled: false, started: true }));
     dispatched
       .then((result) => {
+        clearPendingRoomTurn();
         providerTurnStarted = result.started;
         const value = result.value as { turnId?: unknown } | undefined;
         if (roomRun && typeof value?.turnId === "string") {
@@ -2378,13 +2482,16 @@ async function runGroupMemberTurn(
         if (result.cancelled) finish("cancelled");
       })
       .catch((err) => {
+        clearPendingRoomTurn();
         const message = err instanceof Error ? err.message : "turn failed";
-        store.appendMessage(group.threadId, {
-          role: "bot",
-          kind: "activity",
-          from: { botId: bot.id, name: bot.name, color: bot.color },
-          tool: { name: `error: ${message.slice(0, 140)}`, ok: false },
-        });
+        if (roomRunCanWrite(group.id, group.threadId, roomRun)) {
+          store.appendMessage(group.threadId, {
+            role: "bot",
+            kind: "activity",
+            from: { botId: bot.id, name: bot.name, color: bot.color },
+            tool: { name: `error: ${message.slice(0, 140)}`, ok: false },
+          });
+        }
         onDispatchError?.(message);
         watchdog.settle(group.threadId);
         finish("dispatch_failed");
@@ -2392,20 +2499,45 @@ async function runGroupMemberTurn(
   });
   const clearRoomOwner = () => {
     const currentGroup = store.groupByThread(group.threadId);
-    if (currentGroup?.id !== group.id || currentGroup.busyBotId !== bot.id) return;
     const currentSpeaker = groupSpeakers.get(group.threadId);
-    if (roomRun && !sameRoomRun(currentSpeaker?.roomRun, roomRun)) return;
+    // A deletion can remove the speaker snapshot before this delayed
+    // dispatch unwinds. A present snapshot still has to match exactly; an
+    // absent one is handled by the immutable bot owner check below.
+    if (roomRun && currentSpeaker && !sameRoomRun(currentSpeaker.roomRun, roomRun)) return;
     const owner = botActivityOwners.get(bot.id);
+    const ownsExactRun = Boolean(
+      roomRun &&
+        owner?.kind === "room" &&
+        owner.threadId === group.threadId &&
+        owner.generation === roomRun.generation,
+    );
+    // The durable room may disappear while a delayed/rejected sendTurn is
+    // unwinding. Release only this immutable owner; never clear a bot that a
+    // newer room or one-to-one task has claimed in the meantime.
+    if (!currentGroup || currentGroup.id !== group.id) {
+      if (!ownsExactRun) return;
+      groupSpeakers.delete(group.threadId);
+      stopScreenPoller(bot.id);
+      if (activeVpsThreads.get(bot.id) === group.threadId) activeVpsThreads.delete(bot.id);
+      if (store.bot(bot.id)?.busy) {
+        store.setActivity(bot.id, "idle");
+        store.patchBot(bot.id, { unread: true });
+      }
+      botActivityOwners.delete(bot.id);
+      if (roomRun) forgetRoomRunActivities(roomRun);
+      return;
+    }
+    if (currentGroup.busyBotId !== bot.id) return;
     groupSpeakers.delete(group.threadId);
     store.patchGroup(currentGroup.id, { busyBotId: null, unread: true });
     if (store.bot(bot.id)?.busy) store.setActivity(bot.id, "idle");
-    if (owner?.kind === "room" && owner.threadId === group.threadId && owner.generation === roomRun?.generation) {
+    if (ownsExactRun) {
       botActivityOwners.delete(bot.id);
     }
   };
-  // A timed-out provider still owns the room thread until its interrupt
-  // produces turn.completed (or the stall watchdog's grace fallback runs).
-  // Do not clear busy or start the next member on that same thread early.
+  // A cancelled provider that successfully registered a turn remains held
+  // until its terminal; timeout/stall paths below are the explicit exception
+  // because they must unblock the room even when no terminal can arrive.
   if (outcome === "cancelled") {
     // If cancellation won before the adapter registered a turn (including a
     // dispatch rejection), no provider can emit turn.completed to release the
@@ -2413,7 +2545,10 @@ async function runGroupMemberTurn(
     // until its interrupt produces that terminal event.
     if (!providerTurnStarted) {
       watchdog.settle(group.threadId);
-      if (roomRun) forgetRoomRunActivities(roomRun);
+      if (roomRun) {
+        forgetPendingRoomTurn(group.threadId, roomRun);
+        forgetRoomRunActivities(roomRun);
+      }
       clearRoomOwner();
     } else if (roomRun && store.groupByThread(group.threadId)?.id === group.id) {
       // dispatchRoomTurn resolves as soon as the adapter acknowledges Stop,
@@ -2421,10 +2556,32 @@ async function runGroupMemberTurn(
       // available to late connector/credential callbacks until that event so
       // they cannot quietly queue a continuation after the room is idle.
       roomTurnCancellation.holdUntilTerminal(group.threadId, roomRun);
+    } else if (roomRun) {
+      // A deleted room cannot receive a terminal cleanup frame. Abandon this
+      // exact generation and release the member without touching newer work.
+      roomTurnCancellation.abandon(group.threadId, roomRun);
+      forgetPendingRoomTurn(group.threadId, roomRun);
+      forgetRoomRunActivities(roomRun);
+      clearRoomOwner();
     }
     return false;
   }
-  if (outcome === "stalled" || outcome === "timed_out") return false;
+  if (outcome === "stalled" || outcome === "timed_out") {
+    // The provider may never answer the interrupt. Settle locally so a queued
+    // room message can start, while the tombstone rejects late G1 callbacks.
+    if (roomRun) {
+      roomTurnCancellation.interrupt(group.threadId);
+      roomTurnCancellation.abandon(group.threadId, roomRun);
+      forgetPendingRoomTurn(group.threadId, roomRun);
+      forgetRoomRunActivities(roomRun);
+    }
+    watchdog.settle(group.threadId);
+    clearRoomOwner();
+    drainQueuedSends();
+    drainConnectorResumes();
+    drainSecretResumes();
+    return false;
+  }
   // turn.completed normally performs this cleanup. Only use the fallback
   // when this invocation still owns the room; otherwise it would emit a
   // duplicate group frame or clear a newer speaker's state.
@@ -2580,7 +2737,11 @@ const CONNECTOR_SLUG = /^[a-z0-9][a-z0-9_-]{0,80}$/;
 type RoomResumeEntry = { roomRun?: RoomTurnIdentity };
 
 function roomResumeCancelled(entry: RoomResumeEntry & { threadId: string }): boolean {
-  return Boolean(entry.roomRun && roomTurnCancellation.isCancelled(entry.threadId, entry.roomRun));
+  return Boolean(
+    entry.roomRun &&
+      (!roomTurnCancellation.isTracked(entry.threadId, entry.roomRun) ||
+        roomTurnCancellation.isCancelled(entry.threadId, entry.roomRun)),
+  );
 }
 
 // Card callbacks can arrive long after the provider that created the card has
@@ -2599,9 +2760,20 @@ function roomRunForConnectorCards(cards: Message[]): RoomTurnIdentity | undefine
 }
 
 function forgetRoomCardRuns(threadId: string): void {
-  for (const message of store.messagesFor(threadId)) {
-    connectorCardRoomRuns.delete(message.id);
-    secretCardRoomRuns.delete(message.id);
+  for (const [messageId, run] of connectorCardRoomRuns) {
+    if (run.threadId === threadId) connectorCardRoomRuns.delete(messageId);
+  }
+  for (const [messageId, run] of secretCardRoomRuns) {
+    if (run.threadId === threadId) secretCardRoomRuns.delete(messageId);
+  }
+}
+
+function forgetRoomCardRunsForRun(run: RoomTurnIdentity): void {
+  for (const [messageId, cardRun] of connectorCardRoomRuns) {
+    if (sameRoomRun(cardRun, run)) connectorCardRoomRuns.delete(messageId);
+  }
+  for (const [messageId, cardRun] of secretCardRoomRuns) {
+    if (sameRoomRun(cardRun, run)) secretCardRoomRuns.delete(messageId);
   }
 }
 
@@ -2631,9 +2803,20 @@ function connectorCards(threadId: string, resumeKey: string) {
   );
 }
 
-function markConnectorResumeFailed(threadId: string, resumeKey: string, error: string) {
+function markConnectorResumeFailed(threadId: string, resumeKey: string, error: string, roomRun?: RoomTurnIdentity) {
+  // A callback can finish after its bot/room was deleted. Do not call
+  // messagesFor() in that case: Store lazily creates a transcript for an
+  // unknown thread, which would resurrect an orphan record.
+  if (!store.groupByThread(threadId) && !store.botByThread(threadId)) {
+    forgetRoomCardRuns(threadId);
+    return;
+  }
   for (const message of connectorCards(threadId, resumeKey)) {
     if (!message.connector) continue;
+    const cardRun = connectorCardRoomRuns.get(message.id);
+    if (roomRun && (!cardRun || !sameRoomRun(cardRun, roomRun))) continue;
+    if (!roomRun && cardRun && store.groupByThread(threadId)) continue;
+    connectorCardRoomRuns.delete(message.id);
     store.patchMessage(threadId, message.id, {
       connector: { ...message.connector, resumed: false, error: error.slice(0, 180) },
     });
@@ -2642,17 +2825,21 @@ function markConnectorResumeFailed(threadId: string, resumeKey: string, error: s
 
 function dispatchConnectorResume(entry: { botId: string; threadId: string; resumeKey: string; labels: string[] } & RoomResumeEntry) {
   const owner = connectorThread(entry.botId, entry.threadId);
-  if (!owner) return;
+  if (!owner) {
+    if (entry.roomRun) forgetRoomCardRunsForRun(entry.roomRun);
+    else if (!store.groupByThread(entry.threadId) && !store.botByThread(entry.threadId)) forgetRoomCardRuns(entry.threadId);
+    return;
+  }
   // Room continuations must carry the generation captured when their card
   // was created. Never look up a dynamic current run here: a late G1
   // callback could otherwise attach itself to G2 (or resume after Stop).
   if (owner.group && !entry.roomRun) {
-    markConnectorResumeFailed(entry.threadId, entry.resumeKey, "the room turn identity is no longer available");
+    markConnectorResumeFailed(entry.threadId, entry.resumeKey, "the room turn identity is no longer available", entry.roomRun);
     return;
   }
   const scopedEntry = entry.roomRun ? { ...entry, roomRun: { ...entry.roomRun } } : entry;
   if (roomResumeCancelled(scopedEntry)) {
-    markConnectorResumeFailed(entry.threadId, entry.resumeKey, "the room turn was stopped before the connection update could resume");
+    markConnectorResumeFailed(entry.threadId, entry.resumeKey, "the room turn was stopped before the connection update could resume", entry.roomRun);
     return;
   }
   const names = entry.labels.join(", ");
@@ -2670,7 +2857,7 @@ function dispatchConnectorResume(entry: { botId: string; threadId: string; resum
         const current = connectorThread(entry.botId, entry.threadId);
         if (!current?.group || current.group.threadId !== threadId) return;
         if (roomResumeCancelled(scopedEntry)) {
-          markConnectorResumeFailed(entry.threadId, entry.resumeKey, "the room turn was stopped before the connection update could resume");
+          markConnectorResumeFailed(entry.threadId, entry.resumeKey, "the room turn was stopped before the connection update could resume", scopedEntry.roomRun);
           return;
         }
         if (current.bot.busy) {
@@ -2690,7 +2877,7 @@ function dispatchConnectorResume(entry: { botId: string; threadId: string; resum
       }
     });
     const tracked = next.catch((error) => {
-      markConnectorResumeFailed(entry.threadId, entry.resumeKey, error instanceof Error ? error.message : String(error));
+      markConnectorResumeFailed(entry.threadId, entry.resumeKey, error instanceof Error ? error.message : String(error), entry.roomRun);
     });
     groupQueues.set(threadId, tracked);
     return;
@@ -2698,11 +2885,11 @@ function dispatchConnectorResume(entry: { botId: string; threadId: string; resum
   void startTurn(entry.botId, prompt, {
     threadId: entry.threadId,
     cardContinuation: true,
-    onDispatchError: (message) => markConnectorResumeFailed(entry.threadId, entry.resumeKey, message),
+    onDispatchError: (message) => markConnectorResumeFailed(entry.threadId, entry.resumeKey, message, entry.roomRun),
   }).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     if (/already working/i.test(message)) pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, scopedEntry);
-    else markConnectorResumeFailed(entry.threadId, entry.resumeKey, message);
+    else markConnectorResumeFailed(entry.threadId, entry.resumeKey, message, entry.roomRun);
   });
 }
 
@@ -2722,11 +2909,11 @@ function maybeResumeConnectors(
     const cardRun = connectorCardRoomRuns.get(message.id);
     return !cardRun || !sameRoomRun(cardRun, roomRun);
   }))) {
-    markConnectorResumeFailed(threadId, resumeKey, "the room turn was stopped before the connection update could resume");
+    markConnectorResumeFailed(threadId, resumeKey, "the room turn was stopped before the connection update could resume", roomRun);
     return false;
   }
-  if (roomRun && roomTurnCancellation.isCancelled(threadId, roomRun)) {
-    markConnectorResumeFailed(threadId, resumeKey, "the room turn was stopped before the connection update could resume");
+  if (roomRun && roomResumeCancelled({ threadId, roomRun })) {
+    markConnectorResumeFailed(threadId, resumeKey, "the room turn was stopped before the connection update could resume", roomRun);
     return false;
   }
   const labels = cards.map((message) => message.connector!.label);
@@ -2742,7 +2929,7 @@ function drainConnectorResumes() {
     if (store.bot(entry.botId)?.busy) continue;
     pendingConnectorResumes.delete(key);
     if (roomResumeCancelled(entry)) {
-      markConnectorResumeFailed(entry.threadId, entry.resumeKey, "the room turn was stopped before the connection update could resume");
+      markConnectorResumeFailed(entry.threadId, entry.resumeKey, "the room turn was stopped before the connection update could resume", entry.roomRun);
       continue;
     }
     dispatchConnectorResume(entry);
@@ -2764,9 +2951,17 @@ function secretMessage(botId: string, threadId: string, messageId: string): Mess
   return message?.kind === "secret" && message.secret ? message : null;
 }
 
-function markSecretResumeFailed(threadId: string, messageId: string, error: string) {
+function markSecretResumeFailed(threadId: string, messageId: string, error: string, roomRun?: RoomTurnIdentity) {
+  if (!store.groupByThread(threadId) && !store.botByThread(threadId)) {
+    forgetRoomCardRuns(threadId);
+    return;
+  }
   const message = store.messagesFor(threadId).find((candidate) => candidate.id === messageId);
   if (!message?.secret) return;
+  const cardRun = secretCardRoomRuns.get(message.id);
+  if (roomRun && (!cardRun || !sameRoomRun(cardRun, roomRun))) return;
+  if (!roomRun && cardRun && store.groupByThread(threadId)) return;
+  secretCardRoomRuns.delete(message.id);
   store.patchMessage(threadId, message.id, {
     secret: { ...message.secret, resumed: false, error: error.slice(0, 180) },
   });
@@ -2774,16 +2969,20 @@ function markSecretResumeFailed(threadId: string, messageId: string, error: stri
 
 function dispatchSecretResume(entry: SecretResumeEntry) {
   const owner = connectorThread(entry.botId, entry.threadId);
-  if (!owner) return;
+  if (!owner) {
+    if (entry.roomRun) forgetRoomCardRunsForRun(entry.roomRun);
+    else if (!store.groupByThread(entry.threadId) && !store.botByThread(entry.threadId)) forgetRoomCardRuns(entry.threadId);
+    return;
+  }
   // A room card is scoped at creation time. Looking up the current run here
   // would let a delayed G1 callback resume inside G2 or escape cancellation.
   if (owner.group && !entry.roomRun) {
-    markSecretResumeFailed(entry.threadId, entry.messageId, "the room turn identity is no longer available");
+    markSecretResumeFailed(entry.threadId, entry.messageId, "the room turn identity is no longer available", entry.roomRun);
     return;
   }
   const scopedEntry = entry.roomRun ? { ...entry, roomRun: { ...entry.roomRun } } : entry;
   if (roomResumeCancelled(scopedEntry)) {
-    markSecretResumeFailed(entry.threadId, entry.messageId, "the room turn was stopped before the credential update could resume");
+    markSecretResumeFailed(entry.threadId, entry.messageId, "the room turn was stopped before the credential update could resume", entry.roomRun);
     return;
   }
   const prompt =
@@ -2803,7 +3002,7 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
         const current = connectorThread(entry.botId, entry.threadId);
         if (!current?.group || current.group.threadId !== threadId) return;
         if (roomResumeCancelled(scopedEntry)) {
-          markSecretResumeFailed(entry.threadId, entry.messageId, "the room turn was stopped before the credential update could resume");
+          markSecretResumeFailed(entry.threadId, entry.messageId, "the room turn was stopped before the credential update could resume", scopedEntry.roomRun);
           return;
         }
         if (current.bot.busy) {
@@ -2818,7 +3017,7 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
             0,
             new Set(),
             prompt,
-            (message) => markSecretResumeFailed(entry.threadId, entry.messageId, message),
+            (message) => markSecretResumeFailed(entry.threadId, entry.messageId, message, scopedEntry.roomRun),
             roomRun,
           );
         } finally {
@@ -2837,6 +3036,7 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
           entry.threadId,
           entry.messageId,
           error instanceof Error ? error.message : String(error),
+          entry.roomRun,
         );
       }),
     );
@@ -2845,13 +3045,13 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
   void startTurn(entry.botId, prompt, {
     threadId: entry.threadId,
     cardContinuation: true,
-    onDispatchError: (message) => markSecretResumeFailed(entry.threadId, entry.messageId, message),
+    onDispatchError: (message) => markSecretResumeFailed(entry.threadId, entry.messageId, message, entry.roomRun),
   }).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     if (/already working/i.test(message)) {
       pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, scopedEntry);
     } else {
-      markSecretResumeFailed(entry.threadId, entry.messageId, message);
+      markSecretResumeFailed(entry.threadId, entry.messageId, message, entry.roomRun);
     }
   });
 }
@@ -2886,7 +3086,7 @@ function drainSecretResumes() {
     if (store.bot(entry.botId)?.busy) continue;
     pendingSecretResumes.delete(key);
     if (roomResumeCancelled(entry)) {
-      markSecretResumeFailed(entry.threadId, entry.messageId, "the room turn was stopped before the credential update could resume");
+      markSecretResumeFailed(entry.threadId, entry.messageId, "the room turn was stopped before the credential update could resume", entry.roomRun);
       continue;
     }
     dispatchSecretResume(entry);
@@ -2904,12 +3104,12 @@ function dropPendingRoomResumes(threadId: string, run?: RoomTurnIdentity | null)
   for (const [key, entry] of pendingConnectorResumes) {
     if (entry.threadId !== threadId || !matches(entry)) continue;
     pendingConnectorResumes.delete(key);
-    markConnectorResumeFailed(threadId, entry.resumeKey, "the room turn was stopped before the connection update could resume");
+    markConnectorResumeFailed(threadId, entry.resumeKey, "the room turn was stopped before the connection update could resume", entry.roomRun);
   }
   for (const [key, entry] of pendingSecretResumes) {
     if (entry.threadId !== threadId || !matches(entry)) continue;
     pendingSecretResumes.delete(key);
-    markSecretResumeFailed(threadId, entry.messageId, "the room turn was stopped before the credential update could resume");
+    markSecretResumeFailed(threadId, entry.messageId, "the room turn was stopped before the credential update could resume", entry.roomRun);
   }
 }
 
@@ -2921,12 +3121,12 @@ function dropStaleRoomResumes(threadId: string, run: RoomTurnIdentity): void {
   for (const [key, entry] of pendingConnectorResumes) {
     if (entry.threadId !== threadId || !stale(entry)) continue;
     pendingConnectorResumes.delete(key);
-    markConnectorResumeFailed(threadId, entry.resumeKey, "the room turn was superseded before the connection update could resume");
+    markConnectorResumeFailed(threadId, entry.resumeKey, "the room turn was superseded before the connection update could resume", entry.roomRun);
   }
   for (const [key, entry] of pendingSecretResumes) {
     if (entry.threadId !== threadId || !stale(entry)) continue;
     pendingSecretResumes.delete(key);
-    markSecretResumeFailed(threadId, entry.messageId, "the room turn was superseded before the credential update could resume");
+    markSecretResumeFailed(threadId, entry.messageId, "the room turn was superseded before the credential update could resume", entry.roomRun);
   }
 }
 
@@ -3434,7 +3634,7 @@ const server = createServer(async (req, res) => {
         if (owner.group && !roomRun) {
           return json(res, 409, { error: "room turn identity required for this continuation" });
         }
-        if (owner.group && roomRun && roomTurnCancellation.isCancelled(fromThreadId, roomRun)) {
+        if (owner.group && roomRun && roomResumeCancelled({ threadId: fromThreadId, roomRun })) {
           return json(res, 409, { error: "the room turn was stopped before the credential request could be created" });
         }
         const existing = store.messagesFor(fromThreadId).find((message) =>
@@ -3525,11 +3725,11 @@ const server = createServer(async (req, res) => {
         if (owner.group && !capturedRoomRun) {
           return json(res, 409, { error: "room turn identity required for this continuation" });
         }
-        if (owner.group && capturedRoomRun && roomTurnCancellation.isCancelled(threadId, capturedRoomRun)) {
+        if (owner.group && capturedRoomRun && roomResumeCancelled({ threadId, roomRun: capturedRoomRun })) {
           return json(res, 409, { error: "the room turn was stopped before the connection request could be created" });
         }
         const connectionState: Record<string, { connected?: boolean }> = await composio.connectionStatus(cfg, slugs).catch(() => ({}));
-        if (owner.group && capturedRoomRun && roomTurnCancellation.isCancelled(threadId, capturedRoomRun)) {
+        if (owner.group && capturedRoomRun && roomResumeCancelled({ threadId, roomRun: capturedRoomRun })) {
           return json(res, 409, { error: "the room turn was stopped before the connection request could be created" });
         }
         const messageIds: string[] = [];
@@ -3542,8 +3742,8 @@ const server = createServer(async (req, res) => {
             continue;
           }
           const toolkit = await composio.toolkitCard(cfg, slug);
-          if (owner.group && capturedRoomRun && roomTurnCancellation.isCancelled(threadId, capturedRoomRun)) {
-            markConnectorResumeFailed(threadId, resumeKey, "the room turn was stopped before the connection request could be created");
+          if (owner.group && capturedRoomRun && roomResumeCancelled({ threadId, roomRun: capturedRoomRun })) {
+            markConnectorResumeFailed(threadId, resumeKey, "the room turn was stopped before the connection request could be created", capturedRoomRun);
             return json(res, 409, { error: "the room turn was stopped before the connection request could be created" });
           }
           const connected = connectionState[slug]?.connected === true;
@@ -3562,8 +3762,8 @@ const server = createServer(async (req, res) => {
           if (capturedRoomRun) connectorCardRoomRuns.set(message.id, { ...capturedRoomRun });
           messageIds.push(message.id);
         }
-        if (owner.group && capturedRoomRun && roomTurnCancellation.isCancelled(threadId, capturedRoomRun)) {
-          markConnectorResumeFailed(threadId, resumeKey, "the room turn was stopped before the connection request could be created");
+        if (owner.group && capturedRoomRun && roomResumeCancelled({ threadId, roomRun: capturedRoomRun })) {
+          markConnectorResumeFailed(threadId, resumeKey, "the room turn was stopped before the connection request could be created", capturedRoomRun);
           return json(res, 409, { error: "the room turn was stopped before the connection request could be created" });
         }
         maybeResumeConnectors(botId, threadId, resumeKey, capturedRoomRun);
@@ -4393,10 +4593,33 @@ const server = createServer(async (req, res) => {
       const threadId = group.threadId;
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
       const instance = busy ? registry.get(busy.modelSelection.instanceId) : undefined;
+      const speaker = groupSpeakers.get(threadId);
+      const ownerBotId = group.busyBotId ?? speaker?.botId;
+      const owner = ownerBotId ? botActivityOwners.get(ownerBotId) : undefined;
+      const ownsRoom = Boolean(
+        owner?.kind === "room" &&
+          owner.threadId === threadId &&
+          (!speaker ||
+            (speaker.botId === ownerBotId &&
+              speaker.roomRun &&
+              speaker.roomRun.generation === owner.generation)),
+      );
       // Retire the immutable thread before removing the group. Any delayed
       // room dispatch or card continuation now fails closed, even if this
       // group id is later reused for a new conversation.
       roomTurnCancellation.retire(threadId);
+      pendingRoomTurnRuns.delete(threadId);
+      forgetRoomThreadActivities(threadId);
+      groupSpeakers.delete(threadId);
+      if (ownsRoom && ownerBotId) {
+        stopScreenPoller(ownerBotId);
+        if (activeVpsThreads.get(ownerBotId) === threadId) activeVpsThreads.delete(ownerBotId);
+        if (store.bot(ownerBotId)?.busy) {
+          store.setActivity(ownerBotId, "idle");
+          store.patchBot(ownerBotId, { unread: true });
+        }
+        botActivityOwners.delete(ownerBotId);
+      }
       dropPendingRoomResumes(threadId);
       groupQueues.delete(threadId);
       groupQueuePending.delete(threadId);
@@ -4438,6 +4661,14 @@ const server = createServer(async (req, res) => {
           .catch(() => false);
         if (!steered) {
           return json(res, 409, { error: "the active room turn stopped before it could receive this steer" });
+        }
+        // steer is awaited, so the room may have been deleted (or its owner
+        // may have settled and been replaced) while the provider accepted the
+        // write. Revalidate the durable identity before appending; otherwise
+        // Store.appendMessage lazily recreates an orphan transcript.
+        const current = store.group(group.id);
+        if (!current || current.threadId !== group.threadId || current.busyBotId !== busyBot?.id) {
+          return json(res, 409, { error: "the active room turn ended before this steer could be recorded" });
         }
         if (busyBot) clearUnattended(busyBot.id);
         store.appendMessage(group.threadId, {
@@ -4988,6 +5219,14 @@ const server = createServer(async (req, res) => {
           .steer!(bot.threadId, promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"))
           .catch(() => false);
         if (steered) {
+          // The adapter call can outlive the bot record (for example when a
+          // user deletes the bot from another window). Never let the append
+          // path recreate its deleted thread or attach a steer to a newer
+          // turn that won the race.
+          const current = store.bot(bot.id);
+          if (!current || current.threadId !== bot.threadId || !current.busy) {
+            return json(res, 409, { error: "the active turn ended before this steer could be recorded" });
+          }
           clearUnattended(bot.id);
           store.appendMessage(bot.threadId, {
             role: "user",
@@ -5637,6 +5876,7 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { resumed: true });
       }
       if (!message.secret.provided) resumeSecretCard(m[1], threadId, message.id, "dismissed");
+      else secretCardRoomRuns.delete(message.id);
       return json(res, 200, { dismissed: true, resumed: true });
     }
 
@@ -5684,6 +5924,7 @@ const server = createServer(async (req, res) => {
       }
       if (m[3] === "dismiss" && method === "POST") {
         store.patchMessage(threadId, message.id, { connector: { ...connector, dismissed: true } });
+        connectorCardRoomRuns.delete(message.id);
         return json(res, 200, { dismissed: true });
       }
       return json(res, 405, { error: "method not allowed" });
