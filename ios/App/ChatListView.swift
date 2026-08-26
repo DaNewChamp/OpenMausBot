@@ -239,18 +239,7 @@ struct ChatListView: View {
                             GroupTile(room: room)
                         }
                         .buttonStyle(.plain)
-                        .contextMenu {
-                            Button("Pin", systemImage: "pin") {
-                                Task { _ = await session.setPinned(true, for: chat) }
-                            }
-                        }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            Button("Pin", systemImage: "pin") {
-                                Task { _ = await session.setPinned(true, for: chat) }
-                            }
-                            .tint(.accentColor)
-                            .disabled(session.pendingPinnedChats.contains(chat.stableID))
-                        }
+                        .pinActions(for: chat, pinned: room.pinned ?? false, session: session)
                     }
                     Button {
                         showingNewGroup = true
@@ -366,11 +355,12 @@ struct ChatListView: View {
 }
 
 private struct ChatPinActions: ViewModifier {
-    let summary: ChatSummary
+    let chat: Chat
+    let pinned: Bool
     @ObservedObject var session: Session
 
     private var pending: Bool {
-        session.pendingPinnedChats.contains(summary.chat.stableID)
+        session.pendingPinnedChats.contains(chat.stableID)
     }
 
     func body(content: Content) -> some View {
@@ -386,9 +376,9 @@ private struct ChatPinActions: ViewModifier {
     @ViewBuilder
     private var toggle: some View {
         Button {
-            Task { _ = await session.setPinned(!summary.pinned, for: summary.chat) }
+            Task { _ = await session.setPinned(!pinned, for: chat) }
         } label: {
-            Label(summary.pinned ? "Unpin" : "Pin", systemImage: summary.pinned ? "pin.slash" : "pin")
+            Label(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin")
         }
         .tint(.accentColor)
         .disabled(pending)
@@ -397,7 +387,11 @@ private struct ChatPinActions: ViewModifier {
 
 private extension View {
     func pinActions(for summary: ChatSummary, session: Session) -> some View {
-        modifier(ChatPinActions(summary: summary, session: session))
+        modifier(ChatPinActions(chat: summary.chat, pinned: summary.pinned, session: session))
+    }
+
+    func pinActions(for chat: Chat, pinned: Bool, session: Session) -> some View {
+        modifier(ChatPinActions(chat: chat, pinned: pinned, session: session))
     }
 }
 

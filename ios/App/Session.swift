@@ -1190,60 +1190,24 @@ struct ChatSummary: Identifiable, Hashable {
     let pinned: Bool
 
     var id: String { chat.stableID }
+
+    init(projection: ConversationSummary, chat: Chat) {
+        self.chat = chat
+        self.preview = projection.preview
+        self.lastActivity = projection.lastActivity
+        self.pinned = projection.pinned
+    }
 }
 
 extension CompanionState {
-    /// Everything worth showing in the chat list: pinned first, then unread,
-    /// then most recently active. Hidden bots stay hidden.
-    ///
-    /// The derived fields are computed once here rather than asked for as the
-    /// list is sorted and filtered. Each one walks a thread's messages to
-    /// reach the last of them, and a comparator is called O(n log n) times
-    /// while the search predicate runs over every chat on every keystroke —
-    /// so the same transcript was being traversed dozens of times per frame
-    /// to produce an answer that had not changed. One pass, then sort the
-    /// results.
+    /// Everything worth showing in the chat list, mapped to the app's chat
+    /// enum after CompanionCore has applied the shared projection and order.
     var chatSummaries: [ChatSummary] {
-        let bots = self.bots.filter { $0.hidden != true }.map(Chat.bot)
-        let rooms = self.rooms.map(Chat.room)
-        return (bots + rooms)
-            .map { chat in
-                let last = visibleTranscript(forThread: chat.threadId).last
-                return ChatSummary(
-                    chat: chat,
-                    preview: Self.preview(of: last),
-                    lastActivity: last?.at ?? 0,
-                    pinned: Self.pinned(chat)
-                )
-            }
-            .sorted { left, right in
-                if left.pinned != right.pinned { return left.pinned }
-                if left.chat.unread != right.chat.unread { return left.chat.unread }
-                return left.lastActivity > right.lastActivity
-            }
-    }
-
-    private static func pinned(_ chat: Chat) -> Bool {
-        switch chat {
-        case let .bot(bot): return bot.pinned ?? false
-        case let .room(room): return room.pinned ?? false
-        }
-    }
-
-    /// The one line a roster row shows under the name, from whichever kind of
-    /// message landed last.
-    private static func preview(of last: Message?) -> String {
-        guard let last else { return "" }
-        switch last.kind {
-        case .text: return last.text ?? ""
-        // a pending card's question is the preview; the roster row already
-        // says "waiting on you" beside it
-        case .options:
-            guard let card = last.card else { return "" }
-            return card.isPending && !card.subtitle.isEmpty ? card.subtitle : card.title
-        case .activity: return last.tool?.name ?? ""
-        case .screen: return "Screenshot"
-        case .unknown: return last.text ?? ""
+        let chats = bots.filter { $0.hidden != true }.map(Chat.bot) + rooms.map(Chat.room)
+        let chatsByID = Dictionary(uniqueKeysWithValues: chats.map { ($0.stableID, $0) })
+        return conversationSummaries.compactMap { projection in
+            guard let chat = chatsByID[projection.id] else { return nil }
+            return ChatSummary(projection: projection, chat: chat)
         }
     }
 }

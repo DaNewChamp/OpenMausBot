@@ -230,32 +230,7 @@ final class StoreTests: XCTestCase {
             recentBot.threadId: [message("recent-bot-message", at: 1_000)],
         ]
 
-        // ChatSummary is an app-target type (the package tests cannot import
-        // SwiftUI), so exercise the same partition contract against the
-        // wire models that feed it. This keeps pinned rooms covered here.
-        struct Summary {
-            let name: String
-            let id: String
-            let pinned: Bool
-            let unread: Bool
-            let at: Double
-        }
-        let summaries = [
-            Summary(name: pinnedBot.name, id: "bot:\(pinnedBot.id)", pinned: pinnedBot.pinned ?? false,
-                    unread: pinnedBot.unread, at: state.transcript(forThread: pinnedBot.threadId).last?.at ?? 0),
-            Summary(name: unreadBot.name, id: "bot:\(unreadBot.id)", pinned: unreadBot.pinned ?? false,
-                    unread: unreadBot.unread, at: state.transcript(forThread: unreadBot.threadId).last?.at ?? 0),
-            Summary(name: recentBot.name, id: "bot:\(recentBot.id)", pinned: recentBot.pinned ?? false,
-                    unread: recentBot.unread, at: state.transcript(forThread: recentBot.threadId).last?.at ?? 0),
-            Summary(name: pinnedRoom.name, id: "room:\(pinnedRoom.id)", pinned: pinnedRoom.pinned ?? false,
-                    unread: pinnedRoom.unread, at: state.transcript(forThread: pinnedRoom.threadId).last?.at ?? 0),
-            Summary(name: unreadRoom.name, id: "room:\(unreadRoom.id)", pinned: unreadRoom.pinned ?? false,
-                    unread: unreadRoom.unread, at: state.transcript(forThread: unreadRoom.threadId).last?.at ?? 0),
-        ].sorted {
-            if $0.pinned != $1.pinned { return $0.pinned }
-            if $0.unread != $1.unread { return $0.unread }
-            return $0.at > $1.at
-        }
+        let summaries = state.conversationSummaries
 
         XCTAssertEqual(
             summaries.map(\.name),
@@ -266,6 +241,15 @@ final class StoreTests: XCTestCase {
             summaries.map(\.id),
             ["bot:pinned-bot", "room:pinned-room", "bot:unread-bot", "room:unread-room", "bot:recent-bot"]
         )
+    }
+
+    func testConversationSummaryTieBreaksByStableIdentity() {
+        let summaries = ConversationSummary.ordered([
+            ConversationSummary(id: "room:z", kind: .room, name: "Z", preview: "", lastActivity: 10, pinned: true, unread: true),
+            ConversationSummary(id: "bot:a", kind: .bot, name: "A", preview: "", lastActivity: 10, pinned: true, unread: true),
+        ])
+
+        XCTAssertEqual(summaries.map(\.id), ["bot:a", "room:z"])
     }
 
     // MARK: - Approvals

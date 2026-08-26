@@ -29,9 +29,6 @@ struct PinnedChatShelf: View {
                         .contextMenu {
                             pinButton(for: summary)
                         }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            pinButton(for: summary)
-                        }
                         .disabled(session.pendingPinnedChats.contains(summary.chat.stableID))
                     }
                 }
@@ -51,6 +48,7 @@ struct PinnedChatShelf: View {
         } label: {
             Label(summary.pinned ? "Unpin" : "Pin", systemImage: summary.pinned ? "pin.slash" : "pin")
         }
+        .disabled(session.pendingPinnedChats.contains(summary.chat.stableID))
     }
 }
 
