@@ -11,6 +11,7 @@ import CompanionCore
 
 struct ChatListView: View {
     @EnvironmentObject private var session: Session
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var query = ""
     /// Driven so that making a bot can open it. Value-based navigation alone
     /// cannot push without a tap, and a new bot appearing silently at the
@@ -36,6 +37,13 @@ struct ChatListView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         if query.isEmpty {
+                            if !pinnedChats.isEmpty {
+                                PinnedChatShelf(summaries: pinnedChats) { chat in
+                                    path.append(chat)
+                                }
+                                .padding(.top, 2)
+                                .padding(.bottom, 8)
+                            }
                             groupsStrip
                             sectionLabel("Bots")
                                 .padding(.top, 18)
@@ -80,13 +88,15 @@ struct ChatListView: View {
                                 )
                             }
                             .buttonStyle(.plain)
+                            .pinActions(for: summary, session: session)
                         }
                     }
                     .padding(.bottom, Self.barClearance)
                 }
+                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: pinnedChats.map(\.id))
                 .refreshable { await session.refresh() }
                 .overlay {
-                    if chats.isEmpty && searchHits.isEmpty {
+                    if chats.isEmpty && pinnedChats.isEmpty && searchHits.isEmpty {
                         ContentUnavailableView(
                             query.isEmpty ? "No bots yet" : "Nothing matches",
                             systemImage: query.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass",
@@ -223,11 +233,24 @@ struct ChatListView: View {
             sectionLabel("Groups")
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(session.state.rooms) { room in
+                    ForEach(session.state.rooms.filter { $0.pinned != true }) { room in
+                        let chat = Chat.room(room)
                         NavigationLink(value: Chat.room(room)) {
                             GroupTile(room: room)
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("Pin", systemImage: "pin") {
+                                Task { _ = await session.setPinned(true, for: chat) }
+                            }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button("Pin", systemImage: "pin") {
+                                Task { _ = await session.setPinned(true, for: chat) }
+                            }
+                            .tint(.accentColor)
+                            .disabled(session.pendingPinnedChats.contains(chat.stableID))
+                        }
                     }
                     Button {
                         showingNewGroup = true
@@ -311,13 +334,22 @@ struct ChatListView: View {
         let all = session.state.chatSummaries
         guard !query.isEmpty else {
             // rooms live in the strip; the list is bots
-            return all.filter { if case .bot = $0.chat { return true } else { return false } }
+            return all.filter {
+                guard !$0.pinned else { return false }
+                if case .bot = $0.chat { return true }
+                return false
+            }
         }
         return all.filter {
             $0.chat.name.localizedCaseInsensitiveContains(query)
                 || $0.chat.subtitle.localizedCaseInsensitiveContains(query)
                 || $0.preview.localizedCaseInsensitiveContains(query)
         }
+    }
+
+    private var pinnedChats: [ChatSummary] {
+        guard query.isEmpty else { return [] }
+        return session.state.chatSummaries.filter(\.pinned)
     }
 
     private var waitingChats: Set<String> {
@@ -330,6 +362,42 @@ struct ChatListView: View {
             .tracking(0.4)
             .foregroundStyle(Color.secondary)
             .padding(.horizontal, 20)
+    }
+}
+
+private struct ChatPinActions: ViewModifier {
+    let summary: ChatSummary
+    @ObservedObject var session: Session
+
+    private var pending: Bool {
+        session.pendingPinnedChats.contains(summary.chat.stableID)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .contextMenu {
+                toggle
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                toggle
+            }
+    }
+
+    @ViewBuilder
+    private var toggle: some View {
+        Button {
+            Task { _ = await session.setPinned(!summary.pinned, for: summary.chat) }
+        } label: {
+            Label(summary.pinned ? "Unpin" : "Pin", systemImage: summary.pinned ? "pin.slash" : "pin")
+        }
+        .tint(.accentColor)
+        .disabled(pending)
+    }
+}
+
+private extension View {
+    func pinActions(for summary: ChatSummary, session: Session) -> some View {
+        modifier(ChatPinActions(summary: summary, session: session))
     }
 }
 

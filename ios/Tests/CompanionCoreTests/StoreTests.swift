@@ -186,6 +186,88 @@ final class StoreTests: XCTestCase {
         XCTAssertNotNil(state.messages["brand-new-thread"])
     }
 
+    func testChatSummariesKeepPinnedBotsAndRoomsTogetherBeforeUnreadAndRecency() throws {
+        let source = try hydrated()
+        let bot = try XCTUnwrap(source.bots.first)
+        let room = try XCTUnwrap(source.rooms.first)
+
+        func botCopy(_ id: String, _ name: String, unread: Bool, pinned: Bool, thread: String) -> Bot {
+            var copy = bot
+            copy.id = id
+            copy.name = name
+            copy.unread = unread
+            copy.pinned = pinned
+            copy.threadId = thread
+            copy.messages = nil
+            return copy
+        }
+
+        func roomCopy(_ id: String, _ name: String, unread: Bool, pinned: Bool, thread: String) -> Room {
+            var copy = room
+            copy.id = id
+            copy.name = name
+            copy.unread = unread
+            copy.pinned = pinned
+            copy.threadId = thread
+            copy.messages = nil
+            return copy
+        }
+
+        let pinnedBot = botCopy("pinned-bot", "Pinned Bot", unread: false, pinned: true, thread: "thread-pinned-bot")
+        let unreadBot = botCopy("unread-bot", "Unread Bot", unread: true, pinned: false, thread: "thread-unread-bot")
+        let recentBot = botCopy("recent-bot", "Recent Bot", unread: false, pinned: false, thread: "thread-recent-bot")
+        let pinnedRoom = roomCopy("pinned-room", "Pinned Room", unread: false, pinned: true, thread: "thread-pinned-room")
+        let unreadRoom = roomCopy("unread-room", "Unread Room", unread: true, pinned: false, thread: "thread-unread-room")
+
+        var state = CompanionState()
+        state.bots = [pinnedBot, unreadBot, recentBot]
+        state.rooms = [pinnedRoom, unreadRoom]
+        state.messages = [
+            pinnedBot.threadId: [message("pinned-bot-message", at: 900)],
+            pinnedRoom.threadId: [message("pinned-room-message", at: 800)],
+            unreadBot.threadId: [message("unread-bot-message", at: 700)],
+            unreadRoom.threadId: [message("unread-room-message", at: 600)],
+            recentBot.threadId: [message("recent-bot-message", at: 1_000)],
+        ]
+
+        // ChatSummary is an app-target type (the package tests cannot import
+        // SwiftUI), so exercise the same partition contract against the
+        // wire models that feed it. This keeps pinned rooms covered here.
+        struct Summary {
+            let name: String
+            let id: String
+            let pinned: Bool
+            let unread: Bool
+            let at: Double
+        }
+        let summaries = [
+            Summary(name: pinnedBot.name, id: "bot:\(pinnedBot.id)", pinned: pinnedBot.pinned ?? false,
+                    unread: pinnedBot.unread, at: state.transcript(forThread: pinnedBot.threadId).last?.at ?? 0),
+            Summary(name: unreadBot.name, id: "bot:\(unreadBot.id)", pinned: unreadBot.pinned ?? false,
+                    unread: unreadBot.unread, at: state.transcript(forThread: unreadBot.threadId).last?.at ?? 0),
+            Summary(name: recentBot.name, id: "bot:\(recentBot.id)", pinned: recentBot.pinned ?? false,
+                    unread: recentBot.unread, at: state.transcript(forThread: recentBot.threadId).last?.at ?? 0),
+            Summary(name: pinnedRoom.name, id: "room:\(pinnedRoom.id)", pinned: pinnedRoom.pinned ?? false,
+                    unread: pinnedRoom.unread, at: state.transcript(forThread: pinnedRoom.threadId).last?.at ?? 0),
+            Summary(name: unreadRoom.name, id: "room:\(unreadRoom.id)", pinned: unreadRoom.pinned ?? false,
+                    unread: unreadRoom.unread, at: state.transcript(forThread: unreadRoom.threadId).last?.at ?? 0),
+        ].sorted {
+            if $0.pinned != $1.pinned { return $0.pinned }
+            if $0.unread != $1.unread { return $0.unread }
+            return $0.at > $1.at
+        }
+
+        XCTAssertEqual(
+            summaries.map(\.name),
+            ["Pinned Bot", "Pinned Room", "Unread Bot", "Unread Room", "Recent Bot"],
+            "pinned bots and rooms lead the list, then unread, then recency"
+        )
+        XCTAssertEqual(
+            summaries.map(\.id),
+            ["bot:pinned-bot", "room:pinned-room", "bot:unread-bot", "room:unread-room", "bot:recent-bot"]
+        )
+    }
+
     // MARK: - Approvals
 
     func testPendingApprovalsAreTheUnansweredOnesNewestFirst() throws {

@@ -44,6 +44,10 @@ final class Session: ObservableObject {
     /// A notification response that should be pushed by the roster's
     /// NavigationStack after the exact detached task has been activated.
     @Published private(set) var notificationChat: Chat?
+    /// A pin request in flight for each conversation. Pinning is server-backed
+    /// rather than optimistic, so the roster disables the action until the
+    /// acknowledgement arrives and cannot apply an older toggle out of order.
+    @Published private(set) var pendingPinnedChats: Set<String> = []
 
     private var client: CompanionClient?
     /// The device token, kept in memory so the client can be rebuilt when the
@@ -650,7 +654,9 @@ final class Session: ObservableObject {
     /// route acknowledges the requested value.
     @discardableResult
     func setPinned(_ pinned: Bool, for chat: Chat) async -> Chat? {
-        guard let client else { return nil }
+        guard let client, !pendingPinnedChats.contains(chat.stableID) else { return nil }
+        pendingPinnedChats.insert(chat.stableID)
+        defer { pendingPinnedChats.remove(chat.stableID) }
         do {
             switch chat {
             case let .bot(bot):
@@ -1097,6 +1103,16 @@ enum Chat: Identifiable, Hashable {
         }
     }
 
+    /// IDs are normally server-global, but keeping the kind in UI identity
+    /// prevents a bot and room with a legacy-colliding id from merging in a
+    /// `ForEach` or pin-mutation gate.
+    var stableID: String {
+        switch self {
+        case let .bot(bot): return "bot:\(bot.id)"
+        case let .room(room): return "room:\(room.id)"
+        }
+    }
+
     static func == (left: Chat, right: Chat) -> Bool {
         switch (left, right) {
         case let (.bot(a), .bot(b)): return a.id == b.id
@@ -1173,7 +1189,7 @@ struct ChatSummary: Identifiable, Hashable {
     let lastActivity: Double
     let pinned: Bool
 
-    var id: String { chat.id }
+    var id: String { chat.stableID }
 }
 
 extension CompanionState {
@@ -1208,8 +1224,10 @@ extension CompanionState {
     }
 
     private static func pinned(_ chat: Chat) -> Bool {
-        if case let .bot(bot) = chat { return bot.pinned ?? false }
-        return false
+        switch chat {
+        case let .bot(bot): return bot.pinned ?? false
+        case let .room(room): return room.pinned ?? false
+        }
     }
 
     /// The one line a roster row shows under the name, from whichever kind of
