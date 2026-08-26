@@ -245,6 +245,7 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
 
         var host = trimmed
         var port = defaultPort
+        var hasExplicitPort = false
         if trimmed.hasPrefix("[") {
             guard let close = trimmed.firstIndex(of: "]") else { return nil }
             host = String(trimmed[trimmed.index(after: trimmed.startIndex)..<close])
@@ -252,6 +253,7 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
             if !rest.isEmpty {
                 guard rest.hasPrefix(":"), let parsed = Int(rest.dropFirst()) else { return nil }
                 port = parsed
+                hasExplicitPort = true
             }
         } else {
             let colonCount = trimmed.reduce(into: 0) { count, character in
@@ -261,6 +263,7 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
                 host = String(trimmed[..<colon])
                 guard let parsed = Int(trimmed[trimmed.index(after: colon)...]) else { return nil }
                 port = parsed
+                hasExplicitPort = true
             }
         }
 
@@ -268,6 +271,16 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
               !host.contains(where: { $0.isWhitespace || "/?#[]".contains($0) }),
               (1...65535).contains(port)
         else { return nil }
+
+        if !hasExplicitPort, let endpoint = CompanionEndpoint.hosted(forBareHost: host) {
+            return Connection(
+                name: endpoint.host,
+                host: endpoint.host,
+                port: endpoint.port,
+                activeEndpoint: endpoint,
+                endpoints: [endpoint]
+            )
+        }
         return Connection(name: host, host: host, port: port)
     }
 

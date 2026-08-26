@@ -41,6 +41,25 @@ describe("companionPairingLink", () => {
     expect(new URL(link!).searchParams.get("address")).toBe("[2001:db8::1]:8810");
   });
 
+  it("keeps an explicit hosted URL on HTTPS instead of appending the local port", () => {
+    const link = companionPairingLink({
+      address: "https://openmaus.posival.com",
+      port: 8810,
+      code: "123456",
+      token,
+    });
+    expect(new URL(link!).searchParams.get("address")).toBe("https://openmaus.posival.com");
+  });
+
+  it("rejects an ambiguous hosted URL instead of putting it in the QR", () => {
+    expect(companionPairingLink({
+      address: "https://openmaus.posival.com/pair",
+      port: 8810,
+      code: "123456",
+      token,
+    })).toBeNull();
+  });
+
   it("carries the ordered fallback hosts, comma-joined", () => {
     const link = companionPairingLink({
       address: "macbook.tail1234.ts.net",

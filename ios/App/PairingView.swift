@@ -651,7 +651,8 @@ struct PairingView: View {
         #endif
     }
 
-    /// "192.168.1.42:8810", or a bare host on the default companion port.
+    /// "https://openmaus.posival.com", "192.168.1.42:8810", or a bare host
+    /// on the default companion port.
     static func parse(_ text: String) -> Connection? {
         Connection.parse(text)
     }

@@ -85,6 +85,23 @@ public struct CompanionEndpoint: Codable, Hashable, Sendable {
         return CompanionEndpoint(url: value, kind: resolvedKind, priority: priority)
     }
 
+    /// The production hosted address may be entered without a scheme. Only
+    /// first-party names with an explicit ownership pattern are upgraded;
+    /// arbitrary DNS names remain legacy HTTP routes unless the user types
+    /// `https://`.
+    public static func hosted(forBareHost host: String, priority: Int = 0) -> CompanionEndpoint? {
+        let canonical = canonicalDNSHost(host)
+        guard canonical == "openmaus.posival.com"
+            || canonical.range(of: #"^c-[0-9a-f]{32}\.openmausbot\.com$"#, options: .regularExpression) != nil
+        else { return nil }
+
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = canonical
+        guard let value = components.url?.absoluteString else { return nil }
+        return CompanionEndpoint(url: value, kind: .hosted, priority: priority)
+    }
+
     /// Older saved connections only carry host strings. Recover the security
     /// class from names whose ownership has a useful transport meaning rather
     /// than treating a protected Tailscale name as arbitrary LAN cleartext.
