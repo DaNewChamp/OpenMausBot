@@ -265,6 +265,9 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
     public var unread: Bool
     public var modelSelection: ModelSelection
     public var createdAt: Double
+    /// Runtime activity from the paired store. Older servers omit it, so the
+    /// phone falls back to `busy` when deciding whether a mascot may move.
+    public var activity: String?
     public var busy: Bool?
     public var pinned: Bool?
     public var hidden: Bool?
@@ -346,6 +349,17 @@ public typealias MascotColor = MausColor
 
 public extension Bot {
     var mascotColor: MausColor { MausColor(rawValue: color) ?? .green }
+
+    /// Whether the paired runtime says this bot is actively working. The
+    /// activity field is authoritative when present: waiting for a person,
+    /// a dead runtime, and a lost signal must not make a face move forever.
+    /// `busy` remains the compatibility fallback for older harnesses.
+    var isWorking: Bool {
+        guard let activity = activity?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !activity.isEmpty else {
+            return busy == true
+        }
+        return activity == "working"
+    }
 }
 
 public struct GroupResponder: Codable, Hashable, Sendable {

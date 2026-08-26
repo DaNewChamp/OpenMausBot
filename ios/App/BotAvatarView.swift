@@ -19,6 +19,10 @@ struct BotAvatarView: View {
 
     private var crop: AvatarCrop { bot.avatarCrop ?? .mascot }
     private var usesImage: Bool { crop != .mascot && bot.avatarUrl != nil && !failed }
+    /// A caller may request animation for a surface, but only the paired
+    /// runtime can grant it. This keeps idle, waiting, and stale bots still
+    /// even when a reused row or profile passes `animated: true`.
+    private var activityAnimation: Bool { animated && bot.isWorking }
 
     var body: some View {
         Group {
@@ -34,8 +38,8 @@ struct BotAvatarView: View {
                     size: size,
                     state: state,
                     shape: bot.mascotShape?.rawValue ?? "droplet",
-                    animated: animated,
-                    comets: comets
+                    animated: activityAnimation,
+                    comets: comets && activityAnimation
                 )
             }
         }

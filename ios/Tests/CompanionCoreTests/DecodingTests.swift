@@ -103,6 +103,31 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(bot.mascotColor, .green)
     }
 
+    func testRuntimeActivityControlsMascotMotionEligibility() throws {
+        let json = """
+        {
+          "id":"activity-bot","threadId":"activity-thread","name":"Activity",
+          "title":"","description":"","notifications":true,"color":"green",
+          "activity":"waiting-on-you","busy":true,"unread":false,
+          "modelSelection":{"instanceId":"local","model":"default"},"createdAt":1
+        }
+        """
+        let waiting = try JSONDecoder().decode(Bot.self, from: Data(json.utf8))
+        XCTAssertFalse(waiting.isWorking)
+
+        let working = try JSONDecoder().decode(
+            Bot.self,
+            from: Data(json.replacingOccurrences(of: "waiting-on-you", with: "working").utf8)
+        )
+        XCTAssertTrue(working.isWorking)
+
+        let legacy = try JSONDecoder().decode(
+            Bot.self,
+            from: Data(json.replacingOccurrences(of: #""activity":"waiting-on-you","busy":true"#, with: #""busy":true"#).utf8)
+        )
+        XCTAssertTrue(legacy.isWorking)
+    }
+
     func testFutureAvatarCropFallsBackWithoutDroppingTheBot() throws {
         let fixture = String(decoding: try fixture("bot-avatar-profile"), as: UTF8.self)
             .replacingOccurrences(of: #""avatarCrop":"rounded""#, with: #""avatarCrop":"hexagon""#)

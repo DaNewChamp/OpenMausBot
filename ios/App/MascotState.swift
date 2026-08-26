@@ -21,10 +21,26 @@ extension MausState {
     }
 
     static func forBot(_ bot: Bot, last: Message?) -> MausState {
+        // Runtime activity outranks a stored expression. A bot that is
+        // working should move; a bot waiting for a person or a dead runtime
+        // should remain still even if an old expression was "thinking".
+        if let activity = bot.activity?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !activity.isEmpty {
+            switch activity {
+            case "working": return .working
+            case "waiting-on-you": return .curious
+            case "no-signal": return .alerting
+            case "dead": return .sad
+            case "idle": break
+            default: break
+            }
+        } else if bot.busy == true {
+            // Older servers only sent the derived busy flag.
+            return .working
+        }
+
         if let pinned = normalize(bot.mascotExpression) { return pinned }
 
         if last?.kind == .activity, last?.tool?.ok == false { return .alerting }
-        if bot.busy == true { return .working }
         if bot.unread { return .notifying }
         if last?.kind == .options { return .curious }
 
@@ -34,8 +50,11 @@ extension MausState {
                 profile.range(of: "\\b\(NSRegularExpression.escapedPattern(for: word))\\b", options: .regularExpression) != nil
             }
         }
-        if matches(["code", "coding", "developer", "development", "engineer", "engineering", "build", "debug", "program", "software"]) { return .working }
-        if matches(["research", "researcher", "search", "investigate", "strategy", "strategist", "study", "learn", "knowledge"]) { return .searching }
+        // Role words describe a bot's specialty, not what it is doing now.
+        // Keeping them out of the activity states prevents an idle coding or
+        // research bot from animating in the roster.
+        if matches(["code", "coding", "developer", "development", "engineer", "engineering", "build", "debug", "program", "software"]) { return .idle }
+        if matches(["research", "researcher", "search", "investigate", "strategy", "strategist", "study", "learn", "knowledge"]) { return .idle }
         if matches(["marketing", "growth", "launch", "campaign", "social", "sales", "outreach", "brand"]) { return .excited }
         if matches(["overnight", "night", "background", "async", "queue", "batch", "long-running"]) { return .drowsy }
         if matches(["monitor", "monitoring", "incident", "alert", "watch", "status", "uptime"]) { return .radar }
@@ -51,7 +70,14 @@ extension MausState {
     static func forChat(_ chat: Chat, in state: CompanionState) -> MausState {
         switch chat {
         case let .bot(bot): return forBot(bot, last: state.visibleTranscript(forThread: bot.threadId).last)
-        case .room: return .happy
+        case let .room(room):
+            // A room's busyBotId is the authoritative owner of its current
+            // turn. If that member is waiting on a person, keep the group
+            // still; if an older payload has no member record, busy remains a
+            // safe indication that something is running.
+            guard room.busyBotId != nil else { return .happy }
+            guard let ownerID = room.busyBotId, let owner = state.bot(ownerID) else { return .working }
+            return owner.isWorking ? .working : .curious
         }
     }
 }

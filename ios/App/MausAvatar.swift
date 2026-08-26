@@ -244,12 +244,15 @@ struct MausAvatar: View {
     var body: some View {
         // Even an opted-in face stops when the app is not active: nothing is
         // watching, and in the background the redraws only cost battery.
-        let live = animated && !reduceMotion && scenePhase == .active
+        // Animation is meaningful only for an activity state. Callers can
+        // safely reuse a view with `animated: true` without waking an idle
+        // mascot (the profile, pinned shelf, and island all do this).
+        let live = animated && state.showsActivity && !reduceMotion && scenePhase == .active
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !live)) { timeline in
             Canvas { context, canvasSize in
                 engine.setState(state, now: timeline.date)
                 if live { engine.step(now: timeline.date) }
-                engine.draw(in: &context, size: canvasSize, color: color, bodyMotion: live, comets: comets, at: timeline.date)
+                engine.draw(in: &context, size: canvasSize, color: color, bodyMotion: live, comets: comets && live, at: timeline.date)
             }
         }
         .frame(width: size, height: size)
