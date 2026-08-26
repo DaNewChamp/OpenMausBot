@@ -60,6 +60,16 @@ private struct PinnedChatTile: View {
             ZStack(alignment: .bottomTrailing) {
                 PinnedChatAvatar(chat: chat, size: 72)
 
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color.primary)
+                    .frame(width: 20, height: 20)
+                    .background(Circle().fill(Color(uiColor: .secondarySystemBackground).opacity(0.92)))
+                    .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 1.5))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(1)
+                    .accessibilityHidden(true)
+
                 if chat.busy {
                     ProgressView()
                         .controlSize(.mini)
@@ -85,7 +95,13 @@ private struct PinnedChatTile: View {
         }
         .contentShape(Rectangle())
         .accessibilityLabel(chat.name)
-        .accessibilityValue(chat.busy ? "Working" : (chat.unread ? "Unread" : ""))
+        .accessibilityValue(accessibilityStatus)
+    }
+
+    private var accessibilityStatus: String {
+        if chat.busy { return "Pinned, working" }
+        if chat.unread { return "Pinned, unread" }
+        return "Pinned"
     }
 }
 

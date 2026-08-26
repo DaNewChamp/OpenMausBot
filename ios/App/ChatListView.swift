@@ -88,7 +88,7 @@ struct ChatListView: View {
                                 )
                             }
                             .buttonStyle(.plain)
-                            .pinActions(for: summary, session: session)
+                            .pinRowActions(for: summary, session: session)
                         }
                     }
                     .padding(.bottom, Self.barClearance)
@@ -239,7 +239,7 @@ struct ChatListView: View {
                             GroupTile(room: room)
                         }
                         .buttonStyle(.plain)
-                        .pinActions(for: chat, pinned: room.pinned ?? false, session: session)
+                        .pinContextActions(for: chat, pinned: room.pinned ?? false, session: session)
                     }
                     Button {
                         showingNewGroup = true
@@ -354,7 +354,7 @@ struct ChatListView: View {
     }
 }
 
-private struct ChatPinActions: ViewModifier {
+private struct PinActionButton: View {
     let chat: Chat
     let pinned: Bool
     @ObservedObject var session: Session
@@ -363,18 +363,7 @@ private struct ChatPinActions: ViewModifier {
         session.pendingPinnedChats.contains(chat.stableID)
     }
 
-    func body(content: Content) -> some View {
-        content
-            .contextMenu {
-                toggle
-            }
-            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                toggle
-            }
-    }
-
-    @ViewBuilder
-    private var toggle: some View {
+    var body: some View {
         Button {
             Task { _ = await session.setPinned(!pinned, for: chat) }
         } label: {
@@ -385,13 +374,41 @@ private struct ChatPinActions: ViewModifier {
     }
 }
 
+private struct ChatPinContextActions: ViewModifier {
+    let chat: Chat
+    let pinned: Bool
+    @ObservedObject var session: Session
+
+    func body(content: Content) -> some View {
+        content.contextMenu {
+            PinActionButton(chat: chat, pinned: pinned, session: session)
+        }
+    }
+}
+
+private struct ChatPinRowActions: ViewModifier {
+    let chat: Chat
+    let pinned: Bool
+    @ObservedObject var session: Session
+
+    func body(content: Content) -> some View {
+        content
+            .contextMenu {
+                PinActionButton(chat: chat, pinned: pinned, session: session)
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                PinActionButton(chat: chat, pinned: pinned, session: session)
+            }
+    }
+}
+
 private extension View {
-    func pinActions(for summary: ChatSummary, session: Session) -> some View {
-        modifier(ChatPinActions(chat: summary.chat, pinned: summary.pinned, session: session))
+    func pinRowActions(for summary: ChatSummary, session: Session) -> some View {
+        modifier(ChatPinRowActions(chat: summary.chat, pinned: summary.pinned, session: session))
     }
 
-    func pinActions(for chat: Chat, pinned: Bool, session: Session) -> some View {
-        modifier(ChatPinActions(chat: chat, pinned: pinned, session: session))
+    func pinContextActions(for chat: Chat, pinned: Bool, session: Session) -> some View {
+        modifier(ChatPinContextActions(chat: chat, pinned: pinned, session: session))
     }
 }
 
