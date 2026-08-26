@@ -115,6 +115,14 @@ const endpointHost = (url: string): string => {
   }
 };
 
+const endpointHostname = (url: string): string => {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+};
+
 export const companionAccountActionError = (
   account: CompanionAccountState | null,
   actionError: string | null,
@@ -233,13 +241,22 @@ export function CompanionSection() {
   const tailnet = state.tailnetName;
   const hosted = state.endpoints?.find((endpoint) => endpoint.kind === "hosted");
   const accountActionError = companionAccountActionError(account, accountError);
-  // `address` is deliberately still a direct host. Older iOS builds assume
-  // this field means host:port over HTTP and would corrupt an HTTPS URL.
-  const address =
+  const directAddress =
     tailnet ??
     state.lan ??
     state.addresses?.find((candidate) => candidate !== state.tailscale) ??
     state.hosts?.[0];
+  // A hosted endpoint is an explicit HTTPS authority. Put it in the legacy
+  // address field too so older phone builds do not reinterpret a public route
+  // as HTTP on the sidecar's local port or fall back to a LAN host.
+  const address = hosted?.url ?? directAddress;
+  const pairingHosts = hosted ? [endpointHostname(hosted.url)] : state.hosts;
+  const pairingEndpoints = hosted ? [hosted] : state.endpoints;
+  const pairingDisplayAddress = hosted
+    ? endpointHost(hosted.url)
+    : address
+      ? `${address}:${state.port}`
+      : null;
   const pairingLink =
     state.pairing && address
       ? companionPairingLink({
@@ -248,8 +265,8 @@ export function CompanionSection() {
           code: state.pairing.code,
           token: state.pairing.token,
           name: state.discovery?.name,
-          hosts: state.hosts,
-          endpoints: state.endpoints,
+          hosts: pairingHosts,
+          endpoints: pairingEndpoints,
         })
       : null;
 
@@ -488,7 +505,7 @@ export function CompanionSection() {
               <div className="text-[12px] font-medium uppercase tracking-wide text-ink-secondary">Manual code</div>
               <div className="mt-1 font-mono text-[28px] tracking-[0.3em] text-ink">{state.pairing.code}</div>
               <div className="mt-1 break-all text-[13px] text-ink-secondary">
-                Expires in {secondsLeft}s{address ? ` · ${address}:${state.port}` : ""}
+                Expires in {secondsLeft}s{pairingDisplayAddress ? ` · ${pairingDisplayAddress}` : ""}
               </div>
               {state.discovery?.advertising && (
                 <div className="mt-2 text-[13px] text-ink-secondary">

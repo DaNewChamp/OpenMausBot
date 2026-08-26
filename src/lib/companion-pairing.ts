@@ -1,4 +1,5 @@
 interface CompanionPairingLinkOptions {
+  /** A bare direct host or an explicit HTTP(S) origin. */
   address: string;
   port: number;
   code: string;
@@ -83,6 +84,36 @@ function encodeEndpoints(endpoints: CompanionEndpoint[]): string {
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
+/** Preserve a caller-supplied URL's transport. Bare hosts retain the legacy
+ * HTTP port contract; only an explicit scheme can select HTTPS. */
+const pairingAddress = (address: string, port: number): string | null => {
+  if (!address.includes("://")) {
+    const dialableHost = address.includes(":") && !address.startsWith("[") ? `[${address}]` : address;
+    return `${dialableHost}:${port}`;
+  }
+
+  try {
+    const parsed = new URL(address);
+    const explicitPort = parsed.port ? Number(parsed.port) : null;
+    if (
+      !["http:", "https:"].includes(parsed.protocol) ||
+      !parsed.hostname ||
+      (explicitPort !== null && (!Number.isInteger(explicitPort) || explicitPort < 1 || explicitPort > 65_535)) ||
+      parsed.username ||
+      parsed.password ||
+      (parsed.pathname !== "" && parsed.pathname !== "/") ||
+      parsed.search ||
+      parsed.hash ||
+      parsed.origin === "null"
+    ) {
+      return null;
+    }
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+};
+
 /**
  * A short-lived handoff from the trusted desktop pairing panel to the mobile
  * app. The code still has to be redeemed with the companion; putting it in
@@ -107,10 +138,11 @@ export function companionPairingLink({
     port > 65_535
   )
     return null;
-  const dialableHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  const addressValue = pairingAddress(host, port);
+  if (!addressValue) return null;
 
   const url = new URL("openmausbot://pair");
-  url.searchParams.set("address", `${dialableHost}:${port}`);
+  url.searchParams.set("address", addressValue);
   // The scanner uses the high-entropy token. The code remains in the link so
   // an older mobile build can still pair during a staggered desktop rollout.
   url.searchParams.set("token", token);

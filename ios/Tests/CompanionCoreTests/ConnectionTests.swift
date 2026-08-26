@@ -21,6 +21,26 @@ final class ConnectionTests: XCTestCase {
         XCTAssertTrue(tailnet?.activeEndpoint?.protectsCredentials == true)
     }
 
+    func testParsesTheHostedHostnameAsHTTPSWithoutChangingLocalDefaults() {
+        let hosted = Connection.parse("openmaus.posival.com")
+        XCTAssertEqual(hosted?.port, 443)
+        XCTAssertEqual(hosted?.baseURL?.absoluteString, "https://openmaus.posival.com")
+        XCTAssertEqual(hosted?.activeEndpoint?.kind, .hosted)
+
+        let local = Connection.parse("mac.local")
+        XCTAssertEqual(local?.port, 8810)
+        XCTAssertEqual(local?.baseURL?.absoluteString, "http://mac.local:8810")
+        XCTAssertNil(local?.activeEndpoint)
+
+        let arbitraryDNS = Connection.parse("device.example.com")
+        XCTAssertEqual(arbitraryDNS?.port, 8810)
+        XCTAssertEqual(arbitraryDNS?.baseURL?.absoluteString, "http://device.example.com:8810")
+
+        let explicitPort = Connection.parse("openmaus.posival.com:8810")
+        XCTAssertEqual(explicitPort?.port, 8810)
+        XCTAssertEqual(explicitPort?.baseURL?.absoluteString, "http://openmaus.posival.com:8810")
+    }
+
     func testParsesIPv6WithAndWithoutAnExplicitPort() {
         let bare = Connection.parse("2001:db8::1")
         XCTAssertEqual(bare?.host, "[2001:db8::1]")
@@ -100,6 +120,14 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(invite.credential, "004209")
         XCTAssertEqual(invite.connection.allowedRouteKinds, [.bonjour, .hosted])
         XCTAssertEqual(invite.connection.allowedLocalRouteURLs, ["http://mac.local:8810"])
+    }
+
+    func testParsesAHostedHostnamePairingInviteAsHTTPS() throws {
+        let url = try XCTUnwrap(URL(string: "openmausbot://pair?address=openmaus.posival.com&code=004209"))
+        let invite = try XCTUnwrap(PairingInvite.parse(url))
+        XCTAssertEqual(invite.connection.baseURL?.absoluteString, "https://openmaus.posival.com")
+        XCTAssertEqual(invite.connection.port, 443)
+        XCTAssertEqual(invite.connection.allowedRouteKinds, [.hosted])
     }
 
     func testLegacyTailnetInviteDropsUnselectedLocalFallbackKinds() throws {
