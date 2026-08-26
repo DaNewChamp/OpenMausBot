@@ -29,6 +29,7 @@ import {
   snapshotAvatarGenerationState,
 } from "./avatar-image.ts";
 import { guardedBotModelSwitch, parseBotModelPatch } from "./bot-model.ts";
+import { parseChatPin } from "./chat-pin.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
@@ -3760,6 +3761,15 @@ const server = createServer(async (req, res) => {
       if (!updated) return json(res, 404, { error: "no such room" });
       return json(res, 200, { group: updated });
     }
+    m = path.match(/^\/api\/groups\/([\w-]+)\/pin$/);
+    if (m && method === "PATCH") {
+      const parsed = parseChatPin(await readBody(req));
+      if (!parsed.ok) return json(res, 400, { error: parsed.error });
+      const group = store.patchGroup(m[1], { pinned: parsed.pinned });
+      if (!group) return json(res, 404, { error: "no such room" });
+      return json(res, 200, { group });
+    }
+
     m = path.match(/^\/api\/groups\/([\w-]+)$/);
     if (m && method === "PATCH") {
       const body = await readBody(req);
@@ -3982,6 +3992,14 @@ const server = createServer(async (req, res) => {
       const visible = wireBot(bot);
       broadcast({ kind: "bot", bot: visible });
       return json(res, 200, { bot: visible });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/pin$/);
+    if (m && method === "PATCH") {
+      const parsed = parseChatPin(await readBody(req));
+      if (!parsed.ok) return json(res, 400, { error: parsed.error });
+      const bot = store.patchBot(m[1], { pinned: parsed.pinned });
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      return json(res, 200, { bot: wireBot(bot) });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/always-allow$/);
     if (m && method === "POST") {

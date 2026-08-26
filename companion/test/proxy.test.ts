@@ -301,6 +301,27 @@ describe("the sidecar in front of an unmodified harness", () => {
     }
   });
 
+  it("forwards only the narrow bot and room pin routes", async () => {
+    const { body } = await device("GET", "/api/bots");
+    const bot = body.bots[0];
+    const created = await device("POST", "/api/groups", {
+      body: { name: "Phone pins", memberIds: [bot.id] },
+    });
+    expect(created.status).toBe(201);
+    const room = created.body.group;
+
+    const pinnedBot = await device("PATCH", `/api/bots/${bot.id}/pin`, { body: { pinned: true } });
+    expect(pinnedBot.status).toBe(200);
+    expect(pinnedBot.body.bot).toMatchObject({ id: bot.id, pinned: true });
+
+    const pinnedRoom = await device("PATCH", `/api/groups/${room.id}/pin`, { body: { pinned: true } });
+    expect(pinnedRoom.status).toBe(200);
+    expect(pinnedRoom.body.group).toMatchObject({ id: room.id, pinned: true });
+
+    expect((await device("PATCH", `/api/bots/${bot.id}`, { body: { pinned: false } })).status).toBe(404);
+    expect((await device("PATCH", `/api/groups/${room.id}`, { body: { pinned: false } })).status).toBe(404);
+  });
+
   it("only remembers an always-allow key carried by a pending card", async () => {
     const { body } = await device("GET", "/api/bots");
     const bot = body.bots[0];

@@ -112,6 +112,33 @@ final class ProfileClientTests: XCTestCase {
         XCTAssertEqual(body["avatarCrop"] as? String, "mascot")
     }
 
+    func testBotPinClientSendsOnlyThePinnedField() async throws {
+        ProfileRequestStub.responseBody = Self.botResponse
+
+        let updated = try await client.setPinned(true, botId: "avatar-bot")
+
+        XCTAssertEqual(updated.id, "avatar-bot")
+        let request = try XCTUnwrap(ProfileRequestStub.capturedRequest)
+        XCTAssertEqual(request.httpMethod, "PATCH")
+        XCTAssertEqual(request.url?.path, "/api/bots/avatar-bot/pin")
+        let data = try XCTUnwrap(ProfileRequestStub.capturedBody)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(body.keys.sorted(), ["pinned"])
+        XCTAssertEqual(body["pinned"] as? Bool, true)
+    }
+
+    func testRoomPinClientDecodesTheAuthoritativeRoom() async throws {
+        ProfileRequestStub.responseBody = Self.roomResponse
+
+        let updated = try await client.setPinned(true, roomId: "room-1")
+
+        XCTAssertEqual(updated.id, "room-1")
+        XCTAssertEqual(updated.pinned, true)
+        let request = try XCTUnwrap(ProfileRequestStub.capturedRequest)
+        XCTAssertEqual(request.httpMethod, "PATCH")
+        XCTAssertEqual(request.url?.path, "/api/groups/room-1/pin")
+    }
+
     func testAvatarGenerationRequestOutlivesTheServersImageTimeout() async throws {
         ProfileRequestStub.responseBody = Self.generatedAvatarResponse
 
@@ -132,6 +159,9 @@ final class ProfileClientTests: XCTestCase {
     """
 
     private static let botResponse = Data("{\"bot\":\(botJSON)}".utf8)
+    private static let roomResponse = Data(
+        #"{"group":{"id":"room-1","threadId":"room-thread","name":"Research","memberIds":["avatar-bot"],"defaultResponder":{"kind":"member","botId":"avatar-bot"},"bulletin":"","unread":false,"pinned":true,"createdAt":1786742441013}}"#.utf8
+    )
     private static let generatedAvatarResponse = Data(
         "{\"avatarUrl\":\"/api/attachments/123e4567-e89b-12d3-a456-426614174000.webp\",\"bot\":\(botJSON)}".utf8
     )

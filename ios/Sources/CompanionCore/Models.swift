@@ -231,6 +231,7 @@ public struct Room: Codable, Hashable, Identifiable, Sendable {
     public var defaultResponder: GroupResponder
     public var bulletin: String
     public var unread: Bool
+    public var pinned: Bool?
     public var createdAt: Double
     public var dm: Bool?
     public var busyBotId: String?
@@ -532,6 +533,14 @@ public struct BotModelPatch: Encodable, Sendable {
     }
 }
 
+public struct ChatPinPatch: Encodable, Sendable {
+    public let pinned: Bool
+
+    public init(pinned: Bool) {
+        self.pinned = pinned
+    }
+}
+
 public struct BotProfilePatch: Encodable, Sendable {
     /// `nil` means "leave the field alone". Profile actions deliberately send
     /// only the fields they own so an avatar upload cannot overwrite identity
@@ -828,6 +837,10 @@ public struct CreatedBot: Codable, Sendable {
 /// `POST /api/groups` — the harness answers with the room it made.
 public struct CreatedRoom: Codable, Sendable {
     public var group: Room
+}
+
+struct RoomResponse: Codable, Sendable {
+    var group: Room
 }
 
 struct SearchResponse: Codable, Sendable {

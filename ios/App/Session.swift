@@ -645,6 +645,31 @@ final class Session: ObservableObject {
         }
     }
 
+    /// Pin or unpin a conversation on the paired computer. The returned
+    /// record is authoritative: state is folded only after the narrow server
+    /// route acknowledges the requested value.
+    @discardableResult
+    func setPinned(_ pinned: Bool, for chat: Chat) async -> Chat? {
+        guard let client else { return nil }
+        do {
+            switch chat {
+            case let .bot(bot):
+                let updated = try await client.setPinned(pinned, botId: bot.id)
+                guard !Task.isCancelled else { return nil }
+                state.apply(.bot(updated))
+                return .bot(updated)
+            case let .room(room):
+                let updated = try await client.setPinned(pinned, roomId: room.id)
+                guard !Task.isCancelled else { return nil }
+                state.apply(.room(updated))
+                return .room(updated)
+            }
+        } catch {
+            if !Task.isCancelled { actionError = error.localizedDescription }
+            return nil
+        }
+    }
+
     func interrupt(bot: Bot) async {
         await perform { try await $0.interrupt(botId: bot.id) }
     }

@@ -680,6 +680,32 @@ describe("harness HTTP API", () => {
     expect(after.body.bots.find((b: { id: string }) => b.id === bot.id)).toBeUndefined();
   });
 
+  it("pins bots and rooms through narrow routes", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const room = (await api("POST", "/api/groups", { name: "Pinned chats", memberIds: [bot.id] })).body.group;
+    try {
+      const pinnedBot = await api("PATCH", `/api/bots/${bot.id}/pin`, { pinned: true });
+      expect(pinnedBot.status).toBe(200);
+      expect(pinnedBot.body.bot).toMatchObject({ id: bot.id, pinned: true });
+
+      const pinnedRoom = await api("PATCH", `/api/groups/${room.id}/pin`, { pinned: true });
+      expect(pinnedRoom.status).toBe(200);
+      expect(pinnedRoom.body.group).toMatchObject({ id: room.id, pinned: true });
+
+      expect((await api("PATCH", `/api/bots/${bot.id}/pin`, { pinned: true, autoApprove: true })).status).toBe(400);
+      expect((await api("PATCH", `/api/groups/${room.id}/pin`, { pinned: "yes" })).status).toBe(400);
+      expect((await api("PATCH", "/api/bots/missing/pin", { pinned: true })).status).toBe(404);
+      expect((await api("PATCH", "/api/groups/missing/pin", { pinned: true })).status).toBe(404);
+
+      const state = (await api("GET", "/api/bots")).body;
+      expect(state.bots.find((candidate: { id: string }) => candidate.id === bot.id).pinned).toBe(true);
+      expect(state.groups.find((candidate: { id: string }) => candidate.id === room.id).pinned).toBe(true);
+    } finally {
+      await api("DELETE", `/api/groups/${room.id}`);
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
   it("elects one Chief of Staff per section and preserves other section Chiefs", async () => {
     const workA = (await api("POST", "/api/bots")).body.bot;
     const workB = (await api("POST", "/api/bots")).body.bot;

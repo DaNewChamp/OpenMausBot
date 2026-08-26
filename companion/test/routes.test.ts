@@ -49,12 +49,14 @@ describe("what the app may do", () => {
     ["POST", "/api/bots/bot_123/tasks/th_1"],
     ["PATCH", "/api/bots/bot_123/tasks/th_1"],
     ["DELETE", "/api/bots/bot_123/tasks/th_1"],
+    ["PATCH", "/api/bots/bot_123/pin"],
     ["PATCH", "/api/bots/bot_123/profile"],
     ["PATCH", "/api/bots/bot_123/model"],
     ["POST", "/api/bots/bot_123/avatar/generate"],
     ["POST", "/api/bots/bot_123/computer/join"],
     ["POST", "/api/groups/room-1/messages"],
     ["POST", "/api/groups/room-1/read"],
+    ["PATCH", "/api/groups/room-1/pin"],
     ["GET", "/api/threads/th_1/messages"],
     ["GET", "/api/threads/th_1/messages/msg_2/image"],
     ["POST", "/api/threads/th_1/messages/msg_2/reactions"],
@@ -163,6 +165,8 @@ describe("what it may not", () => {
     // accounts but the account DELETE route is deliberately not allowed
     expect(allowed("DELETE", "/api/connectors/slack/accounts/ca_123")).toBe(false);
     expect(allowed("PATCH", "/api/groups/room-1")).toBe(false);
+    expect(allowed("PATCH", "/api/bots/bot_123/pin/extra")).toBe(false);
+    expect(allowed("PATCH", "/api/groups/room-1/pin/extra")).toBe(false);
   });
 
   // Patterns are anchored, so a path that merely starts right is still a

@@ -720,6 +720,15 @@ public struct CompanionClient: Sendable {
         ).bot
     }
 
+    /// Paired-safe conversation pinning. This narrow route accepts only the
+    /// Boolean pin value; the server returns the authoritative bot record.
+    public func setPinned(_ pinned: Bool, botId: String) async throws -> Bot {
+        try await send(
+            try makeRequest("PATCH", "/api/bots/\(botId)/pin", encodedBody: ChatPinPatch(pinned: pinned)),
+            as: BotResponse.self
+        ).bot
+    }
+
     public func uploadAvatar(data: Data, mime: String) async throws -> String {
         let allowed = ["image/png", "image/jpeg", "image/gif", "image/webp"]
         guard allowed.contains(mime), data.count <= 10 * 1_024 * 1_024 else {
@@ -813,6 +822,15 @@ public struct CompanionClient: Sendable {
         var body: [String: Any] = ["memberIds": memberIds]
         if let name, !name.trimmingCharacters(in: .whitespaces).isEmpty { body["name"] = name }
         return try await send(try makeRequest("POST", "/api/groups", body: body), as: CreatedRoom.self).group
+    }
+
+    /// Paired-safe conversation pinning for a room. The state is applied by
+    /// the app only after this server acknowledgement is decoded.
+    public func setPinned(_ pinned: Bool, roomId: String) async throws -> Room {
+        try await send(
+            try makeRequest("PATCH", "/api/groups/\(roomId)/pin", encodedBody: ChatPinPatch(pinned: pinned)),
+            as: RoomResponse.self
+        ).group
     }
 
     public func send(text: String, toBot botId: String) async throws {
