@@ -17,7 +17,10 @@ struct ComputerView: View {
     @State private var openingDesktop = false
     @State private var desktopURL: URL?
     @State private var desktopError: String?
-    @State private var screenLoadFailure: String?
+    @State private var screenWatch = ComputerWatchLifecycle()
+    @State private var isWatchingScreen = false
+
+    private static let firstFrameTimeout = ComputerWatchLifecycle.firstFrameTimeout
 
     private var frame: ScreenFrame? { session.state.screens[bot.id] }
 
@@ -30,13 +33,39 @@ struct ComputerView: View {
     }
 
     private var presentationState: ComputerPresentationState {
-        if image != nil { return .watching }
-        let failure = frame == nil ? screenLoadFailure : "The latest screen frame could not be decoded."
-        return ComputerPresentationState.resolve(bot: current, loadFailure: failure)
+        let decodeFailure = frame != nil && image == nil
+            ? "The latest screen frame could not be decoded."
+            : nil
+        let activeStreamFailure = screenWatch.phase == .watching ? nil : streamFailure
+        return ComputerPresentationState.resolve(
+            bot: current,
+            frame: image == nil ? nil : frame,
+            loadFailure: screenWatch.failureMessage ?? activeStreamFailure ?? decodeFailure
+        )
     }
 
     private var canOpenCloudViewer: Bool {
         ComputerPresentationState.supportsCloudViewer(current)
+            && !isUnavailable(presentationState)
+    }
+
+    private var streamFailure: String? {
+        switch session.status {
+        case let .offline(message): return message
+        case .unauthorized: return "This phone is no longer paired with the computer."
+        case .unpaired: return "Pair this phone with a computer to watch the screen."
+        case .connecting, .live: return nil
+        }
+    }
+
+    private var canRetryScreen: Bool {
+        ComputerPresentationState.hasKnownComputer(current)
+            && screenWatch.failureMessage != nil
+    }
+
+    private func isUnavailable(_ state: ComputerPresentationState) -> Bool {
+        if case .unavailable = state { return true }
+        return false
     }
 
     var body: some View {
@@ -78,13 +107,61 @@ struct ComputerView: View {
             }
         }
         .onAppear {
+            guard ComputerPresentationState.hasKnownComputer(current) else {
+                screenWatch.failed(ComputerPresentationState.unavailableMessage(for: current))
+                return
+            }
+            isWatchingScreen = true
             session.watchScreen(of: bot.id)
         }
         .onDisappear {
-            session.stopWatchingScreen(of: bot.id)
+            if isWatchingScreen {
+                isWatchingScreen = false
+                session.stopWatchingScreen(of: bot.id)
+            }
         }
         .onChange(of: frame?.png) { _, png in
-            if png != nil { screenLoadFailure = nil }
+            guard let png else { return }
+            let next = ScreenFrame(png: png, mime: frame?.mime ?? "image/png")
+            if next.data.flatMap(UIImage.init(data:)) != nil {
+                screenWatch.receivedFrame()
+            } else {
+                screenWatch.failed("The latest screen frame could not be decoded.")
+            }
+        }
+        .onChange(of: session.status) { _, status in
+            if case let .offline(message) = status {
+                screenWatch.failed(message)
+            } else if case .unauthorized = status {
+                screenWatch.failed("This phone is no longer paired with the computer.")
+            }
+        }
+        .task(id: "\(screenWatch.attempt)-\(current.busy == true)") {
+            guard ComputerPresentationState.hasKnownComputer(current) else { return }
+            if screenWatch.phase == .idle {
+                if let streamFailure {
+                    screenWatch.failed(streamFailure)
+                } else if let frame {
+                    if image != nil {
+                        screenWatch.receivedFrame()
+                    } else {
+                        screenWatch.failed("The latest screen frame could not be decoded.")
+                    }
+                } else {
+                    screenWatch.begin()
+                    return
+                }
+            }
+            guard current.busy == true, screenWatch.isWaiting else { return }
+            let attempt = screenWatch.attempt
+            try? await Task.sleep(for: Self.firstFrameTimeout)
+            guard !Task.isCancelled,
+                  screenWatch.attempt == attempt,
+                  screenWatch.isWaiting,
+                  frame == nil,
+                  current.busy == true
+            else { return }
+            screenWatch.timedOut()
         }
     }
 
@@ -183,8 +260,10 @@ struct ComputerView: View {
                     .foregroundStyle(Color.white.opacity(0.65))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
-                Button("Try again", action: retryScreen)
-                    .buttonStyle(.borderedProminent)
+                if canRetryScreen {
+                    Button("Try again", action: retryScreen)
+                        .buttonStyle(.borderedProminent)
+                }
             }
             .foregroundStyle(Color.white)
 
@@ -236,7 +315,8 @@ struct ComputerView: View {
     }
 
     private func retryScreen() {
-        screenLoadFailure = nil
+        guard ComputerPresentationState.hasKnownComputer(current) else { return }
+        screenWatch.retry()
         session.stopWatchingScreen(of: bot.id)
         session.watchScreen(of: bot.id)
     }

@@ -113,6 +113,7 @@ final class Session: ObservableObject {
            let fleet = try? JSONDecoder().decode(Fleet.self, from: data) {
             connection = Connection(name: "Preview Mac", host: "preview.tailnet.ts.net", port: 8810)
             state.hydrate(fleet)
+            StorePreviewHarness.apply(arguments: ProcessInfo.processInfo.arguments, to: &state)
             recordHydration(resumed: false)
             status = .live
             return
@@ -1122,6 +1123,54 @@ final class Session: ObservableObject {
         }
     }
 }
+
+#if DEBUG
+/// Debug-only, credential-free fixtures for the computer panel. The normal
+/// preview still loads the real fleet-shaped JSON; these flags only replace
+/// one synthetic bot and/or inject a screen event for deterministic UI QA:
+/// `-preview-computer=starting|watching|unavailable|cloud-viewer` and the
+/// optional `-preview-bot=<id>`.
+private enum StorePreviewHarness {
+    private static let validScreenPNG = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAEElEQVR4nGNQ0HKBIwacHACAQwappO2xZwAAAABJRU5ErkJggg=="
+
+    static func apply(arguments: [String], to state: inout CompanionState) {
+        guard let argument = arguments.first(where: { $0.hasPrefix("-preview-computer=") }) else { return }
+        let scenario = String(argument.dropFirst("-preview-computer=".count))
+        let target = arguments.first(where: { $0.hasPrefix("-preview-bot=") })
+            .map { String($0.dropFirst("-preview-bot=".count)) }
+            ?? state.bots.first(where: { $0.pinned != true })?.id
+            ?? state.bots.first?.id
+        guard let target, let index = state.bots.firstIndex(where: { $0.id == target }) else { return }
+
+        var bot = state.bots[index]
+        switch scenario {
+        case "starting":
+            bot.computer = "local"
+            bot.cloudBackend = nil
+            bot.busy = true
+            state.screens.removeValue(forKey: bot.id)
+        case "watching":
+            bot.computer = "local"
+            bot.cloudBackend = nil
+            bot.busy = true
+            state.screens[bot.id] = ScreenFrame(png: validScreenPNG, mime: "image/png")
+        case "unavailable":
+            bot.computer = "local"
+            bot.cloudBackend = nil
+            bot.busy = true
+            state.screens[bot.id] = ScreenFrame(png: "not-an-image", mime: "image/png")
+        case "cloud-viewer":
+            bot.computer = "cloud"
+            bot.cloudBackend = "box"
+            bot.busy = false
+            state.screens.removeValue(forKey: bot.id)
+        default:
+            return
+        }
+        state.bots[index] = bot
+    }
+}
+#endif
 
 /// A chat is a bot or a room. They share a thread, which is what every
 /// message, approval and page is keyed by.

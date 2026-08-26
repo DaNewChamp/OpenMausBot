@@ -89,7 +89,7 @@
       "description": "Keeps the work moving.",
       "notifications": true,
       "color": "green",
-      "pinned": true,
+      "pinned": false,
       "computer": "local",
       "unread": false,
       "modelSelection": { "instanceId": "preview", "model": "preview" },

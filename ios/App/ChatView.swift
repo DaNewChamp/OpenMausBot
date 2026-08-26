@@ -266,6 +266,12 @@ struct ChatView: View {
             // Profile parity screenshots without automating a tap through the
             // animated island/header transition.
             if ProcessInfo.processInfo.arguments.contains("-open-profile") { showingProfile = true }
+            // `-open-computer` opens the watch-only panel for the preview
+            // harness, so each deterministic computer state can be captured
+            // without a paired computer or credentials.
+            if ProcessInfo.processInfo.arguments.contains("-open-computer"), case .bot = current {
+                showingComputer = true
+            }
 #endif
         }
         .onChange(of: current.unread) { _, unread in
