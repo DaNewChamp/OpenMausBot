@@ -34,6 +34,7 @@ struct IslandShell<Content: View>: View {
     let hasIsland: Bool
     var expandedSize = CGSize(width: 250, height: 330)
     @ViewBuilder let content: () -> Content
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let size = expanded ? expandedSize : IslandGeometry.size
@@ -49,7 +50,7 @@ struct IslandShell<Content: View>: View {
             if expanded {
                 content()
                     .frame(width: expandedSize.width, height: expandedSize.height)
-                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                    .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.92)))
             }
         }
         .frame(width: size.width, height: size.height)
@@ -60,6 +61,12 @@ struct IslandShell<Content: View>: View {
         .padding(.top, IslandGeometry.top)
         .shadow(color: .black.opacity(expanded ? 0.45 : 0), radius: 28, y: 12)
         .ignoresSafeArea(edges: .top)
+        .transaction { transaction in
+            if reduceMotion {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+        }
     }
 }
 
@@ -70,6 +77,7 @@ struct NeedsYouIsland: View {
     let hasIsland: Bool
     let open: (Chat) -> Void
     @EnvironmentObject private var session: Session
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shown: ChatUpdate?
     @State private var dismissedCardIds = Set<String>()
     @State private var answering = false
@@ -94,11 +102,12 @@ struct NeedsYouIsland: View {
                         // The hardware island covers the first 37pt of the
                         // square; the face sits clear of it, centred.
                         Button { open(shown.chat) } label: {
-                            ChatAvatarView(chat: shown.chat, size: 120, state: MausState.forChat(shown.chat, in: session.state), animated: attentionLive, comets: attentionLive)
+                            ChatAvatarView(chat: shown.chat, size: 120, state: MausState.forChat(shown.chat, in: session.state), animated: attentionLive && !reduceMotion, comets: attentionLive && !reduceMotion)
                         }
                         .buttonStyle(.plain)
-                        .task(id: shown.chat.id) {
-                            attentionLive = true
+                        .task(id: "\(shown.chat.id)-\(reduceMotion)") {
+                            attentionLive = !reduceMotion
+                            guard !reduceMotion else { return }
                             try? await Task.sleep(for: .seconds(30))
                             attentionLive = false
                         }
@@ -148,7 +157,13 @@ struct NeedsYouIsland: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
-        .animation(.spring(response: 0.55, dampingFraction: 0.78), value: expanded)
+        .animation(reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.78), value: expanded)
+        .transaction { transaction in
+            if reduceMotion {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+        }
         .onChange(of: update?.card?.requestId) { _, _ in reconcile() }
         .onAppear { reconcile() }
     }
