@@ -8,6 +8,9 @@
       "description": "Finds the facts and brings back sources.",
       "notifications": true,
       "color": "cyan",
+      "pinned": true,
+      "computer": "cloud",
+      "cloudBackend": "box",
       "unread": true,
       "modelSelection": { "instanceId": "preview", "model": "preview" },
       "createdAt": 1787000000000,
@@ -18,6 +21,7 @@
       "messages": [
         { "id": "scout-user", "role": "user", "kind": "text", "at": 1787028500000, "text": "Compare the final TestFlight checklist with Apple’s requirements." },
         { "id": "scout-reply", "role": "bot", "kind": "text", "at": 1787028580000, "parentId": "scout-user", "text": "I checked signing, privacy declarations, review notes, and the real-device test pass. One action needs your approval before I continue." },
+        { "id": "scout-comm", "role": "bot", "kind": "activity", "at": 1787028610000, "parentId": "scout-reply", "tool": { "name": "Messaged @Pixel", "ok": true }, "comm": { "groupId": "preview-room-lab", "withBotId": "preview-pixel", "withName": "Pixel", "withColor": "purple" } },
         {
           "id": "scout-approval",
           "role": "bot",
@@ -43,6 +47,8 @@
       "description": "Shapes polished product experiences.",
       "notifications": true,
       "color": "purple",
+      "pinned": true,
+      "computer": "vm",
       "unread": false,
       "modelSelection": { "instanceId": "preview", "model": "preview" },
       "createdAt": 1786900000000,
@@ -61,6 +67,9 @@
       "description": "Builds and verifies releases.",
       "notifications": true,
       "color": "orange",
+      "pinned": true,
+      "computer": "cloud",
+      "cloudBackend": "vps",
       "unread": false,
       "busy": true,
       "modelSelection": { "instanceId": "preview", "model": "preview" },
@@ -71,7 +80,83 @@
         { "id": "forge-user", "role": "user", "kind": "text", "at": 1787027800000, "text": "Run the complete release verification." },
         { "id": "forge-reply", "role": "bot", "kind": "text", "at": 1787027900000, "parentId": "forge-user", "text": "Building the signed archive and checking the privacy manifest…" }
       ]
+    },
+    {
+      "id": "preview-atlas",
+      "threadId": "preview-thread-atlas",
+      "name": "Atlas",
+      "title": "Planner",
+      "description": "Keeps the work moving.",
+      "notifications": true,
+      "color": "green",
+      "pinned": true,
+      "computer": "local",
+      "unread": false,
+      "modelSelection": { "instanceId": "preview", "model": "preview" },
+      "createdAt": 1786700000000,
+      "activeLeafId": "atlas-reply",
+      "messages": [
+        { "id": "atlas-user", "role": "user", "kind": "text", "at": 1787027000000, "text": "Keep the launch plan tidy." },
+        { "id": "atlas-reply", "role": "bot", "kind": "text", "at": 1787027100000, "parentId": "atlas-user", "text": "The handoffs are organized and ready for review." }
+      ]
+    },
+    {
+      "id": "preview-quill",
+      "threadId": "preview-thread-quill",
+      "name": "Quill",
+      "title": "Writer",
+      "description": "Turns rough notes into clear updates.",
+      "notifications": true,
+      "color": "pink",
+      "pinned": true,
+      "computer": "vm",
+      "unread": false,
+      "modelSelection": { "instanceId": "preview", "model": "preview" },
+      "createdAt": 1786600000000,
+      "activeLeafId": "quill-reply",
+      "messages": [
+        { "id": "quill-user", "role": "user", "kind": "text", "at": 1787026800000, "text": "Polish the release note." },
+        { "id": "quill-reply", "role": "bot", "kind": "text", "at": 1787026900000, "parentId": "quill-user", "text": "The summary is concise, clear, and ready to share." }
+      ]
+    },
+    {
+      "id": "preview-orbit",
+      "threadId": "preview-thread-orbit",
+      "name": "Orbit",
+      "title": "Monitor",
+      "description": "Watches the systems that matter.",
+      "notifications": true,
+      "color": "blue",
+      "pinned": true,
+      "computer": "cloud",
+      "cloudBackend": "box",
+      "unread": false,
+      "modelSelection": { "instanceId": "preview", "model": "preview" },
+      "createdAt": 1786500000000,
+      "activeLeafId": "orbit-reply",
+      "messages": [
+        { "id": "orbit-user", "role": "user", "kind": "text", "at": 1787026600000, "text": "Watch the launch metrics." },
+        { "id": "orbit-reply", "role": "bot", "kind": "text", "at": 1787026700000, "parentId": "orbit-user", "text": "No alerts are firing in the preview workspace." }
+      ]
     }
   ],
-  "groups": []
+  "groups": [
+    {
+      "id": "preview-room-lab",
+      "threadId": "preview-thread-lab",
+      "name": "Launch room",
+      "memberIds": ["preview-scout", "preview-pixel", "preview-forge"],
+      "defaultResponder": { "kind": "lead", "botId": "preview-scout" },
+      "bulletin": "Synthetic preview room for visual QA.",
+      "unread": false,
+      "pinned": true,
+      "createdAt": 1786400000000,
+      "dm": false,
+      "busyBotId": null,
+      "messages": [
+        { "id": "lab-user", "role": "user", "kind": "text", "at": 1787026200000, "text": "Coordinate the launch review." },
+        { "id": "lab-reply", "role": "bot", "kind": "text", "at": 1787026300000, "parentId": "lab-user", "from": { "botId": "preview-scout", "name": "Scout", "color": "cyan" }, "text": "The team is aligned for the preview." }
+      ]
+    }
+  ]
 }
