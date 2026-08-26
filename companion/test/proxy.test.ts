@@ -301,6 +301,33 @@ describe("the sidecar in front of an unmodified harness", () => {
     }
   });
 
+  it("keeps inline connector cards OAuth-only at the proxy boundary", async () => {
+    const { body } = await device("GET", "/api/bots");
+    const bot = body.bots[0];
+    const authorizePath = `/api/bots/${bot.id}/connector-cards/missing/authorize`;
+    const statusPath = `/api/bots/${bot.id}/connector-cards/missing/status`;
+
+    expect((await device("POST", authorizePath, {
+      body: { threadId: bot.threadId, apiKey: "must-not-forward" },
+    })).status).toBe(400);
+    expect((await device("POST", authorizePath, {
+      body: { threadId: bot.threadId },
+      headers: { "content-type": "text/plain" },
+    })).status).toBe(415);
+
+    // A valid body reaches the harness (which answers 404 because this test
+    // did not create a pending card), rather than being rejected by the
+    // sidecar's default-deny policy.
+    const forwarded = await device("POST", authorizePath, { body: { threadId: bot.threadId } });
+    expect(forwarded.status).not.toBe(403);
+    expect(forwarded.status).not.toBe(400);
+
+    expect((await device("GET", statusPath)).status).toBe(400);
+    const status = await device("GET", `${statusPath}?threadId=${encodeURIComponent(bot.threadId)}`);
+    expect(status.status).not.toBe(403);
+    expect(status.status).not.toBe(400);
+  });
+
   it("forwards only the narrow bot and room pin routes", async () => {
     const { body } = await device("GET", "/api/bots");
     const bot = body.bots[0];

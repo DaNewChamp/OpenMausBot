@@ -63,6 +63,9 @@ export interface ConnectorCardData {
   resumeKey: string;
   error?: string;
   dismissed?: boolean;
+  /** Optional catalog identity, copied onto newer inline cards. */
+  logo?: string | null;
+  domain?: string | null;
   resumed?: boolean;
 }
 

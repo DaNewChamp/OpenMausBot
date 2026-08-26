@@ -138,6 +138,9 @@ public extension CompanionState {
             return card.isPending && !card.subtitle.isEmpty ? card.subtitle : card.title
         case .activity: return last.tool?.name ?? ""
         case .screen: return "Screenshot"
+        case .connector:
+            guard let connector = last.connector, connector.isUsable else { return last.text ?? "" }
+            return connector.label
         case .unknown: return last.text ?? ""
         }
     }

@@ -7,7 +7,7 @@
 // and the one that quietly stopped being true once before.
 import { describe, expect, it } from "vitest";
 
-import { denyReason } from "../src/routes.ts";
+import { denyReason, validateConnectorCardBody, validateConnectorCardThreadId } from "../src/routes.ts";
 
 const ask = (method: string, path: string, authenticated = true) =>
   denyReason({ method, path, authenticated });
@@ -77,6 +77,10 @@ describe("what the app may do", () => {
     ["GET", "/api/connectors/connected"],
     ["GET", "/api/connectors"],
     ["POST", "/api/connectors/slack/authorize"],
+    ["GET", "/api/bots/bot_123/connector-cards/msg_2/status"],
+    ["POST", "/api/bots/bot_123/connector-cards/msg_2/authorize"],
+    ["POST", "/api/bots/bot_123/connector-cards/msg_2/resume"],
+    ["POST", "/api/bots/bot_123/connector-cards/msg_2/dismiss"],
   ];
 
   for (const [method, path] of calls) {
@@ -165,6 +169,9 @@ describe("what it may not", () => {
     // revocation is a Mac-only affordance: the phone can list and add
     // accounts but the account DELETE route is deliberately not allowed
     expect(allowed("DELETE", "/api/connectors/slack/accounts/ca_123")).toBe(false);
+    expect(allowed("GET", "/api/bots/bot_123/connector-cards/msg_2/authorize")).toBe(false);
+    expect(allowed("POST", "/api/bots/bot_123/connector-cards/msg_2/status")).toBe(false);
+    expect(allowed("POST", "/api/bots/bot_123/connector-cards/msg_2/authorize/extra")).toBe(false);
     expect(allowed("PATCH", "/api/groups/room-1")).toBe(false);
     expect(allowed("POST", "/api/groups/room-1/interrupt")).toBe(true);
     expect(allowed("PATCH", "/api/groups/room-1/interrupt")).toBe(false);
@@ -180,6 +187,23 @@ describe("what it may not", () => {
     expect(allowed("GET", "/api/events/all")).toBe(false);
     expect(allowed("GET", "/api/threads/th_1/messages/msg_2/image/../../../config")).toBe(false);
     expect(allowed("GET", "/api/bots%2f..%2fwebhooks")).toBe(false);
+  });
+
+  it("validates connector-card mutation bodies without accepting secret fields", () => {
+    const path = "/api/bots/bot_123/connector-cards/msg_2/authorize";
+    expect(validateConnectorCardBody("POST", path, { threadId: "thread_1" })).toBeNull();
+    expect(validateConnectorCardBody("POST", path, {})).toMatchObject({ status: 400 });
+    expect(validateConnectorCardBody("POST", path, { threadId: "thread_1", alias: "Work" })).toMatchObject({ status: 400 });
+    expect(validateConnectorCardBody("POST", path, { threadId: "thread_1", apiKey: "secret" })).toMatchObject({ status: 400 });
+    expect(validateConnectorCardBody("POST", path, { threadId: "thread/1" })).toMatchObject({ status: 400 });
+    expect(validateConnectorCardBody("GET", path, { threadId: "thread_1" })).toBeNull();
+  });
+
+  it("validates connector-card status thread identifiers", () => {
+    expect(validateConnectorCardThreadId("thread_1")).toBeNull();
+    expect(validateConnectorCardThreadId("thread/1")?.status).toBe(400);
+    expect(validateConnectorCardThreadId("")?.status).toBe(400);
+    expect(validateConnectorCardThreadId({ secret: "nope" })?.status).toBe(400);
   });
 
   // The one that matters. Upstream adds routes on its own schedule, and the

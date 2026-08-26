@@ -114,6 +114,100 @@ final class ConnectedAppsClientTests: XCTestCase {
         await assertBadURL { _ = try await self.client.authorizeConnector(slug: "gmail", alias: nil) }
     }
 
+    func testAuthorizesInlineCardWithThreadScopeAndHTTPSURL() async throws {
+        ConnectorRequestStub.responseBody = Data(#"{"url":"https://auth.example/connect?state=abc"}"#.utf8)
+
+        let url = try await client.authorizeConnectorCard(
+            botId: "bot_123",
+            threadId: "thread_456",
+            messageId: "msg_789"
+        )
+
+        XCTAssertEqual(url.absoluteString, "https://auth.example/connect?state=abc")
+        XCTAssertEqual(
+            ConnectorRequestStub.capturedRequest?.url?.path,
+            "/api/bots/bot_123/connector-cards/msg_789/authorize"
+        )
+        let body = try XCTUnwrap(ConnectorRequestStub.capturedBody)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(object, ["threadId": "thread_456"])
+    }
+
+    func testReadsInlineCardStatusWithThreadQuery() async throws {
+        ConnectorRequestStub.responseBody = Data(#"{"connected":false,"pending":true,"status":"initiated"}"#.utf8)
+
+        let status = try await client.connectorCardStatus(
+            botId: "bot_123",
+            threadId: "thread_456",
+            messageId: "msg_789"
+        )
+
+        XCTAssertFalse(status.connected)
+        XCTAssertEqual(status.pending, true)
+        XCTAssertEqual(status.status, "initiated")
+        XCTAssertEqual(
+            ConnectorRequestStub.capturedRequest?.url?.path,
+            "/api/bots/bot_123/connector-cards/msg_789/status"
+        )
+        XCTAssertEqual(
+            URLComponents(url: try XCTUnwrap(ConnectorRequestStub.capturedRequest?.url), resolvingAgainstBaseURL: false)?.queryItems,
+            [URLQueryItem(name: "threadId", value: "thread_456")]
+        )
+    }
+
+    func testResumesAndDismissesInlineCards() async throws {
+        ConnectorRequestStub.responseBody = Data(#"{"resumed":true}"#.utf8)
+        let resumed = try await client.resumeConnectorCard(
+            botId: "bot_123", threadId: "thread_456", messageId: "msg_789"
+        )
+        XCTAssertEqual(resumed.resumed, true)
+        XCTAssertEqual(ConnectorRequestStub.capturedRequest?.httpMethod, "POST")
+        XCTAssertEqual(
+            ConnectorRequestStub.capturedRequest?.url?.path,
+            "/api/bots/bot_123/connector-cards/msg_789/resume"
+        )
+
+        ConnectorRequestStub.responseBody = Data(#"{"dismissed":true}"#.utf8)
+        let dismissed = try await client.dismissConnectorCard(
+            botId: "bot_123", threadId: "thread_456", messageId: "msg_789"
+        )
+        XCTAssertEqual(dismissed.dismissed, true)
+        XCTAssertEqual(
+            ConnectorRequestStub.capturedRequest?.url?.path,
+            "/api/bots/bot_123/connector-cards/msg_789/dismiss"
+        )
+    }
+
+    func testRejectsUnsafeInlineCardIDsAndAuthorizationLinksBeforeSending() async {
+        await assertBadURL {
+            _ = try await self.client.authorizeConnectorCard(
+                botId: "bot/123", threadId: "thread_456", messageId: "msg_789"
+            )
+        }
+        XCTAssertNil(ConnectorRequestStub.capturedRequest)
+
+        ConnectorRequestStub.responseBody = Data(#"{"url":"http://auth.example/connect"}"#.utf8)
+        await assertBadURL {
+            _ = try await self.client.authorizeConnectorCard(
+                botId: "bot_123", threadId: "thread_456", messageId: "msg_789"
+            )
+        }
+        XCTAssertNotNil(ConnectorRequestStub.capturedRequest)
+    }
+
+    func testAuthorizationURLRejectsCredentialsFragmentsAndNonstandardPorts() {
+        XCTAssertNotNil(ConnectorAuthorizationURL.parse("https://auth.example/connect?state=abc"))
+        for value in [
+            "http://auth.example/connect",
+            "https://user:secret@auth.example/connect",
+            "https://auth.example:444/connect",
+            "https://auth.example/connect#token",
+            "not a URL",
+        ] {
+            XCTAssertNil(ConnectorAuthorizationURL.parse(value), value)
+        }
+    }
+
     private func assertBadURL(
         _ operation: () async throws -> Void,
         file: StaticString = #filePath,

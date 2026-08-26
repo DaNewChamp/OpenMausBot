@@ -1428,6 +1428,12 @@ struct MessageRow: View {
             } else {
                 ActivityChip(tool: message.tool)
             }
+        case .connector:
+            if let connector = message.connector, connector.isUsable {
+                ConnectorCardView(chat: chat, message: message, connector: connector)
+            } else if let text = message.text, !text.isEmpty {
+                TextBubble(message: message, chat: chat, tailed: endsRun)
+            }
         case .screen:
             ScreenShot(threadId: chat.threadId, message: message)
         case .unknown:
@@ -2141,6 +2147,247 @@ struct CardView: View {
                     .fill(card.isPending ? tint.opacity(0.12) : GrokConversationStyle.assistantBubble)
             )
         }
+    }
+}
+
+/// An OAuth-only connected-app request embedded in the transcript. The
+/// browser handoff is deliberately the only credential-adjacent operation on
+/// the phone: no API keys, aliases, or secret/config fields are modeled here.
+private struct ConnectorCardView: View {
+    let chat: Chat
+    let message: Message
+    let connector: ConnectorMessageData
+
+    @EnvironmentObject private var session: Session
+    @Environment(\.conversationTypography) private var typography
+    @State private var actionInFlight = false
+    @State private var localError: String?
+
+    private var accent: Color { MausPalette.color(chat.color) }
+
+    private var canAct: Bool {
+        switch chat {
+        case .bot: return true
+        case .room: return message.from?.botId != nil
+        }
+    }
+
+    private var statusTitle: String {
+        switch connector.status {
+        case .required: return "Needs connection"
+        case .authorizing: return "Waiting for authorization"
+        case .connected where connector.resumed == true: return "Ready"
+        case .connected: return "Connected"
+        case .failed: return "Connection failed"
+        case .unknown: return "Connection unavailable"
+        }
+    }
+
+    private var actionTitle: String {
+        connector.status == .authorizing ? "Open authorization" : "Connect \(connector.label)"
+    }
+
+    var body: some View {
+        if connector.dismissed == true {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 13) {
+                HStack(alignment: .top, spacing: 12) {
+                    ConnectorLogoView(connector: connector, tint: accent)
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(connector.label)
+                            .font(typography.font(size: 17, relativeTo: .headline, weight: .semibold))
+                            .foregroundStyle(Color.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(statusTitle)
+                            .font(typography.detail.weight(.medium))
+                            .foregroundStyle(statusColor)
+                    }
+
+                    Spacer(minLength: 6)
+
+                    Button {
+                        Task { await dismissCard() }
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.secondary)
+                            .frame(width: 28, height: 28)
+                            .background(Circle().fill(Color.primary.opacity(0.08)))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(actionInFlight || !canAct)
+                    .accessibilityLabel("Dismiss \(connector.label) connection request")
+                }
+
+                if !connector.displayDescription.isEmpty {
+                    Text(connector.displayDescription)
+                        .font(typography.font(size: 15, relativeTo: .subheadline))
+                        .foregroundStyle(Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+
+                if let error = connector.displayError ?? localError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(typography.detail)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack(spacing: 10) {
+                    if connector.status == .connected, connector.resumed != true {
+                        ConnectorActionButton(
+                            title: "Continue",
+                            systemImage: "arrow.forward",
+                            tint: accent,
+                            disabled: actionInFlight || !canAct
+                        ) {
+                            Task { await resumeCard() }
+                        }
+                    } else if connector.status != .connected {
+                        ConnectorActionButton(
+                            title: actionTitle,
+                            systemImage: "link",
+                            tint: accent,
+                            disabled: actionInFlight || !canAct
+                        ) {
+                            Task { await authorizeCard() }
+                        }
+                    } else {
+                        Label("Connected", systemImage: "checkmark.circle.fill")
+                            .font(typography.detail.weight(.semibold))
+                            .foregroundStyle(.green)
+                            .accessibilityLabel("\(connector.label) connected")
+                    }
+                }
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(connector.status == .failed ? Color.orange.opacity(0.10) : GrokConversationStyle.assistantBubble)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("\(connector.label) connection request")
+            .task(id: "\(message.id)|\(connector.status.rawValue)") {
+                await pollAuthorizationIfNeeded()
+            }
+        }
+    }
+
+    private var statusColor: Color {
+        switch connector.status {
+        case .connected: return .green
+        case .failed: return .orange
+        case .authorizing: return accent
+        case .required, .unknown: return .secondary
+        }
+    }
+
+    @MainActor
+    private func authorizeCard() async {
+        guard !actionInFlight else { return }
+        actionInFlight = true
+        localError = nil
+        defer { actionInFlight = false }
+        guard let url = await session.authorizeConnectorCard(chat: chat, message: message) else { return }
+        let opened = await UIApplication.shared.open(url)
+        if !opened { localError = "Authorization could not be opened on this device." }
+    }
+
+    @MainActor
+    private func resumeCard() async {
+        guard !actionInFlight else { return }
+        actionInFlight = true
+        localError = nil
+        defer { actionInFlight = false }
+        _ = await session.resumeConnectorCard(chat: chat, message: message)
+    }
+
+    @MainActor
+    private func dismissCard() async {
+        guard !actionInFlight else { return }
+        actionInFlight = true
+        localError = nil
+        defer { actionInFlight = false }
+        _ = await session.dismissConnectorCard(chat: chat, message: message)
+    }
+
+    private func pollAuthorizationIfNeeded() async {
+        guard connector.status == .authorizing else { return }
+        for _ in 0..<45 {
+            do {
+                try await Task.sleep(nanoseconds: 4_000_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            guard let response = await session.connectorCardStatus(chat: chat, message: message) else { continue }
+            if response.connected || response.status?.range(of: "failed|expired|revoked|error", options: [.caseInsensitive, .regularExpression]) != nil {
+                return
+            }
+        }
+    }
+}
+
+private struct ConnectorActionButton: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+    let disabled: Bool
+    let action: () -> Void
+    @Environment(\.conversationTypography) private var typography
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(typography.detail.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 38)
+                .background(Capsule().fill(tint))
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.48 : 1)
+    }
+}
+
+private struct ConnectorLogoView: View {
+    let connector: ConnectorMessageData
+    let tint: Color
+
+    var body: some View {
+        Group {
+            if let url = connector.safeLogoURL {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image {
+                        image.resizable().scaledToFit()
+                    } else {
+                        monogram
+                    }
+                }
+            } else {
+                monogram
+            }
+        }
+        .frame(width: 42, height: 42)
+        .background(Circle().fill(tint.opacity(0.16)))
+        .clipShape(Circle())
+        .accessibilityLabel("\(connector.label) icon")
+    }
+
+    private var monogram: some View {
+        Text(String(connector.label.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1)).uppercased())
+            .font(.system(size: 18, weight: .bold))
+            .foregroundStyle(tint)
     }
 }
 

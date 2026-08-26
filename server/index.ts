@@ -3755,6 +3755,8 @@ const server = createServer(async (req, res) => {
               slug,
               label: toolkit.label,
               description: toolkit.blurb || `Connect ${toolkit.label} so the bot can continue`,
+              logo: toolkit.logo,
+              domain: toolkit.domain,
               status: connected ? "connected" : "required",
               resumeKey,
             },

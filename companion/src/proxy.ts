@@ -19,7 +19,14 @@ import {
   MAX_COMPANION_ENDPOINTS,
   type CompanionEndpoint,
 } from "./endpoints.ts";
-import { denyReason, isCloudDesktopJoin } from "./routes.ts";
+import {
+  denyReason,
+  isCloudDesktopJoin,
+  isConnectorCardAction,
+  isConnectorCardStatus,
+  validateConnectorCardBody,
+  validateConnectorCardThreadId,
+} from "./routes.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
 /** What the forwarding handler needs from the process around it. */
@@ -291,6 +298,49 @@ export function createProxyHandler(options: ProxyOptions) {
       return sendJson(res, 200, endpointSnapshot(options));
     }
 
+    // Connector-card mutations are the one JSON body this proxy validates
+    // before opening the harness request. A strict body shape keeps a paired
+    // token from smuggling aliases, credentials, or future config fields.
+    if (isConnectorCardAction(method, path)) {
+      const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+      if (!contentType.startsWith("application/json")) {
+        return sendJson(res, 415, { error: "connector card requests require application/json" });
+      }
+      readJson(req).then(
+        (body) => {
+          const bodyDenial = validateConnectorCardBody(method, path, body);
+          if (bodyDenial) return sendJson(res, bodyDenial.status, { error: bodyDenial.error });
+          forward(Buffer.from(JSON.stringify(body), "utf8"));
+        },
+        (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
+      return;
+    }
+
+    // Status is read-only, but its thread scope still must be a single safe
+    // query value. `denyReason` receives only the path by design, so inspect
+    // this one query at the forwarding boundary.
+    if (isConnectorCardStatus(method, path)) {
+      let parsed: URL;
+      try {
+        parsed = new URL(req.url ?? path, "http://companion.invalid");
+      } catch {
+        return sendJson(res, 400, { error: "connector card status requires a valid threadId" });
+      }
+      const keys = [...parsed.searchParams.keys()];
+      const threadId = parsed.searchParams.get("threadId");
+      const queryDenial = keys.length === 1 ? validateConnectorCardThreadId(threadId) : {
+        status: 400,
+        error: "connector card status accepts only threadId",
+      };
+      if (queryDenial) return sendJson(res, queryDenial.status, { error: queryDenial.error });
+      forward();
+      return;
+    }
+
+    forward();
+
+    function forward(requestBody?: Buffer): void {
     const upstream = httpRequest(
       {
         hostname: "127.0.0.1",
@@ -533,6 +583,8 @@ export function createProxyHandler(options: ProxyOptions) {
           : { error: "OpenMausBot is not running on this computer" },
       );
     });
-    req.pipe(upstream);
+    if (requestBody) upstream.end(requestBody);
+    else req.pipe(upstream);
+    }
   };
 }

@@ -68,6 +68,24 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(newBot.speakReplies, true)
     }
 
+    func testMascotShapeDecodesAndUnknownValuesUseTheDropletDefault() throws {
+        let json = """
+        {
+          "id":"shape-bot","threadId":"shape-thread","name":"Shape","title":"",
+          "description":"","notifications":true,"color":"purple","mascotShape":"hexagon",
+          "unread":false,"modelSelection":{"instanceId":"local","model":"default"},"createdAt":1
+        }
+        """
+        let bot = try JSONDecoder().decode(Bot.self, from: Data(json.utf8))
+        XCTAssertEqual(bot.mascotShape, .hexagon)
+
+        let future = try JSONDecoder().decode(
+            Bot.self,
+            from: Data(json.replacingOccurrences(of: #""mascotShape":"hexagon""#, with: #""mascotShape":"star""#).utf8)
+        )
+        XCTAssertEqual(future.mascotShape, .droplet)
+    }
+
     func testFutureAvatarCropFallsBackWithoutDroppingTheBot() throws {
         let fixture = String(decoding: try fixture("bot-avatar-profile"), as: UTF8.self)
             .replacingOccurrences(of: #""avatarCrop":"rounded""#, with: #""avatarCrop":"hexagon""#)
@@ -450,5 +468,43 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(threadId, "t1")
         XCTAssertEqual(message.kind, .unknown)
         XCTAssertEqual(message.text, "ran")
+    }
+
+    func testDecodesOAuthConnectorCardWithoutExposingCredentialText() throws {
+        let json = #"""
+        {
+          "id":"connect-1","role":"bot","kind":"connector","at":1,
+          "connector":{
+            "slug":"google_calendar","label":"Google Calendar",
+            "description":"Connect with OAuth. apiKey=sk-live-never-show-this",
+            "status":"required","resumeKey":"calendar-read",
+            "logo":"https://cdn.example.com/google.png","domain":"google.com",
+            "error":"access_token=secret-token"
+          }
+        }
+        """#
+        let message = try JSONDecoder().decode(Message.self, from: Data(json.utf8))
+        XCTAssertEqual(message.kind, .connector)
+        let card = try XCTUnwrap(message.connector)
+        XCTAssertTrue(card.isUsable)
+        XCTAssertEqual(card.label, "Google Calendar")
+        XCTAssertEqual(card.safeLogoURL?.scheme, "https")
+        XCTAssertTrue(card.displayDescription.contains("•••"))
+        XCTAssertFalse(card.displayDescription.contains("sk-live-never-show-this"))
+        XCTAssertTrue(card.displayError?.contains("•••") == true)
+        XCTAssertFalse(card.displayError?.contains("secret-token") == true)
+    }
+
+    func testMalformedOrSecretCardsRemainNonActionable() throws {
+        let malformed = #"{"id":"m1","role":"bot","kind":"connector","at":1,"connector":"not-an-object","text":"Connect in OpenMausBot on your computer"}"#
+        let malformedMessage = try JSONDecoder().decode(Message.self, from: Data(malformed.utf8))
+        XCTAssertEqual(malformedMessage.kind, .connector)
+        XCTAssertFalse(try XCTUnwrap(malformedMessage.connector).isUsable)
+
+        let secret = #"{"id":"m2","role":"bot","kind":"secret","at":2,"secret":{"value":"do-not-send"},"text":"Use the desktop settings"}"#
+        let secretMessage = try JSONDecoder().decode(Message.self, from: Data(secret.utf8))
+        XCTAssertEqual(secretMessage.kind, .unknown)
+        XCTAssertNil(secretMessage.connector)
+        XCTAssertEqual(secretMessage.text, "Use the desktop settings")
     }
 }

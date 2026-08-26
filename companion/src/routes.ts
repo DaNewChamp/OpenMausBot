@@ -44,6 +44,60 @@ export function isCloudDesktopJoin(method: string, path: string): boolean {
   return method === CLOUD_DESKTOP_JOIN_ROUTE.method && CLOUD_DESKTOP_JOIN_ROUTE.path.test(path);
 }
 
+/** Inline OAuth cards are narrower than the general connected-app catalog.
+ * The phone may act only on a card already present in the exact transcript it
+ * names; it cannot add arbitrary accounts from a copied slug. */
+export const CONNECTOR_CARD_STATUS_ROUTE = {
+  method: "GET",
+  path: /^\/api\/bots\/[\w-]+\/connector-cards\/[\w-]+\/status$/,
+} as const;
+
+export const CONNECTOR_CARD_ACTION_ROUTE = {
+  method: "POST",
+  path: /^\/api\/bots\/[\w-]+\/connector-cards\/[\w-]+\/(?:authorize|resume|dismiss)$/,
+} as const;
+
+export function isConnectorCardStatus(method: string, path: string): boolean {
+  return method === CONNECTOR_CARD_STATUS_ROUTE.method && CONNECTOR_CARD_STATUS_ROUTE.path.test(path);
+}
+
+export function isConnectorCardAction(method: string, path: string): boolean {
+  return method === CONNECTOR_CARD_ACTION_ROUTE.method && CONNECTOR_CARD_ACTION_ROUTE.path.test(path);
+}
+
+/** Validate the only body a connector-card mutation accepts. Keeping this at
+ * the companion boundary prevents a paired token from forwarding arbitrary
+ * fields such as aliases, credentials, or config paths to a future harness. */
+export function validateConnectorCardBody(
+  method: string,
+  path: string,
+  body: unknown,
+): Denial | null {
+  if (!isConnectorCardAction(method, path)) return null;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { status: 400, error: "connector card requests require a JSON body with threadId" };
+  }
+  const values = body as Record<string, unknown>;
+  const keys = Object.keys(values);
+  if (keys.length !== 1 || keys[0] !== "threadId") {
+    return { status: 400, error: "connector card requests accept only threadId" };
+  }
+  const threadId = values.threadId;
+  if (typeof threadId !== "string" || !/^[\w-]{1,200}$/.test(threadId)) {
+    return { status: 400, error: "threadId must be a safe conversation identifier" };
+  }
+  return null;
+}
+
+/** The status action has no body; its one query value is validated separately
+ * by the proxy because `denyReason` intentionally receives a path only. */
+export function validateConnectorCardThreadId(threadId: unknown): Denial | null {
+  if (typeof threadId !== "string" || !/^[\w-]{1,200}$/.test(threadId)) {
+    return { status: 400, error: "threadId must be a safe conversation identifier" };
+  }
+  return null;
+}
+
 /** Every request the iOS app makes, and nothing else.
  *
  * Ids are `[\w-]+`, matching the harness's own route patterns. The paths
@@ -127,6 +181,8 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "GET", path: /^\/api\/connectors\/connected$/ },
   { method: "GET", path: /^\/api\/connectors$/ },
   { method: "POST", path: /^\/api\/connectors\/[\w-]+\/authorize$/ },
+  CONNECTOR_CARD_STATUS_ROUTE,
+  CONNECTOR_CARD_ACTION_ROUTE,
 ];
 
 /** Route families worth naming in the refusal.

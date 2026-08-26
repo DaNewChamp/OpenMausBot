@@ -170,7 +170,7 @@ public typealias MessageDeliveryDisposition = MessageDeliveryReceipt.Disposition
 
 public struct Message: Codable, Hashable, Identifiable, Sendable {
     public enum Kind: String, Codable, Sendable {
-        case text, options, activity, screen
+        case text, options, activity, screen, connector
         /// A kind this build has never heard of.
         ///
         /// Not decorative. `kind` is not optional, so without this a single
@@ -207,6 +207,10 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     public var at: Double
     public var text: String?
     public var card: OptionCard?
+    /// A safe, OAuth-only connected-app request. Secret cards deliberately
+    /// have no model here: their unknown kind falls back without exposing a
+    /// credential field to the phone.
+    public var connector: ConnectorMessageData?
     public var tool: ToolActivity?
     /// The message this one follows; nil at the thread root. Two messages
     /// sharing a parent are a fork.
@@ -877,6 +881,161 @@ public struct ConnectorStatus: Codable, Hashable, Sendable {
 
 public struct ConnectorCatalog: Codable, Sendable {
     public var configured: Bool
+/// The transcript shape for an OAuth connect card. This is intentionally
+/// separate from `ConnectorCard`, which is the marketplace/catalog shape.
+/// The phone receives status and instructions, never a credential or config
+/// payload. Malformed/future values decode to an unusable card so one bad
+/// message cannot discard an entire fleet hydrate.
+public struct ConnectorMessageData: Codable, Hashable, Sendable {
+    public enum Status: String, Codable, Hashable, Sendable {
+        case required, authorizing, connected, failed, unknown
+
+        public init(from decoder: Decoder) throws {
+            let raw = (try? decoder.singleValueContainer().decode(String.self)) ?? ""
+            self = Self(rawValue: raw) ?? .unknown
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
+        }
+    }
+
+    public var slug: String
+    public var label: String
+    public var description: String
+    public var status: Status
+    public var resumeKey: String
+    public var error: String?
+    public var dismissed: Bool?
+    public var resumed: Bool?
+    /// Optional catalog metadata copied onto newer connector cards. The
+    /// card remains fully usable when an older harness omits these fields.
+    public var logo: String?
+    public var domain: String?
+
+    public init(
+        slug: String,
+        label: String,
+        description: String,
+        status: Status,
+        resumeKey: String,
+        error: String? = nil,
+        dismissed: Bool? = nil,
+        resumed: Bool? = nil,
+        logo: String? = nil,
+        domain: String? = nil
+    ) {
+        self.slug = slug
+        self.label = label
+        self.description = description
+        self.status = status
+        self.resumeKey = resumeKey
+        self.error = error
+        self.dismissed = dismissed
+        self.resumed = resumed
+        self.logo = logo
+        self.domain = domain
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case slug, label, description, status, resumeKey, error, dismissed, resumed, logo, domain
+    }
+
+    public init(from decoder: Decoder) throws {
+        guard let container = try? decoder.container(keyedBy: CodingKeys.self) else {
+            self.init(slug: "", label: "", description: "", status: .unknown, resumeKey: "")
+            return
+        }
+        self.init(
+            slug: (try? container.decode(String.self, forKey: .slug)) ?? "",
+            label: (try? container.decode(String.self, forKey: .label)) ?? "",
+            description: (try? container.decode(String.self, forKey: .description)) ?? "",
+            status: (try? container.decode(Status.self, forKey: .status)) ?? .unknown,
+            resumeKey: (try? container.decode(String.self, forKey: .resumeKey)) ?? "",
+            error: try? container.decode(String.self, forKey: .error),
+            dismissed: try? container.decode(Bool.self, forKey: .dismissed),
+            resumed: try? container.decode(Bool.self, forKey: .resumed),
+            logo: try? container.decode(String.self, forKey: .logo),
+            domain: try? container.decode(String.self, forKey: .domain)
+        )
+    }
+
+    /// The only card payload shape the native view will act on. Unknown or
+    /// malformed cards remain harmless transcript data and render as text
+    /// when the server supplied a fallback message.
+    public var isUsable: Bool {
+        Self.validComponent(slug, maxBytes: 81, allowUnderscore: true)
+            && !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && label.utf8.count <= 160
+            && description.utf8.count <= 2_000
+            && Self.validComponent(resumeKey, maxBytes: 100, allowUnderscore: true)
+            && status != .unknown
+    }
+
+    public var isConnected: Bool { status == .connected }
+    public var isAuthorizing: Bool { status == .authorizing }
+    public var hasFailed: Bool { status == .failed }
+
+    /// A public logo may be shown only when it is an ordinary HTTPS image
+    /// URL. Credentials, fragments and non-HTTPS resources are not fetched
+    /// from a transcript-provided value.
+    public var safeLogoURL: URL? {
+        guard let logo else { return nil }
+        return Self.safeHTTPSURL(logo, allowQuery: false)
+    }
+
+    /// Connector prose is server-authored and redacted server-side, but the
+    /// phone applies a small second fence before it becomes visible. This
+    /// prevents a malformed card from turning a pasted key into transcript
+    /// text while preserving useful instructions.
+    public var displayDescription: String {
+        Self.redactCredentialLikeText(description, maxLength: 600)
+    }
+
+    /// Error details are provider-authored too. Keep them useful enough to
+    /// diagnose a failed OAuth handoff without ever echoing a pasted key.
+    public var displayError: String? {
+        guard let error, !error.isEmpty else { return nil }
+        return Self.redactCredentialLikeText(error, maxLength: 400)
+    }
+
+    private static func redactCredentialLikeText(_ value: String, maxLength: Int) -> String {
+        let source = String(value.prefix(maxLength))
+        guard let expression = try? NSRegularExpression(
+            pattern: #"(?i)(api[_ -]?key|access[_ -]?token|secret|password|bearer)\s*[:=]\s*[^\s,;]+"#
+        ) else { return source }
+        let range = NSRange(source.startIndex..<source.endIndex, in: source)
+        return expression.stringByReplacingMatches(in: source, range: range, withTemplate: "$1: •••")
+    }
+
+    private static func validComponent(_ value: String, maxBytes: Int, allowUnderscore: Bool) -> Bool {
+        guard !value.isEmpty, value.utf8.count <= maxBytes else { return false }
+        return value.utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (65...90).contains(byte) ||
+                (97...122).contains(byte) || byte == 45 || (allowUnderscore && byte == 95)
+        }
+    }
+
+    private static func safeHTTPSURL(_ raw: String, allowQuery: Bool) -> URL? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.utf8.count <= 2_048,
+              !value.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }),
+              let components = URLComponents(string: value),
+              components.scheme?.lowercased() == "https",
+              let host = components.host,
+              !host.isEmpty,
+              components.user == nil,
+              components.password == nil,
+              components.fragment == nil,
+              components.port == nil || components.port == 443,
+              allowQuery || components.query == nil,
+              let url = components.url
+        else { return nil }
+        return url
+    }
+}
+
     public var mode: String?
     public var source: String?
     public var cards: [ConnectorCard]
@@ -915,6 +1074,39 @@ public struct CreatedBot: Codable, Sendable {
 /// `POST /api/groups` — the harness answers with the room it made.
 public struct CreatedRoom: Codable, Sendable {
     public var group: Room
+}
+
+public struct ConnectorCardStatusResponse: Codable, Sendable {
+    public var connected: Bool
+    public var pending: Bool?
+    public var status: String?
+}
+
+public struct ConnectorCardActionResponse: Codable, Sendable {
+    public var resumed: Bool?
+    public var dismissed: Bool?
+}
+
+/// A URL returned by a server-side connector authorization route. OAuth
+/// links may carry state in their query, but must be HTTPS and cannot smuggle
+/// credentials, a fragment, or a nonstandard port into an external browser.
+public enum ConnectorAuthorizationURL {
+    public static func parse(_ raw: String) -> URL? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.utf8.count <= 2_048,
+              !value.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }),
+              let components = URLComponents(string: value),
+              components.scheme?.lowercased() == "https",
+              let host = components.host,
+              !host.isEmpty,
+              components.user == nil,
+              components.password == nil,
+              components.fragment == nil,
+              components.port == nil || components.port == 443,
+              let url = components.url
+        else { return nil }
+        return url
+    }
 }
 
 struct RoomResponse: Codable, Sendable {
