@@ -31,6 +31,9 @@ struct BotActivityAttributes: ActivityAttributes {
     var name: String
     /// MausPalette colour name.
     var color: String
+    /// Persisted mascot silhouette. Optional keeps activities created by an
+    /// older app renderable while the phone rolls out the new picker.
+    var shape: String?
 }
 
 /// Answer from the island or the lock screen. A `LiveActivityIntent` runs in

@@ -65,7 +65,13 @@ final class LiveActivityCoordinator {
                 let newAsk = update.kind == .needsYou && lastSent[bot.id]?.requestId != content.requestId
                 Task { await activity.update(.init(state: content, staleDate: nil), alertConfiguration: newAsk ? alert : nil) }
             } else {
-                let attributes = BotActivityAttributes(botId: bot.id, threadId: bot.threadId, name: bot.name, color: bot.color)
+                let attributes = BotActivityAttributes(
+                    botId: bot.id,
+                    threadId: bot.threadId,
+                    name: bot.name,
+                    color: bot.color,
+                    shape: bot.mascotShape?.rawValue
+                )
                 _ = try? Activity.request(attributes: attributes, content: .init(state: content, staleDate: nil), pushType: nil)
                 // a fresh activity cannot alert on request; one immediate alerting update does it
                 if let alert, let activity = Activity<BotActivityAttributes>.activities.first(where: { $0.attributes.botId == bot.id }) {

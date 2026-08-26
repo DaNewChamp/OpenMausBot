@@ -29,10 +29,26 @@ enum MausPalette {
         "yellow": "#D8A729",
         "teal": "#01A492",
         "coral": "#E5634E",
+        // These three are part of the Grok picker even though older servers
+        // did not advertise them. Keep them bright enough to read on the
+        // charcoal canvas and use faceInk(_:) for light-body contrast.
+        "white": "#F2F2F7",
+        "brown": "#9A633D",
+        "gray": "#A1A1AA",
     ]
 
     static func color(_ name: String) -> Color {
-        Color(hex: hex[name] ?? "#8E8E93")
+        let key = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return Color(hex: hex[key] ?? "#8E8E93")
+    }
+
+    /// The eyes and mouth need a dark ink when a light Grok swatch is chosen;
+    /// white ink on white/gray bodies disappears against the dark canvas.
+    static func faceInk(_ name: String) -> Color {
+        switch name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "white", "gray": return Color.black.opacity(0.82)
+        default: return .white
+        }
     }
 
 }
@@ -299,6 +315,7 @@ struct MausFaceStill: View {
     let color: String
     var state: MausState = .idle
     var size: CGFloat = 52
+    var shape: String = "droplet"
     var comets: Bool = false
     /// The clock for the comets' phase; a different date is a different frame.
     var at: Date = Date()
@@ -310,6 +327,7 @@ struct MausFaceStill: View {
             engine.draw(in: &context, size: canvasSize, color: color, bodyMotion: false, comets: comets, at: at)
         }
         .frame(width: size, height: size)
+        .clipShape(MascotMarkClip(kind: shape))
         .accessibilityHidden(true)
     }
 }
@@ -601,14 +619,14 @@ final class MausFaceEngine {
                 if i == 0 { path.move(to: q) } else { path.addLine(to: q) }
             }
             path.closeSubpath()
-            context.fill(path, with: .color(.white))
+            context.fill(path, with: .color(MausPalette.faceInk(color)))
         }
 
         let spec = displayedMouth()
         let frame = Self.mouthFrame(rings, spec)
         context.stroke(
             Self.mouthPath(frame, spec),
-            with: .color(.white),
+            with: .color(MausPalette.faceInk(color)),
             style: StrokeStyle(lineWidth: MausFaceData.mouthStroke, lineCap: .round)
         )
     }

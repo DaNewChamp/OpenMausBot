@@ -15,6 +15,7 @@ import { pickBotName } from "./names.ts";
 import { redactSecretsInText } from "./redact.ts";
 import {
   botAvatarProfile,
+  botMascotColorSchema,
   botMascotShapeSchema,
   type BotAvatarCrop,
   type BotMascotShape,
@@ -30,7 +31,10 @@ export type MausColor =
   | "pink"
   | "yellow"
   | "teal"
-  | "coral";
+  | "coral"
+  | "white"
+  | "brown"
+  | "gray";
 
 /**
  * The face a bot rests on, as one of the engine's state names. Kept as a plain
@@ -402,6 +406,9 @@ const COLORS: MausColor[] = [
   "yellow",
   "teal",
   "coral",
+  "white",
+  "brown",
+  "gray",
 ];
 
 /** Sections are persisted as display labels, so exact trimmed labels are
@@ -529,6 +536,10 @@ export class Store {
       }
       if (b.autoStartVps !== undefined && b.autoStartVps !== true && b.autoStartVps !== false) {
         delete b.autoStartVps;
+        botsMigrated = true;
+      }
+      if (!botMascotColorSchema.safeParse(b.color).success) {
+        b.color = COLORS[0];
         botsMigrated = true;
       }
       const avatar = botAvatarProfile(b);
@@ -886,7 +897,7 @@ export class Store {
       title: profile.title ?? "",
       description: profile.description ?? "",
       notifications: true,
-      color: profile.color ?? COLORS[this.bots.length % COLORS.length],
+      color: botMascotColorSchema.safeParse(profile.color).data ?? COLORS[this.bots.length % COLORS.length],
       ...(profile.mascotExpression ? { mascotExpression: profile.mascotExpression } : {}),
       unread: false,
       modelSelection: profile.modelSelection ?? this.defaultSelection(),
@@ -932,7 +943,14 @@ export class Store {
   patchBot(id: string, patch: Partial<BotRecord>): BotRecord | null {
     const bot = this.bot(id);
     if (!bot) return null;
-    Object.assign(bot, patch);
+    const safePatch = { ...patch };
+    if ("color" in safePatch && !botMascotColorSchema.safeParse(safePatch.color).success) {
+      delete safePatch.color;
+    }
+    if ("mascotShape" in safePatch && !botMascotShapeSchema.safeParse(safePatch.mascotShape).success) {
+      delete safePatch.mascotShape;
+    }
+    Object.assign(bot, safePatch);
     this.saveBots();
     this.emit({ type: "bot", botId: id });
     return bot;

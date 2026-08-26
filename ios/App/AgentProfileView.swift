@@ -275,6 +275,11 @@ struct AgentProfileView: View {
                                         )
                                         .padding(-5)
                                 }
+                                .overlay {
+                                    if choice.id == "white" {
+                                        Circle().stroke(Color.primary.opacity(0.22), lineWidth: 1)
+                                    }
+                                }
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("\(choice.name) character color")
@@ -338,8 +343,8 @@ struct AgentProfileView: View {
 
     private var profileColors: [ProfileColorChoice] {
         [
-            .init(id: "white", name: "White", color: Color.white),
-            .init(id: "brown", name: "Brown", color: Color(red: 0.55, green: 0.34, blue: 0.20)),
+            .init(id: "white", name: "White", color: MausPalette.color("white")),
+            .init(id: "brown", name: "Brown", color: MausPalette.color("brown")),
             .init(id: "red", name: "Red", color: MausPalette.color("red")),
             .init(id: "orange", name: "Orange", color: MausPalette.color("orange")),
             .init(id: "yellow", name: "Yellow", color: MausPalette.color("yellow")),
@@ -348,7 +353,7 @@ struct AgentProfileView: View {
             .init(id: "blue", name: "Blue", color: MausPalette.color("blue")),
             .init(id: "purple", name: "Purple", color: MausPalette.color("purple")),
             .init(id: "pink", name: "Pink", color: MausPalette.color("pink")),
-            .init(id: "gray", name: "Gray", color: Color.gray),
+            .init(id: "gray", name: "Gray", color: MausPalette.color("gray")),
             .init(id: "cyan", name: "Cyan", color: MausPalette.color("cyan")),
         ]
     }

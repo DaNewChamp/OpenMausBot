@@ -322,6 +322,32 @@ public enum MascotShape: String, Codable, CaseIterable, Hashable, Sendable, Iden
     }
 }
 
+/// The shared Grok-style mascot palette. `Bot.color` stays a string so an
+/// older phone can still decode a newer desktop payload; callers that need a
+/// concrete swatch use `Bot.mascotColor`, which safely falls back to green.
+public enum MausColor: String, Codable, CaseIterable, Hashable, Sendable, Identifiable {
+    case green, blue, red, orange, purple, cyan, pink, yellow, teal, coral
+    case white, brown, gray
+
+    public var id: String { rawValue }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = Self(rawValue: raw) ?? .green
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public typealias MascotColor = MausColor
+
+public extension Bot {
+    var mascotColor: MausColor { MausColor(rawValue: color) ?? .green }
+}
+
 public struct GroupResponder: Codable, Hashable, Sendable {
     public var kind: String
     public var botId: String?
@@ -911,6 +937,11 @@ public struct ConnectorStatus: Codable, Hashable, Sendable {
 
 public struct ConnectorCatalog: Codable, Sendable {
     public var configured: Bool
+    public var mode: String?
+    public var source: String?
+    public var cards: [ConnectorCard]
+}
+
 /// The transcript shape for an OAuth connect card. This is intentionally
 /// separate from `ConnectorCard`, which is the marketplace/catalog shape.
 /// The phone receives status and instructions, never a credential or config
@@ -1064,11 +1095,6 @@ public struct ConnectorMessageData: Codable, Hashable, Sendable {
         else { return nil }
         return url
     }
-}
-
-    public var mode: String?
-    public var source: String?
-    public var cards: [ConnectorCard]
 }
 
 public struct ConnectorStatuses: Codable, Sendable {

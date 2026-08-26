@@ -96,7 +96,7 @@ export function parseBotProfilePatch(input: BotProfilePatchInput, strict = false
       return { ok: false, error: "avatarCrop must be mascot, circle, rounded, or square" };
     }
     if (issue?.path[0] === "color") {
-      return { ok: false, error: "color must be green, blue, red, orange, purple, cyan, pink, yellow, teal, or coral" };
+      return { ok: false, error: "color must be green, blue, red, orange, purple, cyan, pink, yellow, teal, coral, white, brown, or gray" };
     }
     if (issue?.path[0] === "mascotShape") {
       return { ok: false, error: "mascotShape must be circle, oval, square, pill, triangle, hexagon, cloud, or droplet" };

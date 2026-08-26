@@ -156,18 +156,29 @@ describe("Store", () => {
   it("persists supported mascot appearance fields and drops an invalid shape on reload", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    store.patchBot(bot.id, { color: "purple", mascotShape: "hexagon" });
+    store.patchBot(bot.id, { color: "white", mascotShape: "hexagon" });
 
     const reloaded = new Store(selection);
-    expect(reloaded.bot(bot.id)).toMatchObject({ color: "purple", mascotShape: "hexagon" });
+    expect(reloaded.bot(bot.id)).toMatchObject({ color: "white", mascotShape: "hexagon" });
 
     const raw: BotRecord[] = JSON.parse(readFileSync(join(DATA_DIR, "bots.json"), "utf8"));
     (raw.find((candidate) => candidate.id === bot.id) as unknown as { mascotShape: string }).mascotShape = "star";
+    (raw.find((candidate) => candidate.id === bot.id) as unknown as { color: string }).color = "chartreuse";
     writeFileSync(join(DATA_DIR, "bots.json"), JSON.stringify(raw));
     const repaired = new Store(selection);
     expect(repaired.bot(bot.id)?.mascotShape).toBeUndefined();
+    expect(repaired.bot(bot.id)?.color).toBe("green");
     const saved: BotRecord[] = JSON.parse(readFileSync(join(DATA_DIR, "bots.json"), "utf8"));
     expect(saved.find((candidate) => candidate.id === bot.id)).not.toHaveProperty("mascotShape");
+  });
+
+  it("sanitizes an invalid color at creation and ignores invalid direct patches", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({ color: "chartreuse" as never });
+    expect(bot.color).toBe("green");
+
+    store.patchBot(bot.id, { color: "chartreuse" as never });
+    expect(store.bot(bot.id)?.color).toBe("green");
   });
 
   it("normalizes persisted cloud backends without changing valid or absent values", () => {

@@ -86,6 +86,23 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(future.mascotShape, .droplet)
     }
 
+    func testGrokMascotPaletteIncludesLightColorsAndUnknownBotsUseSafeGreen() throws {
+        XCTAssertEqual(
+            Set(MausColor.allCases),
+            Set([.green, .blue, .red, .orange, .purple, .cyan, .pink, .yellow, .teal, .coral, .white, .brown, .gray])
+        )
+
+        let json = """
+        {
+          "id":"palette-bot","threadId":"palette-thread","name":"Palette","title":"",
+          "description":"","notifications":true,"color":"chartreuse",
+          "unread":false,"modelSelection":{"instanceId":"local","model":"default"},"createdAt":1
+        }
+        """
+        let bot = try JSONDecoder().decode(Bot.self, from: Data(json.utf8))
+        XCTAssertEqual(bot.mascotColor, .green)
+    }
+
     func testFutureAvatarCropFallsBackWithoutDroppingTheBot() throws {
         let fixture = String(decoding: try fixture("bot-avatar-profile"), as: UTF8.self)
             .replacingOccurrences(of: #""avatarCrop":"rounded""#, with: #""avatarCrop":"hexagon""#)

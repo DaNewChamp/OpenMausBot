@@ -17,6 +17,9 @@ export const BOT_MASCOT_COLORS = [
   "yellow",
   "teal",
   "coral",
+  "white",
+  "brown",
+  "gray",
 ] as const;
 export const botMascotColorSchema = z.enum(BOT_MASCOT_COLORS);
 export type BotMascotColor = z.infer<typeof botMascotColorSchema>;

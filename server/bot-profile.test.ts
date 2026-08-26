@@ -16,13 +16,15 @@ describe("parseBotProfilePatch (strict — the paired boundary)", () => {
   });
 
   it("accepts only the supported cosmetic fields and values", () => {
-    expect(parseBotProfilePatch({ color: "red", mascotShape: "hexagon" }, true)).toEqual({
+    expect(parseBotProfilePatch({ color: "white", mascotShape: "hexagon" }, true)).toEqual({
       ok: true,
-      patch: { color: "red", mascotShape: "hexagon" },
+      patch: { color: "white", mascotShape: "hexagon" },
     });
+    expect(parseBotProfilePatch({ color: "brown" }, true)).toEqual({ ok: true, patch: { color: "brown" } });
+    expect(parseBotProfilePatch({ color: "gray" }, true)).toEqual({ ok: true, patch: { color: "gray" } });
     expect(parseBotProfilePatch({ color: "chartreuse" } as never, true)).toEqual({
       ok: false,
-      error: "color must be green, blue, red, orange, purple, cyan, pink, yellow, teal, or coral",
+      error: "color must be green, blue, red, orange, purple, cyan, pink, yellow, teal, coral, white, brown, or gray",
     });
     expect(parseBotProfilePatch({ mascotShape: "diamond" } as never, true)).toEqual({
       ok: false,
