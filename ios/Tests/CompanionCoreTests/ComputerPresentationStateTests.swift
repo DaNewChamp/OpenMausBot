@@ -63,6 +63,31 @@ final class ComputerPresentationStateTests: XCTestCase {
         XCTAssertEqual(ComputerPresentationState(bot: bot(computer: "local")), .starting)
     }
 
+    func testAutoModeWithoutFrameWhileWorkingStarts() {
+        XCTAssertEqual(ComputerPresentationState(bot: bot(computer: nil, busy: true)), .starting)
+    }
+
+    func testAutoModeWithFrameIsWatchableButNeverInteractive() {
+        let frame = ScreenFrame(png: "c2NyZWVu", mime: "image/png")
+        let auto = bot(computer: nil, cloudBackend: "box", busy: true)
+        XCTAssertEqual(ComputerPresentationState(bot: auto, frame: frame), .watching)
+        XCTAssertFalse(ComputerPresentationState.supportsCloudViewer(auto))
+    }
+
+    func testAutoModeWithoutWorkingBotHasNoLiveScreen() {
+        XCTAssertEqual(
+            ComputerPresentationState(bot: bot(computer: nil, busy: false)),
+            .unavailable(message: "No live screen is available until this agent is working.")
+        )
+    }
+
+    func testAutoModeStreamFailureIsUnavailable() {
+        XCTAssertEqual(
+            ComputerPresentationState(bot: bot(computer: nil, busy: true), loadFailure: "The stream is offline."),
+            .unavailable(message: "The stream is offline.")
+        )
+    }
+
     func testIdleKnownComputerDoesNotSpinForever() {
         XCTAssertEqual(
             ComputerPresentationState(bot: bot(computer: "local", busy: false)),
@@ -77,7 +102,7 @@ final class ComputerPresentationStateTests: XCTestCase {
         )
         XCTAssertEqual(
             ComputerPresentationState(bot: bot(computer: nil, busy: false)),
-            .unavailable(message: "No computer is configured for this agent.")
+            .unavailable(message: "No live screen is available until this agent is working.")
         )
         XCTAssertEqual(
             ComputerPresentationState(bot: bot(computer: "quantum-desktop", busy: true)),
@@ -111,8 +136,8 @@ final class ComputerPresentationStateTests: XCTestCase {
             .unavailable(message: "Computer access is turned off for this agent.")
         )
         XCTAssertEqual(
-            ComputerPresentationState(bot: bot(computer: nil), frame: frame),
-            .unavailable(message: "No computer is configured for this agent.")
+            ComputerPresentationState(bot: bot(computer: nil, busy: true), frame: frame),
+            .watching
         )
         XCTAssertEqual(
             ComputerPresentationState(bot: bot(computer: "future-desktop"), frame: frame),

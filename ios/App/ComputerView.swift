@@ -62,7 +62,7 @@ struct ComputerView: View {
 
     private var canRetryScreen: Bool {
         ComputerPresentationState.hasKnownComputer(current)
-            && screenWatch.failureMessage != nil
+            && (screenWatch.failureMessage != nil || streamFailure != nil)
     }
 
     private func isUnavailable(_ state: ComputerPresentationState) -> Bool {
@@ -71,7 +71,7 @@ struct ComputerView: View {
     }
 
     private var computerSignature: String {
-        let computer = current.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "unknown"
+        let computer = current.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "auto"
         let backend = current.cloudBackend?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "legacy"
         return "\(computer)|\(backend)"
     }
@@ -190,7 +190,7 @@ struct ComputerView: View {
             if screenWatch.phase == .idle {
                 if let streamFailure {
                     screenWatch.failed(streamFailure)
-                } else if let frame {
+                } else if frame != nil {
                     if image != nil {
                         screenWatch.receivedFrame()
                     } else {
@@ -382,9 +382,22 @@ struct ComputerView: View {
 
         if !isWatchingScreen {
             isWatchingScreen = true
-            screenWatch.begin()
             session.watchScreen(of: bot.id)
-        } else if screenWatch.phase == .idle {
+        }
+
+        // The view can be pushed after the stream has already failed. Seed
+        // the lifecycle from the authoritative session status instead of
+        // showing an unavailable card with a dead Retry action while the
+        // timeout task is still waiting for its first frame.
+        if let streamFailure {
+            screenWatch.failed(streamFailure)
+        } else if current.busy == true, frame != nil {
+            if image == nil {
+                screenWatch.failed("The latest screen frame could not be decoded.")
+            } else {
+                screenWatch.receivedFrame()
+            }
+        } else if current.busy == true, screenWatch.phase == .idle {
             screenWatch.begin()
         }
     }
@@ -400,13 +413,12 @@ struct ComputerView: View {
     private func restartScreenWatch() {
         session.clearScreen(of: bot.id)
         screenWatch.retry()
-        if isWatchingScreen {
-            session.stopWatchingScreen(of: bot.id)
-            session.watchScreen(of: bot.id)
-        } else {
+        if !isWatchingScreen {
             isWatchingScreen = true
-            session.watchScreen(of: bot.id)
         }
+        // Keep the watcher count stable. Toggling stop→watch opens one
+        // screens=off stream and then another screens=on stream back-to-back.
+        session.refreshScreenWatch(of: bot.id)
     }
 
     @MainActor

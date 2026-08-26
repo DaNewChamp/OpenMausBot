@@ -61,10 +61,13 @@ public enum ComputerPresentationState: Equatable, Sendable {
     }
 
     /// Computer values are supplied by the desktop and can grow over time.
-    /// Only the three values this client can describe get a waiting state;
-    /// `nil`, `off`, and future values are honest unavailable states.
+    /// An omitted value is the server's Auto mode: the desktop chooses Box,
+    /// VPS, Local VM, or local CUA for the turn and can still stream a frame.
+    /// Explicit `off` and future values are honest unavailable states.
     public static func hasKnownComputer(_ bot: Bot) -> Bool {
-        switch bot.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        guard let raw = bot.computer else { return true }
+        let computer = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch computer {
         case "cloud", "local", "vm": return true
         default: return false
         }
@@ -72,7 +75,7 @@ public enum ComputerPresentationState: Equatable, Sendable {
 
     public static func unavailableMessage(for bot: Bot) -> String {
         guard let computer = bot.computer?.trimmingCharacters(in: .whitespacesAndNewlines), !computer.isEmpty else {
-            return "No computer is configured for this agent."
+            return "No live screen is available until this agent is working."
         }
         if computer.lowercased() == "off" {
             return "Computer access is turned off for this agent."

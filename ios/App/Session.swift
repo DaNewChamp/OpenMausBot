@@ -324,6 +324,16 @@ final class Session: ObservableObject {
         }
     }
 
+    /// Reopen the screen-enabled stream without changing the watcher count.
+    /// A retry from a computer panel must not briefly drop from one watcher to
+    /// zero: that would reconnect once with `screens=off` and immediately
+    /// again with `screens=on`, wasting the retry and flashing stale state.
+    func refreshScreenWatch(of botId: String) {
+        if screenWatchers == 0 { screenWatchers = 1 }
+        restartStream()
+        connect()
+    }
+
     /// Drop a cached frame without changing the number of open computer
     /// panels. Configuration and connection transitions use this to ensure a
     /// screen from an earlier capability is never rendered as current.
