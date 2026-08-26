@@ -901,7 +901,7 @@ public struct CompanionClient: Sendable {
     ) async throws -> ProfileUpdateResult {
         do {
             let updated = try await updateProfileThroughProfileRoute(botId: botId, patch: patch)
-            return .updated(updated)
+            return Self.profileUpdateResult(updated, for: patch)
         } catch let error as APIError {
             guard let rejected = Self.unsupportedAppearanceField(in: error) else {
                 throw error
@@ -911,7 +911,7 @@ public struct CompanionClient: Sendable {
 
             do {
                 let updated = try await updateProfileThroughLegacyRoute(botId: botId, patch: patch)
-                return .updated(updated)
+                return Self.profileUpdateResult(updated, for: patch)
             } catch let legacyError as APIError {
                 guard Self.legacyProfileRouteUnavailable(legacyError) else { throw legacyError }
 
@@ -958,6 +958,13 @@ public struct CompanionClient: Sendable {
         if patch.color != nil { fields.insert("color") }
         if patch.mascotShape != nil { fields.insert("mascotShape") }
         return fields
+    }
+
+    private static func profileUpdateResult(_ bot: Bot, for patch: BotProfilePatch) -> ProfileUpdateResult {
+        var pending = Set<String>()
+        if let color = patch.color, bot.color != color { pending.insert("color") }
+        if let shape = patch.mascotShape, bot.mascotShape != shape { pending.insert("mascotShape") }
+        return pending.isEmpty ? .updated(bot) : .updatedWithPendingAppearance(bot, fields: pending)
     }
 
     private static func legacyProfileRouteUnavailable(_ error: APIError) -> Bool {

@@ -134,7 +134,7 @@ final class ProfileClientTests: XCTestCase {
     func testProfileClientFallsBackToLegacyBotPatchForExplicitUnsupportedAppearance() async throws {
         ProfileRequestStub.responseSequence = [
             (400, Data(#"{"error":"Unsupported profile field: color"}"#.utf8)),
-            (200, Self.botResponse),
+            (200, Self.botResponseWithPurpleHexagon),
         ]
 
         let result = try await client.updateProfileWithCompatibility(
@@ -153,6 +153,25 @@ final class ProfileClientTests: XCTestCase {
         let data = try XCTUnwrap(ProfileRequestStub.capturedBodies.last ?? nil)
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(body.keys.sorted(), ["color", "mascotShape"])
+    }
+
+    func testProfileClientKeepsOnlySilentlyIgnoredLegacyAppearancePending() async throws {
+        ProfileRequestStub.responseSequence = [
+            (400, Data(#"{"error":"unsupported profile field: color"}"#.utf8)),
+            (200, Self.botResponseWithPurpleAndNoShape),
+        ]
+
+        let result = try await client.updateProfileWithCompatibility(
+            botId: "avatar-bot",
+            patch: BotProfilePatch(color: "purple", mascotShape: .hexagon)
+        )
+
+        guard case let .updatedWithPendingAppearance(updated, fields) = result else {
+            return XCTFail("a legacy route that ignores shape must keep only shape pending")
+        }
+        XCTAssertEqual(updated.color, "purple")
+        XCTAssertNil(updated.mascotShape)
+        XCTAssertEqual(fields, ["mascotShape"])
     }
 
     func testProfileClientDoesNotFallbackForAuthenticationFailure() async throws {
@@ -448,6 +467,15 @@ final class ProfileClientTests: XCTestCase {
 
     private static let botResponseString = "{\"bot\":\(botJSON)}"
     private static let botResponse = Data(botResponseString.utf8)
+    private static let botResponseWithPurpleHexagon = Data(
+        botResponseString.replacingOccurrences(of: #""color":"blue""#, with: #""color":"purple""#).utf8
+    )
+    private static let botResponseWithPurpleAndNoShape = Data(
+        botResponseString
+            .replacingOccurrences(of: #""color":"blue""#, with: #""color":"purple""#)
+            .replacingOccurrences(of: ",\"mascotShape\":\"hexagon\"", with: "")
+            .utf8
+    )
     private static let roomResponse = Data(
         #"{"group":{"id":"room-1","threadId":"room-thread","name":"Research","memberIds":["avatar-bot"],"defaultResponder":{"kind":"member","botId":"avatar-bot"},"bulletin":"","unread":false,"pinned":true,"createdAt":1786742441013}}"#.utf8
     )
