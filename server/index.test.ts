@@ -1849,6 +1849,110 @@ describe("harness HTTP API", () => {
     60_000,
   );
 
+  it(
+    "stops a room responder chain without advancing, then preserves later turns",
+    async () => {
+      const first = (await api("POST", "/api/bots")).body.bot;
+      const second = (await api("POST", "/api/bots")).body.bot;
+      let room: any;
+      const snapshot = async () => (await api("GET", "/api/bots?messages=40")).body;
+      const roomState = async () => (await snapshot()).groups.find((candidate: any) => candidate.id === room.id);
+      const waitForRoomBusy = async (botId: string | null, what: string) => {
+        await expect.poll(async () => (await roomState())?.busyBotId ?? null, {
+          timeout: 5_000,
+          message: what,
+        }).toBe(botId);
+      };
+
+      try {
+        for (const bot of [first, second]) {
+          const patched = await api("PATCH", `/api/bots/${bot.id}`, {
+            modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+          });
+          expect(patched.status).toBe(200);
+        }
+        room = (await api("POST", "/api/groups", {
+          name: "Stop chain",
+          memberIds: [first.id, second.id],
+        })).body.group;
+        expect((await api("PATCH", `/api/groups/${room.id}/setup`, { action: "skip" })).status).toBe(200);
+        expect((await api("PATCH", `/api/groups/${room.id}`, {
+          defaultResponder: { kind: "everyone" },
+        })).status).toBe(200);
+
+        const started = await api("POST", `/api/groups/${room.id}/messages`, { text: "first chain" });
+        expect(started.status).toBe(202);
+        await waitForRoomBusy(first.id, "first room responder to start");
+
+        // Stopping the active responder cancels this whole everyone-chain.
+        // If the old loop advances, the second member stays busy in the
+        // deterministic hanging fixture and this idle assertion fails.
+        expect((await api("POST", `/api/groups/${room.id}/interrupt`)).status).toBe(200);
+        await waitForRoomBusy(null, "room chain to stop without advancing");
+        const stopped = await roomState();
+        expect(stopped.messages.filter((message: any) => message.role === "user").map((message: any) => message.text)).toEqual([
+          "first chain",
+        ]);
+        expect((await snapshot()).bots.find((bot: any) => bot.id === second.id)?.busy ?? false).toBe(false);
+
+        // A new independent message gets a fresh generation and can run.
+        const future = await api("POST", `/api/groups/${room.id}/messages`, { text: "future turn" });
+        expect(future.body).toMatchObject({ ok: true, disposition: "started" });
+        await waitForRoomBusy(first.id, "future room turn to start");
+        expect((await api("POST", `/api/groups/${room.id}/interrupt`)).status).toBe(200);
+        await waitForRoomBusy(null, "future room turn to stop");
+
+        // An explicit queue is durable user input. It remains in the room
+        // transcript and starts after the active turn is stopped; stopping
+        // that newly active queued turn must not discard the line.
+        const active = await api("POST", `/api/groups/${room.id}/messages`, { text: "active before queue" });
+        expect(active.body).toMatchObject({ ok: true, disposition: "started" });
+        await waitForRoomBusy(first.id, "active room turn before queue");
+        const queued = await api("POST", `/api/groups/${room.id}/messages`, {
+          text: "keep this queued",
+          delivery: "queue",
+        });
+        expect(queued.body).toMatchObject({ ok: true, disposition: "queued", queued: true });
+        expect(typeof queued.body.queueId).toBe("string");
+        expect((await api("POST", `/api/groups/${room.id}/interrupt`)).status).toBe(200);
+        await waitForRoomBusy(first.id, "queued room turn to drain after stop");
+        const drained = await roomState();
+        expect(drained.messages.find((message: any) => message.text === "keep this queued")).toMatchObject({
+          queueId: queued.body.queueId,
+        });
+        expect((await api("POST", `/api/groups/${room.id}/interrupt`)).status).toBe(200);
+        await waitForRoomBusy(null, "queued room turn to stop");
+
+        // The ordinary bot stop endpoint remains an idempotent one-to-one
+        // boundary; room cancellation must not change that contract.
+        const botStarted = await api("POST", `/api/bots/${first.id}/messages`, { text: "bot stop" });
+        expect(botStarted.body).toMatchObject({ ok: true, disposition: "started" });
+        await expect.poll(async () => (await snapshot()).bots.find((bot: any) => bot.id === first.id)?.busy ?? false, {
+          timeout: 5_000,
+          message: "one-to-one bot turn to start",
+        }).toBe(true);
+        expect((await api("POST", `/api/bots/${first.id}/interrupt`)).status).toBe(200);
+        await expect.poll(async () => (await snapshot()).bots.find((bot: any) => bot.id === first.id)?.busy ?? false, {
+          timeout: 5_000,
+          message: "one-to-one bot turn to stop",
+        }).toBe(false);
+      } finally {
+        if (room) {
+          await api("POST", `/api/groups/${room.id}/interrupt`);
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          await api("POST", `/api/groups/${room.id}/interrupt`);
+          await expect.poll(async () => (await roomState())?.busyBotId ?? null, { timeout: 5_000 }).toBe(null);
+          await api("DELETE", `/api/groups/${room.id}`);
+        }
+        await api("POST", `/api/bots/${first.id}/interrupt`);
+        await api("POST", `/api/bots/${second.id}/interrupt`);
+        await api("DELETE", `/api/bots/${first.id}`);
+        await api("DELETE", `/api/bots/${second.id}`);
+      }
+    },
+    60_000,
+  );
+
   it("refuses to fork a message when the provider is unavailable, without mutating", async () => {
     const { body } = await api("GET", "/api/bots");
     const bot = body.bots[0];

@@ -38,6 +38,7 @@ import { parseChatPin } from "./chat-pin.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { runWhenRoomIdle } from "./room-queue.ts";
+import { RoomTurnCancellation, type RoomTurnRun } from "./room-turn-cancel.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { cloudBackendChangeError, vpsAliasChangeError } from "./cloud-backend.ts";
@@ -1890,6 +1891,7 @@ const groupQueues = new Map<string, Promise<void>>();
  * promise map is intentionally retained after a room settles, so its
  * presence alone cannot answer whether a new message is actually queued. */
 const groupQueuePending = new Map<string, number>();
+const roomTurnCancellation = new RoomTurnCancellation();
 const GROUP_CONTEXT_MESSAGES = 30;
 const MAX_GROUP_HOPS = 1;
 
@@ -1942,10 +1944,12 @@ async function runGroupMemberTurn(
   spoken: Set<string> = new Set(),
   cardContinuation?: string,
   onDispatchError?: (message: string) => void,
+  roomRun?: RoomTurnRun,
 ): Promise<boolean> {
   const group = store.group(groupId);
   const bot = store.bot(botId);
   if (!group || !bot) return false;
+  if (roomRun && roomTurnCancellation.isCancelled(groupId, roomRun)) return false;
   spoken.add(botId);
   const instance = registry.get(bot.modelSelection.instanceId);
   const userName = cfg.profile?.name?.trim() || "User";
@@ -2003,6 +2007,7 @@ async function runGroupMemberTurn(
     onDispatchError?.(message);
     return true;
   }
+  if (roomRun && roomTurnCancellation.isCancelled(groupId, roomRun)) return false;
   store.setActivity(bot.id, "working");
 
   store.patchGroup(group.id, { busyBotId: bot.id }); // the store's change stream carries the frame
@@ -2130,13 +2135,15 @@ async function runGroupMemberTurn(
   }
 
   // chained mentions: a member's reply can summon teammates — one hop only
+  if (roomRun && roomTurnCancellation.isCancelled(groupId, roomRun)) return false;
   if (hop < MAX_GROUP_HOPS && replyText.trim()) {
     const members = group.memberIds
       .map((id) => store.bot(id))
       .filter((b): b is NonNullable<typeof b> => Boolean(b) && b!.id !== bot.id);
     for (const next of roomResponders(replyText, members, { kind: "mentions" })) {
       if (spoken.has(next.id)) continue;
-      if (!(await runGroupMemberTurn(groupId, next.id, hop + 1, spoken))) return false;
+      if (roomRun && roomTurnCancellation.isCancelled(groupId, roomRun)) return false;
+      if (!(await runGroupMemberTurn(groupId, next.id, hop + 1, spoken, undefined, undefined, roomRun))) return false;
     }
   }
   return true;
@@ -2213,10 +2220,16 @@ function startGroupTurn(
   const next = prev.then(async () => {
     try {
       await runWhenRoomIdle(store, groupId, async () => {
+        const roomRun = roomTurnCancellation.begin(groupId);
         const spoken = new Set<string>();
-        for (const responder of responders) {
-          if (spoken.has(responder.id)) continue;
-          if (!(await runGroupMemberTurn(groupId, responder.id, 0, spoken))) break;
+        try {
+          for (const responder of responders) {
+            if (roomTurnCancellation.isCancelled(groupId, roomRun)) break;
+            if (spoken.has(responder.id)) continue;
+            if (!(await runGroupMemberTurn(groupId, responder.id, 0, spoken, undefined, undefined, roomRun))) break;
+          }
+        } finally {
+          roomTurnCancellation.finish(groupId, roomRun);
         }
       });
     } finally {
@@ -3930,6 +3943,7 @@ const server = createServer(async (req, res) => {
     if (m && method === "POST") {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such room" });
+      roomTurnCancellation.interrupt(group.id);
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
       const instance = busy ? registry.get(busy.modelSelection.instanceId) : undefined;
       await instance?.adapter.interruptTurn(group.threadId).catch(() => {});
