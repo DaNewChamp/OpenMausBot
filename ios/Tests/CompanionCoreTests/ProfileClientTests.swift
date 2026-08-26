@@ -181,6 +181,40 @@ final class ProfileClientTests: XCTestCase {
         XCTAssertEqual(ProfileRequestStub.capturedRequests.count, 1)
     }
 
+    func testBotPinReportsUnsupportedWhenBothPinRoutesAreMissing() async throws {
+        ProfileRequestStub.responseSequence = [
+            (404, Data(#"{"error":"no route: PATCH /api/bots/avatar-bot/pin"}"#.utf8)),
+            (404, Data(#"{"error":"no route: PATCH /api/bots/avatar-bot"}"#.utf8)),
+        ]
+
+        let result = try await client.setPinnedResult(true, botId: "avatar-bot")
+        guard case .unsupported = result else {
+            return XCTFail("both exact missing routes should enable the local fallback")
+        }
+        XCTAssertEqual(
+            ProfileRequestStub.capturedRequests.compactMap { $0.url?.path },
+            ["/api/bots/avatar-bot/pin", "/api/bots/avatar-bot"]
+        )
+    }
+
+    func testBotPinPreservesLegacyNotFoundInsteadOfUsingLocalFallback() async throws {
+        ProfileRequestStub.responseSequence = [
+            (404, Data(#"{"error":"no route: PATCH /api/bots/avatar-bot/pin"}"#.utf8)),
+            (404, Data(#"{"error":"no such bot"}"#.utf8)),
+        ]
+
+        do {
+            _ = try await client.setPinnedResult(true, botId: "avatar-bot")
+            XCTFail("a real legacy 404 must remain an error")
+        } catch let error as APIError {
+            guard case let .status(code, message) = error else {
+                return XCTFail("unexpected API error: \(error)")
+            }
+            XCTAssertEqual(code, 404)
+            XCTAssertEqual(message, "no such bot")
+        }
+    }
+
     func testRoomPinClientDecodesTheAuthoritativeRoom() async throws {
         ProfileRequestStub.responseBody = Self.roomResponse
 

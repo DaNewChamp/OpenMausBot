@@ -332,6 +332,21 @@ public enum APIError: Error, LocalizedError, Sendable {
     }
 }
 
+/// Result of a pin request after trying the current and legacy safe routes.
+/// Older paired sidecars may expose neither route; callers can then retain a
+/// device-local override without turning a compatibility gap into an error.
+public enum ConversationPinResult<Value: Sendable>: Sendable {
+    case updated(Value)
+    case unsupported
+
+    public func map<Mapped: Sendable>(_ transform: (Value) -> Mapped) -> ConversationPinResult<Mapped> {
+        switch self {
+        case let .updated(value): return .updated(transform(value))
+        case .unsupported: return .unsupported
+        }
+    }
+}
+
 public struct CompanionClient: Sendable {
     public let connection: Connection
     private let token: String?
@@ -728,12 +743,20 @@ public struct CompanionClient: Sendable {
     /// field. A 404 for a missing bot, or any other failure, must not be
     /// retried as it could hide a real server error.
     public func setPinned(_ pinned: Bool, botId: String) async throws -> Bot {
+        switch try await setPinnedResult(pinned, botId: botId) {
+        case let .updated(bot): return bot
+        case .unsupported:
+            throw APIError.status(code: 404, message: "no route: PATCH /api/bots/\(botId)/pin")
+        }
+    }
+
+    public func setPinnedResult(_ pinned: Bool, botId: String) async throws -> ConversationPinResult<Bot> {
         try await setPinned(
             pinned,
             narrowPath: "/api/bots/\(botId)/pin",
             legacyPath: "/api/bots/\(botId)",
             as: BotResponse.self
-        ).bot
+        ).map { $0.bot }
     }
 
     public func uploadAvatar(data: Data, mime: String) async throws -> String {
@@ -834,31 +857,43 @@ public struct CompanionClient: Sendable {
     /// Paired-safe conversation pinning for a room. The state is applied by
     /// the app only after this server acknowledgement is decoded.
     public func setPinned(_ pinned: Bool, roomId: String) async throws -> Room {
+        switch try await setPinnedResult(pinned, roomId: roomId) {
+        case let .updated(room): return room
+        case .unsupported:
+            throw APIError.status(code: 404, message: "no route: PATCH /api/groups/\(roomId)/pin")
+        }
+    }
+
+    public func setPinnedResult(_ pinned: Bool, roomId: String) async throws -> ConversationPinResult<Room> {
         try await setPinned(
             pinned,
             narrowPath: "/api/groups/\(roomId)/pin",
             legacyPath: "/api/groups/\(roomId)",
             as: RoomResponse.self
-        ).group
+        ).map { $0.group }
     }
 
-    private func setPinned<Response: Decodable>(
+    private func setPinned<Response: Decodable & Sendable>(
         _ pinned: Bool,
         narrowPath: String,
         legacyPath: String,
         as type: Response.Type
-    ) async throws -> Response {
+    ) async throws -> ConversationPinResult<Response> {
         let patch = ChatPinPatch(pinned: pinned)
         do {
-            return try await send(
+            return .updated(try await send(
                 try makeRequest("PATCH", narrowPath, encodedBody: patch),
                 as: type
-            )
+            ))
         } catch let error as APIError where Self.isMissingRoute(error, path: narrowPath) {
-            return try await send(
-                try makeRequest("PATCH", legacyPath, encodedBody: patch),
-                as: type
-            )
+            do {
+                return .updated(try await send(
+                    try makeRequest("PATCH", legacyPath, encodedBody: patch),
+                    as: type
+                ))
+            } catch let error as APIError where Self.isMissingRoute(error, path: legacyPath) {
+                return .unsupported
+            }
         }
     }
 

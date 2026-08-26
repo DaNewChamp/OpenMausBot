@@ -252,6 +252,71 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(summaries.map(\.id), ["bot:a", "room:z"])
     }
 
+    func testLocalPinAndUnpinAffectBotAndRoomOrdering() throws {
+        var source = try hydrated()
+        var bot = try XCTUnwrap(source.bots.first)
+        var room = try XCTUnwrap(source.rooms.first)
+        bot.pinned = nil
+        room.pinned = nil
+        source.bots = [bot]
+        source.rooms = [room]
+
+        source.setLocalPinned(true, for: "bot:\(bot.id)")
+        source.setLocalPinned(true, for: "room:\(room.id)")
+        XCTAssertEqual(source.conversationSummaries.filter(\.pinned).count, 2)
+
+        source.setLocalPinned(false, for: "bot:\(bot.id)")
+        XCTAssertFalse(source.conversationSummaries.first { $0.id == "bot:\(bot.id)" }?.pinned ?? true)
+        XCTAssertTrue(source.conversationSummaries.first { $0.id == "room:\(room.id)" }?.pinned ?? false)
+    }
+
+    func testLocalPinOverridesSurviveEncodingAndHydrationWhenServerOmitsPin() throws {
+        let source = try hydrated()
+        var bot = try XCTUnwrap(source.bots.first)
+        var room = try XCTUnwrap(source.rooms.first)
+        bot.pinned = nil
+        room.pinned = nil
+
+        var overrides = ConversationPinOverrides()
+        overrides.set(true, for: "bot:\(bot.id)")
+        overrides.set(true, for: "room:\(room.id)")
+        let reloaded = try JSONDecoder().decode(
+            ConversationPinOverrides.self,
+            from: JSONEncoder().encode(overrides)
+        )
+
+        var state = CompanionState()
+        state.pinnedOverrides = reloaded
+        state.hydrate(Fleet(bots: [bot], groups: [room]))
+        XCTAssertEqual(state.bot(bot.id)?.pinned, true)
+        XCTAssertEqual(state.rooms.first?.pinned, true)
+        XCTAssertEqual(state.pinnedOverrides.count, 2)
+    }
+
+    func testAuthoritativeServerPinReconcilesAndClearsTheLocalOverride() throws {
+        let source = try hydrated()
+        var bot = try XCTUnwrap(source.bots.first)
+        bot.pinned = nil
+
+        var state = CompanionState()
+        state.bots = [bot]
+        state.setLocalPinned(true, for: "bot:\(bot.id)")
+
+        bot.pinned = false
+        state.apply(.bot(bot))
+        XCTAssertNil(state.pinnedOverrides.value(for: "bot:\(bot.id)"))
+        XCTAssertEqual(state.bot(bot.id)?.pinned, false)
+        XCTAssertFalse(state.conversationSummaries.first?.pinned ?? true)
+    }
+
+    func testLocalPinOverridesStayBounded() {
+        var overrides = ConversationPinOverrides()
+        for index in 0...ConversationPinOverrides.maxEntries {
+            overrides.set(true, for: "bot:\(index)")
+        }
+        XCTAssertLessThanOrEqual(overrides.count, ConversationPinOverrides.maxEntries)
+    }
+
     // MARK: - Approvals
 
     func testPendingApprovalsAreTheUnansweredOnesNewestFirst() throws {

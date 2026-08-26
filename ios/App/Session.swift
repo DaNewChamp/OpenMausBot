@@ -98,10 +98,26 @@ final class Session: ObservableObject {
     private var pendingNotification: NotificationTarget?
 
     private static let connectionKey = "companion.connection"
+    private static let pinnedOverridesKey = "companion.pinned-overrides"
+
+    private static func loadPinnedOverrides() -> ConversationPinOverrides {
+        guard let data = UserDefaults.standard.data(forKey: pinnedOverridesKey),
+              let overrides = try? JSONDecoder().decode(ConversationPinOverrides.self, from: data)
+        else { return ConversationPinOverrides() }
+        return overrides
+    }
+
+    private func persistPinnedOverrides() {
+        UserDefaults.standard.set(
+            try? JSONEncoder().encode(state.pinnedOverrides),
+            forKey: Self.pinnedOverridesKey
+        )
+    }
 
     // MARK: - Pairing
 
     init() {
+        state.pinnedOverrides = Self.loadPinnedOverrides()
         _ = NotificationCoordinator.shared
         NotificationCoordinator.shared.responseHandler = { [weak self] target in
             Task { @MainActor in await self?.openNotification(target) }
@@ -219,6 +235,7 @@ final class Session: ObservableObject {
             token: paired.token
         )
         self.state = CompanionState()
+        UserDefaults.standard.removeObject(forKey: Self.pinnedOverridesKey)
         // A fresh pairing settles any restore that was still waiting on the
         // keychain — the token is in hand, so there is nothing left to retry.
         restorePending = false
@@ -250,6 +267,7 @@ final class Session: ObservableObject {
         pendingNotification = nil
         if let id = connection?.id { Keychain.remove(id) }
         UserDefaults.standard.removeObject(forKey: Self.connectionKey)
+        UserDefaults.standard.removeObject(forKey: Self.pinnedOverridesKey)
         connection = nil
         client = nil
         token = nil
@@ -427,7 +445,9 @@ final class Session: ObservableObject {
                         refreshConnectionMetadata(using: client)
                         continue
                     }
+                    let previousOverrides = state.pinnedOverrides
                     state.apply(frame)
+                    if state.pinnedOverrides != previousOverrides { persistPinnedOverrides() }
                     if case let .notify(notification) = frame.frame {
                         NotificationCoordinator.shared.deliver(notification, sequence: frame.seq)
                     }
@@ -465,6 +485,7 @@ final class Session: ObservableObject {
         let fleet = try await client.fleet(messages: 50)
         log.info("hydrated \(fleet.bots.count, privacy: .public) bots, \(fleet.groups.count, privacy: .public) rooms")
         state.hydrate(fleet)
+        persistPinnedOverrides()
         NotificationCoordinator.shared.setBadge(state.unreadCount)
     }
 
@@ -705,15 +726,31 @@ final class Session: ObservableObject {
         do {
             switch chat {
             case let .bot(bot):
-                let updated = try await client.setPinned(pinned, botId: bot.id)
+                let result = try await client.setPinnedResult(pinned, botId: bot.id)
                 guard !Task.isCancelled else { return nil }
-                state.apply(.bot(updated))
-                return .bot(updated)
+                switch result {
+                case let .updated(updated):
+                    state.apply(.bot(updated))
+                    persistPinnedOverrides()
+                    return .bot(updated)
+                case .unsupported:
+                    state.setLocalPinned(pinned, for: chat.stableID)
+                    persistPinnedOverrides()
+                    return state.bot(bot.id).map(Chat.bot) ?? .bot(bot)
+                }
             case let .room(room):
-                let updated = try await client.setPinned(pinned, roomId: room.id)
+                let result = try await client.setPinnedResult(pinned, roomId: room.id)
                 guard !Task.isCancelled else { return nil }
-                state.apply(.room(updated))
-                return .room(updated)
+                switch result {
+                case let .updated(updated):
+                    state.apply(.room(updated))
+                    persistPinnedOverrides()
+                    return .room(updated)
+                case .unsupported:
+                    state.setLocalPinned(pinned, for: chat.stableID)
+                    persistPinnedOverrides()
+                    return state.rooms.first(where: { $0.id == room.id }).map(Chat.room) ?? .room(room)
+                }
             }
         } catch {
             if !Task.isCancelled { actionError = error.localizedDescription }

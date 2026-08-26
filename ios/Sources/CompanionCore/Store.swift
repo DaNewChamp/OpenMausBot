@@ -36,6 +36,9 @@ public struct CompanionState: Sendable {
     /// `screens=on`, and only the newest frame is kept — these are hundreds
     /// of kilobytes each and a history of them is worth nothing.
     public var screens: [String: ScreenFrame] = [:]
+    /// Pin choices retained on the phone when an older paired server exposes
+    /// neither the narrow pin route nor the legacy general PATCH route.
+    public var pinnedOverrides = ConversationPinOverrides()
 
     public init() {}
 
@@ -100,6 +103,22 @@ public struct CompanionState: Sendable {
     public mutating func hydrate(_ fleet: Fleet) {
         bots = fleet.bots
         rooms = fleet.groups
+        for index in bots.indices {
+            let stableID = "bot:\(bots[index].id)"
+            if bots[index].pinned != nil {
+                pinnedOverrides.reconcile(serverPinned: bots[index].pinned, for: stableID)
+            } else if let local = pinnedOverrides.value(for: stableID) {
+                bots[index].pinned = local
+            }
+        }
+        for index in rooms.indices {
+            let stableID = "room:\(rooms[index].id)"
+            if rooms[index].pinned != nil {
+                pinnedOverrides.reconcile(serverPinned: rooms[index].pinned, for: stableID)
+            } else if let local = pinnedOverrides.value(for: stableID) {
+                rooms[index].pinned = local
+            }
+        }
         messages.removeAll()
         hasMore.removeAll()
         for bot in fleet.bots {
@@ -190,6 +209,8 @@ public struct CompanionState: Sendable {
             clearStream(threadId)
 
         case let .bot(bot):
+            let stableID = "bot:\(bot.id)"
+            pinnedOverrides.reconcile(serverPinned: bot.pinned, for: stableID)
             // Ordinary frames omit messages and must preserve the transcript.
             // Task switches deliberately include the new task's transcript;
             // that is authoritative and must replace the previous context.
@@ -206,11 +227,14 @@ public struct CompanionState: Sendable {
                     merged.messages = previous.messages
                     merged.activeLeafId = bot.activeLeafId ?? previous.activeLeafId
                 }
+                if merged.pinned == nil { merged.pinned = pinnedOverrides.value(for: stableID) }
                 bots[index] = merged
             } else {
-                bots.append(bot)
-                if messages[bot.threadId] == nil {
-                    messages[bot.threadId] = bot.messages ?? []
+                var merged = bot
+                if merged.pinned == nil { merged.pinned = pinnedOverrides.value(for: stableID) }
+                bots.append(merged)
+                if messages[merged.threadId] == nil {
+                    messages[merged.threadId] = merged.messages ?? []
                 }
             }
 
@@ -227,18 +251,24 @@ public struct CompanionState: Sendable {
                 // was the last event that could ever mention this id.
                 clearStream(threadId)
                 clearScreen(botId)
+                pinnedOverrides.remove(for: "bot:\(botId)")
                 bots.remove(at: index)
             }
 
         case let .room(room):
+            let stableID = "room:\(room.id)"
+            pinnedOverrides.reconcile(serverPinned: room.pinned, for: stableID)
             if let index = rooms.firstIndex(where: { $0.id == room.id }) {
                 var merged = room
                 merged.messages = rooms[index].messages
+                if merged.pinned == nil { merged.pinned = pinnedOverrides.value(for: stableID) }
                 rooms[index] = merged
             } else {
-                rooms.append(room)
-                if messages[room.threadId] == nil {
-                    messages[room.threadId] = room.messages ?? []
+                var merged = room
+                if merged.pinned == nil { merged.pinned = pinnedOverrides.value(for: stableID) }
+                rooms.append(merged)
+                if messages[merged.threadId] == nil {
+                    messages[merged.threadId] = merged.messages ?? []
                 }
             }
 
@@ -250,6 +280,7 @@ public struct CompanionState: Sendable {
                 // Same reasoning as a deleted bot: the thread is gone, so the
                 // half-written reply streaming into it has nowhere to land.
                 clearStream(threadId)
+                pinnedOverrides.remove(for: "room:\(groupId)")
                 rooms.remove(at: index)
             }
 
@@ -312,6 +343,22 @@ public struct CompanionState: Sendable {
     public mutating func clearStream(_ threadId: String) {
         streaming.removeValue(forKey: threadId)
         reasoning.removeValue(forKey: threadId)
+    }
+
+    /// Apply a pin immediately after an old server rejected both supported
+    /// routes. The record mirrors the override so legacy views that inspect
+    /// `bot.pinned` or `room.pinned` still move the conversation to the shelf.
+    public mutating func setLocalPinned(_ pinned: Bool, for stableID: String) {
+        pinnedOverrides.set(pinned, for: stableID)
+        if stableID.hasPrefix("bot:"),
+           let botID = stableID.split(separator: ":", maxSplits: 1).last,
+           let index = bots.firstIndex(where: { $0.id == botID }) {
+            bots[index].pinned = pinned
+        } else if stableID.hasPrefix("room:"),
+                  let roomID = stableID.split(separator: ":", maxSplits: 1).last,
+                  let index = rooms.firstIndex(where: { $0.id == roomID }) {
+            rooms[index].pinned = pinned
+        }
     }
 
     /// Append, unless we already hold it. Replaying a resumed stream can

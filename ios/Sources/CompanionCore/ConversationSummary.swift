@@ -1,5 +1,48 @@
 import Foundation
 
+/// Device-local pin choices used when a paired server predates the pin route.
+/// The map is intentionally small and deterministic: it is a UI fallback,
+/// not a second server-side conversation database.
+public struct ConversationPinOverrides: Codable, Equatable, Sendable {
+    public static let maxEntries = 128
+
+    private var values: [String: Bool]
+
+    public init(values: [String: Bool] = [:]) {
+        self.values = values
+        trim()
+    }
+
+    public var count: Int { values.count }
+
+    public func value(for stableID: String) -> Bool? {
+        values[stableID]
+    }
+
+    public mutating func set(_ pinned: Bool, for stableID: String) {
+        values[stableID] = pinned
+        trim(preserving: stableID)
+    }
+
+    public mutating func remove(for stableID: String) {
+        values.removeValue(forKey: stableID)
+    }
+
+    /// A server response containing a pin field is authoritative. An omitted
+    /// field means this is an older server and the local choice remains.
+    public mutating func reconcile(serverPinned: Bool?, for stableID: String) {
+        guard serverPinned != nil else { return }
+        remove(for: stableID)
+    }
+
+    private mutating func trim(preserving stableID: String? = nil) {
+        guard values.count > Self.maxEntries else { return }
+        for candidate in values.keys.sorted() where values.count > Self.maxEntries {
+            if candidate != stableID { values.removeValue(forKey: candidate) }
+        }
+    }
+}
+
 /// The app-independent projection used to populate a conversation roster.
 /// Keeping this beside the state fold makes ordering identical on every view
 /// and gives the package tests the same policy the app renders.
@@ -65,7 +108,7 @@ public extension CompanionState {
                     name: bot.name,
                     preview: Self.preview(of: last),
                     lastActivity: last?.at ?? 0,
-                    pinned: bot.pinned ?? false,
+                    pinned: bot.pinned ?? pinnedOverrides.value(for: "bot:\(bot.id)") ?? false,
                     unread: bot.unread
                 )
             }
@@ -78,7 +121,7 @@ public extension CompanionState {
                 name: room.name,
                 preview: Self.preview(of: last),
                 lastActivity: last?.at ?? 0,
-                pinned: room.pinned ?? false,
+                pinned: room.pinned ?? pinnedOverrides.value(for: "room:\(room.id)") ?? false,
                 unread: room.unread
             )
         }
