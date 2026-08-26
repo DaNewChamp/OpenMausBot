@@ -95,9 +95,6 @@ struct ChatView: View {
                     // A thread holds 50 messages until you ask for more, so
                     // there is nothing here worth being lazy about.
                     VStack(alignment: .leading, spacing: 6) {
-                        // room for the floating face when scrolled to the top
-                        Color.clear.frame(height: 72)
-
                         if session.state.hasMore[threadId] == true {
                             Button("Load earlier messages") {
                                 // keep the reader where they were: after older
@@ -203,16 +200,11 @@ struct ChatView: View {
                     .padding(.vertical, 12)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                // The header lives in the scroll view's top safe area: the
-                // transcript starts below it and scrolls under it — that is
-                // what the glass is for. An inset rather than a content
-                // margin, because `.defaultScrollAnchor(.bottom)` anchored
-                // unreliably against a margin and opened chats mid-way.
-                // The blur is only the top strip — back, computer — the way
-                // a system bar is; the transcript starts on that line and
-                // scrolls under the face and name, which float over it.
+                // A real safe-area inset keeps the transcript below the
+                // compact bar. Nothing is overlaid on the first bubble, so
+                // navigation transitions cannot leave a floating avatar
+                // behind.
                 .safeAreaInset(edge: .top, spacing: 0) { headerBar }
-                .overlay(alignment: .top) { headerFace }
                 // A conversation grows from the bottom: a transcript shorter
                 // than the screen rests at the bottom, and opening a chat
                 // starts on the newest message rather than the oldest.
@@ -357,112 +349,110 @@ struct ChatView: View {
 
     // MARK: - Header
 
-    /// Back on the left with the rest-of-app unread count, the bot's
-    /// computer on the right — a blurred strip to the top edge.
+    /// A compact, native conversation bar. The old design put a large face in
+    /// an overlay above this row; it looked good in a still image but raced
+    /// navigation and covered the first transcript bubble. Keeping every
+    /// control inside the safe-area inset makes the bar deterministic.
     private var headerBar: some View {
-        HStack(alignment: .top) {
+        HStack(spacing: 10) {
             Button { dismiss() } label: {
-                HStack(spacing: 4) {
+                ZStack(alignment: .topTrailing) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 40, height: 40)
+
                     if unreadElsewhere > 0 {
-                        Text("\(unreadElsewhere)")
-                            .font(.system(size: 13, weight: .semibold))
-                            .padding(.horizontal, 7)
-                            .frame(minWidth: 22, minHeight: 22)
-                            .background(Capsule().fill(Color.secondary.opacity(0.22)))
+                        Text(unreadElsewhere > 99 ? "99+" : "\(unreadElsewhere)")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Color(uiColor: .systemBackground))
+                            .padding(.horizontal, 4)
+                            .frame(minWidth: 17, minHeight: 17)
+                            .background(Capsule().fill(Color.primary))
+                            .offset(x: 3, y: -3)
                     }
                 }
                 .foregroundStyle(Color.primary)
-                .padding(.leading, 12)
-                .padding(.trailing, unreadElsewhere > 0 ? 8 : 12)
-                .frame(height: 44)
-                .contentShape(Capsule())
+                .background(Circle().fill(Color.primary.opacity(0.10)))
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .glassCapsule()
             .accessibilityLabel("Back")
+            .accessibilityValue(unreadElsewhere > 0 ? "\(unreadElsewhere) unread elsewhere" : "")
 
-            Spacer(minLength: 4)
+            Spacer(minLength: 2)
 
-            if case .bot = current {
-                GlassButton(systemImage: "display", size: 44, weight: .medium) {
-                    showingComputer = true
-                }
-                .accessibilityLabel("Watch \(current.name)'s computer")
-            } else {
-                Color.clear.frame(width: 44, height: 44)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 4)
-        .padding(.bottom, 8)
-        .background(
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .mask(
-                    VStack(spacing: 0) {
-                        Color.black
-                        LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                            .frame(height: 20)
-                    }
-                )
-                .padding(.bottom, -20)
-                .ignoresSafeArea(edges: .top)
-                .allowsHitTesting(false)
-        )
-    }
-
-    /// The bot's face over its name pill, floating over the transcript
-    /// between the two buttons.
-    private var headerFace: some View {
-        VStack(spacing: 6) {
-            if case .bot = current {
-                Button { showingProfile = true } label: {
+            Button {
+                if current.isBot { showingProfile = true }
+                else { showingPlus = true }
+            } label: {
+                HStack(spacing: 8) {
                     ChatAvatarView(
                         chat: current,
-                        size: 60,
+                        size: 28,
                         state: MausState.forChat(current, in: session.state),
                         animated: !reduceMotion && MausState.forChat(current, in: session.state).showsActivity
                     )
-                        .frame(width: 60, height: 60)
+                    Text(current.name)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(current.isBot ? "Open \(current.name) profile" : "Open \(current.name) chat options")
+            .accessibilityHint(current.isBot ? "Edits this agent's identity, avatar, notifications, and voice" : "Opens conversation options")
+
+            Spacer(minLength: 2)
+
+            if case .bot = current {
+                Button { showingComputer = true } label: {
+                    Image(systemName: "display")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(Color.primary)
+                        .frame(width: 40, height: 40)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Open \(current.name) profile")
-                .accessibilityHint("Edits this agent's identity, avatar, notifications, and voice")
+                .background(Circle().fill(Color.primary.opacity(0.10)))
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                .accessibilityLabel("Watch \(current.name)'s computer")
             } else {
-                Color.clear.frame(width: 60, height: 60)
-            }
-            Button {
-                if case .bot = current { showingProfile = true }
-                else { showingPlus = true }
-            } label: {
-                HStack(spacing: 6) {
-                    Text(current.name)
-                        .font(.system(size: 15, weight: .semibold))
+                Button { showingPlus = true } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Color.primary)
-                        .lineLimit(1)
-                    if !current.subtitle.isEmpty {
-                        Text(current.subtitle)
-                            .font(.system(size: 13))
-                            .foregroundStyle(Color.secondary)
-                            .lineLimit(1)
-                    }
-                    Image(systemName: current.isBot ? "person.crop.circle" : "ellipsis")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Color.secondary)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Circle())
                 }
-                .padding(.leading, 12)
-                .padding(.trailing, 10)
-                .frame(height: 32)
-                .contentShape(Capsule())
+                .buttonStyle(.plain)
+                .background(Circle().fill(Color.primary.opacity(0.10)))
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                .accessibilityLabel("Open \(current.name) chat options")
             }
-            .buttonStyle(.plain)
-            .glassCapsule()
-            .accessibilityLabel(current.isBot ? "Open \(current.name) profile" : "Open \(current.name) chat options")
         }
-        .padding(.top, max(0, IslandGeometry.topInset - 4))
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+        .background {
+            ZStack(alignment: .bottom) {
+                Rectangle()
+                    .fill(Color(uiColor: .systemBackground).opacity(0.94))
+                LinearGradient(
+                    colors: [Color(uiColor: .systemBackground).opacity(0.28), .clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 14)
+                .offset(y: 14)
+                Divider().opacity(0.22)
+            }
+            .ignoresSafeArea(edges: .top)
+            .allowsHitTesting(false)
+        }
     }
 
     // MARK: - The + sheet

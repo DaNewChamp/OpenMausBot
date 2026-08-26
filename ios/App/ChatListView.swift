@@ -1,11 +1,9 @@
 // The roster.
 //
-// Messages-shaped: a glass header, your groups across the top, every bot
-// below with the unread dot in the bot's own colour at the left edge, and a
-// glass bar floating at the bottom. The bar's pill is Updates — only the
-// bots that need you, are working, or have something you have not read —
-// beside round search and new-bot buttons. Everything scrolls under the
-// glass, which is the whole point of the glass.
+// Messages-shaped: a quiet native header, your groups across the top, every
+// bot below with the unread dot in the bot's own colour at the left edge, and
+// a single low-contrast Updates bar floating at the bottom. The transcript
+// and roster remain the visual focus; chrome should not compete with them.
 import SwiftUI
 import CompanionCore
 
@@ -174,16 +172,19 @@ struct ChatListView: View {
 
     // MARK: - Header
 
-    /// You (the computer you are paired with) on the left, settings on the
-    /// right, and where you are in between. Glass tiles, like the system's.
+    /// The roster chrome follows the mobile reference: your profile on the
+    /// left, a quiet Chats title, and search/new-chat actions on the right.
+    /// These are deliberately simple controls instead of three competing
+    /// glass pills; the list itself should stay visually calm.
     private var header: some View {
-        HStack(alignment: .center) {
+        HStack(alignment: .center, spacing: 10) {
             NavigationLink { SettingsView() } label: {
-                ProfileAvatar(name: session.connection?.name ?? "You", size: 30)
-                    .frame(width: 44, height: 44)
+                ProfileAvatar(name: session.connection?.name ?? "You", size: 28)
+                    .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
-            .glassCapsule()
+            .background(Circle().fill(Color.primary.opacity(0.10)))
+            .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
             .accessibilityLabel("Settings")
 
             Spacer(minLength: 8)
@@ -200,19 +201,20 @@ struct ChatListView: View {
 
             Spacer(minLength: 8)
 
-            NavigationLink { SettingsView() } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(Color.primary)
-                    .frame(width: 44, height: 44)
+            RosterHeaderButton(systemImage: "magnifyingglass", accessibilityLabel: "Search") {
+                searchOpen = true
+                searchFocused = true
             }
-            .buttonStyle(.plain)
-            .glassCapsule()
-            .accessibilityLabel("Settings")
+
+            RosterHeaderButton(systemImage: "plus", accessibilityLabel: "New bot") {
+                Task {
+                    if let bot = await session.createBot() { path.append(Chat.bot(bot)) }
+                }
+            }
         }
         .padding(.horizontal, 16)
-        .padding(.top, 4)
-        .padding(.bottom, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
     }
 
     private var headerSubtitle: String {
@@ -281,7 +283,7 @@ struct ChatListView: View {
                     }
                     .padding(.horizontal, 16)
                     .frame(height: 52)
-                    .glassCapsule()
+                    .rosterCapsule()
 
                     Button("Cancel") {
                         query = ""
@@ -292,7 +294,7 @@ struct ChatListView: View {
                     .foregroundStyle(Color.primary)
                     .padding(.horizontal, 16)
                     .frame(height: 52)
-                    .glassCapsule()
+                    .rosterCapsule()
                 } else {
                     UpdatesPill(updates: session.state.updates) { showingUpdates = true }
                         .frame(height: 52)
@@ -351,6 +353,38 @@ struct ChatListView: View {
             .tracking(0.4)
             .foregroundStyle(Color.secondary)
             .padding(.horizontal, 20)
+    }
+}
+
+/// A quiet circular action for the roster header. Keeping the fill opaque-ish
+/// avoids the layered blur that made the previous header feel like a stack of
+/// unrelated floating controls.
+private struct RosterHeaderButton: View {
+    let systemImage: String
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(Color.primary)
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .background(Circle().fill(Color.primary.opacity(0.10)))
+        .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+        .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+private extension View {
+    /// A low-contrast surface for the roster's one persistent bottom control.
+    /// It keeps the hierarchy from turning into a wall of refractive glass.
+    func rosterCapsule() -> some View {
+        background(Color.primary.opacity(0.09), in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.11), lineWidth: 0.5))
     }
 }
 
@@ -491,12 +525,12 @@ struct ChatRow: View {
             .frame(width: 22)
             .frame(maxHeight: .infinity)
 
-            HStack(alignment: .top, spacing: 14) {
-                ChatAvatarView(chat: chat, size: 52, state: state, animated: !reduceMotion && state.showsActivity)
-                    .padding(.top, 12)
+            HStack(alignment: .top, spacing: 12) {
+                ChatAvatarView(chat: chat, size: 46, state: state, animated: !reduceMotion && state.showsActivity)
+                    .padding(.top, 10)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 7) {
                         Text(chat.name)
                             .font(.system(size: 17, weight: .semibold))
                             .foregroundStyle(Color.primary)
@@ -510,14 +544,14 @@ struct ChatRow: View {
                                 .foregroundStyle(Color.secondary)
                                 .lineLimit(1)
                                 .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Color.primary.opacity(0.08)))
                         }
 
                         Spacer(minLength: 4)
 
                         Text(RelativeStamp.list(at))
-                            .font(.system(size: 15))
+                            .font(.system(size: 14))
                             .foregroundStyle(Color.secondary)
                             .fixedSize()
                         Image(systemName: "chevron.right")
@@ -549,7 +583,7 @@ struct ChatRow: View {
                             .padding(.top, 4)
                     }
                 }
-                .padding(.vertical, 12)
+                .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .overlay(alignment: .bottom) {
                     if !last { Divider() }
@@ -611,7 +645,7 @@ struct UpdatesPill: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .glassCapsule()
+        .rosterCapsule()
         .accessibilityLabel("Updates")
     }
 
