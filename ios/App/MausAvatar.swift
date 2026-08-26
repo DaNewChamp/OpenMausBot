@@ -42,13 +42,11 @@ enum MausPalette {
         return Color(hex: hex[key] ?? "#8E8E93")
     }
 
-    /// The eyes and mouth need a dark ink when a light Grok swatch is chosen;
-    /// white ink on white/gray bodies disappears against the dark canvas.
+    /// Grok's marks use the same quiet ink on every body colour. Keeping the
+    /// eyes dark is what makes the resting face read as a silhouette instead
+    /// of a glossy emoji.
     static func faceInk(_ name: String) -> Color {
-        switch name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "white", "gray": return Color.black.opacity(0.82)
-        default: return .white
-        }
+        Color.black.opacity(0.82)
     }
 
 }
@@ -268,7 +266,7 @@ struct MausAvatar: View {
     }
 }
 
-private struct MascotMarkClip: Shape {
+struct MascotMarkClip: Shape {
     let kind: String
 
     func path(in rect: CGRect) -> Path {
@@ -343,6 +341,27 @@ private struct MascotMarkClip: Shape {
         default:
             return Path(rect)
         }
+    }
+}
+
+/// A flat picker mark. SF Symbols are close at a glance but vary by OS
+/// release (notably the rounded square and cloud), so the profile uses the
+/// same geometry as the avatar renderer for every swatch.
+struct MascotMarkIcon: View {
+    let kind: String
+    let color: Color
+    var size: CGFloat = 28
+
+    var body: some View {
+        Canvas { context, canvasSize in
+            let rect = CGRect(origin: .zero, size: canvasSize).insetBy(dx: 1, dy: 1)
+            let path = kind == "droplet"
+                ? MausSilhouette.path(in: rect)
+                : MascotMarkClip.path(kind: kind, in: rect)
+            context.fill(path, with: .color(color))
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }
 
@@ -652,12 +671,7 @@ final class MausFaceEngine {
                 in: CGRect(origin: .zero, size: CGSize(width: MausFaceData.faceBox, height: MausFaceData.faceBox))
             )
         }
-        let bounds = body.boundingRect
-        context.fill(body, with: .linearGradient(
-            Gradient(stops: MausPalette.gradientStops(color)),
-            startPoint: CGPoint(x: bounds.maxX, y: bounds.minY),
-            endPoint: CGPoint(x: bounds.minX, y: bounds.maxY)
-        ))
+        context.fill(body, with: .color(MausPalette.color(color)))
 
         // The face is painted on the body: clipped to it, anchored in it.
         context.clip(to: body)
@@ -666,30 +680,19 @@ final class MausFaceEngine {
         context.scaleBy(x: a.scale, y: a.scale)
         context.translateBy(x: -MausFaceData.faceCentre.x, y: -MausFaceData.faceCentre.y)
 
-        let gaze = displayedGaze()
-        let ox = gaze.x * lookAround, oy = gaze.y * lookAround
-        let rings = displayedRings().map { $0.map { CGPoint(x: $0.x + ox, y: $0.y + oy) } }
-        let blink = blinkScale(now: now)
+        // A resting Grok mark is deliberately quiet: two fixed dark ovals,
+        // no smile, gaze, or expression morph. Working states may still move
+        // the body and orbit comets, but the identity remains recognisable.
+        let rings = [MausFaceData.ring(0, eye: 0), MausFaceData.ring(0, eye: 1)]
 
         for ring in rings {
-            let c = Self.centre(ring)
             var path = Path()
             for (i, p) in ring.enumerated() {
-                // blink squashes the eye towards its own centre line
-                let q = CGPoint(x: p.x, y: c.y + (p.y - c.y) * blink)
-                if i == 0 { path.move(to: q) } else { path.addLine(to: q) }
+                if i == 0 { path.move(to: p) } else { path.addLine(to: p) }
             }
             path.closeSubpath()
             context.fill(path, with: .color(MausPalette.faceInk(color)))
         }
-
-        let spec = displayedMouth()
-        let frame = Self.mouthFrame(rings, spec)
-        context.stroke(
-            Self.mouthPath(frame, spec),
-            with: .color(MausPalette.faceInk(color)),
-            style: StrokeStyle(lineWidth: MausFaceData.mouthStroke, lineCap: .round)
-        )
     }
 
     /// The desktop's `bodyTransform`, in face-box units, elapsed in ms.

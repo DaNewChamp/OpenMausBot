@@ -12,7 +12,6 @@ struct AgentProfileView: View {
 
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var name: String
     @State private var title: String
     @State private var description: String
@@ -220,23 +219,15 @@ struct AgentProfileView: View {
     }
 
     private var profileHero: some View {
-        ZStack {
-            Circle()
-                .fill(MausPalette.color(selectedColor).opacity(0.16))
-                .frame(width: 158, height: 158)
-                .blur(radius: 22)
-                .accessibilityHidden(true)
-
-            BotAvatarView(
-                bot: heroBot,
-                size: 136,
-                state: .happy,
-                animated: !reduceMotion
-            )
-        }
+        BotAvatarView(
+            bot: heroBot,
+            size: 94,
+            state: .idle,
+            animated: false
+        )
         .frame(maxWidth: .infinity)
-        .padding(.top, 20)
-        .padding(.bottom, 18)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(current.name) avatar")
     }
@@ -248,7 +239,7 @@ struct AgentProfileView: View {
                 .multilineTextAlignment(.center)
                 .textInputAutocapitalization(.words)
                 .padding(.horizontal, 18)
-                .frame(minHeight: 58)
+                .frame(minHeight: 50)
 
             Divider().overlay(AgentProfileStyle.divider)
 
@@ -257,7 +248,7 @@ struct AgentProfileView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 18)
-                .frame(minHeight: 52)
+                .frame(minHeight: 44)
         }
         .profileCard()
         .accessibilityElement(children: .contain)
@@ -270,7 +261,7 @@ struct AgentProfileView: View {
             VStack(spacing: 0) {
                 LazyVGrid(
                     columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 6),
-                    spacing: 18
+                    spacing: 14
                 ) {
                     ForEach(profileColors) { choice in
                         Button {
@@ -279,14 +270,21 @@ struct AgentProfileView: View {
                         } label: {
                             Circle()
                                 .fill(choice.color)
-                                .frame(width: 34, height: 34)
+                                .frame(width: 28, height: 28)
                                 .overlay {
                                     Circle()
                                         .stroke(
-                                            selectedColor == choice.id ? Color.primary : .clear,
+                                            selectedColor == choice.id ? Color.white.opacity(0.28) : .clear,
                                             lineWidth: 2
                                         )
-                                        .padding(-5)
+                                        .padding(-6)
+                                }
+                                .overlay {
+                                    if selectedColor == choice.id {
+                                        Circle()
+                                            .stroke(Color.black.opacity(0.35), lineWidth: 1)
+                                            .padding(-2)
+                                    }
                                 }
                                 .overlay {
                                     if choice.id == "white" {
@@ -300,8 +298,8 @@ struct AgentProfileView: View {
                     }
                 }
                 .padding(.horizontal, 18)
-                .padding(.top, 18)
-                .padding(.bottom, 20)
+                .padding(.top, 14)
+                .padding(.bottom, 16)
 
                 Divider().overlay(AgentProfileStyle.divider)
 
@@ -311,17 +309,26 @@ struct AgentProfileView: View {
                             selectedShape = mark
                             scheduleAppearanceSave()
                         } label: {
-                            Image(systemName: mark.systemImage)
-                                .font(.system(size: 21, weight: .semibold))
-                                .foregroundStyle(MausPalette.color(selectedColor))
-                                .frame(width: 30, height: 30)
+                            MascotMarkIcon(
+                                kind: mark.rawValue,
+                                color: MausPalette.color(selectedColor),
+                                size: 28
+                            )
+                            .frame(width: 30, height: 30)
                                 .overlay {
                                     Circle()
                                         .stroke(
-                                            selectedShape == mark ? Color.primary.opacity(0.72) : .clear,
+                                            selectedShape == mark ? Color.white.opacity(0.28) : .clear,
                                             lineWidth: 2
                                         )
-                                        .padding(-5)
+                                        .padding(-6)
+                                }
+                                .overlay {
+                                    if selectedShape == mark {
+                                        Circle()
+                                            .stroke(Color.black.opacity(0.35), lineWidth: 1)
+                                            .padding(-2)
+                                    }
                                 }
                         }
                         .buttonStyle(.plain)
@@ -331,7 +338,7 @@ struct AgentProfileView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 16)
-                .padding(.vertical, 18)
+                .padding(.vertical, 14)
 
                 Divider().overlay(AgentProfileStyle.divider)
 
@@ -344,7 +351,7 @@ struct AgentProfileView: View {
                 .foregroundStyle(Color.accentColor)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 18)
-                .padding(.vertical, 16)
+                .padding(.vertical, 14)
             }
             .profileCard()
 
@@ -361,7 +368,7 @@ struct AgentProfileView: View {
                     .accessibilityLabel("Character appearance pending synchronization")
             }
         }
-        .padding(.top, 26)
+        .padding(.top, 20)
     }
 
     private var profileColors: [ProfileColorChoice] {
@@ -416,7 +423,7 @@ struct AgentProfileView: View {
             .profileCard()
             .accessibilityHint("Edit this agent's instructions")
         }
-        .padding(.top, 28)
+        .padding(.top, 22)
     }
 
     private var routinesSection: some View {
@@ -466,7 +473,7 @@ struct AgentProfileView: View {
             }
             .profileCard()
         }
-        .padding(.top, 28)
+        .padding(.top, 22)
     }
 
     private func routineRow(_ routine: Routine) -> some View {
@@ -554,7 +561,7 @@ struct AgentProfileView: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 18)
         }
-        .padding(.top, 28)
+        .padding(.top, 22)
     }
 
     @ViewBuilder
@@ -1128,19 +1135,19 @@ private extension AvatarCrop {
 private enum AgentProfileStyle {
     static let canvas = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.071, green: 0.071, blue: 0.078, alpha: 1)
+            ? UIColor(red: 0.055, green: 0.055, blue: 0.055, alpha: 1)
             : UIColor(red: 0.965, green: 0.965, blue: 0.973, alpha: 1)
     })
 
     static let card = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.118, green: 0.118, blue: 0.129, alpha: 1)
+            ? UIColor(red: 0.082, green: 0.075, blue: 0.078, alpha: 1)
             : UIColor(red: 0.898, green: 0.898, blue: 0.914, alpha: 1)
     })
 
     static let control = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.145, green: 0.145, blue: 0.157, alpha: 1)
+            ? UIColor(red: 0.129, green: 0.129, blue: 0.129, alpha: 1)
             : UIColor(red: 0.882, green: 0.882, blue: 0.898, alpha: 1)
     })
 
@@ -1194,7 +1201,7 @@ private enum MascotMark: String, CaseIterable, Identifiable {
 }
 
 private extension View {
-    func profileCard(cornerRadius: CGFloat = 22) -> some View {
+    func profileCard(cornerRadius: CGFloat = 18) -> some View {
         background(
             AgentProfileStyle.card,
             in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
