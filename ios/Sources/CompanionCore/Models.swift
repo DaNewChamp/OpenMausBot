@@ -215,6 +215,10 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     public var from: Sender?
     public var reactions: [Reaction]?
     public var comm: CommChip?
+    /// Identity assigned by the steer queue. Unlike the text, this remains
+    /// unique when a person sends the same words more than once and lets the
+    /// companion retire its local acknowledgement without guessing.
+    public var queueId: String?
     /// Screen messages in the paged shape: the pixels live behind
     /// `/api/threads/:threadId/messages/:id/image` rather than inline.
     public var hasImage: Bool?

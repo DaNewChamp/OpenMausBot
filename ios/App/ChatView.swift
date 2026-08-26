@@ -625,6 +625,7 @@ struct ChatView: View {
         // This also cancels an in-flight permission prompt before it can
         // open the microphone after the message has already been sent.
         dictation.stop()
+        let draftAtSubmission = draft
         let text = (explicitText ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, composerRequestGate.begin() else { return }
         let target = current
@@ -636,11 +637,17 @@ struct ChatView: View {
                 if let queueId = receipt.queueId {
                     pendingQueueNotices[queueId] = PendingQueueNotice(
                         queueId: queueId,
-                        text: text,
                         threadId: target.threadId
                     )
+                    // The queued line may have landed on the transcript before
+                    // the HTTP acknowledgement returned. Reconcile now as
+                    // well as from the normal transcript-change path so that
+                    // SSE-before-HTTP cannot leave a stale local notice.
+                    reconcilePendingQueue(in: messages)
                 }
-                draft = ""
+                // The editor remains usable while the request is in flight.
+                // Do not erase a newer draft that was typed after submission.
+                if draft == draftAtSubmission { draft = "" }
                 SoundEffects.playSent()
                 Haptics.impact(.medium)
             }
@@ -674,14 +681,15 @@ struct ChatView: View {
             }
             return
         }
-        let deliveredTexts = Set(
-            transcript
-                .filter { $0.role == .user }
-                .compactMap { $0.text?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let pendingForThread = pendingQueueNotices.values
+            .filter { $0.threadId == threadId }
+            .map(\.queueId)
+        let remaining = PendingQueueReconciliation.remainingQueueIDs(
+            pendingQueueIDs: pendingForThread,
+            transcript: transcript
         )
         pendingQueueNotices = pendingQueueNotices.filter { _, pending in
-            guard pending.threadId == threadId else { return true }
-            return !deliveredTexts.contains(pending.text)
+            pending.threadId != threadId || remaining.contains(pending.queueId)
         }
     }
 
@@ -695,7 +703,7 @@ struct ChatView: View {
                 Label(
                     pendingCount == 1
                         ? "Queued · waiting for current work"
-                        : "(pendingCount) queued · waiting for current work",
+                        : "\(pendingCount) queued · waiting for current work",
                     systemImage: "clock.arrow.circlepath"
                 )
                     .font(chatTypography.detail.weight(.medium))
@@ -850,8 +858,12 @@ struct ChatView: View {
             .disabled(composerRequestGate.isInFlight)
             .padding(.trailing, 6)
             .padding(.bottom, 6)
-            .accessibilityLabel("Stop current work")
-            .accessibilityHint("Interrupts the active turn for this conversation")
+            .accessibilityLabel(current.isBot ? "Stop current work" : "Stop active responder")
+            .accessibilityHint(
+                current.isBot
+                    ? "Interrupts the active turn for this conversation"
+                    : "Interrupts the active responder; queued messages remain"
+            )
 
         case .send(let mode):
             Button { submit(mode: mode) } label: {
@@ -879,7 +891,7 @@ struct ChatView: View {
             .padding(.bottom, 6)
             .accessibilityLabel(mode == .steer ? "Send and steer" : mode == .queue ? "Send and queue" : "Send")
             .accessibilityHint("Touch and hold for explicit steer or queue choices")
-            .animation(.easeOut(duration: 0.15), value: canSend)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: canSend)
 
         case .none:
             Button { activatePrimaryAction() } label: {
@@ -1037,7 +1049,6 @@ private struct ShareFile: Identifiable {
 
 private struct PendingQueueNotice: Equatable {
     let queueId: String
-    let text: String
     let threadId: String
 }
 
