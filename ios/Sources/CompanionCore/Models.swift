@@ -254,6 +254,9 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
     public var description: String
     public var notifications: Bool
     public var color: String
+    /// The mascot silhouette selected in the character picker. Older servers
+    /// omit this field; clients use the droplet default when it is absent.
+    public var mascotShape: MascotShape? = nil
     /// An app-owned `/api/attachments/:name` URL. The URL is intentionally
     /// relative so every paired device fetches it from its own computer.
     public var avatarUrl: String?
@@ -292,6 +295,25 @@ public enum AvatarCrop: String, Codable, CaseIterable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = Self(rawValue: raw) ?? .mascot
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+/// The paired-safe mascot marks shown by the Grok-style character picker.
+/// Unknown values fall back to the familiar droplet so a newer desktop never
+/// makes an older phone drop the whole bot record.
+public enum MascotShape: String, Codable, CaseIterable, Hashable, Sendable, Identifiable {
+    case circle, oval, square, pill, triangle, hexagon, cloud, droplet
+
+    public var id: String { rawValue }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = Self(rawValue: raw) ?? .droplet
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -631,6 +653,8 @@ public struct BotProfilePatch: Encodable, Sendable {
     public var title: String?
     public var description: String?
     public var notifications: Bool?
+    public var color: String?
+    public var mascotShape: MascotShape?
     public var avatarUrl: AvatarURL?
     public var avatarCrop: AvatarCrop?
     public var voice: String?
@@ -649,6 +673,8 @@ public struct BotProfilePatch: Encodable, Sendable {
         title: String? = nil,
         description: String? = nil,
         notifications: Bool? = nil,
+        color: String? = nil,
+        mascotShape: MascotShape? = nil,
         avatarUrl: AvatarURL? = nil,
         avatarCrop: AvatarCrop? = nil,
         voice: String? = nil,
@@ -658,6 +684,8 @@ public struct BotProfilePatch: Encodable, Sendable {
         self.title = title
         self.description = description
         self.notifications = notifications
+        self.color = color
+        self.mascotShape = mascotShape
         self.avatarUrl = avatarUrl
         self.avatarCrop = avatarCrop
         self.voice = voice
@@ -665,7 +693,7 @@ public struct BotProfilePatch: Encodable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, title, description, notifications, avatarUrl, avatarCrop, voice, speakReplies
+        case name, title, description, notifications, color, mascotShape, avatarUrl, avatarCrop, voice, speakReplies
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -674,6 +702,8 @@ public struct BotProfilePatch: Encodable, Sendable {
         try values.encodeIfPresent(title, forKey: .title)
         try values.encodeIfPresent(description, forKey: .description)
         try values.encodeIfPresent(notifications, forKey: .notifications)
+        try values.encodeIfPresent(color, forKey: .color)
+        try values.encodeIfPresent(mascotShape, forKey: .mascotShape)
         if let avatarUrl {
             switch avatarUrl {
             case let .set(path): try values.encode(path, forKey: .avatarUrl)

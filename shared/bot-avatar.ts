@@ -5,6 +5,38 @@ export const BOT_AVATAR_CROPS = ["mascot", "circle", "rounded", "square"] as con
 export const botAvatarCropSchema = z.enum(BOT_AVATAR_CROPS);
 export type BotAvatarCrop = z.infer<typeof botAvatarCropSchema>;
 
+/** Keep profile colour validation in the shared wire contract. */
+export const BOT_MASCOT_COLORS = [
+  "green",
+  "blue",
+  "red",
+  "orange",
+  "purple",
+  "cyan",
+  "pink",
+  "yellow",
+  "teal",
+  "coral",
+] as const;
+export const botMascotColorSchema = z.enum(BOT_MASCOT_COLORS);
+export type BotMascotColor = z.infer<typeof botMascotColorSchema>;
+
+/** The small set of silhouettes offered by the Grok-style character picker.
+ * Keep this separate from avatar crops: a custom image may still use a crop,
+ * while the mascot keeps its own mark shape. */
+export const BOT_MASCOT_SHAPES = [
+  "circle",
+  "oval",
+  "square",
+  "pill",
+  "triangle",
+  "hexagon",
+  "cloud",
+  "droplet",
+] as const;
+export const botMascotShapeSchema = z.enum(BOT_MASCOT_SHAPES);
+export type BotMascotShape = z.infer<typeof botMascotShapeSchema>;
+
 /**
  * Custom avatars are deliberately limited to this app's attachment server.
  * Besides making persisted profiles portable across desktop/browser clients,

@@ -13,7 +13,12 @@ import { workspaceDir } from "./workspace.ts";
 import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./contracts.ts";
 import { pickBotName } from "./names.ts";
 import { redactSecretsInText } from "./redact.ts";
-import { botAvatarProfile, type BotAvatarCrop } from "../shared/bot-avatar.ts";
+import {
+  botAvatarProfile,
+  botMascotShapeSchema,
+  type BotAvatarCrop,
+  type BotMascotShape,
+} from "../shared/bot-avatar.ts";
 
 export type MausColor =
   | "green"
@@ -290,6 +295,9 @@ export interface BotRecord {
   description: string;
   notifications: boolean;
   color: MausColor;
+  /** Mascot silhouette selected in the character picker. Optional so older
+   * bot records continue to decode as the default droplet. */
+  mascotShape?: BotMascotShape;
   mascotExpression?: MausExpression | null;
   /** App-owned attachment served as this bot's custom profile image. */
   avatarUrl?: string;
@@ -530,6 +538,10 @@ export class Store {
       }
       if (b.avatarCrop !== undefined && avatar.avatarCrop !== b.avatarCrop) {
         delete b.avatarCrop;
+        botsMigrated = true;
+      }
+      if (b.mascotShape !== undefined && !botMascotShapeSchema.safeParse(b.mascotShape).success) {
+        delete b.mascotShape;
         botsMigrated = true;
       }
     }

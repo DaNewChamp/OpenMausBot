@@ -208,6 +208,11 @@ struct MausAvatar: View {
     let color: String
     var size: CGFloat = 52
     var state: MausState = .idle
+    /// The persisted character mark. Droplet preserves the original mascot
+    /// silhouette; the other marks clip it to the selected Grok-style shape.
+    /// Raw value keeps this shared renderer usable by the widget target,
+    /// which intentionally has no dependency on the full CompanionCore API.
+    var shape: String = "droplet"
     /// Animation is OPT-IN: a mounted face costs a 30fps Canvas redraw, and a
     /// roster of them once pegged the app (and SimRenderServer) all night.
     /// Pass true only where motion carries meaning — a busy bot, an open
@@ -232,7 +237,58 @@ struct MausAvatar: View {
             }
         }
         .frame(width: size, height: size)
+        .clipShape(MascotMarkClip(kind: shape))
         .accessibilityHidden(true)
+    }
+}
+
+private struct MascotMarkClip: Shape {
+    let kind: String
+
+    func path(in rect: CGRect) -> Path {
+        switch kind {
+        case "circle":
+            return Path(ellipseIn: rect)
+        case "oval":
+            return Path(ellipseIn: rect.insetBy(dx: 0, dy: rect.height * 0.16))
+        case "square":
+            return Path(rect)
+        case "pill":
+            return Path(roundedRect: rect, cornerRadius: rect.height / 2)
+        case "triangle":
+            var path = Path()
+            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.closeSubpath()
+            return path
+        case "hexagon":
+            var path = Path()
+            for index in 0..<6 {
+                let angle = -CGFloat.pi / 2 + CGFloat(index) * CGFloat.pi / 3
+                let point = CGPoint(
+                    x: rect.midX + cos(angle) * rect.width * 0.5,
+                    y: rect.midY + sin(angle) * rect.height * 0.5
+                )
+                if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
+            }
+            path.closeSubpath()
+            return path
+        case "cloud":
+            var path = Path()
+            path.addRoundedRect(
+                in: rect.insetBy(dx: rect.width * 0.08, dy: rect.height * 0.18),
+                cornerSize: CGSize(width: rect.width * 0.22, height: rect.height * 0.22)
+            )
+            path.addEllipse(in: CGRect(x: rect.minX, y: rect.midY - rect.height * 0.12, width: rect.width * 0.46, height: rect.height * 0.42))
+            path.addEllipse(in: CGRect(x: rect.midX - rect.width * 0.16, y: rect.minY, width: rect.width * 0.52, height: rect.height * 0.54))
+            path.addEllipse(in: CGRect(x: rect.maxX - rect.width * 0.48, y: rect.midY - rect.height * 0.16, width: rect.width * 0.48, height: rect.height * 0.46))
+            return path
+        case "droplet":
+            return Path(rect)
+        default:
+            return Path(rect)
+        }
     }
 }
 

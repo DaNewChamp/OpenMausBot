@@ -153,6 +153,23 @@ describe("Store", () => {
     expect(messages.at(-1)).toMatchObject({ role: "user", text: "hi there" });
   });
 
+  it("persists supported mascot appearance fields and drops an invalid shape on reload", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.patchBot(bot.id, { color: "purple", mascotShape: "hexagon" });
+
+    const reloaded = new Store(selection);
+    expect(reloaded.bot(bot.id)).toMatchObject({ color: "purple", mascotShape: "hexagon" });
+
+    const raw: BotRecord[] = JSON.parse(readFileSync(join(DATA_DIR, "bots.json"), "utf8"));
+    (raw.find((candidate) => candidate.id === bot.id) as unknown as { mascotShape: string }).mascotShape = "star";
+    writeFileSync(join(DATA_DIR, "bots.json"), JSON.stringify(raw));
+    const repaired = new Store(selection);
+    expect(repaired.bot(bot.id)?.mascotShape).toBeUndefined();
+    const saved: BotRecord[] = JSON.parse(readFileSync(join(DATA_DIR, "bots.json"), "utf8"));
+    expect(saved.find((candidate) => candidate.id === bot.id)).not.toHaveProperty("mascotShape");
+  });
+
   it("normalizes persisted cloud backends without changing valid or absent values", () => {
     const store = new Store(selection);
     const box = store.createBot();

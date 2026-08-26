@@ -110,6 +110,36 @@ final class ProfileClientTests: XCTestCase {
         XCTAssertEqual(body["avatarCrop"] as? String, "rounded")
     }
 
+    func testProfileClientEncodesCharacterColorAndMascotShape() async throws {
+        ProfileRequestStub.responseBody = Self.botResponse
+
+        _ = try await client.updateProfile(
+            botId: "avatar-bot",
+            patch: BotProfilePatch(color: "purple", mascotShape: .hexagon)
+        )
+
+        let data = try XCTUnwrap(ProfileRequestStub.capturedBody)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(body.keys.sorted(), ["color", "mascotShape"])
+        XCTAssertEqual(body["color"] as? String, "purple")
+        XCTAssertEqual(body["mascotShape"] as? String, "hexagon")
+    }
+
+    func testProfileClientDecodesAnUnknownMascotShapeToTheSafeDefault() async throws {
+        ProfileRequestStub.responseBody = Data(
+            Self.botResponseString
+                .replacingOccurrences(of: #""mascotShape":"hexagon""#, with: #""mascotShape":"star""#)
+                .utf8
+        )
+
+        let updated = try await client.updateProfile(
+            botId: "avatar-bot",
+            patch: BotProfilePatch(color: "purple", mascotShape: .hexagon)
+        )
+
+        XCTAssertEqual(updated.mascotShape, .droplet)
+    }
+
     func testProfileClientEncodesAnExplicitAvatarClearAsNull() async throws {
         ProfileRequestStub.responseBody = Self.botResponse
 
@@ -273,14 +303,15 @@ final class ProfileClientTests: XCTestCase {
     private static let botJSON = """
     {
       "id":"avatar-bot","threadId":"avatar-thread","name":"Scout","title":"Researcher",
-      "description":"Finds evidence.","notifications":true,"color":"blue",
+      "description":"Finds evidence.","notifications":true,"color":"blue","mascotShape":"hexagon",
       "avatarUrl":"/api/attachments/123e4567-e89b-12d3-a456-426614174000.webp",
       "avatarCrop":"rounded","unread":false,
       "modelSelection":{"instanceId":"local","model":"default"},"createdAt":1786742441013
     }
     """
 
-    private static let botResponse = Data("{\"bot\":\(botJSON)}".utf8)
+    private static let botResponseString = "{\"bot\":\(botJSON)}"
+    private static let botResponse = Data(botResponseString.utf8)
     private static let roomResponse = Data(
         #"{"group":{"id":"room-1","threadId":"room-thread","name":"Research","memberIds":["avatar-bot"],"defaultResponder":{"kind":"member","botId":"avatar-bot"},"bulletin":"","unread":false,"pinned":true,"createdAt":1786742441013}}"#.utf8
     )

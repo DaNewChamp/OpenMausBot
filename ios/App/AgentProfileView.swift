@@ -58,12 +58,14 @@ struct AgentProfileView: View {
         _pickedModel = State(initialValue: bot.modelSelection.model)
         _baseline = State(initialValue: ProfileFormSnapshot(bot: bot))
         _selectedColor = State(initialValue: bot.color)
+        _selectedShape = State(initialValue: MascotMark(rawValue: bot.mascotShape?.rawValue ?? MascotMark.droplet.rawValue) ?? .droplet)
     }
 
     private var current: Bot { session.state.bot(bot.id) ?? bot }
     private var heroBot: Bot {
         var value = current
         value.color = selectedColor
+        value.mascotShape = MascotShape(rawValue: selectedShape.rawValue)
         return value
     }
     private var imageGenerationReady: Bool { config?.imageGen?.configured == true }
@@ -84,6 +86,7 @@ struct AgentProfileView: View {
         name == baseline.name && title == baseline.title && description == baseline.description
             && notifications == baseline.notifications && crop == baseline.crop
             && voice == baseline.voice && speakReplies == baseline.speakReplies
+            && selectedColor == baseline.color && selectedShape.rawValue == baseline.shape.rawValue
     }
 
     var body: some View {
@@ -314,7 +317,7 @@ struct AgentProfileView: View {
                 Divider().overlay(AgentProfileStyle.divider)
 
                 Button("Reset to default") {
-                    selectedColor = current.color
+                    selectedColor = "green"
                     selectedShape = .droplet
                 }
                 .font(.body)
@@ -866,6 +869,9 @@ struct AgentProfileView: View {
             description: description == baseline.description
                 ? nil : description.trimmingCharacters(in: .whitespacesAndNewlines),
             notifications: notifications == baseline.notifications ? nil : notifications,
+            color: selectedColor == baseline.color ? nil : selectedColor,
+            mascotShape: selectedShape.rawValue == baseline.shape.rawValue
+                ? nil : MascotShape(rawValue: selectedShape.rawValue),
             avatarCrop: crop == baseline.crop ? nil : crop,
             // Empty is the server's explicit "use workspace default" value;
             // nil would mean the voice field is not part of this patch.
@@ -981,6 +987,8 @@ struct AgentProfileView: View {
         title = bot.title
         description = bot.description
         notifications = bot.notifications
+        selectedColor = bot.color
+        selectedShape = MascotMark(rawValue: bot.mascotShape?.rawValue ?? MascotMark.droplet.rawValue) ?? .droplet
         crop = bot.avatarCrop ?? .mascot
         voice = bot.voice ?? ""
         speakReplies = bot.speakReplies == true
@@ -993,6 +1001,8 @@ private struct ProfileFormSnapshot {
     var title: String
     var description: String
     var notifications: Bool
+    var color: String
+    var shape: MascotShape
     var crop: AvatarCrop
     var voice: String
     var speakReplies: Bool
@@ -1002,6 +1012,8 @@ private struct ProfileFormSnapshot {
         title = bot.title
         description = bot.description
         notifications = bot.notifications
+        color = bot.color
+        shape = bot.mascotShape ?? .droplet
         crop = bot.avatarCrop ?? .mascot
         voice = bot.voice ?? ""
         speakReplies = bot.speakReplies == true

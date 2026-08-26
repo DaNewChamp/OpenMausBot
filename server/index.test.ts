@@ -920,6 +920,8 @@ describe("harness HTTP API", () => {
         title: "Mobile-safe agent",
         description: "Only profile data crosses this boundary.",
         notifications: false,
+        color: "purple",
+        mascotShape: "hexagon",
         avatarUrl,
         avatarCrop: "circle",
         voice: "voice_fixture",
@@ -931,6 +933,8 @@ describe("harness HTTP API", () => {
         title: "Mobile-safe agent",
         description: "Only profile data crosses this boundary.",
         notifications: false,
+        color: "purple",
+        mascotShape: "hexagon",
         avatarUrl,
         avatarCrop: "circle",
         voice: "voice_fixture",
@@ -941,8 +945,17 @@ describe("harness HTTP API", () => {
       );
       expect(frame.bot).toMatchObject({ id: bot.id, avatarUrl, avatarCrop: "circle" });
 
+      const reopened = await api("GET", "/api/bots?messages=0");
+      expect(reopened.status).toBe(200);
+      expect(reopened.body.bots.find((candidate: { id: string }) => candidate.id === bot.id)).toMatchObject({
+        color: "purple",
+        mascotShape: "hexagon",
+      });
+
       for (const invalid of [
-        { color: "red" },
+        { color: "chartreuse" },
+        { mascotShape: "diamond" },
+        { mascotMark: "droplet" },
         { avatarUrl: "https://tracker.example/avatar.png" },
         { avatarUrl: "/api/attachments/123e4567-e89b-12d3-a456-426614174000.png" },
         { avatarCrop: "hexagon" },
@@ -964,6 +977,8 @@ describe("harness HTTP API", () => {
       expect(cleared.body.bot).toMatchObject({
         avatarUrl: null,
         avatarCrop: "mascot",
+        color: "purple",
+        mascotShape: "hexagon",
         voice: "",
         speakReplies: false,
       });

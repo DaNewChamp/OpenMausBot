@@ -15,26 +15,59 @@ describe("parseBotProfilePatch (strict — the paired boundary)", () => {
     }
   });
 
+  it("accepts only the supported cosmetic fields and values", () => {
+    expect(parseBotProfilePatch({ color: "red", mascotShape: "hexagon" }, true)).toEqual({
+      ok: true,
+      patch: { color: "red", mascotShape: "hexagon" },
+    });
+    expect(parseBotProfilePatch({ color: "chartreuse" } as never, true)).toEqual({
+      ok: false,
+      error: "color must be green, blue, red, orange, purple, cyan, pink, yellow, teal, or coral",
+    });
+    expect(parseBotProfilePatch({ mascotShape: "diamond" } as never, true)).toEqual({
+      ok: false,
+      error: "mascotShape must be circle, oval, square, pill, triangle, hexagon, cloud, or droplet",
+    });
+  });
+
   it("refuses unknown cosmetic keys too — strict means the allowlist IS the contract", () => {
-    const result = parseBotProfilePatch({ color: "red" } as never, true);
-    expect(result).toEqual({ ok: false, error: "unsupported profile field: color" });
+    const result = parseBotProfilePatch({ mascotMark: "droplet" } as never, true);
+    expect(result).toEqual({ ok: false, error: "unsupported profile field: mascotMark" });
   });
 
   it("accepts the full identity surface", () => {
     const result = parseBotProfilePatch(
-      { name: "Mira", title: "Lead", description: "plans", notifications: true, voice: "vx", speakReplies: false },
+      {
+        name: "Mira",
+        title: "Lead",
+        description: "plans",
+        notifications: true,
+        color: "green",
+        mascotShape: "droplet",
+        voice: "vx",
+        speakReplies: false,
+      },
       true,
     );
     expect(result).toEqual({
       ok: true,
-      patch: { name: "Mira", title: "Lead", description: "plans", notifications: true, voice: "vx", speakReplies: false },
+      patch: {
+        name: "Mira",
+        title: "Lead",
+        description: "plans",
+        notifications: true,
+        color: "green",
+        mascotShape: "droplet",
+        voice: "vx",
+        speakReplies: false,
+      },
     });
   });
 });
 
 describe("parseBotProfilePatch (both modes)", () => {
   it("lenient mode drops unknown keys instead of failing — the desktop PATCH mixes fields", () => {
-    const result = parseBotProfilePatch({ name: "Mira", color: "red" } as never, false);
+    const result = parseBotProfilePatch({ name: "Mira", mascotMark: "droplet" } as never, false);
     expect(result).toEqual({ ok: true, patch: { name: "Mira" } });
   });
 

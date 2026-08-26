@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-import { botAvatarCropSchema, botAvatarUrlSchema } from "../shared/bot-avatar.ts";
+import {
+  botAvatarCropSchema,
+  botAvatarUrlSchema,
+  botMascotColorSchema,
+  botMascotShapeSchema,
+} from "../shared/bot-avatar.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 
 import type { BotRecord } from "./store.ts";
@@ -10,6 +15,8 @@ export const BOT_PROFILE_PATCH_FIELDS = [
   "title",
   "description",
   "notifications",
+  "color",
+  "mascotShape",
   "avatarUrl",
   "avatarCrop",
   "voice",
@@ -31,6 +38,8 @@ const profilePatchSchema = z.object({
     .max(BOT_PROFILE_LIMITS.description, { error: "description must be at most 4000 characters" })
     .optional(),
   notifications: z.boolean({ error: "notifications must be true or false" }).optional(),
+  color: botMascotColorSchema.optional(),
+  mascotShape: botMascotShapeSchema.optional(),
   avatarUrl: z
     .union([botAvatarUrlSchema, z.literal(""), z.null()], {
       error: "avatarUrl must be a stored PNG, JPEG, GIF, or WebP attachment",
@@ -49,7 +58,16 @@ export type BotProfilePatchInput = z.input<typeof profilePatchSchema>;
 export type BotProfilePatch = Partial<
   Pick<
     BotRecord,
-    "name" | "title" | "description" | "notifications" | "avatarUrl" | "avatarCrop" | "voice" | "speakReplies"
+    | "name"
+    | "title"
+    | "description"
+    | "notifications"
+    | "color"
+    | "mascotShape"
+    | "avatarUrl"
+    | "avatarCrop"
+    | "voice"
+    | "speakReplies"
   >
 >;
 
@@ -76,6 +94,12 @@ export function parseBotProfilePatch(input: BotProfilePatchInput, strict = false
     const issue = parsed.error.issues[0];
     if (issue?.path[0] === "avatarCrop") {
       return { ok: false, error: "avatarCrop must be mascot, circle, rounded, or square" };
+    }
+    if (issue?.path[0] === "color") {
+      return { ok: false, error: "color must be green, blue, red, orange, purple, cyan, pink, yellow, teal, or coral" };
+    }
+    if (issue?.path[0] === "mascotShape") {
+      return { ok: false, error: "mascotShape must be circle, oval, square, pill, triangle, hexagon, cloud, or droplet" };
     }
     return { ok: false, error: issue?.message ?? "invalid profile patch" };
   }
