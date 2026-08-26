@@ -274,11 +274,11 @@ struct ChatView: View {
             // bit here rather than leaving a badge on an open conversation.
             if unread { Task { await session.markRead(current) } }
         }
-        .onChange(of: session.status) { _, status in
-            // A reconnect refresh is authoritative. If the queue notice is
-            // no longer represented by the refreshed transcript, remove the
-            // local acknowledgement rather than leaving it forever.
-            if case .live = status { reconcilePendingQueue(in: messages, authoritativeRefresh: true) }
+        .onChange(of: session.authoritativeHydrationRevision) { _, _ in
+            // Only a completed full hydrate can retire notices that are no
+            // longer represented by the server transcript. Resumed SSE
+            // reconnects leave this revision alone, preserving local notices.
+            reconcilePendingQueue(in: messages, authoritativeRefresh: true)
         }
         .onDisappear { dictation.stop() }
         .onChange(of: scenePhase) { _, phase in

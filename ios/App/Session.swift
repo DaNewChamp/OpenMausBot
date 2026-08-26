@@ -31,6 +31,10 @@ final class Session: ObservableObject {
     }
 
     @Published private(set) var state = CompanionState()
+    /// Advances only after the server has replaced local state with a full
+    /// fleet hydrate. Resumed SSE connections leave it unchanged so views do
+    /// not mistake a reconnect for an authoritative refresh.
+    @Published private(set) var authoritativeHydrationRevision = 0
     @Published private(set) var connection: Connection?
     @Published private(set) var status: Status = .unpaired
     /// Transient, user-facing failures from an action they just took.
@@ -109,6 +113,7 @@ final class Session: ObservableObject {
            let fleet = try? JSONDecoder().decode(Fleet.self, from: data) {
             connection = Connection(name: "Preview Mac", host: "preview.tailnet.ts.net", port: 8810)
             state.hydrate(fleet)
+            recordHydration(resumed: false)
             status = .live
             return
         }
@@ -390,6 +395,7 @@ final class Session: ObservableObject {
                         if !resumed {
                             try await hydrate()
                             state.resetCursor(cursor)
+                            recordHydration(resumed: resumed)
                         }
                         status = .live
                         // Remember what actually carried the stream for
@@ -438,6 +444,12 @@ final class Session: ObservableObject {
         log.info("hydrated \(fleet.bots.count, privacy: .public) bots, \(fleet.groups.count, privacy: .public) rooms")
         state.hydrate(fleet)
         NotificationCoordinator.shared.setBadge(state.unreadCount)
+    }
+
+    private var hydrationRevision = HydrationRevision()
+
+    private func recordHydration(resumed: Bool) {
+        authoritativeHydrationRevision = hydrationRevision.record(resumed: resumed)
     }
 
     // MARK: - Which address to dial
@@ -991,6 +1003,7 @@ final class Session: ObservableObject {
             if bot == nil {
                 let fleet = try await client.fleet(messages: 50)
                 state.hydrate(fleet)
+                recordHydration(resumed: false)
                 bot = state.bot(target.botId)
             }
             // A room's approval/question notification carries the asker bot
