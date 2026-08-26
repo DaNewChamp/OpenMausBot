@@ -104,6 +104,34 @@ final class ComputerPresentationStateTests: XCTestCase {
         XCTAssertEqual(ComputerPresentationState(bot: bot(computer: "local"), frame: frame), .watching)
     }
 
+    func testOffAndUnknownComputersIgnoreValidCachedFrames() {
+        let frame = ScreenFrame(png: "c2NyZWVu", mime: "image/png")
+        XCTAssertEqual(
+            ComputerPresentationState(bot: bot(computer: "off"), frame: frame),
+            .unavailable(message: "Computer access is turned off for this agent.")
+        )
+        XCTAssertEqual(
+            ComputerPresentationState(bot: bot(computer: nil), frame: frame),
+            .unavailable(message: "No computer is configured for this agent.")
+        )
+        XCTAssertEqual(
+            ComputerPresentationState(bot: bot(computer: "future-desktop"), frame: frame),
+            .unavailable(message: "This computer type isn't supported on this phone.")
+        )
+    }
+
+    func testIdleComputerIgnoresValidCachedFrame() {
+        let frame = ScreenFrame(png: "c2NyZWVu", mime: "image/png")
+        XCTAssertEqual(
+            ComputerPresentationState(bot: bot(computer: "local", busy: false), frame: frame),
+            .unavailable(message: "No live screen is available until this agent is working.")
+        )
+        XCTAssertEqual(
+            ComputerPresentationState(bot: bot(computer: "cloud", cloudBackend: "box", busy: false), frame: frame),
+            .cloudViewerAvailable
+        )
+    }
+
     func testLoadFailureWinsOverStaleFrame() {
         let frame = ScreenFrame(png: "c2NyZWVu", mime: "image/png")
         XCTAssertEqual(
@@ -131,6 +159,10 @@ final class ComputerPresentationStateTests: XCTestCase {
         lifecycle.receivedFrame()
         XCTAssertEqual(lifecycle.phase, .watching)
         XCTAssertNil(lifecycle.failureMessage)
+
+        lifecycle.reset()
+        XCTAssertEqual(lifecycle.phase, .idle)
+        XCTAssertEqual(lifecycle.attempt, 3)
 
         lifecycle.failed("The stream ended.")
         XCTAssertEqual(lifecycle.failureMessage, "The stream ended.")

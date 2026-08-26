@@ -13,24 +13,29 @@ public enum ComputerPresentationState: Equatable, Sendable {
     case cloudViewerAvailable
 
     /// Maps the authoritative bot record and the latest optional frame to a
-    /// display state. A failure wins over capability, because showing a
-    /// disabled-looking viewer while the stream is broken is misleading.
+    /// display state. Configuration and failures win over a cached frame:
+    /// showing a screen after the computer was disabled, stopped, or lost is
+    /// more misleading than showing a waiting card.
     public init(bot: Bot, frame: ScreenFrame? = nil, loadFailure: String? = nil) {
         if let loadFailure {
             let message = loadFailure.trimmingCharacters(in: .whitespacesAndNewlines)
             self = message.isEmpty
                 ? .unavailable(message: "We couldn't load this computer right now.")
                 : .unavailable(message: message)
-        } else if frame != nil {
-            self = .watching
         } else if !Self.hasKnownComputer(bot) {
             self = .unavailable(message: Self.unavailableMessage(for: bot))
+        } else if bot.busy != true {
+            // Frames are emitted only while a bot is working. A frame held
+            // after the turn ends is a cache, not a live desktop.
+            self = Self.supportsCloudViewer(bot)
+                ? .cloudViewerAvailable
+                : .unavailable(message: "No live screen is available until this agent is working.")
+        } else if frame != nil {
+            self = .watching
         } else if Self.supportsCloudViewer(bot) {
             self = .cloudViewerAvailable
-        } else if bot.busy == true {
-            self = .starting
         } else {
-            self = .unavailable(message: "No live screen is available until this agent is working.")
+            self = .starting
         }
     }
 
@@ -111,6 +116,14 @@ public struct ComputerWatchLifecycle: Equatable, Sendable {
     }
 
     public mutating func retry() { begin() }
+
+    /// Forget the last stream phase when the bot's computer or working state
+    /// changes. Incrementing the attempt also cancels any timeout task that
+    /// was waiting on the previous phase.
+    public mutating func reset() {
+        attempt += 1
+        phase = .idle
+    }
 
     public mutating func receivedFrame() {
         phase = .watching

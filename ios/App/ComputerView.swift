@@ -33,14 +33,16 @@ struct ComputerView: View {
     }
 
     private var presentationState: ComputerPresentationState {
-        let decodeFailure = frame != nil && image == nil
+        let decodeFailure = ComputerPresentationState.hasKnownComputer(current)
+            && current.busy == true
+            && frame != nil
+            && image == nil
             ? "The latest screen frame could not be decoded."
             : nil
-        let activeStreamFailure = screenWatch.phase == .watching ? nil : streamFailure
         return ComputerPresentationState.resolve(
             bot: current,
             frame: image == nil ? nil : frame,
-            loadFailure: screenWatch.failureMessage ?? activeStreamFailure ?? decodeFailure
+            loadFailure: streamFailure ?? screenWatch.failureMessage ?? decodeFailure
         )
     }
 
@@ -66,6 +68,29 @@ struct ComputerView: View {
     private func isUnavailable(_ state: ComputerPresentationState) -> Bool {
         if case .unavailable = state { return true }
         return false
+    }
+
+    private var computerSignature: String {
+        let computer = current.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "unknown"
+        let backend = current.cloudBackend?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "legacy"
+        return "\(computer)|\(backend)"
+    }
+
+    private var headerStatusTitle: String {
+        switch presentationState {
+        case .watching: return "Watching"
+        case .starting: return "Working"
+        case .cloudViewerAvailable: return "Ready"
+        case .unavailable: return "Unavailable"
+        }
+    }
+
+    private var headerStatusColor: Color {
+        switch presentationState {
+        case .watching: return .green
+        case .starting: return .orange
+        case .cloudViewerAvailable, .unavailable: return .secondary
+        }
     }
 
     var body: some View {
@@ -107,18 +132,10 @@ struct ComputerView: View {
             }
         }
         .onAppear {
-            guard ComputerPresentationState.hasKnownComputer(current) else {
-                screenWatch.failed(ComputerPresentationState.unavailableMessage(for: current))
-                return
-            }
-            isWatchingScreen = true
-            session.watchScreen(of: bot.id)
+            syncScreenWatch(resetFrame: false)
         }
         .onDisappear {
-            if isWatchingScreen {
-                isWatchingScreen = false
-                session.stopWatchingScreen(of: bot.id)
-            }
+            stopScreenWatch()
         }
         .onChange(of: frame?.png) { _, png in
             guard let png else { return }
@@ -130,14 +147,46 @@ struct ComputerView: View {
             }
         }
         .onChange(of: session.status) { _, status in
-            if case let .offline(message) = status {
+            switch status {
+            case let .offline(message):
+                session.clearScreen(of: bot.id)
                 screenWatch.failed(message)
-            } else if case .unauthorized = status {
+            case .unauthorized:
+                session.clearScreen(of: bot.id)
                 screenWatch.failed("This phone is no longer paired with the computer.")
+            case .unpaired:
+                session.clearScreen(of: bot.id)
+                screenWatch.failed("Pair this phone with a computer to watch the screen.")
+            case .connecting:
+                if screenWatch.phase == .watching {
+                    session.clearScreen(of: bot.id)
+                    screenWatch.retry()
+                }
+            case .live:
+                guard ComputerPresentationState.hasKnownComputer(current) else { return }
+                if screenWatch.failureMessage != nil {
+                    session.clearScreen(of: bot.id)
+                    screenWatch.retry()
+                }
             }
         }
-        .task(id: "\(screenWatch.attempt)-\(current.busy == true)") {
+        .onChange(of: current.computer) { _, _ in
+            syncScreenWatch(resetFrame: true)
+        }
+        .onChange(of: current.cloudBackend) { _, _ in
+            syncScreenWatch(resetFrame: true)
+        }
+        .onChange(of: current.busy) { _, busy in
             guard ComputerPresentationState.hasKnownComputer(current) else { return }
+            session.clearScreen(of: bot.id)
+            screenWatch.reset()
+            if busy == true {
+                screenWatch.begin()
+            }
+        }
+        .task(id: "\(computerSignature)-\(screenWatch.attempt)-\(current.busy == true)") {
+            guard ComputerPresentationState.hasKnownComputer(current) else { return }
+            guard current.busy == true else { return }
             if screenWatch.phase == .idle {
                 if let streamFailure {
                     screenWatch.failed(streamFailure)
@@ -152,7 +201,7 @@ struct ComputerView: View {
                     return
                 }
             }
-            guard current.busy == true, screenWatch.isWaiting else { return }
+            guard screenWatch.isWaiting else { return }
             let attempt = screenWatch.attempt
             try? await Task.sleep(for: Self.firstFrameTimeout)
             guard !Task.isCancelled,
@@ -190,9 +239,9 @@ struct ComputerView: View {
 
             Spacer(minLength: 8)
 
-            Text(current.busy == true ? "Live" : "Idle")
+            Text(headerStatusTitle)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(current.busy == true ? Color.green : Color.secondary)
+                .foregroundStyle(headerStatusColor)
         }
         .foregroundStyle(Color.primary)
         .padding(.horizontal, 16)
@@ -203,7 +252,7 @@ struct ComputerView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let image {
+        if case .watching = presentationState, let image {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFit()
@@ -316,9 +365,48 @@ struct ComputerView: View {
 
     private func retryScreen() {
         guard ComputerPresentationState.hasKnownComputer(current) else { return }
-        screenWatch.retry()
+        restartScreenWatch()
+    }
+
+    private func syncScreenWatch(resetFrame: Bool) {
+        guard ComputerPresentationState.hasKnownComputer(current) else {
+            stopScreenWatch()
+            screenWatch.failed(ComputerPresentationState.unavailableMessage(for: current))
+            return
+        }
+
+        if resetFrame {
+            session.clearScreen(of: bot.id)
+            screenWatch.reset()
+        }
+
+        if !isWatchingScreen {
+            isWatchingScreen = true
+            screenWatch.begin()
+            session.watchScreen(of: bot.id)
+        } else if screenWatch.phase == .idle {
+            screenWatch.begin()
+        }
+    }
+
+    private func stopScreenWatch() {
+        session.clearScreen(of: bot.id)
+        guard isWatchingScreen else { return }
+        isWatchingScreen = false
         session.stopWatchingScreen(of: bot.id)
-        session.watchScreen(of: bot.id)
+        screenWatch.reset()
+    }
+
+    private func restartScreenWatch() {
+        session.clearScreen(of: bot.id)
+        screenWatch.retry()
+        if isWatchingScreen {
+            session.stopWatchingScreen(of: bot.id)
+            session.watchScreen(of: bot.id)
+        } else {
+            isWatchingScreen = true
+            session.watchScreen(of: bot.id)
+        }
     }
 
     @MainActor

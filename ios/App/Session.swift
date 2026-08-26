@@ -324,6 +324,13 @@ final class Session: ObservableObject {
         }
     }
 
+    /// Drop a cached frame without changing the number of open computer
+    /// panels. Configuration and connection transitions use this to ensure a
+    /// screen from an earlier capability is never rendered as current.
+    func clearScreen(of botId: String) {
+        state.clearScreen(botId)
+    }
+
     /// Reopen the stream so its query string matches what we now want. The
     /// cursor survives, so this is a gap, not a reset.
     private func restartStream() {
