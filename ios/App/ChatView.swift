@@ -17,6 +17,8 @@ import CompanionCore
 // lives.
 import UIKit
 import AVFoundation
+import PhotosUI
+import UniformTypeIdentifiers
 
 /// Conversation surfaces follow Grok's quiet, ink-on-charcoal canvas rather
 /// than the app-wide Liquid Glass treatment. Keeping the palette local to the
@@ -74,6 +76,15 @@ struct ChatView: View {
     /// failure shut after later chips land on the same run.
     @State private var openedToolRuns: Set<String> = []
     @State private var closedToolRuns: Set<String> = []
+    /// Images remain in local state until their message is acknowledged. A
+    /// failed upload therefore leaves the preview and draft intact rather
+    /// than turning a tap on Send into data loss.
+    @State private var selectedAttachments: [PendingImageAttachment] = []
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var showingFileImporter = false
+    @State private var showingCamera = false
+    @State private var isUploadingAttachments = false
+    @State private var attachmentError: String?
 
     /// The live bubble's scroll target. A constant because there is at most
     /// one per chat and it has no message id to borrow.
@@ -368,6 +379,33 @@ struct ChatView: View {
         .sheet(item: $shareFile) { file in
             ActivityShareSheet(items: [file.url])
         }
+        .fileImporter(
+            isPresented: $showingFileImporter,
+            allowedContentTypes: [.image],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case let .success(urls):
+                Task { await importFiles(urls) }
+            case let .failure(error):
+                attachmentError = error.localizedDescription
+            }
+        }
+        .sheet(isPresented: $showingCamera) {
+            CameraAttachmentPicker { image in
+                showingCamera = false
+                addCameraImage(image)
+            } onCancel: {
+                showingCamera = false
+            }
+            .ignoresSafeArea()
+        }
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            photoItems = []
+            setShowingPlus(false)
+            Task { await importPhotos(items) }
+        }
     }
 
     private var selectedConversationTextSize: ConversationTextSize {
@@ -380,10 +418,9 @@ struct ChatView: View {
 
     // MARK: - Header
 
-    /// A compact, centered Grok-style bar. The avatar/name capsule is a real
-    /// intrinsic-width control, not a full-width navigation title, so it stays
-    /// centered while long names truncate and navigation transitions cannot
-    /// leave a large face behind.
+    /// Grok's conversation chrome is intentionally asymmetric: back and the
+    /// agent capsule sit together on the leading edge, while the computer
+    /// action remains an independent trailing control.
     private var headerBar: some View {
         HStack(spacing: 12) {
             Button { dismiss() } label: {
@@ -409,8 +446,6 @@ struct ChatView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Back")
             .accessibilityValue(unreadElsewhere > 0 ? "\(unreadElsewhere) unread elsewhere" : "")
-
-            Spacer(minLength: 0)
 
             Button {
                 if current.isBot { showingProfile = true }
@@ -470,17 +505,15 @@ struct ChatView: View {
         .background {
             ZStack(alignment: .bottom) {
                 Rectangle()
-                    .fill(GrokConversationStyle.background.opacity(0.96))
-                Rectangle()
                     .fill(.ultraThinMaterial)
-                    .opacity(0.18)
+                    .opacity(0.62)
                 LinearGradient(
-                    colors: [GrokConversationStyle.background.opacity(0.24), .clear],
+                    colors: [GrokConversationStyle.background.opacity(0.66), GrokConversationStyle.background.opacity(0.18), .clear],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 16)
-                .offset(y: 16)
+                .frame(height: 28)
+                .offset(y: 20)
             }
             .ignoresSafeArea(edges: .top)
             .allowsHitTesting(false)
@@ -501,6 +534,9 @@ struct ChatView: View {
                     .onTapGesture { setShowingPlus(false) }
 
                 VStack(spacing: 0) {
+                    attachmentPickerActions
+                    Divider()
+                        .padding(.horizontal, 18)
                     ForEach(plusActions) { action in
                         Button {
                             setShowingPlus(false)
@@ -541,6 +577,93 @@ struct ChatView: View {
             }
             .transition(reduceMotion ? .identity : .opacity)
         }
+    }
+
+    @ViewBuilder
+    private var attachmentPickerActions: some View {
+        PhotosPicker(
+            selection: $photoItems,
+            maxSelectionCount: max(1, Self.maxAttachmentCount - selectedAttachments.count),
+            matching: .images
+        ) {
+            HStack(spacing: 16) {
+                Image(systemName: "photo.on.rectangle")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(Color.primary)
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(Color.primary.opacity(0.10)))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Photo library")
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(Color.primary)
+                    Text("Choose images from Photos")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 64)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(selectedAttachments.count >= Self.maxAttachmentCount)
+
+        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            Button {
+                setShowingPlus(false)
+                showingCamera = true
+            } label: {
+                HStack(spacing: 16) {
+                    Image(systemName: "camera")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(Color.primary)
+                        .frame(width: 44, height: 44)
+                        .background(Circle().fill(Color.primary.opacity(0.10)))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Take photo")
+                            .font(.system(size: 19, weight: .medium))
+                            .foregroundStyle(Color.primary)
+                        Text("Use the camera")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Color.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 18)
+                .frame(height: 64)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedAttachments.count >= Self.maxAttachmentCount)
+        }
+
+        Button {
+            setShowingPlus(false)
+            showingFileImporter = true
+        } label: {
+            HStack(spacing: 16) {
+                Image(systemName: "folder")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(Color.primary)
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(Color.primary.opacity(0.10)))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Choose file")
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(Color.primary)
+                    Text("PNG, JPEG, GIF, or WebP up to 10 MB")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 64)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(selectedAttachments.count >= Self.maxAttachmentCount)
     }
 
     private struct PlusAction: Identifiable {
@@ -651,6 +774,147 @@ struct ChatView: View {
         }
     }
 
+    // MARK: - Attachments
+
+    private static let maxAttachmentCount = 10
+
+    private func appendAttachment(data: Data, mime: String, name: String) {
+        guard selectedAttachments.count < Self.maxAttachmentCount else {
+            attachmentError = "You can attach up to (Self.maxAttachmentCount) images per message."
+            return
+        }
+        do {
+            try AttachmentPath.validate(data: data, mime: mime)
+            let normalized = AttachmentPath.normalizedMIME(mime) ?? mime
+            selectedAttachments.append(
+                PendingImageAttachment(
+                    data: data,
+                    mime: normalized,
+                    name: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Image" : name
+                )
+            )
+            attachmentError = nil
+        } catch {
+            attachmentError = error.localizedDescription
+        }
+    }
+
+    private func importPhotos(_ items: [PhotosPickerItem]) async {
+        for item in items {
+            guard selectedAttachments.count < Self.maxAttachmentCount else {
+                attachmentError = "You can attach up to (Self.maxAttachmentCount) images per message."
+                break
+            }
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    throw APIError.transport("That photo could not be read.")
+                }
+                let suggested = item.supportedContentTypes.first?.preferredMIMEType
+                guard let mime = Self.imageMIME(data, suggested: suggested) else {
+                    throw APIError.transport("Choose a PNG, JPEG, GIF, or WebP image.")
+                }
+                appendAttachment(data: data, mime: mime, name: "Photo")
+            } catch {
+                attachmentError = error.localizedDescription
+            }
+        }
+    }
+
+    private func importFiles(_ urls: [URL]) async {
+        for url in urls {
+            guard selectedAttachments.count < Self.maxAttachmentCount else {
+                attachmentError = "You can attach up to (Self.maxAttachmentCount) images per message."
+                break
+            }
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer {
+                if accessed { url.stopAccessingSecurityScopedResource() }
+            }
+            do {
+                let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+                let suggested = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+                guard let mime = Self.imageMIME(data, suggested: suggested) else {
+                    throw APIError.transport("Choose a PNG, JPEG, GIF, or WebP image.")
+                }
+                appendAttachment(data: data, mime: mime, name: url.deletingPathExtension().lastPathComponent)
+            } catch {
+                attachmentError = "(url.lastPathComponent): (error.localizedDescription)"
+            }
+        }
+    }
+
+    private func addCameraImage(_ image: UIImage) {
+        guard let data = image.jpegData(compressionQuality: 0.9) else {
+            attachmentError = "That photo could not be read."
+            return
+        }
+        appendAttachment(data: data, mime: "image/jpeg", name: "Camera photo")
+    }
+
+    private static func imageMIME(_ data: Data, suggested: String? = nil) -> String? {
+        if data.count >= 8,
+           data[data.startIndex] == 0x89,
+           data[data.startIndex + 1] == 0x50,
+           data[data.startIndex + 2] == 0x4E,
+           data[data.startIndex + 3] == 0x47 {
+            return "image/png"
+        }
+        if data.count >= 3,
+           data[data.startIndex] == 0xFF,
+           data[data.startIndex + 1] == 0xD8,
+           data[data.startIndex + 2] == 0xFF {
+            return "image/jpeg"
+        }
+        if data.count >= 4,
+           String(data: data.prefix(4), encoding: .ascii) == "GIF8" {
+            return "image/gif"
+        }
+        if data.count >= 12,
+           String(data: data.prefix(4), encoding: .ascii) == "RIFF",
+           String(data: data.dropFirst(8).prefix(4), encoding: .ascii) == "WEBP" {
+            return "image/webp"
+        }
+        return AttachmentPath.normalizedMIME(suggested ?? "")
+    }
+
+    private func uploadSelectedAttachments() async -> [String]? {
+        guard !selectedAttachments.isEmpty else { return [] }
+        isUploadingAttachments = true
+        defer { isUploadingAttachments = false }
+        let ids = selectedAttachments.map(\.id)
+        var paths: [String] = []
+        for id in ids {
+            guard let index = selectedAttachments.firstIndex(where: { $0.id == id }) else { continue }
+            if let uploaded = selectedAttachments[index].uploaded {
+                paths.append(uploaded.path)
+                continue
+            }
+            do {
+                let uploaded = try await session.uploadAttachment(
+                    data: selectedAttachments[index].data,
+                    mime: selectedAttachments[index].mime
+                )
+                guard let currentIndex = selectedAttachments.firstIndex(where: { $0.id == id }) else { continue }
+                selectedAttachments[currentIndex].uploaded = uploaded
+                selectedAttachments[currentIndex].error = nil
+                paths.append(uploaded.path)
+            } catch {
+                if let currentIndex = selectedAttachments.firstIndex(where: { $0.id == id }) {
+                    selectedAttachments[currentIndex].error = error.localizedDescription
+                }
+                attachmentError = error.localizedDescription
+                return nil
+            }
+        }
+        return paths
+    }
+
+    private func removeAttachment(_ id: UUID) {
+        guard !isUploadingAttachments else { return }
+        selectedAttachments.removeAll { $0.id == id }
+        if selectedAttachments.isEmpty { attachmentError = nil }
+    }
+
     /// True when this message opens a fresh stretch of conversation — the
     /// first one, or one that follows a gap of half an hour or more.
     private func startsANewStretch(at index: Int, in messages: [Message]) -> Bool {
@@ -675,9 +939,15 @@ struct ChatView: View {
     }
 
     private var primaryAction: ComposerPrimaryAction {
-        ComposerActionPolicy.action(
+        // The shared policy knows about text only. A selected image is still
+        // a sendable message, so pass a non-empty sentinel without changing
+        // the prompt that ultimately goes over the wire.
+        let policyDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !selectedAttachments.isEmpty
+            ? " "
+            : draft
+        return ComposerActionPolicy.action(
             busy: current.busy,
-            draft: draft,
+            draft: policyDraft,
             defaultMode: selectedBusySendDefault
         )
     }
@@ -700,12 +970,21 @@ struct ChatView: View {
         dictation.stop()
         let draftAtSubmission = draft
         let text = (explicitText ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, composerRequestGate.begin() else { return }
+        guard (!text.isEmpty || !selectedAttachments.isEmpty), composerRequestGate.begin() else { return }
         let target = current
         let mode = explicitMode ?? (target.busy ? selectedBusySendDefault.deliveryMode : .auto)
         showCommandHUD = false
         Task { @MainActor in
-            let receipt = await session.send(text, to: target, mode: mode)
+            let prompt: String
+            if selectedAttachments.isEmpty {
+                prompt = text
+            } else if let paths = await uploadSelectedAttachments() {
+                prompt = AttachmentPrompt.compose(text: text, paths: paths)
+            } else {
+                composerRequestGate.end()
+                return
+            }
+            let receipt = await session.send(prompt, to: target, mode: mode)
             if let receipt, receipt.ok {
                 if let queueId = receipt.queueId {
                     pendingQueueNotices[queueId] = PendingQueueNotice(
@@ -721,6 +1000,8 @@ struct ChatView: View {
                 // The editor remains usable while the request is in flight.
                 // Do not erase a newer draft that was typed after submission.
                 if draft == draftAtSubmission { draft = "" }
+                selectedAttachments.removeAll()
+                attachmentError = nil
                 SoundEffects.playSent()
                 Haptics.impact(.medium)
             }
@@ -772,6 +1053,8 @@ struct ChatView: View {
     private var composer: some View {
         VStack(spacing: 6) {
             let pendingCount = pendingQueueNotices.values.filter { $0.threadId == threadId }.count
+            attachmentPreviewStrip
+
             if pendingCount > 0 {
                 Label(
                     pendingCount == 1
@@ -792,6 +1075,15 @@ struct ChatView: View {
                     .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 4)
+            }
+
+            if let attachmentError {
+                Label(attachmentError, systemImage: "exclamationmark.triangle")
+                    .font(chatTypography.detail)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+                    .accessibilityLabel("Attachment error")
             }
 
             if showCommandHUD {
@@ -915,6 +1207,62 @@ struct ChatView: View {
         .padding(.top, 6)
         .padding(.bottom, 8)
         .background(GrokConversationStyle.background.opacity(0.98).ignoresSafeArea(edges: .bottom))
+    }
+
+    @ViewBuilder
+    private var attachmentPreviewStrip: some View {
+        if !selectedAttachments.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(selectedAttachments) { attachment in
+                        ZStack(alignment: .topTrailing) {
+                            Group {
+                                if let image = UIImage(data: attachment.data) {
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .scaledToFill()
+                                } else {
+                                    Image(systemName: "photo")
+                                        .font(.system(size: 20, weight: .medium))
+                                        .foregroundStyle(Color.secondary)
+                                }
+                            }
+                            .frame(width: 64, height: 64)
+                            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.16), lineWidth: 1)
+                            }
+
+                            if isUploadingAttachments && attachment.uploaded == nil {
+                                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                    .fill(Color.black.opacity(0.35))
+                                    .frame(width: 64, height: 64)
+                                    .overlay { ProgressView().tint(.white) }
+                            }
+
+                            Button {
+                                removeAttachment(attachment.id)
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 22, height: 22)
+                                    .background(Circle().fill(Color.black.opacity(0.68)))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isUploadingAttachments)
+                            .accessibilityLabel("Remove (attachment.name)")
+                        }
+                        .accessibilityElement(children: .contain)
+                    }
+                }
+                .padding(.horizontal, 4)
+                .padding(.vertical, 3)
+            }
+            .frame(height: 74)
+            .accessibilityLabel("Selected images")
+        }
     }
 
     @ViewBuilder
@@ -1125,6 +1473,22 @@ private struct ShareFile: Identifiable {
     var id: String { url.path }
 }
 
+private struct PendingImageAttachment: Identifiable, Equatable {
+    let id: UUID
+    let data: Data
+    let mime: String
+    let name: String
+    var uploaded: UploadedAttachment?
+    var error: String?
+
+    init(data: Data, mime: String, name: String) {
+        self.id = UUID()
+        self.data = data
+        self.mime = mime
+        self.name = name
+    }
+}
+
 private struct PendingQueueNotice: Equatable {
     let queueId: String
     let threadId: String
@@ -1140,11 +1504,58 @@ private struct ActivityShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
+private struct CameraAttachmentPicker: UIViewControllerRepresentable {
+    let onImage: (UIImage) -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onImage: onImage, onCancel: onCancel) }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.mediaTypes = [UTType.image.identifier]
+        picker.delegate = context.coordinator
+        picker.allowsEditing = false
+        return picker
+    }
+
+    func updateUIViewController(_ controller: UIImagePickerController, context: Context) {}
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let onImage: (UIImage) -> Void
+        let onCancel: () -> Void
+
+        init(onImage: @escaping (UIImage) -> Void, onCancel: @escaping () -> Void) {
+            self.onImage = onImage
+            self.onCancel = onCancel
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            onCancel()
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            if let image = info[.originalImage] as? UIImage { onImage(image) }
+            else { onCancel() }
+        }
+    }
+}
+
 struct TextBubble: View {
     let message: Message
     let chat: Chat
     var tailed = true
     @Environment(\.conversationTypography) private var typography
+    @EnvironmentObject private var session: Session
+
+    private var parsedAttachments: (display: String, paths: [String])? {
+        guard message.role == .user, let text = message.text else { return nil }
+        let parsed = AttachmentPrompt.split(text)
+        return parsed.paths.isEmpty ? nil : parsed
+    }
 
     private var parsedDiff: (filename: String, diff: String)? {
         guard message.role != .user, let source = message.text else { return nil }
@@ -1242,11 +1653,22 @@ struct TextBubble: View {
                 } else if let table = parsedTable {
                     SQLResultTableView(columns: table.headers, rows: table.rows)
                 } else if mine {
-                    Text(message.text ?? "")
-                        .font(typography.body)
-                        .foregroundStyle(BubbleColor.mineText)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if let parsedAttachments {
+                        TranscriptAttachmentGallery(paths: parsedAttachments.paths)
+                        if !parsedAttachments.display.isEmpty {
+                            Text(parsedAttachments.display)
+                                .font(typography.body)
+                                .foregroundStyle(BubbleColor.mineText)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } else {
+                        Text(message.text ?? "")
+                            .font(typography.body)
+                            .foregroundStyle(BubbleColor.mineText)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 } else {
                     MarkdownText(source: message.text ?? "")
                         .foregroundStyle(Color.primary)
@@ -1267,6 +1689,61 @@ struct TextBubble: View {
 
             if !mine { Spacer(minLength: 18) }
         }
+    }
+}
+
+/// User messages keep their absolute engine paths in the transcript, but the
+/// phone never loads those paths as URLs. Each one is resolved by Session
+/// through the authenticated, same-origin attachment route.
+private struct TranscriptAttachmentGallery: View {
+    let paths: [String]
+    @EnvironmentObject private var session: Session
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var images: [String: UIImage] = [:]
+    @State private var failed: Set<String> = []
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(paths, id: \.self) { path in
+                    Group {
+                        if let image = images[path] {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill()
+                        } else if failed.contains(path) {
+                            Image(systemName: "photo.badge.exclamationmark")
+                                .font(.system(size: 22, weight: .medium))
+                                .foregroundStyle(Color.secondary)
+                        } else {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                    }
+                    .frame(width: 156, height: 116)
+                    .background(Color.black.opacity(0.16))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.primary.opacity(0.14), lineWidth: 1)
+                    }
+                    .accessibilityLabel(failed.contains(path) ? "Attachment unavailable" : "Attached image")
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .scrollDisabled(paths.count < 2)
+        .task(id: paths) {
+            for path in paths {
+                guard images[path] == nil, !failed.contains(path), !Task.isCancelled else { continue }
+                guard let data = await session.attachmentData(path: path), let image = UIImage(data: data) else {
+                    failed.insert(path)
+                    continue
+                }
+                images[path] = image
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: images.keys.sorted())
     }
 }
 

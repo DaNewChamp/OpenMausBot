@@ -7,6 +7,138 @@
 // rather than present and failing at runtime.
 import Foundation
 
+/// One image saved by the companion attachment endpoint. The server returns
+/// an absolute filesystem path for the agents and a byte count for the phone;
+/// the phone turns that path into a same-origin serving route only after the
+/// generated filename has passed `AttachmentPath`'s allowlist.
+public struct UploadedAttachment: Codable, Equatable, Sendable {
+    public let path: String
+    public let mime: String
+    public let bytes: Int
+
+    public init(path: String, mime: String, bytes: Int) {
+        self.path = path
+        self.mime = mime
+        self.bytes = bytes
+    }
+}
+
+/// The attachment contract shared by the native composer and the companion
+/// client. Keeping this in the portable target makes the safety boundary
+/// testable without a simulator and keeps transcript rendering from ever
+/// treating a message-provided URL as an arbitrary image source.
+public enum AttachmentPath {
+    public static let maxBytes = 10 * 1_024 * 1_024
+    public static let supportedMIMEs = ["image/png", "image/jpeg", "image/gif", "image/webp"]
+    private static let supportedExtensions = ["png", "jpg", "gif", "webp"]
+
+    public static func normalizedMIME(_ mime: String) -> String? {
+        let value = mime.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
+            .first.map(String.init)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let value, supportedMIMEs.contains(value) else { return nil }
+        return value
+    }
+
+    public static func validate(data: Data, mime: String) throws {
+        guard normalizedMIME(mime) != nil else {
+            throw APIError.transport("Choose a PNG, JPEG, GIF, or WebP image.")
+        }
+        guard !data.isEmpty else {
+            throw APIError.transport("That image is empty.")
+        }
+        guard data.count <= maxBytes else {
+            throw APIError.transport("That image is larger than 10 MB.")
+        }
+    }
+
+    /// The generated attachment name is the only part a serving URL needs.
+    /// Reject relative paths, traversal components, dot segments, and names
+    /// outside the server's UUID-style ASCII allowlist.
+    public static func servingPath(from absolutePath: String) -> String? {
+        let path = absolutePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isAbsolute(path) else { return nil }
+        let components = path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).map(String.init)
+        guard !components.contains(where: { $0 == "." || $0 == ".." }),
+              components.contains(where: { $0.lowercased() == "attachments" }),
+              let name = components.last,
+              validFilename(name)
+        else { return nil }
+        return "/api/attachments/\(name)"
+    }
+
+    public static func validFilename(_ name: String) -> Bool {
+        guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return false }
+        let stem = name[..<dot]
+        let ext = name[name.index(after: dot)...].lowercased()
+        guard !stem.isEmpty, supportedExtensions.contains(String(ext)) else { return false }
+        return stem.utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (65...90).contains(byte) ||
+                (97...122).contains(byte) || byte == 45
+        }
+    }
+
+    private static func isAbsolute(_ path: String) -> Bool {
+        if path.hasPrefix("/") || path.hasPrefix("\\") { return true }
+        let bytes = Array(path.utf8)
+        return bytes.count >= 3 && ((48...57).contains(bytes[0]) || (65...90).contains(bytes[0]) || (97...122).contains(bytes[0])) &&
+            bytes[1] == 58 && (bytes[2] == 47 || bytes[2] == 92)
+    }
+}
+
+/// Prompt markup for images is intentionally plain text: every supported
+/// engine can open the path, while the iOS transcript can remove the tag and
+/// render the same attachment through the authenticated serving route.
+public enum AttachmentPrompt {
+    public static func compose(text: String, paths: [String]) -> String {
+        let parts = [text.trimmingCharacters(in: .whitespacesAndNewlines)] + paths.compactMap { path in
+            guard AttachmentPath.servingPath(from: path) != nil else { return nil }
+            return "<attached-image path=\"\(escapeAttribute(path))\" />"
+        }
+        return parts.filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
+    public static func split(_ text: String) -> (display: String, paths: [String]) {
+        let pattern = #"<attached-image\s+path="([^"]*)"\s*/?>"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            return (text, [])
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        var paths: [String] = []
+        let matches = expression.matches(in: text, range: range)
+        for match in matches {
+            guard match.numberOfRanges > 1,
+                  let pathRange = Range(match.range(at: 1), in: text)
+            else { continue }
+            let path = decodeAttribute(String(text[pathRange]))
+            if !path.isEmpty { paths.append(path) }
+        }
+        let display = expression.stringByReplacingMatches(in: text, range: range, withTemplate: "")
+        return (display.trimmingCharacters(in: .whitespacesAndNewlines), paths)
+    }
+
+    public static func escapeAttribute(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\n", with: "&#10;")
+            .replacingOccurrences(of: "\r", with: "&#13;")
+            .replacingOccurrences(of: "\t", with: "&#9;")
+    }
+
+    private static func decodeAttribute(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&#10;", with: "\n")
+            .replacingOccurrences(of: "&#13;", with: "\r")
+            .replacingOccurrences(of: "&#9;", with: "\t")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&amp;", with: "&")
+    }
+}
+
 /// Where a companion connects, and with what. The token is *not* held here
 /// — it lives in the keychain and is handed to the client at construction,
 /// so a `Connection` can be written to disk without writing a credential.
@@ -672,8 +804,23 @@ public struct CompanionClient: Sendable {
     /// Fetch an app-owned avatar with the paired-device bearer token. Custom
     /// avatars never go through `AsyncImage`, which cannot attach that token.
     public func avatar(path: String) async throws -> Data {
-        guard Self.validAvatarPath(path) else { throw APIError.badURL }
-        let request = try makeRequest("GET", path)
+        guard let servingPath = AttachmentPath.servingPath(from: path), Self.validAvatarPath(servingPath) else {
+            throw APIError.badURL
+        }
+        let request = try makeRequest("GET", servingPath)
+        let (data, response) = try await perform(request)
+        try Self.check(response, data)
+        return data
+    }
+
+    /// Fetch a user-attached image through the paired route. The transcript
+    /// contains an absolute filesystem path for the engine, never a URL; only
+    /// a generated attachment name can cross back into the HTTP client.
+    public func attachment(path: String) async throws -> Data {
+        guard let servingPath = AttachmentPath.servingPath(from: path) else {
+            throw APIError.badURL
+        }
+        let request = try makeRequest("GET", servingPath)
         let (data, response) = try await perform(request)
         try Self.check(response, data)
         return data
@@ -771,6 +918,28 @@ public struct CompanionClient: Sendable {
         let name = URL(fileURLWithPath: saved.path).lastPathComponent
         guard !name.isEmpty, !name.contains("/") else { throw APIError.transport("The uploaded image could not be used.") }
         return "/api/attachments/\(name)"
+    }
+
+    /// Save one native composer image. The endpoint deliberately accepts raw
+    /// bytes, matching the desktop composer and avoiding a second base64 copy
+    /// of a ten-megabyte photo in memory.
+    public func uploadAttachment(data: Data, mime: String) async throws -> UploadedAttachment {
+        guard let normalized = AttachmentPath.normalizedMIME(mime) else {
+            throw APIError.transport("Choose a PNG, JPEG, GIF, or WebP image.")
+        }
+        try AttachmentPath.validate(data: data, mime: normalized)
+        var request = try makeRequest("POST", "/api/attachments")
+        request.setValue(normalized, forHTTPHeaderField: "Content-Type")
+        request.httpBody = data
+        let response = try await send(request, as: AttachmentResponse.self)
+        guard AttachmentPath.servingPath(from: response.path) != nil,
+              response.bytes > 0,
+              response.bytes <= AttachmentPath.maxBytes,
+              AttachmentPath.normalizedMIME(response.mime) != nil
+        else {
+            throw APIError.transport("The uploaded image could not be used.")
+        }
+        return UploadedAttachment(path: response.path, mime: response.mime, bytes: response.bytes)
     }
 
     public func generateAvatar(botId: String, prompt: String) async throws -> Bot {

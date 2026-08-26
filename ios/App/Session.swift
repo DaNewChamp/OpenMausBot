@@ -640,6 +640,48 @@ final class Session: ObservableObject {
         return nil
     }
 
+    /// Upload one image selected by the native composer. The server is the
+    /// source of the absolute path; the client validates that the response is
+    /// an app-owned generated attachment before the path can enter a prompt.
+    func uploadAttachment(data: Data, mime: String) async throws -> UploadedAttachment {
+        guard let client else { throw APIError.transport("This computer is offline.") }
+        do {
+            return try await client.uploadAttachment(data: data, mime: mime)
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            throw error
+        } catch let error as APIError {
+            if case let .status(code, message) = error,
+               code == 404,
+               message == "no route: POST /api/attachments" {
+                let unavailable = APIError.transport(
+                    "This computer does not support image attachments yet. Update OpenMausBot on the computer."
+                )
+                if !Task.isCancelled { actionError = unavailable.localizedDescription }
+                throw unavailable
+            }
+            if !Task.isCancelled { actionError = error.localizedDescription }
+            throw error
+        } catch {
+            if !Task.isCancelled { actionError = error.localizedDescription }
+            throw error
+        }
+    }
+
+    /// Fetch a transcript attachment through the paired, same-origin route.
+    /// A malformed path is rejected by CompanionCore before URL construction.
+    func attachmentData(path: String) async -> Data? {
+        guard let client else { return nil }
+        do {
+            return try await client.attachment(path: path)
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            return nil
+        } catch {
+            return nil
+        }
+    }
+
     func answer(chat: Chat, card: OptionCard, choice: String, rememberingPermission: Bool = true) async {
         guard let requestId = card.requestId else { return }
         if rememberingPermission, card.shouldRememberPermission(for: choice), case let .bot(bot) = chat {
