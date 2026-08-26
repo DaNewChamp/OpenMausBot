@@ -200,6 +200,12 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
         fromBotId: BOT_ID,
         fromThreadId: THREAD_ID,
         credentialId,
+        ...(process.env.OMB_ROOM_THREAD_ID && process.env.OMB_ROOM_GENERATION
+          ? {
+              roomThreadId: process.env.OMB_ROOM_THREAD_ID,
+              roomGeneration: Number(process.env.OMB_ROOM_GENERATION),
+            }
+          : {}),
         ...(reason ? { reason } : {}),
       }),
     });

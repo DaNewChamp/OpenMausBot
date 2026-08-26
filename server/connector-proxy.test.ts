@@ -74,6 +74,40 @@ describe("connector MCP bridge", () => {
     expect(received.body.resumeKey).toMatch(/^[\w-]{8,100}$/);
   });
 
+  it("forwards the immutable room generation with connection-card requests", async () => {
+    let received: any = null;
+    const harness = await listen((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        received = JSON.parse(body);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end("{}");
+      });
+    });
+    const lines = start({
+      OMB_HARNESS_URL: harness,
+      OMB_COMMS_TOKEN: "bridge-secret",
+      OMB_BOT_ID: "bot-1",
+      OMB_THREAD_ID: "thread-room",
+      OMB_ROOM_THREAD_ID: "thread-room",
+      OMB_ROOM_GENERATION: "7",
+    });
+    child!.stdin.write(`${JSON.stringify({
+      jsonrpc: "2.0",
+      id: 8,
+      method: "tools/call",
+      params: { name: "COMPOSIO_MANAGE_CONNECTIONS", arguments: { toolkits: ["GMAIL"] } },
+    })}\n`);
+    await nextJson(lines);
+    expect(received).toMatchObject({
+      botId: "bot-1",
+      threadId: "thread-room",
+      roomThreadId: "thread-room",
+      roomGeneration: 7,
+    });
+  });
+
   it("relays ordinary MCP JSON-RPC without exposing upstream headers on stdout", async () => {
     let upstreamAuthorization = "";
     const upstream = await listen((request, response) => {

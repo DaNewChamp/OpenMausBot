@@ -115,7 +115,18 @@ async function showConnectorCards(slugs: string[]): Promise<void> {
   const response = await fetch(`${HARNESS}/api/internal/connectors/request`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
-    body: JSON.stringify({ botId: BOT_ID, threadId: THREAD_ID, slugs, resumeKey: randomUUID() }),
+    body: JSON.stringify({
+      botId: BOT_ID,
+      threadId: THREAD_ID,
+      slugs,
+      resumeKey: randomUUID(),
+      ...(process.env.OMB_ROOM_THREAD_ID && process.env.OMB_ROOM_GENERATION
+        ? {
+            roomThreadId: process.env.OMB_ROOM_THREAD_ID,
+            roomGeneration: Number(process.env.OMB_ROOM_GENERATION),
+          }
+        : {}),
+    }),
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) {

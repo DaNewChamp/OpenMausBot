@@ -161,9 +161,58 @@ describe("room turn cancellation", () => {
     const later = cancellation.begin("thread-held");
     expect(cancellation.current("thread-held")).toBe(later);
     expect(cancellation.isCancelled("thread-held", later)).toBe(false);
-    expect(cancellation.settle("thread-held")).toBe(true);
+    expect(cancellation.settle("thread-held", stopped.generation)).toBe(true);
     expect(cancellation.current("thread-held")).toBe(later);
     expect(lateCardWouldResume()).toBe(true);
+  });
+
+  it("settles only the matching held generation while a later run is active", () => {
+    const cancellation = new RoomTurnCancellation();
+    const first = cancellation.begin("thread-generations");
+    cancellation.interrupt("thread-generations");
+    expect(cancellation.holdUntilTerminal("thread-generations", first)).toBe(true);
+
+    const second = cancellation.begin("thread-generations");
+    expect(cancellation.settle("thread-generations", second.generation)).toBe(false);
+    expect(cancellation.currentOrHeld("thread-generations")).toBe(second);
+    expect(cancellation.settle("thread-generations", first.generation)).toBe(true);
+    expect(cancellation.currentOrHeld("thread-generations")).toBe(second);
+  });
+
+  it("keeps provider turn identity immutable after a later generation starts", () => {
+    const cancellation = new RoomTurnCancellation();
+    const first = cancellation.begin("thread-turn-ids");
+    expect(cancellation.registerTurn("thread-turn-ids", { ...first }, "provider-g1")).toBe(true);
+    cancellation.interrupt("thread-turn-ids");
+    cancellation.holdUntilTerminal("thread-turn-ids", first);
+
+    const second = cancellation.begin("thread-turn-ids");
+    expect(cancellation.registerTurn("thread-turn-ids", second, "provider-g2")).toBe(true);
+    expect(cancellation.runForTurn("thread-turn-ids", "provider-g1")).toEqual({
+      threadId: "thread-turn-ids",
+      generation: first.generation,
+    });
+    expect(cancellation.runForTurn("thread-turn-ids", "provider-g2")).toEqual({
+      threadId: "thread-turn-ids",
+      generation: second.generation,
+    });
+    expect(cancellation.settle("thread-turn-ids", second.generation)).toBe(false);
+    expect(cancellation.runForTurn("thread-turn-ids", "provider-g1")).toEqual({
+      threadId: "thread-turn-ids",
+      generation: first.generation,
+    });
+  });
+
+  it("does not re-register a turn id when the terminal event beats dispatch resolution", () => {
+    const cancellation = new RoomTurnCancellation();
+    const run = cancellation.begin("thread-late-registration");
+    expect(cancellation.registerTurn("thread-late-registration", run, "provider-late")).toBe(true);
+    expect(cancellation.completeTurn("thread-late-registration", "provider-late", run.generation)).toBe(true);
+    expect(cancellation.registerTurn("thread-late-registration", run, "provider-late")).toBe(false);
+    expect(cancellation.runForTurn("thread-late-registration", "provider-late")).toBeNull();
+    // A room generation can continue with another provider turn after the
+    // first member settles (for example a chained @mention).
+    expect(cancellation.registerTurn("thread-late-registration", run, "provider-next")).toBe(true);
   });
 
   it("does not turn a normally finished dispatch into a cancellation", async () => {

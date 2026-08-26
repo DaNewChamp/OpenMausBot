@@ -226,7 +226,7 @@ const phoneProxyPath = SPAWNED_PROXIES.phone;
 // in the packaged app process.execPath is Electron — run the proxy as node
 const AGENTS_NODE_FLAG = { ELECTRON_RUN_AS_NODE: "1" };
 
-function agentsIntegration(botId: string, threadId: string, depth: number) {
+function agentsIntegration(botId: string, threadId: string, depth: number, roomRun?: RoomTurnIdentity) {
   return {
     command: process.execPath,
     args: [agentsProxyPath],
@@ -237,6 +237,12 @@ function agentsIntegration(botId: string, threadId: string, depth: number) {
       OMB_THREAD_ID: threadId,
       OMB_COMMS_TOKEN: COMMS_TOKEN,
       OMB_TURN_DEPTH: String(depth),
+      ...(roomRun
+        ? {
+            OMB_ROOM_THREAD_ID: roomRun.threadId,
+            OMB_ROOM_GENERATION: String(roomRun.generation),
+          }
+        : {}),
     },
   };
 }
@@ -249,13 +255,18 @@ function phoneIntegration() {
   return { command: process.execPath, args: [phoneProxyPath], env };
 }
 
-function connectedAppsIntegration(botId: string, threadId: string) {
-  return composio.mcpIntegration(cfg, {
+async function connectedAppsIntegration(botId: string, threadId: string, roomRun?: RoomTurnIdentity) {
+  const integration = await composio.mcpIntegration(cfg, {
     harnessUrl: `http://127.0.0.1:${PORT}`,
     commsToken: COMMS_TOKEN,
     botId,
     threadId,
   });
+  if (integration && roomRun) {
+    integration.env.OMB_ROOM_THREAD_ID = roomRun.threadId;
+    integration.env.OMB_ROOM_GENERATION = String(roomRun.generation);
+  }
+  return integration;
 }
 
 // ── computer control (who is driving) ──────────────────────────────────
@@ -613,13 +624,71 @@ function notify(notification: Notification | null) {
 }
 
 // Group threads: the fold needs to know WHO is talking — the turn engine
-// records the active member here before dispatching its turn.
-const groupSpeakers = new Map<string, { botId: string; name: string; color: string }>();
+// records the active member here before dispatching its turn. The room run is
+// immutable: a late provider event must never borrow the current speaker from
+// a newer generation on the same transcript thread.
+type RoomSpeakerActivity = {
+  botId: string;
+  name: string;
+  color: string;
+  roomRun?: RoomTurnIdentity;
+  turnId?: string;
+};
+const groupSpeakers = new Map<string, RoomSpeakerActivity>();
+const roomTurnActivities = new Map<string, RoomSpeakerActivity>();
+// EventBus delivers the same RuntimeEvent object to every listener. Keep the
+// immutable room identity on that object so a later listener (the room turn
+// waiter) can still distinguish a late G1 terminal after the main fold has
+// retired its provider mapping.
+const roomEventRuns = new WeakMap<RuntimeEvent, RoomTurnIdentity>();
+const botActivityOwners = new Map<
+  string,
+  | { kind: "room"; threadId: string; generation: number }
+  | { kind: "task"; threadId: string }
+>();
+
+function roomTurnActivityKey(threadId: string, turnId: string): string {
+  return `${threadId}\u0000${turnId}`;
+}
+
+function sameRoomRun(a?: RoomTurnIdentity, b?: RoomTurnIdentity): boolean {
+  return Boolean(a && b && a.threadId === b.threadId && a.generation === b.generation);
+}
+
+function sameRoomActivity(a?: RoomSpeakerActivity, b?: RoomSpeakerActivity): boolean {
+  return Boolean(
+    a &&
+      b &&
+      a.botId === b.botId &&
+      a.roomRun &&
+      b.roomRun &&
+      sameRoomRun(a.roomRun, b.roomRun) &&
+      (!a.turnId || !b.turnId || a.turnId === b.turnId),
+  );
+}
+
+function roomActivityOwnerMatches(activity: RoomSpeakerActivity): boolean {
+  if (!activity.roomRun) return false;
+  const owner = botActivityOwners.get(activity.botId);
+  return Boolean(
+    owner?.kind === "room" &&
+      owner.threadId === activity.roomRun.threadId &&
+      owner.generation === activity.roomRun.generation,
+  );
+}
 
 // The latest running token totals for the turn in flight on each thread.
 // Providers report cumulative-within-turn numbers; the final value is folded
 // into the task's tally when the turn settles.
 const turnUsage = new Map<string, { input: number; output: number }>();
+// Room providers can overlap briefly while a stopped generation winds down
+// and the next queued generation starts. Keep their usage by immutable room
+// generation so an old terminal event cannot erase a newer turn's counters.
+const roomTurnUsage = new Map<string, { input: number; output: number }>();
+
+function roomTurnUsageKey(run: RoomTurnIdentity): string {
+  return `${run.threadId}\u0000${run.generation}`;
+}
 
 // Bounded per active turn. OpenHands uses a bounded recent-event scan for
 // the same class of stuck-loop detection; retaining an unlimited set of
@@ -658,15 +727,22 @@ const watchdog = new TurnWatchdog({
     const release = setTimeout(() => {
       const group = store.groupByThread(turn.threadId);
       const speaker = groupSpeakers.get(turn.threadId);
-      if (group && group.busyBotId === turn.botId && speaker?.botId === turn.botId) {
+      const owner = botActivityOwners.get(turn.botId);
+      const ownsRoom =
+        owner?.kind === "room" &&
+        owner.threadId === turn.threadId &&
+        owner.generation === speaker?.roomRun?.generation;
+      if (group && group.busyBotId === turn.botId && speaker?.botId === turn.botId && ownsRoom) {
         groupSpeakers.delete(turn.threadId);
         store.patchGroup(group.id, { busyBotId: null, unread: true });
       }
       const currentBot = store.bot(turn.botId);
-      if (currentBot?.busy) {
+      if (currentBot?.busy && ownsRoom) {
         stopScreenPoller(currentBot.id);
         if (activeVpsThreads.get(currentBot.id) === turn.threadId) activeVpsThreads.delete(currentBot.id);
         store.setActivity(currentBot.id, "idle");
+        botActivityOwners.delete(currentBot.id);
+        if (speaker?.roomRun) forgetRoomRunActivities(speaker.roomRun);
         // The grace fallback replaces a missing turn.completed event. Release
         // every kind of work that may have queued behind this bot, including
         // connector and credential continuations.
@@ -802,15 +878,35 @@ bus.subscribe((event: RuntimeEvent) => {
   const routineRun = routines?.handleRuntimeEvent(event) ?? null;
   const bot = store.botByThread(event.threadId);
   const group = bot ? undefined : store.groupByThread(event.threadId);
+  const currentRoomSpeaker = groupSpeakers.get(event.threadId);
+  const mappedActivity =
+    roomActivityForEvent(event) ??
+    (event.type === "turn.started" && event.turnId && currentRoomSpeaker?.roomRun
+      ? bindRoomTurnActivity(event.threadId, currentRoomSpeaker.roomRun, event.turnId, currentRoomSpeaker)
+      : undefined);
+  if (mappedActivity?.roomRun) {
+    roomEventRuns.set(event, { ...mappedActivity.roomRun });
+  }
   // A room may be deleted while its provider is winding down. A terminal
   // event still owns the speaker snapshot and must release the member's busy
   // state even though the durable group is gone.
-  const speaker = group
-    ? groupSpeakers.get(event.threadId)
-    : event.type === "turn.completed"
-      ? groupSpeakers.get(event.threadId)
-      : undefined;
-  if (event.type === "turn.completed") roomTurnCancellation.settle(event.threadId);
+  const speaker = mappedActivity ??
+    (event.turnId
+      ? undefined
+      : group
+        ? currentRoomSpeaker
+        : event.type === "turn.completed"
+          ? currentRoomSpeaker
+          : undefined);
+  if (event.type === "turn.completed") {
+    const terminalRun = mappedActivity?.roomRun ??
+      (event.turnId ? roomTurnCancellation.runForTurn(event.threadId, event.turnId) ?? undefined : undefined);
+    if (terminalRun && event.turnId) {
+      roomTurnCancellation.completeTurn(event.threadId, event.turnId, terminalRun.generation);
+    }
+    if (terminalRun) roomTurnCancellation.settle(event.threadId, terminalRun.generation);
+    forgetRoomTurnActivity(event, terminalRun);
+  }
   if (!bot && !group && !speaker) return;
 
   const pushMessage = (m: Omit<Message, "id" | "at">) => {
@@ -1047,13 +1143,19 @@ bus.subscribe((event: RuntimeEvent) => {
     case "thread.token-usage.updated":
       // running totals for the turn in flight; folded into the task's
       // tally at turn.completed (below) so retries never double-count
-      turnUsage.set(event.threadId, { input: event.input, output: event.output });
+      if (mappedActivity?.roomRun) {
+        roomTurnUsage.set(roomTurnUsageKey(mappedActivity.roomRun), { input: event.input, output: event.output });
+      } else if (bot) {
+        turnUsage.set(event.threadId, { input: event.input, output: event.output });
+      }
       break;
     case "turn.completed": {
-      const reply = lastReply.get(event.threadId) ?? "";
-      lastReply.delete(event.threadId);
-      const lastReported = turnUsage.get(event.threadId);
-      turnUsage.delete(event.threadId);
+      const terminalRun = mappedActivity?.roomRun ??
+        (event.turnId ? roomTurnCancellation.runForTurn(event.threadId, event.turnId) ?? undefined : undefined);
+      const reply = terminalRun ? "" : lastReply.get(event.threadId) ?? "";
+      if (!terminalRun) lastReply.delete(event.threadId);
+      const lastReported = bot ? turnUsage.get(event.threadId) : undefined;
+      if (bot) turnUsage.delete(event.threadId);
       // group turns run on the room's thread — the speaking bot's task
       // tally is not the right home for a shared room's spend, so only
       // 1:1 task turns are tallied for now.
@@ -1074,6 +1176,8 @@ bus.subscribe((event: RuntimeEvent) => {
         });
         // settled → idle; a setup failure already marked it dead, keep that
         if (store.bot(bot.id)?.activity !== "dead") store.setActivity(bot.id, "idle");
+        const owner = botActivityOwners.get(bot.id);
+        if (owner?.kind === "task" && owner.threadId === event.threadId) botActivityOwners.delete(bot.id);
         store.patchBot(bot.id, { unread: true });
         if (routineRun?.status !== "failed") {
           // the frame carries the bot's avatar so every desktop client can
@@ -1097,23 +1201,30 @@ bus.subscribe((event: RuntimeEvent) => {
       }
       const group = store.groupByThread(event.threadId);
       // A room can be deleted while its provider is winding down. Keep the
-      // speaker snapshot as the cleanup authority until turn.completed so a
-      // deleted room cannot leave its member busy forever.
-      const speaker = groupSpeakers.get(event.threadId);
-      if (speaker && group?.busyBotId === speaker.botId) {
-        groupSpeakers.delete(event.threadId);
-        store.patchGroup(group.id, { busyBotId: null, unread: true });
-        const speakingBot = store.bot(speaker.botId);
-        if (speakingBot?.busy) {
-          store.setActivity(speakingBot.id, "idle");
-          store.patchBot(speakingBot.id, { unread: true });
-        }
-      } else if (speaker && !group) {
-        groupSpeakers.delete(event.threadId);
-        const speakingBot = store.bot(speaker.botId);
-        if (speakingBot?.busy) {
-          store.setActivity(speakingBot.id, "idle");
-          store.patchBot(speakingBot.id, { unread: true });
+      // immutable activity snapshot as the cleanup authority until
+      // turn.completed, but only release the bot if that exact generation is
+      // still its current activity owner. A late G1 completion must not set a
+      // bot idle while G2 (or a one-to-one task) is using it.
+      const activity = mappedActivity ?? (event.turnId ? undefined : currentRoomSpeaker);
+      const currentSpeaker = groupSpeakers.get(event.threadId);
+      if (activity && sameRoomActivity(currentSpeaker, activity) && roomActivityOwnerMatches(activity)) {
+        if (group?.busyBotId === activity.botId) {
+          groupSpeakers.delete(event.threadId);
+          store.patchGroup(group.id, { busyBotId: null, unread: true });
+          const speakingBot = store.bot(activity.botId);
+          if (speakingBot?.busy) {
+            store.setActivity(speakingBot.id, "idle");
+            store.patchBot(speakingBot.id, { unread: true });
+          }
+          botActivityOwners.delete(activity.botId);
+        } else if (!group) {
+          groupSpeakers.delete(event.threadId);
+          const speakingBot = store.bot(activity.botId);
+          if (speakingBot?.busy) {
+            store.setActivity(speakingBot.id, "idle");
+            store.patchBot(speakingBot.id, { unread: true });
+          }
+          botActivityOwners.delete(activity.botId);
         }
       }
       // A delegated turn's terminal state belongs in the A⇄B channel:
@@ -1509,6 +1620,7 @@ async function startTurn(
   // in the background — box provisioning can take ~90s and must never
   // hang the HTTP request
   store.setActivity(bot.id, "working");
+  botActivityOwners.set(bot.id, { kind: "task", threadId });
   store.patchBot(bot.id, { unread: false });
   turnUsage.delete(threadId);
 
@@ -1820,6 +1932,8 @@ async function startTurn(
       if (activeVpsThreads.get(bot.id) === threadId) activeVpsThreads.delete(bot.id);
       watchdog.settle(threadId);
       turnUsage.delete(threadId);
+      const owner = botActivityOwners.get(bot.id);
+      if (owner?.kind === "task" && owner.threadId === threadId) botActivityOwners.delete(bot.id);
       const message = e instanceof Error ? e.message : String(e);
       store.appendMessage(threadId, {
         role: "bot",
@@ -1921,6 +2035,91 @@ const roomTurnCancellation = new RoomTurnCancellation();
 const GROUP_CONTEXT_MESSAGES = 30;
 const MAX_GROUP_HOPS = 1;
 
+/** Bind a provider turn id to the room generation that dispatched it. The
+ * adapter may emit `turn.started` before `sendTurn` resolves, so this helper
+ * is called both from the event fold and from the dispatch result. */
+function bindRoomTurnActivity(
+  threadId: string,
+  run: RoomTurnIdentity,
+  turnId: string,
+  speaker?: Pick<RoomSpeakerActivity, "botId" | "name" | "color">,
+): RoomSpeakerActivity | undefined {
+  if (!turnId || run.threadId !== threadId) return undefined;
+  const key = roomTurnActivityKey(threadId, turnId);
+  const existing = roomTurnActivities.get(key);
+  if (existing) {
+    if (!sameRoomRun(existing.roomRun, run)) return existing;
+    if (!roomTurnCancellation.registerTurn(threadId, run, turnId)) return undefined;
+    return existing;
+  }
+  const current = groupSpeakers.get(threadId);
+  const source = speaker ?? current;
+  if (!source) return undefined;
+  const activity: RoomSpeakerActivity = {
+    botId: source.botId,
+    name: source.name,
+    color: source.color,
+    roomRun: { threadId: run.threadId, generation: run.generation },
+    turnId,
+  };
+  if (!roomTurnCancellation.registerTurn(threadId, run, turnId)) return undefined;
+  roomTurnActivities.set(key, activity);
+  const currentSpeaker = groupSpeakers.get(threadId);
+  if (!currentSpeaker || sameRoomRun(currentSpeaker.roomRun, run)) {
+    groupSpeakers.set(threadId, activity);
+  }
+  botActivityOwners.set(source.botId, {
+    kind: "room",
+    threadId: run.threadId,
+    generation: run.generation,
+  });
+  return activity;
+}
+
+function roomActivityForEvent(event: RuntimeEvent): RoomSpeakerActivity | undefined {
+  if (!event.turnId) return undefined;
+  return roomTurnActivities.get(roomTurnActivityKey(event.threadId, event.turnId));
+}
+
+function forgetRoomTurnActivity(event: RuntimeEvent, run?: RoomTurnIdentity): void {
+  if (event.turnId) {
+    const key = roomTurnActivityKey(event.threadId, event.turnId);
+    const activity = roomTurnActivities.get(key);
+    if (!run || !activity || sameRoomRun(activity.roomRun, run)) roomTurnActivities.delete(key);
+    roomTurnCancellation.forgetTurn(event.threadId, event.turnId, run?.generation);
+  }
+  if (run) {
+    const usageKey = roomTurnUsageKey(run);
+    roomTurnUsage.delete(usageKey);
+  }
+}
+
+/** Remove every provider mapping owned by one room generation. This is used
+ * only when no terminal event can arrive (for example a dispatch rejection or
+ * the watchdog grace fallback); a later generation's mappings are untouched. */
+function forgetRoomRunActivities(run: RoomTurnIdentity): void {
+  for (const [key, activity] of roomTurnActivities) {
+    if (!sameRoomRun(activity.roomRun, run)) continue;
+    roomTurnActivities.delete(key);
+    if (activity.turnId) roomTurnCancellation.forgetTurn(run.threadId, activity.turnId, run.generation);
+  }
+  roomTurnUsage.delete(roomTurnUsageKey(run));
+}
+
+function roomRunFromProviderRequest(
+  threadId: string,
+  body: Record<string, unknown>,
+): RoomTurnIdentity | undefined {
+  const hasIdentity = Object.hasOwn(body, "roomThreadId") || Object.hasOwn(body, "roomGeneration");
+  if (!hasIdentity) return undefined;
+  const requestedThread = body.roomThreadId;
+  const generation = body.roomGeneration;
+  if (requestedThread !== threadId || typeof generation !== "number" || !Number.isInteger(generation) || generation < 1) {
+    return undefined;
+  }
+  return { threadId, generation };
+}
+
 function serializeRoomContext(threadId: string, userName: string): string {
   const messages = store.messagesFor(threadId);
   const messagesById = new Map(messages.map((message) => [message.id, message]));
@@ -2007,7 +2206,7 @@ async function runGroupMemberTurn(
   }
   const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
   if (hop < MAX_COMMS_DEPTH && instance.adapter.capabilities.agentsMcp === true) {
-    integrations.agents = agentsIntegration(bot.id, group.threadId, hop);
+    integrations.agents = agentsIntegration(bot.id, group.threadId, hop, roomRun);
   }
   const selectedSkills = selectBundledSkills(
     serializeRoomContext(group.threadId, userName),
@@ -2019,7 +2218,7 @@ async function runGroupMemberTurn(
   }
   try {
     if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
-      const connection = await connectedAppsIntegration(bot.id, group.threadId);
+      const connection = await connectedAppsIntegration(bot.id, group.threadId, roomRun);
       if (connection) integrations.composio = connection;
     }
   } catch (error) {
@@ -2037,7 +2236,18 @@ async function runGroupMemberTurn(
   store.setActivity(bot.id, "working");
 
   store.patchGroup(group.id, { busyBotId: bot.id }); // the store's change stream carries the frame
-  groupSpeakers.set(group.threadId, { botId: bot.id, name: bot.name, color: bot.color });
+  const roomIdentity = roomRun
+    ? { threadId: roomRun.threadId, generation: roomRun.generation }
+    : undefined;
+  const speaker: RoomSpeakerActivity = { botId: bot.id, name: bot.name, color: bot.color, roomRun: roomIdentity };
+  groupSpeakers.set(group.threadId, speaker);
+  if (roomIdentity) {
+    botActivityOwners.set(bot.id, {
+      kind: "room",
+      threadId: roomIdentity.threadId,
+      generation: roomIdentity.generation,
+    });
+  }
 
   const roster = group.memberIds
     .map((id) => store.bot(id))
@@ -2088,6 +2298,7 @@ async function runGroupMemberTurn(
   // resolved dispatch may have one winding down after its interrupt. Keep
   // that distinction for the cleanup decision below.
   let providerTurnStarted = false;
+  let providerTurnId: string | undefined;
   const outcome = await new Promise<"settled" | "dispatch_failed" | "stalled" | "timed_out" | "cancelled">((resolve) => {
     let done = false;
     let unsub = () => {};
@@ -2112,6 +2323,21 @@ async function runGroupMemberTurn(
     };
     unsub = bus.subscribe((e: RuntimeEvent) => {
       if (e.threadId !== group.threadId) return;
+      if (roomRun && e.turnId) {
+        const mappedRun = roomEventRuns.get(e) ?? roomActivityForEvent(e)?.roomRun ??
+          roomTurnCancellation.runForTurn(e.threadId, e.turnId);
+        // A shared transcript can carry a late event from a stopped room
+        // generation. The bus fold records that event's immutable run on the
+        // event object; reject it before it can finish this newer waiter.
+        if (mappedRun && !sameRoomRun(mappedRun, roomRun)) return;
+        if (e.type === "turn.started" && mappedRun && sameRoomRun(mappedRun, roomRun)) {
+          providerTurnId = e.turnId;
+        }
+        // One transcript can receive a late terminal event from a stopped
+        // generation while a newer run is active. Once this invocation has
+        // seen its own provider turn, ignore events from every other turn.
+        if (providerTurnId && e.turnId !== providerTurnId) return;
+      }
       if (e.type === "item.completed" && e.itemType === "assistant_text") replyText += `\n${e.text}`;
       else if (e.type === "turn.completed") finish("settled");
       // Waiting on a person is not turn work: hold the ceiling while an
@@ -2144,6 +2370,11 @@ async function runGroupMemberTurn(
     dispatched
       .then((result) => {
         providerTurnStarted = result.started;
+        const value = result.value as { turnId?: unknown } | undefined;
+        if (roomRun && typeof value?.turnId === "string") {
+          providerTurnId = value.turnId;
+          bindRoomTurnActivity(group.threadId, roomRun, value.turnId, speaker);
+        }
         if (result.cancelled) finish("cancelled");
       })
       .catch((err) => {
@@ -2162,9 +2393,15 @@ async function runGroupMemberTurn(
   const clearRoomOwner = () => {
     const currentGroup = store.groupByThread(group.threadId);
     if (currentGroup?.id !== group.id || currentGroup.busyBotId !== bot.id) return;
+    const currentSpeaker = groupSpeakers.get(group.threadId);
+    if (roomRun && !sameRoomRun(currentSpeaker?.roomRun, roomRun)) return;
+    const owner = botActivityOwners.get(bot.id);
     groupSpeakers.delete(group.threadId);
     store.patchGroup(currentGroup.id, { busyBotId: null, unread: true });
     if (store.bot(bot.id)?.busy) store.setActivity(bot.id, "idle");
+    if (owner?.kind === "room" && owner.threadId === group.threadId && owner.generation === roomRun?.generation) {
+      botActivityOwners.delete(bot.id);
+    }
   };
   // A timed-out provider still owns the room thread until its interrupt
   // produces turn.completed (or the stall watchdog's grace fallback runs).
@@ -2176,6 +2413,7 @@ async function runGroupMemberTurn(
     // until its interrupt produces that terminal event.
     if (!providerTurnStarted) {
       watchdog.settle(group.threadId);
+      if (roomRun) forgetRoomRunActivities(roomRun);
       clearRoomOwner();
     } else if (roomRun && store.groupByThread(group.threadId)?.id === group.id) {
       // dispatchRoomTurn resolves as soon as the adapter acknowledges Stop,
@@ -2192,6 +2430,7 @@ async function runGroupMemberTurn(
   // duplicate group frame or clear a newer speaker's state.
   clearRoomOwner();
   if (outcome === "dispatch_failed") {
+    if (roomRun) forgetRoomRunActivities(roomRun);
     // No turn.completed follows a rejected room dispatch. Anything that was
     // queued while this bot briefly owned the room must be retried now.
     drainQueuedSends();
@@ -2292,6 +2531,7 @@ function startGroupTurn(
         // dispatch into the replacement room.
         if (!current || current.threadId !== threadId) return;
         const roomRun = roomTurnCancellation.begin(threadId);
+        dropStaleRoomResumes(threadId, roomRun);
         const spoken = new Set<string>();
         try {
           for (const responder of responders) {
@@ -2339,13 +2579,30 @@ function resolveReplyTarget(threadId: string, value: unknown): Message | undefin
 const CONNECTOR_SLUG = /^[a-z0-9][a-z0-9_-]{0,80}$/;
 type RoomResumeEntry = { roomRun?: RoomTurnIdentity };
 
-function roomRunIdentity(threadId: string): RoomTurnIdentity | undefined {
-  const run = roomTurnCancellation.currentOrHeld(threadId);
-  return run ? { threadId: run.threadId, generation: run.generation } : undefined;
-}
-
 function roomResumeCancelled(entry: RoomResumeEntry & { threadId: string }): boolean {
   return Boolean(entry.roomRun && roomTurnCancellation.isCancelled(entry.threadId, entry.roomRun));
+}
+
+// Card callbacks can arrive long after the provider that created the card has
+// stopped. Keep the room generation alongside the in-memory card id rather
+// than deriving it from whichever run happens to be current when the user
+// taps Resume. Legacy cards without a captured identity fail closed for room
+// continuations instead of becoming unscoped work.
+const connectorCardRoomRuns = new Map<string, RoomTurnIdentity>();
+const secretCardRoomRuns = new Map<string, RoomTurnIdentity>();
+
+function roomRunForConnectorCards(cards: Message[]): RoomTurnIdentity | undefined {
+  const runs = cards.map((message) => connectorCardRoomRuns.get(message.id));
+  if (!runs.length || runs.some((run) => !run)) return undefined;
+  const first = runs[0];
+  return first && runs.every((run) => run && sameRoomRun(run, first)) ? { ...first } : undefined;
+}
+
+function forgetRoomCardRuns(threadId: string): void {
+  for (const message of store.messagesFor(threadId)) {
+    connectorCardRoomRuns.delete(message.id);
+    secretCardRoomRuns.delete(message.id);
+  }
 }
 
 const pendingConnectorResumes = new Map<
@@ -2386,8 +2643,14 @@ function markConnectorResumeFailed(threadId: string, resumeKey: string, error: s
 function dispatchConnectorResume(entry: { botId: string; threadId: string; resumeKey: string; labels: string[] } & RoomResumeEntry) {
   const owner = connectorThread(entry.botId, entry.threadId);
   if (!owner) return;
-  const roomRun = entry.roomRun ?? (owner.group ? roomRunIdentity(entry.threadId) : undefined);
-  const scopedEntry = roomRun ? { ...entry, roomRun } : entry;
+  // Room continuations must carry the generation captured when their card
+  // was created. Never look up a dynamic current run here: a late G1
+  // callback could otherwise attach itself to G2 (or resume after Stop).
+  if (owner.group && !entry.roomRun) {
+    markConnectorResumeFailed(entry.threadId, entry.resumeKey, "the room turn identity is no longer available");
+    return;
+  }
+  const scopedEntry = entry.roomRun ? { ...entry, roomRun: { ...entry.roomRun } } : entry;
   if (roomResumeCancelled(scopedEntry)) {
     markConnectorResumeFailed(entry.threadId, entry.resumeKey, "the room turn was stopped before the connection update could resume");
     return;
@@ -2438,20 +2701,39 @@ function dispatchConnectorResume(entry: { botId: string; threadId: string; resum
     onDispatchError: (message) => markConnectorResumeFailed(entry.threadId, entry.resumeKey, message),
   }).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
-    if (/already working/i.test(message)) pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, entry);
+    if (/already working/i.test(message)) pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, scopedEntry);
     else markConnectorResumeFailed(entry.threadId, entry.resumeKey, message);
   });
 }
 
-function maybeResumeConnectors(botId: string, threadId: string, resumeKey: string) {
+function maybeResumeConnectors(
+  botId: string,
+  threadId: string,
+  resumeKey: string,
+  capturedRoomRun?: RoomTurnIdentity,
+) {
   const cards = connectorCards(threadId, resumeKey);
   if (!cards.length || cards.some((message) => message.connector?.dismissed || message.connector?.status !== "connected")) return false;
   if (cards.every((message) => message.connector?.resumed)) return true;
+  const owner = connectorThread(botId, threadId);
+  if (!owner) return false;
+  const roomRun = capturedRoomRun ? { ...capturedRoomRun } : roomRunForConnectorCards(cards);
+  if (owner.group && (!roomRun || cards.some((message) => {
+    const cardRun = connectorCardRoomRuns.get(message.id);
+    return !cardRun || !sameRoomRun(cardRun, roomRun);
+  }))) {
+    markConnectorResumeFailed(threadId, resumeKey, "the room turn was stopped before the connection update could resume");
+    return false;
+  }
+  if (roomRun && roomTurnCancellation.isCancelled(threadId, roomRun)) {
+    markConnectorResumeFailed(threadId, resumeKey, "the room turn was stopped before the connection update could resume");
+    return false;
+  }
   const labels = cards.map((message) => message.connector!.label);
   for (const message of cards) {
     store.patchMessage(threadId, message.id, { connector: { ...message.connector!, resumed: true, error: undefined } });
   }
-  dispatchConnectorResume({ botId, threadId, resumeKey, labels });
+  dispatchConnectorResume({ botId, threadId, resumeKey, labels, ...(roomRun ? { roomRun } : {}) });
   return true;
 }
 
@@ -2493,8 +2775,13 @@ function markSecretResumeFailed(threadId: string, messageId: string, error: stri
 function dispatchSecretResume(entry: SecretResumeEntry) {
   const owner = connectorThread(entry.botId, entry.threadId);
   if (!owner) return;
-  const roomRun = entry.roomRun ?? (owner.group ? roomRunIdentity(entry.threadId) : undefined);
-  const scopedEntry = roomRun ? { ...entry, roomRun } : entry;
+  // A room card is scoped at creation time. Looking up the current run here
+  // would let a delayed G1 callback resume inside G2 or escape cancellation.
+  if (owner.group && !entry.roomRun) {
+    markSecretResumeFailed(entry.threadId, entry.messageId, "the room turn identity is no longer available");
+    return;
+  }
+  const scopedEntry = entry.roomRun ? { ...entry, roomRun: { ...entry.roomRun } } : entry;
   if (roomResumeCancelled(scopedEntry)) {
     markSecretResumeFailed(entry.threadId, entry.messageId, "the room turn was stopped before the credential update could resume");
     return;
@@ -2562,7 +2849,7 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
   }).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     if (/already working/i.test(message)) {
-      pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, entry);
+      pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, scopedEntry);
     } else {
       markSecretResumeFailed(entry.threadId, entry.messageId, message);
     }
@@ -2582,7 +2869,15 @@ function resumeSecretCard(botId: string, threadId: string, messageId: string, ou
       error: undefined,
     },
   });
-  dispatchSecretResume({ botId, threadId, messageId, label: message.secret.label, outcome });
+  const roomRun = secretCardRoomRuns.get(message.id);
+  dispatchSecretResume({
+    botId,
+    threadId,
+    messageId,
+    label: message.secret.label,
+    outcome,
+    ...(roomRun ? { roomRun: { ...roomRun } } : {}),
+  });
   return true;
 }
 
@@ -2615,6 +2910,23 @@ function dropPendingRoomResumes(threadId: string, run?: RoomTurnIdentity | null)
     if (entry.threadId !== threadId || !matches(entry)) continue;
     pendingSecretResumes.delete(key);
     markSecretResumeFailed(threadId, entry.messageId, "the room turn was stopped before the credential update could resume");
+  }
+}
+
+/** Starting a new user generation invalidates any room card continuation
+ * captured from an older generation that was still waiting in memory. */
+function dropStaleRoomResumes(threadId: string, run: RoomTurnIdentity): void {
+  const stale = (entry: RoomResumeEntry) =>
+    Boolean(entry.roomRun && (entry.roomRun.threadId !== run.threadId || entry.roomRun.generation !== run.generation));
+  for (const [key, entry] of pendingConnectorResumes) {
+    if (entry.threadId !== threadId || !stale(entry)) continue;
+    pendingConnectorResumes.delete(key);
+    markConnectorResumeFailed(threadId, entry.resumeKey, "the room turn was superseded before the connection update could resume");
+  }
+  for (const [key, entry] of pendingSecretResumes) {
+    if (entry.threadId !== threadId || !stale(entry)) continue;
+    pendingSecretResumes.delete(key);
+    markSecretResumeFailed(threadId, entry.messageId, "the room turn was superseded before the credential update could resume");
   }
 }
 
@@ -3118,6 +3430,13 @@ const server = createServer(async (req, res) => {
         if (credentialIsConfigured(cfg, credentialId)) {
           return json(res, 200, { alreadyConfigured: true, label: target.label });
         }
+        const roomRun = owner.group ? roomRunFromProviderRequest(fromThreadId, body) : undefined;
+        if (owner.group && !roomRun) {
+          return json(res, 409, { error: "room turn identity required for this continuation" });
+        }
+        if (owner.group && roomRun && roomTurnCancellation.isCancelled(fromThreadId, roomRun)) {
+          return json(res, 409, { error: "the room turn was stopped before the credential request could be created" });
+        }
         const existing = store.messagesFor(fromThreadId).find((message) =>
           isReusableCredentialRequest(message, credentialId, from.id, Boolean(owner.group))
         );
@@ -3138,6 +3457,7 @@ const server = createServer(async (req, res) => {
             requestKey: randomUUID(),
           },
         });
+        if (roomRun) secretCardRoomRuns.set(message.id, roomRun);
         return json(res, 201, { messageId: message.id, label: target.label });
       }
       if (method === "POST" && path === "/api/internal/connectors/mcp") {
@@ -3198,7 +3518,20 @@ const server = createServer(async (req, res) => {
         if (!composio.configured(cfg) || owner.bot.composio === false) {
           return json(res, 409, { error: "connected apps are not enabled for this bot" });
         }
+        // Capture once, before any toolkit/network await can let this room
+        // advance to a newer generation. Every card in this request shares
+        // that immutable origin.
+        const capturedRoomRun = owner.group ? roomRunFromProviderRequest(threadId, body) : undefined;
+        if (owner.group && !capturedRoomRun) {
+          return json(res, 409, { error: "room turn identity required for this continuation" });
+        }
+        if (owner.group && capturedRoomRun && roomTurnCancellation.isCancelled(threadId, capturedRoomRun)) {
+          return json(res, 409, { error: "the room turn was stopped before the connection request could be created" });
+        }
         const connectionState: Record<string, { connected?: boolean }> = await composio.connectionStatus(cfg, slugs).catch(() => ({}));
+        if (owner.group && capturedRoomRun && roomTurnCancellation.isCancelled(threadId, capturedRoomRun)) {
+          return json(res, 409, { error: "the room turn was stopped before the connection request could be created" });
+        }
         const messageIds: string[] = [];
         for (const slug of slugs) {
           const existing = store.messagesFor(threadId).find(
@@ -3209,6 +3542,10 @@ const server = createServer(async (req, res) => {
             continue;
           }
           const toolkit = await composio.toolkitCard(cfg, slug);
+          if (owner.group && capturedRoomRun && roomTurnCancellation.isCancelled(threadId, capturedRoomRun)) {
+            markConnectorResumeFailed(threadId, resumeKey, "the room turn was stopped before the connection request could be created");
+            return json(res, 409, { error: "the room turn was stopped before the connection request could be created" });
+          }
           const connected = connectionState[slug]?.connected === true;
           const message = store.appendMessage(threadId, {
             role: "bot",
@@ -3222,9 +3559,14 @@ const server = createServer(async (req, res) => {
               resumeKey,
             },
           });
+          if (capturedRoomRun) connectorCardRoomRuns.set(message.id, { ...capturedRoomRun });
           messageIds.push(message.id);
         }
-        maybeResumeConnectors(botId, threadId, resumeKey);
+        if (owner.group && capturedRoomRun && roomTurnCancellation.isCancelled(threadId, capturedRoomRun)) {
+          markConnectorResumeFailed(threadId, resumeKey, "the room turn was stopped before the connection request could be created");
+          return json(res, 409, { error: "the room turn was stopped before the connection request could be created" });
+        }
+        maybeResumeConnectors(botId, threadId, resumeKey, capturedRoomRun);
         return json(res, 200, { messageIds });
       }
       return json(res, 404, { error: "unknown internal endpoint" });
@@ -4058,6 +4400,7 @@ const server = createServer(async (req, res) => {
       dropPendingRoomResumes(threadId);
       groupQueues.delete(threadId);
       groupQueuePending.delete(threadId);
+      forgetRoomCardRuns(threadId);
       await instance?.adapter.interruptTurn(threadId).catch(() => {});
       closeOpenApprovals(threadId);
       lastReply.delete(group.threadId);
@@ -4458,6 +4801,7 @@ const server = createServer(async (req, res) => {
       await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => {});
       stopScreenPoller(bot.id);
       activeVpsThreads.delete(bot.id);
+      botActivityOwners.delete(bot.id);
       routines!.disableForBot(bot.id);
       webhooks.disableForBot(bot.id);
       lastReply.delete(bot.threadId);
@@ -4466,6 +4810,7 @@ const server = createServer(async (req, res) => {
       cancelPeerApprovalsFor(bot.id);
       discardDelegations(commsBus, bot.threadId);
       computerControl.forget(bot.id);
+      forgetRoomCardRuns(bot.threadId);
       const target = perBotLocalVmTarget(bot.id);
       localVmIdles.get(target.key)?.cancel();
       localVmIdles.delete(target.key);
