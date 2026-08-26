@@ -23,6 +23,9 @@ export interface RoomTurnDispatchResult<T> {
 export class RoomTurnCancellation {
   private readonly generations = new Map<string, number>();
   private readonly active = new Map<string, RoomTurnRun>();
+  /** A provider can acknowledge Stop before it emits its terminal event. Keep
+   * the cancelled identity around for late card callbacks during that gap. */
+  private readonly terminal = new Map<string, RoomTurnRun>();
   private readonly cancelHandlers = new Map<RoomTurnRun, Set<() => void>>();
 
   begin(threadId: string): RoomTurnRun {
@@ -36,6 +39,29 @@ export class RoomTurnCancellation {
   finish(threadId: string, run: RoomTurnRun): void {
     if (this.active.get(threadId) === run) this.active.delete(threadId);
     this.cancelHandlers.delete(run);
+  }
+
+  /** Keep a stopped, successfully registered provider turn scoped until its
+   * terminal event arrives. The caller may finish its orchestration promise;
+   * this tombstone is only for callbacks that arrive while the provider is
+   * still winding down. */
+  holdUntilTerminal(threadId: string, run: RoomTurnRun): boolean {
+    if (!run.cancelled || run.threadId !== threadId) return false;
+    const active = this.active.get(threadId);
+    if (active && active !== run) return false;
+    this.terminal.set(threadId, run);
+    return true;
+  }
+
+  /** Return active work, or the stopped generation awaiting its terminal
+   * provider event when the orchestration promise already finished. */
+  currentOrHeld(threadId: string): RoomTurnRun | null {
+    return this.active.get(threadId) ?? this.terminal.get(threadId) ?? null;
+  }
+
+  /** Forget a held generation after the provider's terminal event. */
+  settle(threadId: string): boolean {
+    return this.terminal.delete(threadId);
   }
 
   /** Return the currently active run without exposing a mutable map entry. */
@@ -102,6 +128,7 @@ export class RoomTurnCancellation {
       }
     }
     this.active.delete(threadId);
+    this.terminal.delete(threadId);
     this.generations.delete(threadId);
     return Boolean(run);
   }

@@ -1850,6 +1850,39 @@ describe("harness HTTP API", () => {
   );
 
   it(
+    "settles a deleted room's provider turn and clears its member",
+    async () => {
+      const bot = (await api("POST", "/api/bots")).body.bot;
+      let room: any;
+      const snapshot = async () => (await api("GET", "/api/bots?messages=20")).body;
+      const waitForBot = async (busy: boolean, what: string) => {
+        await expect.poll(async () => {
+          return Boolean((await snapshot()).bots.find((candidate: any) => candidate.id === bot.id)?.busy);
+        }, { timeout: 5_000, message: what }).toBe(busy);
+      };
+      try {
+        const patched = await api("PATCH", `/api/bots/${bot.id}`, {
+          modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+        });
+        expect(patched.status).toBe(200);
+        room = (await api("POST", "/api/groups", { name: "Delete while running", memberIds: [bot.id] })).body.group;
+        expect((await api("PATCH", `/api/groups/${room.id}/setup`, { action: "skip" })).status).toBe(200);
+        expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "delete this room" })).status).toBe(202);
+        await waitForBot(true, "deleted-room provider turn to start");
+
+        expect((await api("DELETE", `/api/groups/${room.id}`)).status).toBe(200);
+        await waitForBot(false, "deleted-room provider completion to clear the member");
+        expect((await snapshot()).groups.some((candidate: any) => candidate.id === room.id)).toBe(false);
+      } finally {
+        if (room) await api("DELETE", `/api/groups/${room.id}`);
+        await api("POST", `/api/bots/${bot.id}/interrupt`);
+        await api("DELETE", `/api/bots/${bot.id}`);
+      }
+    },
+    60_000,
+  );
+
+  it(
     "stops a room responder chain without advancing, then preserves later turns",
     async () => {
       const first = (await api("POST", "/api/bots")).body.bot;
@@ -1887,8 +1920,11 @@ describe("harness HTTP API", () => {
         // Stopping the active responder cancels this whole everyone-chain.
         // If the old loop advances, the second member stays busy in the
         // deterministic hanging fixture and this idle assertion fails.
-        expect((await api("POST", `/api/groups/${room.id}/interrupt`)).status).toBe(200);
-        await waitForRoomBusy(null, "room chain to stop without advancing");
+        // The same Stop button is available from the active bot's own chat.
+        // It must cancel the owning room generation, not just that bot's
+        // one-to-one thread, so the second everyone responder never starts.
+        expect((await api("POST", `/api/bots/${first.id}/interrupt`)).status).toBe(200);
+        await waitForRoomBusy(null, "room chain to stop without advancing from bot chat");
         const stopped = await roomState();
         expect(stopped.messages.filter((message: any) => message.role === "user").map((message: any) => message.text)).toEqual([
           "first chain",

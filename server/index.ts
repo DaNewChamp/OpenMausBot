@@ -802,8 +802,16 @@ bus.subscribe((event: RuntimeEvent) => {
   const routineRun = routines?.handleRuntimeEvent(event) ?? null;
   const bot = store.botByThread(event.threadId);
   const group = bot ? undefined : store.groupByThread(event.threadId);
-  if (!bot && !group) return;
-  const speaker = group ? groupSpeakers.get(event.threadId) : undefined;
+  // A room may be deleted while its provider is winding down. A terminal
+  // event still owns the speaker snapshot and must release the member's busy
+  // state even though the durable group is gone.
+  const speaker = group
+    ? groupSpeakers.get(event.threadId)
+    : event.type === "turn.completed"
+      ? groupSpeakers.get(event.threadId)
+      : undefined;
+  if (event.type === "turn.completed") roomTurnCancellation.settle(event.threadId);
+  if (!bot && !group && !speaker) return;
 
   const pushMessage = (m: Omit<Message, "id" | "at">) => {
     const message = store.appendMessage(event.threadId, group && m.role === "bot" ? { ...m, from: speaker } : m);
@@ -2169,6 +2177,12 @@ async function runGroupMemberTurn(
     if (!providerTurnStarted) {
       watchdog.settle(group.threadId);
       clearRoomOwner();
+    } else if (roomRun && store.groupByThread(group.threadId)?.id === group.id) {
+      // dispatchRoomTurn resolves as soon as the adapter acknowledges Stop,
+      // which can precede its terminal event. Keep this cancelled generation
+      // available to late connector/credential callbacks until that event so
+      // they cannot quietly queue a continuation after the room is idle.
+      roomTurnCancellation.holdUntilTerminal(group.threadId, roomRun);
     }
     return false;
   }
@@ -2326,7 +2340,7 @@ const CONNECTOR_SLUG = /^[a-z0-9][a-z0-9_-]{0,80}$/;
 type RoomResumeEntry = { roomRun?: RoomTurnIdentity };
 
 function roomRunIdentity(threadId: string): RoomTurnIdentity | undefined {
-  const run = roomTurnCancellation.current(threadId);
+  const run = roomTurnCancellation.currentOrHeld(threadId);
   return run ? { threadId: run.threadId, generation: run.generation } : undefined;
 }
 
@@ -4100,7 +4114,7 @@ const server = createServer(async (req, res) => {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such room" });
       const threadId = group.threadId;
-      const interruptedRun = roomTurnCancellation.current(threadId);
+      const interruptedRun = roomTurnCancellation.currentOrHeld(threadId);
       roomTurnCancellation.interrupt(threadId);
       // A connector/credential card may have completed while the provider
       // was busy. Remove only continuations from this generation; a later
@@ -4762,6 +4776,11 @@ const server = createServer(async (req, res) => {
       // from its own chat must reach that turn, not just the 1:1 thread
       const busyGroup = store.groups.find((g) => g.busyBotId === bot.id);
       if (busyGroup) {
+        const interruptedRun = roomTurnCancellation.currentOrHeld(busyGroup.threadId);
+        roomTurnCancellation.interrupt(busyGroup.threadId);
+        // Drop only continuations owned by this room generation. A later
+        // queued user message remains durable and will get a fresh run.
+        dropPendingRoomResumes(busyGroup.threadId, interruptedRun);
         await instance?.adapter.interruptTurn(busyGroup.threadId).catch(() => {});
         closeOpenApprovals(busyGroup.threadId);
       }

@@ -140,6 +140,32 @@ describe("room turn cancellation", () => {
     });
   });
 
+  it("keeps a stopped successful registration scoped until terminal settle", () => {
+    const cancellation = new RoomTurnCancellation();
+    const stopped = cancellation.begin("thread-held");
+    cancellation.interrupt("thread-held");
+
+    expect(cancellation.holdUntilTerminal("thread-held", stopped)).toBe(true);
+    cancellation.finish("thread-held", stopped);
+    expect(cancellation.current("thread-held")).toBeNull();
+    expect(cancellation.currentOrHeld("thread-held")).toBe(stopped);
+    expect(cancellation.isCancelled("thread-held", stopped)).toBe(true);
+    const lateCardWouldResume = () => {
+      const run = cancellation.currentOrHeld("thread-held");
+      return run ? !cancellation.isCancelled("thread-held", run) : false;
+    };
+    expect(lateCardWouldResume()).toBe(false);
+
+    // A queued user message still gets a fresh active generation while the
+    // provider winds down; its callbacks are not blocked by the tombstone.
+    const later = cancellation.begin("thread-held");
+    expect(cancellation.current("thread-held")).toBe(later);
+    expect(cancellation.isCancelled("thread-held", later)).toBe(false);
+    expect(cancellation.settle("thread-held")).toBe(true);
+    expect(cancellation.current("thread-held")).toBe(later);
+    expect(lateCardWouldResume()).toBe(true);
+  });
+
   it("does not turn a normally finished dispatch into a cancellation", async () => {
     const cancellation = new RoomTurnCancellation();
     const run = cancellation.begin("thread-finished");
