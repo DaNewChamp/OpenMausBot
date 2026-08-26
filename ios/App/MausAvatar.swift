@@ -225,7 +225,7 @@ struct MausAvatar: View {
     var size: CGFloat = 52
     var state: MausState = .idle
     /// The persisted character mark. Droplet preserves the original mascot
-    /// silhouette; the other marks clip it to the selected Grok-style shape.
+    /// silhouette; the other marks render their own Grok-style body geometry.
     /// Raw value keeps this shared renderer usable by the widget target,
     /// which intentionally has no dependency on the full CompanionCore API.
     var shape: String = "droplet"
@@ -252,11 +252,18 @@ struct MausAvatar: View {
             Canvas { context, canvasSize in
                 engine.setState(state, now: timeline.date)
                 if live { engine.step(now: timeline.date) }
-                engine.draw(in: &context, size: canvasSize, color: color, bodyMotion: live, comets: comets && live, at: timeline.date)
+                engine.draw(
+                    in: &context,
+                    size: canvasSize,
+                    color: color,
+                    shape: shape,
+                    bodyMotion: live,
+                    comets: comets && live,
+                    at: timeline.date
+                )
             }
         }
         .frame(width: size, height: size)
-        .clipShape(MascotMarkClip(kind: shape))
         .accessibilityHidden(true)
     }
 }
@@ -265,6 +272,14 @@ private struct MascotMarkClip: Shape {
     let kind: String
 
     func path(in rect: CGRect) -> Path {
+        Self.path(kind: kind, in: rect)
+    }
+
+    /// The picker silhouettes in the same coordinate system as the face
+    /// engine. Keeping this as one path factory avoids the old bug where the
+    /// engine painted the cursor body first and an outer clip only intersected
+    /// it, making most selections look like the original horse-shaped blob.
+    static func path(kind: String, in rect: CGRect) -> Path {
         switch kind {
         case "circle":
             return Path(ellipseIn: rect)
@@ -294,14 +309,34 @@ private struct MascotMarkClip: Shape {
             path.closeSubpath()
             return path
         case "cloud":
+            // One continuous cloud outline, rather than overlapping clip
+            // subpaths. This produces the same visible body in Canvas and in
+            // SwiftUI's Shape clipper at every size.
             var path = Path()
-            path.addRoundedRect(
-                in: rect.insetBy(dx: rect.width * 0.08, dy: rect.height * 0.18),
-                cornerSize: CGSize(width: rect.width * 0.22, height: rect.height * 0.22)
+            let x = rect.minX, y = rect.minY, w = rect.width, h = rect.height
+            path.move(to: CGPoint(x: x + w * 0.16, y: y + h * 0.78))
+            path.addCurve(
+                to: CGPoint(x: x + w * 0.30, y: y + h * 0.40),
+                control1: CGPoint(x: x + w * 0.03, y: y + h * 0.76),
+                control2: CGPoint(x: x + w * 0.10, y: y + h * 0.48)
             )
-            path.addEllipse(in: CGRect(x: rect.minX, y: rect.midY - rect.height * 0.12, width: rect.width * 0.46, height: rect.height * 0.42))
-            path.addEllipse(in: CGRect(x: rect.midX - rect.width * 0.16, y: rect.minY, width: rect.width * 0.52, height: rect.height * 0.54))
-            path.addEllipse(in: CGRect(x: rect.maxX - rect.width * 0.48, y: rect.midY - rect.height * 0.16, width: rect.width * 0.48, height: rect.height * 0.46))
+            path.addCurve(
+                to: CGPoint(x: x + w * 0.57, y: y + h * 0.28),
+                control1: CGPoint(x: x + w * 0.31, y: y + h * 0.18),
+                control2: CGPoint(x: x + w * 0.47, y: y + h * 0.17)
+            )
+            path.addCurve(
+                to: CGPoint(x: x + w * 0.82, y: y + h * 0.47),
+                control1: CGPoint(x: x + w * 0.70, y: y + h * 0.18),
+                control2: CGPoint(x: x + w * 0.84, y: y + h * 0.25)
+            )
+            path.addCurve(
+                to: CGPoint(x: x + w * 0.86, y: y + h * 0.78),
+                control1: CGPoint(x: x + w * 1.03, y: y + h * 0.48),
+                control2: CGPoint(x: x + w * 0.99, y: y + h * 0.78)
+            )
+            path.addLine(to: CGPoint(x: x + w * 0.16, y: y + h * 0.78))
+            path.closeSubpath()
             return path
         case "droplet":
             return Path(rect)
@@ -327,10 +362,17 @@ struct MausFaceStill: View {
         Canvas { context, canvasSize in
             let engine = MausFaceEngine()
             engine.setState(state, now: Date(timeIntervalSinceReferenceDate: 0))
-            engine.draw(in: &context, size: canvasSize, color: color, bodyMotion: false, comets: comets, at: at)
+            engine.draw(
+                in: &context,
+                size: canvasSize,
+                color: color,
+                shape: shape,
+                bodyMotion: false,
+                comets: comets,
+                at: at
+            )
         }
         .frame(width: size, height: size)
-        .clipShape(MascotMarkClip(kind: shape))
         .accessibilityHidden(true)
     }
 }
@@ -566,7 +608,15 @@ final class MausFaceEngine {
     /// face is doing — the island's "something is happening" — in addition to
     /// the states that carry their own. `at` is the clock; pass a fixed date
     /// for a still frame.
-    func draw(in context: inout GraphicsContext, size: CGSize, color: String, bodyMotion: Bool, comets: Bool = false, at now: Date = Date()) {
+    func draw(
+        in context: inout GraphicsContext,
+        size: CGSize,
+        color: String,
+        shape: String = "droplet",
+        bodyMotion: Bool,
+        comets: Bool = false,
+        at now: Date = Date()
+    ) {
         let rect = CGRect(origin: .zero, size: size)
         context.concatenate(MausSilhouette.fit(rect))
         let elapsed = CGFloat(now.timeIntervalSince(stateStart) * 1000)
@@ -587,14 +637,22 @@ final class MausFaceEngine {
         if bodyMotion {
             bodyContext.concatenate(bodyTransform(MausFaceData.motion[state] ?? MausBodyMotion(), elapsed: elapsed))
         }
-        drawBody(in: &bodyContext, color: color, now: now)
+        drawBody(in: &bodyContext, color: color, shape: shape, now: now)
 
         for piece in pieces where piece.front { context.fill(piece.path, with: piece.shading) }
     }
 
-    private func drawBody(in context: inout GraphicsContext, color: String, now: Date) {
-        let body = MausSilhouette.inFaceBox
-        let bounds = MausSilhouette.faceBoxBounds
+    private func drawBody(in context: inout GraphicsContext, color: String, shape: String, now: Date) {
+        let body: Path
+        if shape == "droplet" {
+            body = MausSilhouette.inFaceBox
+        } else {
+            body = MascotMarkClip.path(
+                kind: shape,
+                in: CGRect(origin: .zero, size: CGSize(width: MausFaceData.faceBox, height: MausFaceData.faceBox))
+            )
+        }
+        let bounds = body.boundingRect
         context.fill(body, with: .linearGradient(
             Gradient(stops: MausPalette.gradientStops(color)),
             startPoint: CGPoint(x: bounds.maxX, y: bounds.minY),

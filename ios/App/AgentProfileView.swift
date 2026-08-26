@@ -33,6 +33,11 @@ struct AgentProfileView: View {
     @State private var savingModel = false
     @State private var modelSaveTask: Task<Void, Never>?
     @State private var modelSaveRevision = 0
+    /// Character taps are persisted as a coalesced, appearance-only write so
+    /// a quick colour/shape change cannot race a full profile save.
+    @State private var appearanceSaveTask: Task<Void, Never>?
+    @State private var appearanceSaveRevision = 0
+    @State private var leavingProfile = false
     @State private var player: AVAudioPlayer?
     @State private var baseline: ProfileFormSnapshot
     @State private var selectedColor: String
@@ -146,6 +151,12 @@ struct AgentProfileView: View {
             }
             .onDisappear {
                 modelSaveTask?.cancel()
+                appearanceSaveTask?.cancel()
+                guard !leavingProfile, hasUnsavedChanges else { return }
+                // The interactive-pop gesture has no button action to await.
+                // Keep its final character choice rather than dropping it
+                // when SwiftUI removes this view from the stack.
+                Task { @MainActor in await saveAll() }
             }
             .sheet(isPresented: $showingInstructions) {
                 instructionsEditor
@@ -160,7 +171,7 @@ struct AgentProfileView: View {
 
     private var profileTopBar: some View {
         HStack {
-            Button { dismiss() } label: {
+            Button { leaveProfile() } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 17, weight: .semibold))
                     .frame(width: 44, height: 44)
@@ -174,7 +185,7 @@ struct AgentProfileView: View {
 
             Menu {
                 Button("Save changes", systemImage: "checkmark") {
-                    Task { await save() }
+                    Task { await saveAll() }
                 }
                 .disabled(!hasUnsavedChanges || busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
@@ -211,7 +222,7 @@ struct AgentProfileView: View {
     private var profileHero: some View {
         ZStack {
             Circle()
-                .fill(MausPalette.color(current.color).opacity(0.16))
+                .fill(MausPalette.color(selectedColor).opacity(0.16))
                 .frame(width: 158, height: 158)
                 .blur(radius: 22)
                 .accessibilityHidden(true)
@@ -264,6 +275,7 @@ struct AgentProfileView: View {
                     ForEach(profileColors) { choice in
                         Button {
                             selectedColor = choice.id
+                            scheduleAppearanceSave()
                         } label: {
                             Circle()
                                 .fill(choice.color)
@@ -297,10 +309,11 @@ struct AgentProfileView: View {
                     ForEach(MascotMark.allCases) { mark in
                         Button {
                             selectedShape = mark
+                            scheduleAppearanceSave()
                         } label: {
                             Image(systemName: mark.systemImage)
                                 .font(.system(size: 21, weight: .semibold))
-                                .foregroundStyle(AgentProfileStyle.mascotOrange)
+                                .foregroundStyle(MausPalette.color(selectedColor))
                                 .frame(width: 30, height: 30)
                                 .overlay {
                                     Circle()
@@ -325,6 +338,7 @@ struct AgentProfileView: View {
                 Button("Reset to default") {
                     selectedColor = "green"
                     selectedShape = .droplet
+                    scheduleAppearanceSave()
                 }
                 .font(.body)
                 .foregroundStyle(Color.accentColor)
@@ -751,7 +765,7 @@ struct AgentProfileView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         Task {
-                            await save()
+                            await saveAll()
                             showingInstructions = false
                         }
                     }
@@ -892,6 +906,72 @@ struct AgentProfileView: View {
             voice: voice == baseline.voice ? nil : voice,
             speakReplies: savedSpeakReplies == baseline.speakReplies ? nil : savedSpeakReplies
         )
+    }
+
+    /// Persist character taps without waiting for the user to discover the
+    /// overflow menu. A short debounce coalesces a colour + shape tap into
+    /// one request and keeps a fast picker interaction deterministic.
+    private func scheduleAppearanceSave() {
+        appearanceSaveRevision &+= 1
+        let revision = appearanceSaveRevision
+        appearanceSaveTask?.cancel()
+        appearanceSaveTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard !Task.isCancelled, appearanceSaveRevision == revision else { return }
+            await saveAppearance()
+            if appearanceSaveRevision == revision {
+                appearanceSaveTask = nil
+            }
+        }
+    }
+
+    /// Appearance-only writes never include the rest of the profile form. If
+    /// the user edits the name while a colour request is in flight, neither
+    /// change can overwrite the other, and the latest picker state is queued
+    /// by the revision check above.
+    private func saveAppearance() async {
+        let requestedColor = selectedColor
+        let requestedShape = selectedShape
+        let patch = BotProfilePatch(
+            color: requestedColor == baseline.color ? nil : requestedColor,
+            mascotShape: requestedShape.rawValue == baseline.shape.rawValue
+                ? nil : MascotShape(rawValue: requestedShape.rawValue)
+        )
+        guard patch.color != nil || patch.mascotShape != nil, !busy else { return }
+
+        busy = true
+        defer { busy = false }
+        guard let updated = await session.updateProfile(patch, for: current) else { return }
+
+        // Do not roll a newer tap back when an older request completes after
+        // it. The returned bot already includes any device-local compatibility
+        // override retained by Session for a legacy desktop.
+        if selectedColor == requestedColor {
+            selectedColor = updated.color
+            baseline.color = updated.color
+        }
+        if selectedShape.rawValue == requestedShape.rawValue {
+            selectedShape = MascotMark(rawValue: updated.mascotShape?.rawValue ?? requestedShape.rawValue) ?? requestedShape
+            baseline.shape = MascotShape(rawValue: selectedShape.rawValue) ?? .droplet
+        }
+    }
+
+    /// Full profile save used by the explicit menu and every dismissal path.
+    /// Cancelling the debounce first prevents an older appearance-only write
+    /// from racing this authoritative form snapshot.
+    private func saveAll() async {
+        appearanceSaveTask?.cancel()
+        appearanceSaveRevision &+= 1
+        await save()
+    }
+
+    private func leaveProfile() {
+        guard !leavingProfile else { return }
+        leavingProfile = true
+        Task { @MainActor in
+            await saveAll()
+            dismiss()
+        }
     }
 
     private func save() async {
