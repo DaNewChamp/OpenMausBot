@@ -272,14 +272,31 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
       // the first send starts a turn that stays open until the gate exists
       const first = await api("POST", `/api/bots/${bot.id}/messages`, { text: "first task please" });
       expect(first.status).toBe(202);
+      expect(first.body).toMatchObject({ ok: true, disposition: "started" });
       expect(first.body.queued).toBeUndefined();
       expect((await botById(bot.id)).busy).toBe(true);
+
+      // This ACP engine has no live-turn steering capability. An explicit
+      // steer must fail, rather than silently taking the queue path, and the
+      // rejected message must not appear in the transcript.
+      const unsupported = await api("POST", `/api/bots/${bot.id}/messages`, {
+        text: "must not be queued",
+        delivery: "steer",
+      });
+      expect(unsupported.status).toBe(409);
+      expect(unsupported.body.error).toMatch(/cannot steer/i);
 
       // sends while busy stay off the transcript so they cannot become the leaf
       const second = await api("POST", `/api/bots/${bot.id}/messages`, { text: "steer two" });
       expect(second.status).toBe(202);
-      expect(second.body).toMatchObject({ ok: true, queued: true });
-      const third = await api("POST", `/api/bots/${bot.id}/messages`, { text: "steer three" });
+      expect(second.body).toMatchObject({ ok: true, disposition: "queued", queued: true });
+      expect(typeof second.body.queueId).toBe("string");
+      const third = await api("POST", `/api/bots/${bot.id}/messages`, {
+        text: "steer three",
+        delivery: "queue",
+      });
+      expect(third.body).toMatchObject({ ok: true, disposition: "queued", queued: true });
+      expect(typeof third.body.queueId).toBe("string");
       expect(third.body.queued).toBe(true);
 
       let snapshot = await botById(bot.id);

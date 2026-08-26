@@ -21,6 +21,11 @@ import {
 import { approvalKey, autoVerdict } from "./auto-approve.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
+import {
+  decideDelivery,
+  deliveryReceipt,
+  parseDeliveryModeFromBody,
+} from "./message-delivery.ts";
 import { attachmentExists, extensionForMime, IMAGE_MAX_BYTES, readAttachment, saveImage, type SavedAttachment } from "./attachments.ts";
 import {
   avatarGenerationRequestSchema,
@@ -1880,6 +1885,10 @@ const webhookIngressStatus = () => ({
 // fresh session with recent room context. A member's reply may @mention
 // teammates; those get one chained turn (hop 1), never deeper.
 const groupQueues = new Map<string, Promise<void>>();
+/** Number of user message turns waiting in a room's serialized chain. The
+ * promise map is intentionally retained after a room settles, so its
+ * presence alone cannot answer whether a new message is actually queued. */
+const groupQueuePending = new Map<string, number>();
 const GROUP_CONTEXT_MESSAGES = 30;
 const MAX_GROUP_HOPS = 1;
 
@@ -2132,13 +2141,26 @@ async function runGroupMemberTurn(
   return true;
 }
 
-function startGroupTurn(groupId: string, text: string, replyTo?: Message) {
+function startGroupTurn(
+  groupId: string,
+  text: string,
+  replyTo?: Message,
+  options: { queueId?: string } = {},
+) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   if (roomSetupPending(group)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
   }
-  store.appendMessage(group.threadId, { role: "user", kind: "text", text, replyToId: replyTo?.id });
+  const busyAtEnqueue = Boolean(group.busyBotId) || (groupQueuePending.get(groupId) ?? 0) > 0;
+  const queueId = busyAtEnqueue ? options.queueId ?? randomUUID() : undefined;
+  store.appendMessage(group.threadId, {
+    role: "user",
+    kind: "text",
+    text,
+    replyToId: replyTo?.id,
+    ...(queueId ? { queueId } : {}),
+  });
 
   const members = group.memberIds
     .map((id) => store.bot(id))
@@ -2181,28 +2203,36 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message) {
         tool: { name: unavailableMessage, ok: false },
       });
     }
-    return;
+    return deliveryReceipt("started");
   }
 
   const prev = groupQueues.get(groupId) ?? Promise.resolve();
+  groupQueuePending.set(groupId, (groupQueuePending.get(groupId) ?? 0) + 1);
   const next = prev.then(async () => {
-    const current = store.group(groupId);
-    if (current?.busyBotId) {
-      const owner = store.bot(current.busyBotId);
-      store.appendMessage(current.threadId, {
-        role: "bot",
-        kind: "activity",
-        tool: { name: `${owner?.name ?? "A room member"} is still stopping — this message was not dispatched`, ok: false },
-      });
-      return;
-    }
-    const spoken = new Set<string>();
-    for (const responder of responders) {
-      if (spoken.has(responder.id)) continue;
-      if (!(await runGroupMemberTurn(groupId, responder.id, 0, spoken))) break;
+    try {
+      const current = store.group(groupId);
+      if (current?.busyBotId) {
+        const owner = store.bot(current.busyBotId);
+        store.appendMessage(current.threadId, {
+          role: "bot",
+          kind: "activity",
+          tool: { name: `${owner?.name ?? "A room member"} is still stopping — this message was not dispatched`, ok: false },
+        });
+        return;
+      }
+      const spoken = new Set<string>();
+      for (const responder of responders) {
+        if (spoken.has(responder.id)) continue;
+        if (!(await runGroupMemberTurn(groupId, responder.id, 0, spoken))) break;
+      }
+    } finally {
+      const pending = (groupQueuePending.get(groupId) ?? 1) - 1;
+      if (pending > 0) groupQueuePending.set(groupId, pending);
+      else groupQueuePending.delete(groupId);
     }
   });
   groupQueues.set(groupId, next.catch(() => {}));
+  return deliveryReceipt(busyAtEnqueue ? "queued" : "started", { queueId, threadId: group.threadId });
 }
 
 function roomSetupPending(group: GroupRecord): boolean {
@@ -3869,9 +3899,38 @@ const server = createServer(async (req, res) => {
       if (!text) return json(res, 400, { error: "text required" });
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such group" });
+      const mode = parseDeliveryModeFromBody(body);
       const replyTo = resolveReplyTarget(group.threadId, body.replyToId);
-      startGroupTurn(group.id, text, replyTo);
-      return json(res, 202, { ok: true });
+      const roomBusy = Boolean(group.busyBotId) || (groupQueuePending.get(group.id) ?? 0) > 0;
+      const busyBot = group.busyBotId ? store.bot(group.busyBotId) : undefined;
+      const busyInstance = busyBot ? registry.get(busyBot.modelSelection.instanceId) : undefined;
+      const canSteer = Boolean(busyInstance?.adapter.capabilities.queueing && busyInstance.adapter.steer);
+      // Rooms historically serialize every user turn through groupQueues. Keep
+      // that default for omitted/auto delivery; only an explicit `steer` may
+      // bypass the room queue and write into the active member's turn.
+      const action = decideDelivery({ mode, busy: roomBusy, canSteer: mode === "auto" ? false : canSteer });
+      if (action === "unsupported") {
+        return json(res, 409, { error: "this room's active agent cannot steer its turn — choose Queue or wait for it to finish" });
+      }
+      if (action === "steer") {
+        const steered = await busyInstance!.adapter
+          .steer!(group.threadId, promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"))
+          .catch(() => false);
+        if (!steered) {
+          return json(res, 409, { error: "the active room turn stopped before it could receive this steer" });
+        }
+        if (busyBot) clearUnattended(busyBot.id);
+        store.appendMessage(group.threadId, {
+          role: "user",
+          kind: "text",
+          text,
+          replyToId: replyTo?.id,
+          steered: true,
+        });
+        return json(res, 202, { ...deliveryReceipt("steered"), steered: true });
+      }
+      const receipt = startGroupTurn(group.id, text, replyTo);
+      return json(res, 202, receipt.disposition === "queued" ? { ...receipt, queued: true } : receipt);
     }
     m = path.match(/^\/api\/groups\/([\w-]+)\/interrupt$/);
     if (m && method === "POST") {
@@ -4384,36 +4443,46 @@ const server = createServer(async (req, res) => {
       if (!text) return json(res, 400, { error: "text required" });
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      const mode = parseDeliveryModeFromBody(body);
       const replyTo = resolveReplyTarget(bot.threadId, body.replyToId);
-      // Claude can accept the message inside its live turn. If the write
-      // loses a race with turn settlement, or the engine cannot steer, the
-      // existing server-side queue records it atomically for the next turn.
-      if (bot.busy) {
-        const instance = registry.get(bot.modelSelection.instanceId);
-        if (instance?.adapter.capabilities.queueing && instance.adapter.steer) {
-          const steered = await instance.adapter
-            .steer(bot.threadId, promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"))
-            .catch(() => false);
-          if (steered) {
-            clearUnattended(bot.id);
-            store.appendMessage(bot.threadId, {
-              role: "user",
-              kind: "text",
-              text,
-              replyToId: replyTo?.id,
-              steered: true,
-            });
-            return json(res, 202, { ok: true, steered: true });
-          }
+      const instance = bot.busy ? registry.get(bot.modelSelection.instanceId) : undefined;
+      const canSteer = Boolean(instance?.adapter.capabilities.queueing && instance.adapter.steer);
+      const action = decideDelivery({ mode, busy: Boolean(bot.busy), canSteer });
+      if (action === "unsupported") {
+        return json(res, 409, { error: "this bot's current engine cannot steer an active turn — choose Queue or wait for it to finish" });
+      }
+      // Claude can accept the message inside its live turn. Auto mode keeps
+      // the legacy fallback: if the write loses a race with turn settlement,
+      // the existing server-side queue records the message for the next turn.
+      if (action === "steer") {
+        const steered = await instance!.adapter
+          .steer!(bot.threadId, promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"))
+          .catch(() => false);
+        if (steered) {
+          clearUnattended(bot.id);
+          store.appendMessage(bot.threadId, {
+            role: "user",
+            kind: "text",
+            text,
+            replyToId: replyTo?.id,
+            steered: true,
+          });
+          return json(res, 202, { ...deliveryReceipt("steered"), steered: true });
         }
+        if (mode === "steer") {
+          return json(res, 409, { error: "the active turn stopped before it could receive this steer" });
+        }
+        // auto mode alone falls through to the existing queue path.
+      }
+      if (action === "queue" || (mode === "auto" && bot.busy)) {
         const queued = queueSteeredMessage(bot, text, {
           replyToId: replyTo?.id,
           prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
         });
-        return json(res, 202, { ok: true, queued: true, queueId: queued.id, threadId: bot.threadId });
+        return json(res, 202, { ...deliveryReceipt("queued", { queueId: queued.id, threadId: bot.threadId }), queued: true });
       }
       await startTurn(bot.id, text, { replyTo });
-      return json(res, 202, { ok: true });
+      return json(res, 202, deliveryReceipt("started"));
     }
 
     // edit a user message → fork the conversation there and rerun the turn.

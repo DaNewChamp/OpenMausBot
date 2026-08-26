@@ -318,6 +318,10 @@ describe("the sidecar in front of an unmodified harness", () => {
     expect(pinnedRoom.status).toBe(200);
     expect(pinnedRoom.body.group).toMatchObject({ id: room.id, pinned: true });
 
+    const interruptedRoom = await device("POST", `/api/groups/${room.id}/interrupt`);
+    expect(interruptedRoom.status).toBe(200);
+    expect(interruptedRoom.body).toEqual({ ok: true });
+
     expect((await device("PATCH", `/api/bots/${bot.id}`, { body: { pinned: false } })).status).toBe(404);
     expect((await device("PATCH", `/api/groups/${room.id}`, { body: { pinned: false } })).status).toBe(404);
   });

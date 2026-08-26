@@ -565,13 +565,24 @@ final class Session: ObservableObject {
     // the source of truth, and a phone that draws its own version of events
     // is a phone that disagrees with the laptop.
 
-    func send(_ text: String, to chat: Chat) async {
-        await perform {
+    @discardableResult
+    func send(
+        _ text: String,
+        to chat: Chat,
+        mode: MessageDeliveryMode = .auto
+    ) async -> MessageDeliveryReceipt? {
+        guard let client else { return nil }
+        do {
             switch chat {
-            case let .bot(bot): try await $0.send(text: text, toBot: bot.id)
-            case let .room(room): try await $0.send(text: text, toRoom: room.id)
+            case let .bot(bot): return try await client.send(text: text, toBot: bot.id, mode: mode)
+            case let .room(room): return try await client.send(text: text, toRoom: room.id, mode: mode)
             }
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+        } catch {
+            actionError = error.localizedDescription
         }
+        return nil
     }
 
     func answer(chat: Chat, card: OptionCard, choice: String, rememberingPermission: Bool = true) async {
@@ -678,6 +689,15 @@ final class Session: ObservableObject {
 
     func interrupt(bot: Bot) async {
         await perform { try await $0.interrupt(botId: bot.id) }
+    }
+
+    func interrupt(chat: Chat) async {
+        await perform {
+            switch chat {
+            case let .bot(bot): try await $0.interrupt(botId: bot.id)
+            case let .room(room): try await $0.interrupt(roomId: room.id)
+            }
+        }
     }
 
     /// Ask for one fresh cloud viewer URL. Unlike ordinary actions this

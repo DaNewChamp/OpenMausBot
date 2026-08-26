@@ -833,12 +833,34 @@ public struct CompanionClient: Sendable {
         ).group
     }
 
-    public func send(text: String, toBot botId: String) async throws {
-        try await send(try makeRequest("POST", "/api/bots/\(botId)/messages", body: ["text": text]))
+    public func send(
+        text: String,
+        toBot botId: String,
+        mode: MessageDeliveryMode = .auto
+    ) async throws -> MessageDeliveryReceipt {
+        try await send(
+            try makeRequest(
+                "POST",
+                "/api/bots/\(botId)/messages",
+                body: ["text": text, "delivery": mode.rawValue]
+            ),
+            as: MessageDeliveryReceipt.self
+        )
     }
 
-    public func send(text: String, toRoom groupId: String) async throws {
-        try await send(try makeRequest("POST", "/api/groups/\(groupId)/messages", body: ["text": text]))
+    public func send(
+        text: String,
+        toRoom groupId: String,
+        mode: MessageDeliveryMode = .auto
+    ) async throws -> MessageDeliveryReceipt {
+        try await send(
+            try makeRequest(
+                "POST",
+                "/api/groups/\(groupId)/messages",
+                body: ["text": text, "delivery": mode.rawValue]
+            ),
+            as: MessageDeliveryReceipt.self
+        )
     }
 
     /// Answer an approval or a question.
@@ -931,6 +953,10 @@ public struct CompanionClient: Sendable {
 
     public func interrupt(botId: String) async throws {
         try await send(try makeRequest("POST", "/api/bots/\(botId)/interrupt"))
+    }
+
+    public func interrupt(roomId: String) async throws {
+        try await send(try makeRequest("POST", "/api/groups/\(roomId)/interrupt"))
     }
 
     /// Mint a fresh interactive viewer for an existing cloud computer. The

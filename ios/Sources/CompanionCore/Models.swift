@@ -94,6 +94,61 @@ public struct CommChip: Codable, Hashable, Sendable {
     public var withColor: String
 }
 
+/// How a message should be delivered when its conversation is already busy.
+/// `auto` preserves the server's endpoint-specific legacy policy.
+public enum MessageDeliveryMode: String, Codable, Sendable {
+    case auto, steer, queue
+}
+
+/// The server's acknowledgement for a message submission. Queue identifiers
+/// are present only when the message was accepted behind an active turn.
+public struct MessageDeliveryReceipt: Codable, Equatable, Sendable {
+    public enum Disposition: String, Codable, Sendable {
+        case started, steered, queued, unknown
+
+        public init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Self(rawValue: raw) ?? .unknown
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
+        }
+    }
+
+    public let ok: Bool
+    public let disposition: Disposition
+    public let queueId: String?
+    public let threadId: String?
+
+    public init(
+        ok: Bool = true,
+        disposition: Disposition,
+        queueId: String? = nil,
+        threadId: String? = nil
+    ) {
+        self.ok = ok
+        self.disposition = disposition
+        self.queueId = queueId
+        self.threadId = threadId
+    }
+
+    private enum CodingKeys: String, CodingKey { case ok, disposition, queueId, threadId }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Older harnesses acknowledged a send with only {ok:true}; treating
+        // that as a started turn keeps a staggered companion rollout usable.
+        ok = try container.decodeIfPresent(Bool.self, forKey: .ok) ?? true
+        disposition = try container.decodeIfPresent(Disposition.self, forKey: .disposition) ?? .started
+        queueId = try container.decodeIfPresent(String.self, forKey: .queueId)
+        threadId = try container.decodeIfPresent(String.self, forKey: .threadId)
+    }
+}
+
+public typealias MessageDeliveryDisposition = MessageDeliveryReceipt.Disposition
+
 public struct Message: Codable, Hashable, Identifiable, Sendable {
     public enum Kind: String, Codable, Sendable {
         case text, options, activity, screen

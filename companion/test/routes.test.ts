@@ -55,6 +55,7 @@ describe("what the app may do", () => {
     ["POST", "/api/bots/bot_123/avatar/generate"],
     ["POST", "/api/bots/bot_123/computer/join"],
     ["POST", "/api/groups/room-1/messages"],
+    ["POST", "/api/groups/room-1/interrupt"],
     ["POST", "/api/groups/room-1/read"],
     ["PATCH", "/api/groups/room-1/pin"],
     ["GET", "/api/threads/th_1/messages"],
@@ -165,6 +166,8 @@ describe("what it may not", () => {
     // accounts but the account DELETE route is deliberately not allowed
     expect(allowed("DELETE", "/api/connectors/slack/accounts/ca_123")).toBe(false);
     expect(allowed("PATCH", "/api/groups/room-1")).toBe(false);
+    expect(allowed("POST", "/api/groups/room-1/interrupt")).toBe(true);
+    expect(allowed("PATCH", "/api/groups/room-1/interrupt")).toBe(false);
     expect(allowed("PATCH", "/api/bots/bot_123/pin/extra")).toBe(false);
     expect(allowed("PATCH", "/api/groups/room-1/pin/extra")).toBe(false);
   });

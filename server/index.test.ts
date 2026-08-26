@@ -1732,6 +1732,119 @@ describe("harness HTTP API", () => {
     expect(afterFail.messages.find((m: { kind: string }) => m.kind === "options")?.card.dismissed).toBeFalsy();
   });
 
+  it(
+    "returns explicit bot and room delivery dispositions without duplicating messages",
+    async () => {
+      const bot = (await api("POST", "/api/bots")).body.bot;
+      let room: any;
+      await api("PATCH", `/api/bots/${bot.id}`, {
+        modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+      });
+      rmSync(fakeClaudeDump, { force: true });
+
+      const waitForBot = async (predicate: (candidate: any) => boolean, what: string) => {
+        await expect.poll(async () => predicate((await api("GET", "/api/bots")).body.bots.find((candidate: any) => candidate.id === bot.id)), {
+          timeout: 5_000,
+          message: what,
+        }).toBe(true);
+      };
+      const stopBot = async () => {
+        await api("POST", `/api/bots/${bot.id}/interrupt`);
+        await waitForBot((candidate) => candidate?.busy === false, "bot to stop");
+      };
+      const interruptBot = async () => {
+        await api("POST", `/api/bots/${bot.id}/interrupt`);
+      };
+
+      try {
+        const started = await api("POST", `/api/bots/${bot.id}/messages`, {
+          text: "first task",
+          delivery: "steer",
+        });
+        expect(started).toEqual({ status: 202, body: { ok: true, disposition: "started" } });
+        await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
+
+        const steered = await api("POST", `/api/bots/${bot.id}/messages`, {
+          text: "urgent follow-up",
+          delivery: "steer",
+        });
+        expect(steered).toEqual({
+          status: 202,
+          body: { ok: true, disposition: "steered", steered: true },
+        });
+
+        const queued = await api("POST", `/api/bots/${bot.id}/messages`, {
+          text: "after this turn",
+          delivery: "queue",
+        });
+        expect(queued.status).toBe(202);
+        expect(queued.body).toMatchObject({ ok: true, disposition: "queued", queued: true, threadId: bot.threadId });
+        expect(typeof queued.body.queueId).toBe("string");
+        const during = (await api("GET", "/api/bots?messages=20")).body.bots.find((candidate: any) => candidate.id === bot.id);
+        expect(during.messages.filter((message: any) => message.role === "user").map((message: any) => message.text)).toEqual([
+          "first task",
+          "urgent follow-up",
+        ]);
+
+        // The first interrupt settles the active turn and immediately drains
+        // the queued line into a second turn. Wait for that transcript append
+        // before stopping the newly active turn.
+        await interruptBot();
+        await waitForBot(
+          (candidate) => candidate?.messages.some((message: any) => message.text === "after this turn"),
+          "queued bot message to drain",
+        );
+        await stopBot();
+
+        room = (await api("POST", "/api/groups", { name: "Delivery room", memberIds: [bot.id] })).body.group;
+        expect((await api("PATCH", `/api/groups/${room.id}/setup`, { action: "skip" })).status).toBe(200);
+        const roomStarted = await api("POST", `/api/groups/${room.id}/messages`, { text: "room task" });
+        expect(roomStarted).toEqual({ status: 202, body: { ok: true, disposition: "started" } });
+        await waitForBot((candidate) => candidate?.busy === true, "room member to start");
+        const roomBusy = await api("GET", "/api/bots");
+        expect(roomBusy.body.groups.find((candidate: any) => candidate.id === room.id)?.busyBotId).toBe(bot.id);
+
+        const roomSteered = await api("POST", `/api/groups/${room.id}/messages`, {
+          text: "room steer",
+          delivery: "steer",
+        });
+        expect(roomSteered).toEqual({
+          status: 202,
+          body: { ok: true, disposition: "steered", steered: true },
+        });
+        const roomQueued = await api("POST", `/api/groups/${room.id}/messages`, {
+          text: "room queue",
+          delivery: "queue",
+        });
+        expect(roomQueued.status).toBe(202);
+        expect(roomQueued.body).toMatchObject({ ok: true, disposition: "queued", queued: true, threadId: room.threadId });
+        expect(typeof roomQueued.body.queueId).toBe("string");
+        const roomSnapshot = (await api("GET", "/api/bots?messages=20")).body.groups.find((candidate: any) => candidate.id === room.id);
+        expect(roomSnapshot.messages.filter((message: any) => message.role === "user").map((message: any) => message.text)).toEqual([
+          "room task",
+          "room steer",
+          "room queue",
+        ]);
+        expect(roomSnapshot.messages.find((message: any) => message.text === "room steer")).toMatchObject({ steered: true });
+        expect(roomSnapshot.messages.find((message: any) => message.text === "room queue")).toMatchObject({ queueId: roomQueued.body.queueId });
+      } finally {
+        if (room) {
+          await api("POST", `/api/groups/${room.id}/interrupt`);
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          await api("POST", `/api/groups/${room.id}/interrupt`);
+          await expect.poll(async () => {
+            const state = (await api("GET", "/api/bots")).body;
+            return state.groups.find((candidate: any) => candidate.id === room.id)?.busyBotId ?? null;
+          }, { timeout: 5_000 }).toBe(null);
+          await api("DELETE", `/api/groups/${room.id}`);
+        }
+        await api("POST", `/api/bots/${bot.id}/interrupt`);
+        await api("DELETE", `/api/bots/${bot.id}`);
+      }
+    },
+    60_000,
+  );
+
   it("refuses to fork a message when the provider is unavailable, without mutating", async () => {
     const { body } = await api("GET", "/api/bots");
     const bot = body.bots[0];
