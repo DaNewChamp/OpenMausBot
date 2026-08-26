@@ -673,11 +673,15 @@ final class MausFaceEngine {
         }
         context.fill(body, with: .color(MausPalette.color(color)))
 
-        // The face is painted on the body: clipped to it, anchored in it.
+        // The face is painted on the body and clipped to it. The original
+        // cursor artwork has its own off-centre anchor, but the character
+        // picker shapes have very different usable areas. Fit the resting
+        // eyes into each mark's safe face region instead of reusing the
+        // droplet coordinates and letting compact shapes crop them.
         context.clip(to: body)
-        let a = MausFaceData.anchor
-        context.translateBy(x: a.x, y: a.y)
-        context.scaleBy(x: a.scale, y: a.scale)
+        let layout = Self.faceLayout(for: shape, in: body.boundingRect)
+        context.translateBy(x: layout.centre.x, y: layout.centre.y)
+        context.scaleBy(x: layout.scale, y: layout.scale)
         context.translateBy(x: -MausFaceData.faceCentre.x, y: -MausFaceData.faceCentre.y)
 
         // A resting Grok mark is deliberately quiet: two fixed dark ovals,
@@ -693,6 +697,55 @@ final class MausFaceEngine {
             path.closeSubpath()
             context.fill(path, with: .color(MausPalette.faceInk(color)))
         }
+    }
+
+    private struct FaceLayout {
+        let centre: CGPoint
+        let scale: CGFloat
+    }
+
+    private static let restingFaceBounds: CGRect = {
+        let points = MausFaceData.ring(0, eye: 0) + MausFaceData.ring(0, eye: 1)
+        guard let first = points.first else { return .zero }
+        return points.dropFirst().reduce(CGRect(origin: first, size: .zero)) { bounds, point in
+            bounds.union(CGRect(origin: point, size: .zero))
+        }
+    }()
+
+    private static func faceLayout(for shape: String, in bounds: CGRect) -> FaceLayout {
+        guard shape != "droplet", restingFaceBounds.width > 0, restingFaceBounds.height > 0 else {
+            return FaceLayout(
+                centre: CGPoint(x: MausFaceData.anchor.x, y: MausFaceData.anchor.y),
+                scale: MausFaceData.anchor.scale
+            )
+        }
+
+        // Fractions describe the safe patch of each silhouette, not the
+        // canvas. Narrow marks need smaller eyes; triangle moves them down
+        // into its wider body; cloud keeps them on the raised right lobe.
+        let spec: (x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat)
+        switch shape {
+        case "circle":   spec = (0.60, 0.46, 0.28, 0.27)
+        case "oval":     spec = (0.60, 0.50, 0.27, 0.31)
+        case "square":   spec = (0.60, 0.45, 0.27, 0.26)
+        case "pill":     spec = (0.60, 0.50, 0.24, 0.34)
+        case "triangle": spec = (0.58, 0.63, 0.22, 0.21)
+        case "hexagon":  spec = (0.60, 0.49, 0.26, 0.25)
+        case "cloud":    spec = (0.62, 0.48, 0.23, 0.27)
+        default:          spec = (0.60, 0.48, 0.26, 0.25)
+        }
+
+        let scale = min(
+            bounds.width * spec.width / restingFaceBounds.width,
+            bounds.height * spec.height / restingFaceBounds.height
+        )
+        return FaceLayout(
+            centre: CGPoint(
+                x: bounds.minX + bounds.width * spec.x,
+                y: bounds.minY + bounds.height * spec.y
+            ),
+            scale: scale
+        )
     }
 
     /// The desktop's `bodyTransform`, in face-box units, elapsed in ms.
