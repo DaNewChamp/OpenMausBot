@@ -6,6 +6,7 @@
 // with them.
 import SwiftUI
 import CompanionCore
+import UIKit
 
 struct ChatListView: View {
     @EnvironmentObject private var session: Session
@@ -20,6 +21,8 @@ struct ChatListView: View {
     @State private var searchOpen = false
     @State private var showingUpdates = false
     @State private var showingNewGroup = false
+    @State private var showingAccount = false
+    @State private var groupProfile: Room?
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -35,7 +38,7 @@ struct ChatListView: View {
                             if !pinnedChats.isEmpty {
                                 PinnedChatShelf(summaries: pinnedChats) { chat in
                                     Haptics.selection()
-                                    path.append(chat)
+                                    open(chat)
                                 }
                                 .padding(.top, 10)
                                 .padding(.bottom, 20)
@@ -68,19 +71,40 @@ struct ChatListView: View {
 
                         let rows = chats
                         ForEach(Array(rows.enumerated()), id: \.element.id) { index, summary in
-                            NavigationLink(value: summary.chat) {
-                                ChatRow(
-                                    chat: summary.chat,
-                                    preview: summary.preview,
-                                    at: summary.lastActivity,
-                                    state: MausState.forChat(summary.chat, in: session.state),
-                                    waiting: waitingChats.contains(summary.chat.id),
-                                    last: index == rows.count - 1
-                                )
+                            Group {
+                                if case let .room(room) = summary.chat {
+                                    Button {
+                                        Haptics.selection()
+                                        groupProfile = room
+                                    } label: {
+                                        ChatRow(
+                                            chat: summary.chat,
+                                            preview: summary.preview,
+                                            at: summary.lastActivity,
+                                            state: MausState.forChat(summary.chat, in: session.state),
+                                            waiting: waitingChats.contains(summary.chat.id),
+                                            last: index == rows.count - 1
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                } else {
+                                    NavigationLink(value: summary.chat) {
+                                        ChatRow(
+                                            chat: summary.chat,
+                                            preview: summary.preview,
+                                            at: summary.lastActivity,
+                                            state: MausState.forChat(summary.chat, in: session.state),
+                                            waiting: waitingChats.contains(summary.chat.id),
+                                            last: index == rows.count - 1
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                    .simultaneousGesture(TapGesture().onEnded { Haptics.selection() })
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .simultaneousGesture(TapGesture().onEnded { Haptics.selection() })
-                            .pinRowActions(for: summary, session: session)
+                            .pinRowActions(for: summary, session: session) { chat in
+                                if case let .room(room) = chat { groupProfile = room }
+                            }
                         }
                     }
                     .padding(.bottom, 24)
@@ -154,6 +178,13 @@ struct ChatListView: View {
                     path.append(Chat.room(room))
                 }
             }
+            .sheet(isPresented: $showingAccount) {
+                AccountSheet()
+                    .environmentObject(session)
+            }
+            .navigationDestination(item: $groupProfile) { room in
+                GroupProfileView(room: room)
+            }
             .task(id: query) {
                 let expected = query
                 guard expected.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 else {
@@ -190,14 +221,17 @@ struct ChatListView: View {
                 }
             } else {
                 HStack(alignment: .center, spacing: 10) {
-                    NavigationLink { SettingsView() } label: {
+                    Button {
+                        Haptics.selection()
+                        showingAccount = true
+                    } label: {
                         ProfileAvatar(name: session.connection?.name ?? "You", size: 30)
                             .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
                     .background(Circle().fill(Color.primary.opacity(0.10)))
                     .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
-                    .accessibilityLabel("Settings")
+                    .accessibilityLabel("Account and settings")
                     .contextMenu {
                         if !session.state.updates.isEmpty {
                             Button {
@@ -310,6 +344,14 @@ struct ChatListView: View {
         Set(session.state.pendingApprovals.compactMap { session.state.chat(forThread: $0.threadId)?.id })
     }
 
+    private func open(_ chat: Chat) {
+        if case let .room(room) = chat {
+            groupProfile = room
+        } else {
+            path.append(chat)
+        }
+    }
+
 }
 
 /// A quiet circular action for the roster header. Keeping the fill opaque-ish
@@ -368,11 +410,47 @@ private struct ChatPinRowActions: ViewModifier {
     let chat: Chat
     let pinned: Bool
     @ObservedObject var session: Session
+    let openGroup: (Chat) -> Void
 
     func body(content: Content) -> some View {
         content
             .contextMenu {
+                if chat.unread {
+                    Button {
+                        Task { await session.markRead(chat) }
+                    } label: {
+                        Label("Mark Read", systemImage: "envelope.open")
+                    }
+                } else {
+                    Button {
+                        session.actionError = "Mark unread is available from the computer."
+                    } label: {
+                        Label("Mark Unread", systemImage: "envelope.badge")
+                    }
+                }
+
                 PinActionButton(chat: chat, pinned: pinned, session: session)
+
+                if case .room = chat {
+                    Button {
+                        openGroup(chat)
+                    } label: {
+                        Label("Group Details", systemImage: "person.2")
+                    }
+                }
+
+                Menu("More", systemImage: "ellipsis") {
+                    Button {
+                        UIPasteboard.general.string = chat.id
+                    } label: {
+                        Label("Copy ID", systemImage: "doc.on.doc")
+                    }
+                    Button(role: .destructive) {
+                        session.actionError = "Delete this conversation from the computer."
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 PinActionButton(chat: chat, pinned: pinned, session: session)
@@ -381,8 +459,17 @@ private struct ChatPinRowActions: ViewModifier {
 }
 
 private extension View {
-    func pinRowActions(for summary: ChatSummary, session: Session) -> some View {
-        modifier(ChatPinRowActions(chat: summary.chat, pinned: summary.pinned, session: session))
+    func pinRowActions(
+        for summary: ChatSummary,
+        session: Session,
+        openGroup: @escaping (Chat) -> Void = { _ in }
+    ) -> some View {
+        modifier(ChatPinRowActions(
+            chat: summary.chat,
+            pinned: summary.pinned,
+            session: session,
+            openGroup: openGroup
+        ))
     }
 
 }

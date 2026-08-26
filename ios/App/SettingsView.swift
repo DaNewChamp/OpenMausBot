@@ -157,3 +157,113 @@ struct SettingsView: View {
         }
     }
 }
+
+/// The compact account sheet behind the roster avatar. Grok keeps this menu
+/// lightweight: account identity and plugins first, detailed controls one tap
+/// deeper in Settings.
+struct AccountSheet: View {
+    @EnvironmentObject private var session: Session
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 12) {
+                    accountRow
+                    NavigationLink {
+                        ConnectedAppsView()
+                    } label: {
+                        rowLabel(
+                            title: "Plugins",
+                            subtitle: "Tools and skills for your agents",
+                            systemImage: "puzzlepiece.extension"
+                        )
+                    }
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        rowLabel(
+                            title: "Settings",
+                            subtitle: "Connection, notifications, and appearance",
+                            systemImage: "gearshape"
+                        )
+                    }
+                }
+                .padding(20)
+            }
+            .background(AccountSheetStyle.canvas.ignoresSafeArea())
+            .navigationTitle(" ")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private var accountRow: some View {
+        NavigationLink {
+            SettingsView()
+        } label: {
+            HStack(spacing: 14) {
+                ProfileAvatar(name: session.connection?.name ?? "You", size: 44)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(session.connection?.name ?? "Vincent Posival")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                    Text(session.connection?.pairingConsentOrigin ?? "Paired computer")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.secondary)
+            }
+            .padding(16)
+            .background(AccountSheetStyle.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func rowLabel(title: String, subtitle: String, systemImage: String) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: systemImage)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(Color.secondary)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Color.primary)
+                Text(subtitle)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.secondary)
+        }
+        .padding(16)
+        .background(AccountSheetStyle.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+}
+
+private enum AccountSheetStyle {
+    static let canvas = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.055, green: 0.055, blue: 0.06, alpha: 1)
+            : .systemBackground
+    })
+    static let card = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.115, green: 0.115, blue: 0.125, alpha: 1)
+            : UIColor.secondarySystemBackground
+    })
+}
