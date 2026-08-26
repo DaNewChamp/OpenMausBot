@@ -403,7 +403,6 @@ struct ComputerView: View {
     }
 
     private func stopScreenWatch() {
-        session.clearScreen(of: bot.id)
         guard isWatchingScreen else { return }
         isWatchingScreen = false
         session.stopWatchingScreen(of: bot.id)

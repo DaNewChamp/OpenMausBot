@@ -71,10 +71,10 @@ final class Session: ObservableObject {
     /// the replacement's handle.
     private var streamGeneration = 0
     private var reconnectDelay: UInt64 = 0
-    /// How many computer panels are open. A count rather than a flag: the
-    /// panel can be pushed twice in a navigation stack, and the last one to
-    /// close is the one that should turn screens back off.
-    private var screenWatchers = 0
+    /// Which computer panels are open. The stream is shared, but frames are
+    /// keyed by bot, so a panel for the same bot cannot clear a frame another
+    /// panel still needs.
+    private var screenWatchers = ScreenWatchRegistry()
     /// Authenticated avatar bytes shared by roster, header, group and task
     /// surfaces. Both entry count and byte cost are bounded because one valid
     /// uploaded image may be 10 MB.
@@ -312,14 +312,16 @@ final class Session: ObservableObject {
     /// session, including on cellular, whether or not anyone is looking.
     /// The reconnect resumes from the cursor, so nothing is missed.
     func watchScreen(of botId: String) {
-        screenWatchers += 1
-        if screenWatchers == 1 { restartStream() }
+        if screenWatchers.start(botId: botId) { restartStream() }
     }
 
     func stopWatchingScreen(of botId: String) {
-        screenWatchers = max(0, screenWatchers - 1)
-        if screenWatchers == 0 {
+        let result = screenWatchers.stop(botId: botId)
+        guard result.stopped else { return }
+        if result.lastForBot {
             state.clearScreen(botId)
+        }
+        if result.lastOverall {
             restartStream()
         }
     }
@@ -329,7 +331,9 @@ final class Session: ObservableObject {
     /// zero: that would reconnect once with `screens=off` and immediately
     /// again with `screens=on`, wasting the retry and flashing stale state.
     func refreshScreenWatch(of botId: String) {
-        if screenWatchers == 0 { screenWatchers = 1 }
+        if !screenWatchers.isWatching(botId: botId) {
+            screenWatchers.start(botId: botId)
+        }
         restartStream()
         connect()
     }
@@ -399,7 +403,7 @@ final class Session: ObservableObject {
                 // breaking out here instead would fall through to the "the
                 // harness went away" path and flash a lost-connection banner
                 // on what is actually a deliberate reconnect.
-                for try await frame in try client.events(since: state.cursor, screens: screenWatchers > 0) {
+                for try await frame in try client.events(since: state.cursor, screens: screenWatchers.totalCount > 0) {
                     if Task.isCancelled { return }
                     reconnectDelay = 0
 
