@@ -305,6 +305,7 @@ import {
   companionOriginTarget,
   companionPairing,
   companionCloudDesktopAccess,
+  companionLocalVmAccess,
   companionRevoke,
   companionRunning,
   companionState,
@@ -1262,6 +1263,9 @@ ipcMain.handle("companion:pairing", async (_event, open) => {
 });
 ipcMain.handle("companion:cloud-desktop", (_event, deviceId, allowed) =>
   companionCloudDesktopAccess(deviceId, Boolean(allowed)).then(() => desktopCompanionState()),
+);
+ipcMain.handle("companion:local-vm", (_event, deviceId, allowed) =>
+  companionLocalVmAccess(deviceId, Boolean(allowed)).then(() => desktopCompanionState()),
 );
 ipcMain.handle("companion:revoke", (_event, deviceId) =>
   companionRevoke(deviceId).then(() => desktopCompanionState()),

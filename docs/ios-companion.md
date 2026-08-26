@@ -20,6 +20,9 @@ The first version includes:
 - Approvals and questions, including narrow “always allow” grants.
 - Resumable SSE, streamed reply text, reconnect hydration, and an opt-in live
   Box computer view. The loopback-only VPS SSH viewer remains desktop-only.
+- A phone-safe Local VM status and lifecycle surface for explicitly enabled
+  devices. The phone can create, stop, or recreate an idle bot VM on the Mac
+  while the durable workspace remains on that Mac.
 - Markdown rendering and Keychain storage for the device token.
 
 It is foreground-only. Push notifications, closed-app background delivery,
@@ -189,6 +192,11 @@ Allowed in the first release:
 - Fetch settled screen images and opt into live screen frames.
 - Request a fresh interactive cloud-desktop viewer only when the computer
   owner has enabled that capability for this specific paired phone.
+- Read a scrubbed per-bot Local VM status and, when **Local VM access** is
+  enabled for this phone in **Settings → Companion**, request guarded
+  **Create**, **Stop**, or idle-only **Recreate** actions. The response
+  contains state and safe display flags only; no host paths, image IDs,
+  commands, ports, tokens, or viewer URLs cross the sidecar.
 - Send messages, interrupt bots, answer approvals/questions, and mark chats
   read.
 - Create a basic bot.
@@ -203,8 +211,11 @@ Intentionally refused:
 
 - API keys and provider configuration.
 - Pairing, device revocation, or companion lifecycle control.
-- Local VM lifecycle, webhooks, connectors, routines, team import/export, and
-  internal peer-agent routes.
+- Shared Local VM lifecycle, webhooks, connectors, routines, team
+  import/export, and internal peer-agent routes.
+- Raw Local VM start/pull/remove/arbitrary-exec operations and loopback viewer
+  URLs. Local VM access is per-device and off by default; the desktop toggle
+  is the only grant path.
 - Cloud computer provisioning, sleep, shell execution, and screenshot APIs.
   The phone receives only the fresh `join` viewer URL, never the provider key.
 - New harness routes that have not been reviewed for phone access.

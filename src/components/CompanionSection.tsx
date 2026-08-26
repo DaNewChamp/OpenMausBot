@@ -25,6 +25,7 @@ interface Device {
   createdAt: number;
   lastSeenAt: number;
   cloudDesktopAccess: boolean;
+  localVmAccess: boolean;
 }
 
 interface CompanionState {
@@ -62,6 +63,7 @@ type Bridge = {
   keepAwake: (enabled: boolean) => Promise<CompanionState>;
   pairing: (open: boolean) => Promise<CompanionState>;
   cloudDesktop: (deviceId: string, allowed: boolean) => Promise<CompanionState>;
+  localVm: (deviceId: string, allowed: boolean) => Promise<CompanionState>;
   revoke: (deviceId: string) => Promise<CompanionState>;
 };
 
@@ -560,6 +562,17 @@ export function CompanionSection() {
                     className={cnSwitch(device.cloudDesktopAccess)}
                   >
                     <span className={cnKnob(device.cloudDesktopAccess)} />
+                  </button>
+                  <span className="text-[12px] text-ink-secondary">Local VM</span>
+                  <button
+                    role="switch"
+                    aria-checked={device.localVmAccess}
+                    aria-label={`Local VM access for ${device.name}`}
+                    disabled={busy}
+                    onClick={() => void act((c) => c.localVm(device.id, !device.localVmAccess))}
+                    className={cnSwitch(device.localVmAccess)}
+                  >
+                    <span className={cnKnob(device.localVmAccess)} />
                   </button>
                 </div>
                 <button

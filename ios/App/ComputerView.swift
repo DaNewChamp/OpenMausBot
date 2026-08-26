@@ -7,6 +7,43 @@ import SwiftUI
 import CompanionCore
 import UIKit
 
+private extension LocalVmAction {
+    var buttonTitle: String {
+        switch self {
+        case .create: return "Create"
+        case .stop: return "Stop"
+        case .recreate: return "Recreate"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .create: return "plus.circle"
+        case .stop: return "stop.circle"
+        case .recreate: return "arrow.clockwise.circle"
+        }
+    }
+
+    var confirmationTitle: String {
+        switch self {
+        case .create: return "Create Local VM?"
+        case .stop: return "Stop Local VM?"
+        case .recreate: return "Recreate Local VM?"
+        }
+    }
+
+    var confirmationMessage: String {
+        switch self {
+        case .create:
+            return "This creates an isolated desktop on the paired Mac. Your durable workspace stays on that Mac."
+        case .stop:
+            return "This stops the disposable desktop. Your durable workspace stays on the paired Mac."
+        case .recreate:
+            return "This replaces the disposable desktop while preserving its durable workspace. It is only allowed when the bot is idle."
+        }
+    }
+}
+
 struct ComputerView: View {
     let bot: Bot
 
@@ -19,6 +56,8 @@ struct ComputerView: View {
     @State private var desktopError: String?
     @State private var screenWatch = ComputerWatchLifecycle()
     @State private var isWatchingScreen = false
+    @State private var confirmingLocalVmAction: LocalVmAction?
+    @State private var localVmError: String?
 
     private static let firstFrameTimeout = ComputerWatchLifecycle.firstFrameTimeout
 
@@ -49,6 +88,22 @@ struct ComputerView: View {
     private var canOpenCloudViewer: Bool {
         ComputerPresentationState.supportsCloudViewer(current)
             && !isUnavailable(presentationState)
+    }
+
+    private var localVmStatus: LocalVmStatus? {
+        session.localVmStatus(for: current)
+    }
+
+    private var canShowLocalVmControls: Bool {
+        ComputerPresentationState.supportsLocalVmControls(
+            current,
+            status: localVmStatus,
+            accessGranted: session.localVmAccess
+        )
+    }
+
+    private var pendingLocalVmAction: Bool {
+        session.pendingLocalVmActions.contains(current.id)
     }
 
     private var streamFailure: String? {
@@ -112,6 +167,8 @@ struct ComputerView: View {
         .safeAreaInset(edge: .bottom) {
             if canOpenCloudViewer {
                 cloudViewerFooter
+            } else if canShowLocalVmControls {
+                localVmFooter
             }
         }
         .alert("Open live cloud desktop?", isPresented: $confirmingDesktop) {
@@ -130,6 +187,16 @@ struct ComputerView: View {
                 CloudDesktopBrowser(url: desktopURL)
                     .ignoresSafeArea()
             }
+        }
+        .alert(item: $confirmingLocalVmAction) { action in
+            Alert(
+                title: Text(action.confirmationTitle),
+                message: Text(action.confirmationMessage),
+                primaryButton: .default(Text(action.buttonTitle)) {
+                    Task { await runLocalVmAction(action) }
+                },
+                secondaryButton: .cancel()
+            )
         }
         .onAppear {
             syncScreenWatch(resetFrame: false)
@@ -183,6 +250,10 @@ struct ComputerView: View {
             if busy == true {
                 screenWatch.begin()
             }
+        }
+        .task(id: "local-vm-\(current.id)-\(current.computer ?? "")") {
+            guard current.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "vm" else { return }
+            await session.refreshLocalVm(for: current)
         }
         .task(id: "\(computerSignature)-\(screenWatch.attempt)-\(current.busy == true)") {
             guard ComputerPresentationState.hasKnownComputer(current) else { return }
@@ -361,6 +432,94 @@ struct ComputerView: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .background(.ultraThinMaterial)
+    }
+
+    private var localVmFooter: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Local VM")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text(localVmStateTitle)
+                        .font(.caption)
+                        .foregroundStyle(Color.white.opacity(0.65))
+                }
+                Spacer(minLength: 8)
+                if pendingLocalVmAction {
+                    ProgressView()
+                        .tint(.white)
+                        .controlSize(.small)
+                }
+            }
+
+            if let localVmError {
+                Text(localVmError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else if let problem = localVmStatus?.problem, localVmStatus?.ready != true {
+                Text(problem)
+                    .font(.caption)
+                    .foregroundStyle(Color.white.opacity(0.65))
+                    .lineLimit(2)
+            }
+
+            HStack(spacing: 8) {
+                if localVmStatus?.canCreate == true {
+                    localVmActionButton(.create)
+                }
+                if localVmStatus?.canStop == true {
+                    localVmActionButton(.stop)
+                }
+                if localVmStatus?.canRecreate == true {
+                    localVmActionButton(.recreate)
+                }
+            }
+
+            Text("Runs on the paired Mac. This phone only sends guarded VM actions.")
+                .font(.caption2)
+                .foregroundStyle(Color.white.opacity(0.5))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+    }
+
+    private var localVmStateTitle: String {
+        switch localVmStatus?.state {
+        case .ready: return "Ready"
+        case .running: return "Starting"
+        case .stopped: return "Stopped"
+        case .missing: return "Not created"
+        case .unavailable: return "Unavailable"
+        case .unknown, nil: return "Checking…"
+        }
+    }
+
+    private func localVmActionButton(_ action: LocalVmAction) -> some View {
+        Button {
+            localVmError = nil
+            confirmingLocalVmAction = action
+        } label: {
+            Label(action.buttonTitle, systemImage: action.systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .tint(action == .stop ? .red : .blue)
+        .disabled(pendingLocalVmAction)
+    }
+
+    @MainActor
+    private func runLocalVmAction(_ action: LocalVmAction) async {
+        localVmError = nil
+        let result = await session.performLocalVmAction(action, for: current)
+        if result == nil, !Task.isCancelled {
+            localVmError = "That Local VM action could not be completed. Try again from this panel."
+        }
     }
 
     private func retryScreen() {

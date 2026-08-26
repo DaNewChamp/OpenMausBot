@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("ogb", {
     keepAwake: (enabled) => ipcRenderer.invoke("companion:keep-awake", enabled),
     pairing: (open) => ipcRenderer.invoke("companion:pairing", open),
     cloudDesktop: (deviceId, allowed) => ipcRenderer.invoke("companion:cloud-desktop", deviceId, allowed),
+    localVm: (deviceId, allowed) => ipcRenderer.invoke("companion:local-vm", deviceId, allowed),
     revoke: (deviceId) => ipcRenderer.invoke("companion:revoke", deviceId),
   },
   /** Optional account-backed HTTPS access for Companion. Secrets stay in the

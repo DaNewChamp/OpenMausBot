@@ -2,9 +2,9 @@
 //
 // Everything the phone can do to the harness, in one place. The rules it
 // encodes come from the default-deny policy in `companion/src/routes.ts`: a
-// paired phone may chat, answer approvals, and read rooms — it may not touch
-// credentials, pairing, or the Local VM. Those routes are simply absent here
-// rather than present and failing at runtime.
+// paired phone may chat, answer approvals, and read rooms. Local VM access is
+// an explicit per-device capability; its client methods are intentionally
+// limited to a scrubbed status projection and empty-body lifecycle verbs.
 import Foundation
 
 /// One image saved by the companion attachment endpoint. The server returns
@@ -1430,6 +1430,46 @@ public struct CompanionClient: Sendable {
         try await send(
             try makeRequest("POST", "/api/bots/\(botId)/computer/join"),
             as: CloudDesktopSession.self
+        )
+    }
+
+    /// Read the phone-safe projection for this bot's Mac-hosted Local VM.
+    /// The paired sidecar rejects this call unless Local VM access was enabled
+    /// for this device in the desktop Companion settings.
+    public func localVmStatus(botId: String) async throws -> LocalVmStatus {
+        try await send(
+            try makeRequest("GET", "/api/bots/\(botId)/local-computer"),
+            as: LocalVmStatus.self
+        )
+    }
+
+    /// Create the bot's isolated Local VM. The body is deliberately `{}`;
+    /// capacity, leases and image readiness remain server-side decisions.
+    public func createLocalVm(botId: String) async throws -> LocalVmStatus {
+        try await localVmAction(botId: botId, action: "run")
+    }
+
+    /// Stop the bot's Local VM. Stopping discards only the disposable
+    /// container; the server keeps the durable workspace on the computer.
+    public func stopLocalVm(botId: String) async throws -> LocalVmStatus {
+        try await localVmAction(botId: botId, action: "stop")
+    }
+
+    /// Replace a bot's Local VM through one guarded server operation while
+    /// preserving its durable workspace. This never exposes remove+run as two
+    /// phone-visible calls.
+    public func recreateLocalVm(botId: String) async throws -> LocalVmStatus {
+        try await localVmAction(botId: botId, action: "recreate")
+    }
+
+    private func localVmAction(botId: String, action: String) async throws -> LocalVmStatus {
+        try await send(
+            try makeRequest(
+                "POST",
+                "/api/bots/\(botId)/local-computer/\(action)",
+                body: [String: Any](),
+            ),
+            as: LocalVmStatus.self
         )
     }
 

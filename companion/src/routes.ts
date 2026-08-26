@@ -44,6 +44,44 @@ export function isCloudDesktopJoin(method: string, path: string): boolean {
   return method === CLOUD_DESKTOP_JOIN_ROUTE.method && CLOUD_DESKTOP_JOIN_ROUTE.path.test(path);
 }
 
+/** The phone-safe Local VM status projection. The shared desktop lifecycle
+ * route is deliberately not included: a phone may inspect only the VM
+ * attached to the bot it is viewing. */
+export const LOCAL_VM_STATUS_ROUTE = {
+  method: "GET",
+  path: /^\/api\/bots\/[\w-]+\/local-computer$/,
+} as const;
+
+/** The only Local VM mutations a paired phone may request. `run` is the
+ * create operation; `recreate` is one guarded server-side replacement. */
+export const LOCAL_VM_ACTION_ROUTE = {
+  method: "POST",
+  path: /^\/api\/bots\/[\w-]+\/local-computer\/(?:run|stop|recreate)$/,
+} as const;
+
+export function isLocalVmStatus(method: string, path: string): boolean {
+  return method === LOCAL_VM_STATUS_ROUTE.method && LOCAL_VM_STATUS_ROUTE.path.test(path);
+}
+
+export function isLocalVmAction(method: string, path: string): boolean {
+  return method === LOCAL_VM_ACTION_ROUTE.method && LOCAL_VM_ACTION_ROUTE.path.test(path);
+}
+
+/** Local VM mutations have no caller-controlled fields. Requiring exactly
+ * `{}` at the sidecar boundary prevents a future harness field from turning
+ * this phone-safe route into arbitrary lifecycle or command execution. */
+export function validateLocalVmActionBody(
+  method: string,
+  path: string,
+  body: unknown,
+): Denial | null {
+  if (!isLocalVmAction(method, path)) return null;
+  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 0) {
+    return { status: 400, error: "Local VM actions accept an empty JSON object only" };
+  }
+  return null;
+}
+
 /** Inline OAuth cards are narrower than the general connected-app catalog.
  * The phone may act only on a card already present in the exact transcript it
  * names; it cannot add arbitrary accounts from a copied slug. */
@@ -141,6 +179,11 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // second, per-device capability check before it reaches the harness.
   CLOUD_DESKTOP_JOIN_ROUTE,
 
+  // Local VM status and narrowly guarded per-bot lifecycle actions. Shared
+  // image/runtime setup, screenshots and arbitrary exec remain desktop-only.
+  LOCAL_VM_STATUS_ROUTE,
+  LOCAL_VM_ACTION_ROUTE,
+
   // rooms — making one, and talking in one
   { method: "POST", path: /^\/api\/groups$/ },
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/messages$/ },
@@ -200,6 +243,10 @@ const EXPLAINED: ReadonlyArray<{ path: RegExp; error: string }> = [
   },
   { path: /^\/api\/config$/, error: "API keys can only be changed on your computer" },
   { path: /^\/api\/local-computer(\/|$)/, error: "the Local VM is set up on your computer" },
+  {
+    path: /^\/api\/bots\/[\w-]+\/local-computer(\/|$)/,
+    error: "Local VM access is managed per phone in OpenMausBot → Settings → Companion",
+  },
   {
     // Creating one exposes an endpoint to the internet, and rotating a
     // secret breaks whatever was sending to it. Neither belongs on a device

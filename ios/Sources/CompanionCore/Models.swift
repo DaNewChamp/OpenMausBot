@@ -1146,6 +1146,120 @@ public struct ScreenFrame: Hashable, Sendable {
     public var data: Data? { Data(base64Encoded: png) }
 }
 
+/// The phone-safe projection returned by a paired companion for a bot's
+/// Mac-hosted Local VM. Host paths, image identifiers, viewer URLs, ports and
+/// setup commands intentionally have no representation here.
+public struct LocalVmStatus: Codable, Equatable, Sendable {
+    public enum IsolationMode: String, Codable, Sendable {
+        case shared, perBot = "per-bot", unknown
+
+        public init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Self(rawValue: raw) ?? .unknown
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
+        }
+    }
+
+    public enum State: String, Codable, Sendable {
+        case ready, running, stopped, missing, unavailable, unknown
+
+        public init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Self(rawValue: raw) ?? .unknown
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
+        }
+    }
+
+    public var mode: IsolationMode
+    public var maxInstances: Int
+    public var state: State
+    public var container: String
+    public var daemonUp: Bool
+    public var imageReady: Bool
+    public var desktopReady: Bool
+    public var ready: Bool
+    public var createSupported: Bool
+    public var busy: Bool
+    public var canCreate: Bool
+    public var canStop: Bool
+    public var canRecreate: Bool
+    public var problem: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case maxInstances = "max_instances"
+        case state, container
+        case daemonUp = "daemon_up"
+        case imageReady = "image_ready"
+        case desktopReady = "desktop_ready"
+        case ready
+        case createSupported = "create_supported"
+        case busy
+        case canCreate = "can_create"
+        case canStop = "can_stop"
+        case canRecreate = "can_recreate"
+        case problem
+    }
+
+    public init(
+        mode: IsolationMode,
+        maxInstances: Int,
+        state: State,
+        container: String,
+        daemonUp: Bool,
+        imageReady: Bool,
+        desktopReady: Bool,
+        ready: Bool,
+        createSupported: Bool,
+        busy: Bool,
+        canCreate: Bool,
+        canStop: Bool,
+        canRecreate: Bool,
+        problem: String?
+    ) {
+        self.mode = mode
+        self.maxInstances = maxInstances
+        self.state = state
+        self.container = container
+        self.daemonUp = daemonUp
+        self.imageReady = imageReady
+        self.desktopReady = desktopReady
+        self.ready = ready
+        self.createSupported = createSupported
+        self.busy = busy
+        self.canCreate = canCreate
+        self.canStop = canStop
+        self.canRecreate = canRecreate
+        self.problem = problem
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try container.decodeIfPresent(IsolationMode.self, forKey: .mode) ?? .unknown
+        maxInstances = try container.decodeIfPresent(Int.self, forKey: .maxInstances) ?? 0
+        state = try container.decodeIfPresent(State.self, forKey: .state) ?? .unknown
+        self.container = try container.decodeIfPresent(String.self, forKey: .container) ?? "unknown"
+        daemonUp = try container.decodeIfPresent(Bool.self, forKey: .daemonUp) ?? false
+        imageReady = try container.decodeIfPresent(Bool.self, forKey: .imageReady) ?? false
+        desktopReady = try container.decodeIfPresent(Bool.self, forKey: .desktopReady) ?? false
+        ready = try container.decodeIfPresent(Bool.self, forKey: .ready) ?? false
+        createSupported = try container.decodeIfPresent(Bool.self, forKey: .createSupported) ?? false
+        busy = try container.decodeIfPresent(Bool.self, forKey: .busy) ?? false
+        canCreate = try container.decodeIfPresent(Bool.self, forKey: .canCreate) ?? false
+        canStop = try container.decodeIfPresent(Bool.self, forKey: .canStop) ?? false
+        canRecreate = try container.decodeIfPresent(Bool.self, forKey: .canRecreate) ?? false
+        problem = try container.decodeIfPresent(String.self, forKey: .problem)
+    }
+}
+
 /// `POST /api/bots` — the harness answers with the bot it made.
 public struct CreatedBot: Codable, Sendable {
     public var bot: Bot

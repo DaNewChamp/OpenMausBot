@@ -26,6 +26,9 @@ export interface DeviceRecord {
   /** Full interactive access to a bot's cloud desktop. Deliberately off on
    * every new and migrated device until the computer owner enables it. */
   cloudDesktopAccess: boolean;
+  /** Per-device access to the Mac-hosted Local VM status and lifecycle
+   * controls. Watch-only screen frames do not require this capability. */
+  localVmAccess: boolean;
 }
 
 /** What the UI is allowed to see: a device without its secret. */
@@ -118,6 +121,7 @@ function normalizeDevice(record: Partial<DeviceRecord> & { id: string; tokenHash
     createdAt,
     lastSeenAt: timestamp(record.lastSeenAt, createdAt),
     cloudDesktopAccess: record.cloudDesktopAccess === true,
+    localVmAccess: record.localVmAccess === true,
   };
 }
 
@@ -269,6 +273,7 @@ export class DeviceRegistry {
       createdAt: Date.now(),
       lastSeenAt: Date.now(),
       cloudDesktopAccess: false,
+      localVmAccess: false,
     };
     this.devices.push(device);
     // Unlike the lastSeenAt write below, this one must not be swallowed. A
@@ -349,6 +354,22 @@ export class DeviceRegistry {
       this.persist();
     } catch (error) {
       device.cloudDesktopAccess = previous;
+      throw error;
+    }
+    return true;
+  }
+
+  /** Grant or remove the narrower Local VM capability independently from
+   * cloud-desktop control. It is off for every new/migrated device. */
+  setLocalVmAccess(id: string, allowed: boolean): boolean {
+    const device = this.devices.find((candidate) => candidate.id === id);
+    if (!device) return false;
+    const previous = device.localVmAccess;
+    device.localVmAccess = allowed;
+    try {
+      this.persist();
+    } catch (error) {
+      device.localVmAccess = previous;
       throw error;
     }
     return true;

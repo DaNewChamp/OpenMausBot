@@ -70,6 +70,7 @@ describe("DeviceRegistry", () => {
     expect(Number.isFinite(listed.lastSeenAt)).toBe(true);
     expect(Number.isFinite(listed.createdAt)).toBe(true);
     expect(listed.cloudDesktopAccess).toBe(false);
+    expect(listed.localVmAccess).toBe(false);
     // and the token it was paired with still works
     expect(reloaded.authenticate(token)?.id).toBe(device.id);
   });
@@ -209,6 +210,31 @@ describe("DeviceRegistry", () => {
 
     expect(() => registry.setCloudDesktopAccess(device.id, true)).toThrow("ENOSPC");
     expect(registry.authenticate(token)?.cloudDesktopAccess).toBe(false);
+  });
+
+  it("keeps Local VM access off until enabled for that device", () => {
+    const registry = new DeviceRegistry();
+    const { token, device } = pair(registry);
+
+    expect(device.localVmAccess).toBe(false);
+    expect(registry.authenticate(token)?.localVmAccess).toBe(false);
+    expect(registry.setLocalVmAccess(device.id, true)).toBe(true);
+    expect(registry.authenticate(token)?.localVmAccess).toBe(true);
+    expect(new DeviceRegistry().authenticate(token)?.localVmAccess).toBe(true);
+    expect(registry.setLocalVmAccess(device.id, false)).toBe(true);
+    expect(registry.authenticate(token)?.localVmAccess).toBe(false);
+    expect(registry.setLocalVmAccess("missing", true)).toBe(false);
+  });
+
+  it("rolls Local VM access back when it cannot be saved", () => {
+    const registry = new DeviceRegistry();
+    const { token, device } = pair(registry);
+    (registry as unknown as { persist: () => void }).persist = () => {
+      throw new Error("ENOSPC: no space left on device");
+    };
+
+    expect(() => registry.setLocalVmAccess(device.id, true)).toThrow("ENOSPC");
+    expect(registry.authenticate(token)?.localVmAccess).toBe(false);
   });
 
   it("uses a high-entropy QR credential and burns the manual fallback with it", () => {

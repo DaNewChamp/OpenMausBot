@@ -110,6 +110,38 @@ final class ModelClientTests: XCTestCase {
         XCTAssertEqual(instances.first?.modelLabel(for: "claude-sonnet-5"), "Claude Sonnet 5")
     }
 
+    func testLocalVmStatusUsesTheSafePerBotRoute() async throws {
+        ModelRequestStub.responseBody = Data("""
+        {"mode":"per-bot","max_instances":2,"state":"missing","container":"missing",
+         "daemon_up":true,"image_ready":true,"desktop_ready":false,"ready":false,
+         "create_supported":true,"busy":false,"can_create":true,"can_stop":false,
+         "can_recreate":false,"problem":"Create this bot's Local VM."}
+        """.utf8)
+
+        let status = try await client.localVmStatus(botId: "model-bot")
+
+        XCTAssertEqual(ModelRequestStub.capturedRequest?.httpMethod, "GET")
+        XCTAssertEqual(ModelRequestStub.capturedRequest?.url?.path, "/api/bots/model-bot/local-computer")
+        XCTAssertEqual(status.mode, .perBot)
+        XCTAssertTrue(status.canCreate)
+    }
+
+    func testLocalVmActionsSendOnlyAnEmptyJsonObject() async throws {
+        ModelRequestStub.responseBody = Data("""
+        {"mode":"per-bot","max_instances":2,"state":"ready","container":"running",
+         "daemon_up":true,"image_ready":true,"desktop_ready":true,"ready":true,
+         "create_supported":true,"busy":false,"can_create":false,"can_stop":true,
+         "can_recreate":true,"problem":null}
+        """.utf8)
+
+        _ = try await client.stopLocalVm(botId: "model-bot")
+
+        XCTAssertEqual(ModelRequestStub.capturedRequest?.httpMethod, "POST")
+        XCTAssertEqual(ModelRequestStub.capturedRequest?.url?.path, "/api/bots/model-bot/local-computer/stop")
+        let body = try XCTUnwrap(ModelRequestStub.capturedBody)
+        XCTAssertEqual(String(data: body, encoding: .utf8), "{}")
+    }
+
     func testSelectableCatalogDropsEmptyAdvertisementsAndAlignsModels() throws {
         let claude = try decodeInstance("""
         {

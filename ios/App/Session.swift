@@ -19,6 +19,12 @@ import UIKit
 /// the transitions are worth being able to read.
 private let log = Logger(subsystem: "com.openmausbot.companion", category: "stream")
 
+enum LocalVmAction: String, CaseIterable, Identifiable, Sendable {
+    case create, stop, recreate
+
+    var id: String { rawValue }
+}
+
 @MainActor
 final class Session: ObservableObject {
     enum Status: Equatable {
@@ -55,6 +61,14 @@ final class Session: ObservableObject {
     /// rather than optimistic, so the roster disables the action until the
     /// acknowledgement arrives and cannot apply an older toggle out of order.
     @Published private(set) var pendingPinnedChats: Set<String> = []
+    /// Phone-safe Local VM snapshots keyed by bot. The capability is granted
+    /// per paired device by the desktop Companion and is deliberately false
+    /// until this phone receives a successful, scrubbed status response.
+    @Published private(set) var localVmStatuses: [String: LocalVmStatus] = [:]
+    @Published private(set) var localVmAccess = false
+    /// One lifecycle action per bot at a time. Keeping this in the session
+    /// prevents repeated taps from racing the server-side lease/capacity guard.
+    @Published private(set) var pendingLocalVmActions: Set<String> = []
 
     private var client: CompanionClient?
     /// The device token, kept in memory so the client can be rebuilt when the
@@ -279,6 +293,9 @@ final class Session: ObservableObject {
             token: paired.token
         )
         self.state = CompanionState()
+        localVmStatuses.removeAll()
+        localVmAccess = false
+        pendingLocalVmActions.removeAll()
         UserDefaults.standard.removeObject(forKey: Self.pinnedOverridesKey)
         // A fresh pairing settles any restore that was still waiting on the
         // keychain — the token is in hand, so there is nothing left to retry.
@@ -336,6 +353,9 @@ final class Session: ObservableObject {
         token = nil
         rotation = CandidateRotation(hosts: [])
         state = CompanionState()
+        localVmStatuses.removeAll()
+        localVmAccess = false
+        pendingLocalVmActions.removeAll()
         resetAvatarCache()
         NotificationCoordinator.shared.setBadge(0)
         status = .unpaired
@@ -892,6 +912,72 @@ final class Session: ObservableObject {
             status = .unauthorized
             throw error
         }
+    }
+
+    /// Read the phone-safe status for one bot's Mac-hosted Local VM. A 403 or
+    /// a missing route means this paired device has no capability; it is not a
+    /// reason to show a broken VM control surface on the phone.
+    func refreshLocalVm(for bot: Bot) async {
+        guard let client else { return }
+        do {
+            let snapshot = try await client.localVmStatus(botId: bot.id)
+            guard !Task.isCancelled else { return }
+            localVmAccess = true
+            localVmStatuses[bot.id] = snapshot
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            localVmAccess = false
+            localVmStatuses.removeAll()
+        } catch let error as APIError {
+            if case let .status(code, _) = error, code == 403 || code == 404 {
+                localVmAccess = false
+                localVmStatuses.removeValue(forKey: bot.id)
+            } else if !Task.isCancelled {
+                actionError = error.localizedDescription
+            }
+        } catch {
+            if !Task.isCancelled { actionError = error.localizedDescription }
+        }
+    }
+
+    func localVmStatus(for bot: Bot) -> LocalVmStatus? {
+        localVmStatuses[bot.id]
+    }
+
+    /// Run one of the three guarded per-bot Local VM operations. The server
+    /// owns all image, lease, idle and capacity decisions; this method merely
+    /// projects its safe response back into the Computer panel.
+    @discardableResult
+    func performLocalVmAction(_ action: LocalVmAction, for bot: Bot) async -> LocalVmStatus? {
+        guard localVmAccess, let client, !pendingLocalVmActions.contains(bot.id) else { return nil }
+        pendingLocalVmActions.insert(bot.id)
+        defer { pendingLocalVmActions.remove(bot.id) }
+        do {
+            let next: LocalVmStatus
+            switch action {
+            case .create: next = try await client.createLocalVm(botId: bot.id)
+            case .stop: next = try await client.stopLocalVm(botId: bot.id)
+            case .recreate: next = try await client.recreateLocalVm(botId: bot.id)
+            }
+            guard !Task.isCancelled else { return nil }
+            localVmAccess = true
+            localVmStatuses[bot.id] = next
+            return next
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            localVmAccess = false
+            localVmStatuses.removeAll()
+        } catch let error as APIError {
+            if case let .status(code, _) = error, code == 403 || code == 404 {
+                localVmAccess = false
+                localVmStatuses.removeValue(forKey: bot.id)
+            } else if !Task.isCancelled {
+                actionError = error.localizedDescription
+            }
+        } catch {
+            if !Task.isCancelled { actionError = error.localizedDescription }
+        }
+        return nil
     }
 
     func markRead(_ chat: Chat) async {

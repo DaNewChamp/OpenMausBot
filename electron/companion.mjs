@@ -398,3 +398,13 @@ export async function companionCloudDesktopAccess(deviceId, allowed) {
   await control(allowed ? "POST" : "DELETE", `/devices/${deviceId}/cloud-desktop`).catch(() => {});
   return companionState();
 }
+
+/** Enable or remove paired-phone access to per-bot Local VM status and
+ * guarded create/stop/recreate actions. This is separate from cloud desktop
+ * control because Local VM access never grants an interactive viewer URL. */
+export async function companionLocalVmAccess(deviceId, allowed) {
+  if (!proc) return companionState();
+  if (!/^[\w-]{1,64}$/.test(String(deviceId ?? ""))) return companionState();
+  await control(allowed ? "POST" : "DELETE", `/devices/${deviceId}/local-vm`).catch(() => {});
+  return companionState();
+}

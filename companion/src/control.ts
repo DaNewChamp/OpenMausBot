@@ -295,6 +295,17 @@ export function createControlServer(options: ControlOptions): Server {
       }
       return json(res, 200, companionState(options));
     }
+    const localVm = path.match(/^\/devices\/([\w-]+)\/local-vm$/);
+    if (localVm && (method === "POST" || method === "DELETE")) {
+      try {
+        if (!options.devices.setLocalVmAccess(localVm[1], method === "POST")) {
+          return json(res, 404, { error: "no such device" });
+        }
+      } catch {
+        return json(res, 500, { error: "could not save Local VM access" });
+      }
+      return json(res, 200, companionState(options));
+    }
     const revoke = path.match(/^\/devices\/([\w-]+)$/);
     if (revoke && method === "DELETE") {
       if (!options.devices.revoke(revoke[1])) return json(res, 404, { error: "no such device" });
@@ -400,7 +411,9 @@ function render(s) {
           "<li><div class='grow'><div class=name>" + esc(d.name) + "</div>" +
           "<div class=dim>Last seen " + ago(d.lastSeenAt) + "</div>" +
           "<button data-cloud='" + esc(d.id) + "' data-allowed='" + (d.cloudDesktopAccess ? "1" : "0") + "'>" +
-          (d.cloudDesktopAccess ? "Cloud desktop on" : "Allow cloud desktop") + "</button></div>" +
+          (d.cloudDesktopAccess ? "Cloud desktop on" : "Allow cloud desktop") + "</button>" +
+          "<button data-vm='" + esc(d.id) + "' data-allowed='" + (d.localVmAccess ? "1" : "0") + "'>" +
+          (d.localVmAccess ? "Local VM on" : "Allow Local VM") + "</button></div>" +
           "<button data-revoke='" + esc(d.id) + "'>Remove</button></li>").join("") + "</ul>"
       : "<p class=dim>No phones are paired yet.</p>");
 
@@ -412,6 +425,12 @@ function render(s) {
   for (const b of document.querySelectorAll("[data-cloud]")) {
     b.addEventListener("click", async () => render(await api(
       "/devices/" + b.dataset.cloud + "/cloud-desktop",
+      b.dataset.allowed === "1" ? "DELETE" : "POST"
+    )));
+  }
+  for (const b of document.querySelectorAll("[data-vm]")) {
+    b.addEventListener("click", async () => render(await api(
+      "/devices/" + b.dataset.vm + "/local-vm",
       b.dataset.allowed === "1" ? "DELETE" : "POST"
     )));
   }

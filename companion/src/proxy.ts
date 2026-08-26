@@ -24,8 +24,11 @@ import {
   isCloudDesktopJoin,
   isConnectorCardAction,
   isConnectorCardStatus,
+  isLocalVmAction,
+  isLocalVmStatus,
   validateConnectorCardBody,
   validateConnectorCardThreadId,
+  validateLocalVmActionBody,
 } from "./routes.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
@@ -34,7 +37,10 @@ export interface ProxyOptions {
   /** Where the harness is listening on loopback. */
   harnessPort: number;
   /** Does this bearer token belong to a paired device? */
-  authenticate: (token: string | undefined) => { cloudDesktopAccess: boolean } | null;
+  authenticate: (token: string | undefined) => {
+    cloudDesktopAccess: boolean;
+    localVmAccess?: boolean;
+  } | null;
   /** Redeem a pairing code. Handled here and never forwarded: the harness
    * has no such route and no idea devices exist — pairing is the sidecar's
    * own concern, and the one thing a device does before it has a token. */
@@ -78,7 +84,11 @@ const MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
 
 /** Read a JSON body, bounded. An unbounded read on an unauthenticated route
  * is a way to be memory-exhausted by anyone who can reach the port. */
-const readJson = (req: IncomingMessage, limit = 64 * 1024): Promise<Record<string, unknown>> =>
+const readJson = (
+  req: IncomingMessage,
+  limit = 64 * 1024,
+  requireObject = false,
+): Promise<Record<string, unknown>> =>
   new Promise((resolve, reject) => {
     let size = 0;
     const chunks: Buffer[] = [];
@@ -94,9 +104,15 @@ const readJson = (req: IncomingMessage, limit = 64 * 1024): Promise<Record<strin
     req.on("error", reject);
     req.on("end", () => {
       const text = Buffer.concat(chunks).toString("utf8").trim();
-      if (!text) return resolve({});
+      if (!text) {
+        if (requireObject) return reject(new Error("JSON body must be an object"));
+        return resolve({});
+      }
       try {
         const parsed: unknown = JSON.parse(text);
+        if (requireObject && (!parsed || typeof parsed !== "object" || Array.isArray(parsed))) {
+          return reject(new Error("JSON body must be an object"));
+        }
         resolve(parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {});
       } catch {
         reject(new Error("invalid JSON body"));
@@ -254,10 +270,16 @@ export function createProxyHandler(options: ProxyOptions) {
       });
     }
 
+    if ((isLocalVmStatus(method, path) || isLocalVmAction(method, path)) && !device?.localVmAccess) {
+      return sendJson(res, 403, {
+        error: "Local VM access is off for this phone — enable it in OpenMausBot → Settings → Companion",
+      });
+    }
+
     // Pairing terminates here. Forwarding it would hand the harness a route
     // it does not have, and the 404 would read to a phone as "wrong address".
     if (method === "POST" && path === "/api/pair") {
-      readJson(req).then(
+      readJson(req, 64 * 1024, true).then(
         (body) => {
           // New clients redeem the high-entropy credential carried by the QR.
           // `code` remains accepted for manual entry and older mobile builds.
@@ -335,6 +357,25 @@ export function createProxyHandler(options: ProxyOptions) {
       };
       if (queryDenial) return sendJson(res, queryDenial.status, { error: queryDenial.error });
       forward();
+      return;
+    }
+
+    // Local VM actions carry no caller-controlled fields. Buffer the tiny
+    // body here, validate the exact empty object, then replay that object to
+    // the harness. Status is read-only and can pass through normally.
+    if (isLocalVmAction(method, path)) {
+      const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+      if (!contentType.startsWith("application/json")) {
+        return sendJson(res, 415, { error: "Local VM actions require application/json" });
+      }
+      readJson(req, 64 * 1024, true).then(
+        (body) => {
+          const bodyDenial = validateLocalVmActionBody(method, path, body);
+          if (bodyDenial) return sendJson(res, bodyDenial.status, { error: bodyDenial.error });
+          forward(Buffer.from("{}", "utf8"));
+        },
+        (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
       return;
     }
 

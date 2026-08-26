@@ -64,6 +64,16 @@ describe("origins the control server will change state for", () => {
     expect((await ask("POST", "/devices/missing/cloud-desktop")).status).toBe(404);
   });
 
+  it("controls Local VM access independently per paired device", async () => {
+    const device = devices.list()[0];
+    expect(device.localVmAccess).toBe(false);
+    expect((await ask("POST", `/devices/${device.id}/local-vm`)).status).toBe(200);
+    expect(devices.list().find((candidate) => candidate.id === device.id)?.localVmAccess).toBe(true);
+    expect((await ask("DELETE", `/devices/${device.id}/local-vm`)).status).toBe(200);
+    expect(devices.list().find((candidate) => candidate.id === device.id)?.localVmAccess).toBe(false);
+    expect((await ask("POST", "/devices/missing/local-vm")).status).toBe(404);
+  });
+
   it("reports a permission write failure without dropping the control server", async () => {
     const [device] = devices.list();
     const writable = devices as unknown as { persist: () => void };

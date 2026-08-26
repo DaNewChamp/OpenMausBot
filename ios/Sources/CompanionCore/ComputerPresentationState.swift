@@ -60,6 +60,22 @@ public enum ComputerPresentationState: Equatable, Sendable {
         return bot.cloudBackend == nil || bot.cloudBackend == "box"
     }
 
+    /// Local VM lifecycle controls are available only for an explicitly
+    /// configured VM whose paired device has received the safe status
+    /// projection. The status itself is also required to be per-bot: shared
+    /// mode remains a desktop-only lifecycle surface.
+    public static func supportsLocalVmControls(
+        _ bot: Bot,
+        status: LocalVmStatus?,
+        accessGranted: Bool
+    ) -> Bool {
+        guard accessGranted,
+              bot.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "vm",
+              let status
+        else { return false }
+        return status.mode == .perBot
+    }
+
     /// Computer values are supplied by the desktop and can grow over time.
     /// An omitted value is the server's Auto mode: the desktop chooses Box,
     /// VPS, Local VM, or local CUA for the turn and can still stream a frame.

@@ -141,6 +141,7 @@ import { fetchSkillFromSource } from "./skill-fetch.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
+import { projectLocalVmStatus } from "./local-vm-phone.ts";
 import { RepeatDetector, callKey } from "./repeat-detector.ts";
 import * as vps from "./vps-computer.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
@@ -3221,6 +3222,19 @@ async function localVmPayload(target: LocalVmTarget) {
   };
 }
 
+/** The paired companion gets a deliberately smaller Local VM response than
+ * the desktop. This function is kept next to the existing full payload so a
+ * future status field cannot accidentally become phone-visible by spread. */
+async function localVmPhonePayload(target: LocalVmTarget) {
+  const status = await containerComputerStatus(undefined, undefined, target);
+  const owner = localVmLeaseFor(target).current(localVmOwnerBusy);
+  return projectLocalVmStatus(status, {
+    mode: localVmMode(cfg),
+    maxInstances: localVmMaxInstances(cfg),
+    busy: Boolean(owner) || localVmLifecycleBusy.has(target.key),
+  });
+}
+
 async function existingPerBotLocalVmCount(runtime: Runtime) {
   const targets = [...new Map(store.bots.map((bot) => {
     const target = perBotLocalVmTarget(bot.id);
@@ -5487,7 +5501,78 @@ const server = createServer(async (req, res) => {
     if (m && method === "GET") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
-      return json(res, 200, await localVmPayload(localVmTargetForBot(bot.id)));
+      const target = localVmTargetForBot(bot.id);
+      return json(
+        res,
+        200,
+        req.headers["x-openmausbot-companion"] === "1"
+          ? await localVmPhonePayload(target)
+          : await localVmPayload(target),
+      );
+    }
+    // Paired phones get only a per-bot, strict lifecycle surface. The
+    // companion proxy authenticates and capability-gates this header; this
+    // second check keeps the harness response safe even if a future route
+    // accidentally reuses the phone path without the proxy's projection.
+    m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer\/(run|stop|recreate)$/);
+    if (m && method === "POST" && req.headers["x-openmausbot-companion"] === "1") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const body = await readBody(req);
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length > 0) {
+        return json(res, 400, { error: "Local VM actions accept an empty JSON object only" });
+      }
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const action = m[2] as "run" | "stop" | "recreate";
+      const target = localVmTargetForBot(bot.id);
+      if (target.key === SHARED_LOCAL_VM_TARGET.key) {
+        return json(res, 409, { error: "Shared mode manages this desktop in App Settings → Local VM" });
+      }
+      if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(target.key)) {
+        return json(res, 409, { error: "this bot's Local VM setup action is still running" });
+      }
+      if (action === "run" && localVmProvisionBusy) {
+        return json(res, 409, { error: "another per-bot Local VM is being created — retry after it finishes" });
+      }
+      const vmOwner = localVmLeaseFor(target).current(localVmOwnerBusy);
+      if (vmOwner || bot.busy) {
+        return json(res, 409, { error: "this bot is using its Local VM — stop the turn first" });
+      }
+      // Fence this target, and the cross-target capacity decision for creates,
+      // before the first await so two phone requests cannot both pass the limit.
+      localVmLifecycleBusy.add(target.key);
+      if (action === "run" || action === "recreate") localVmProvisionBusy = true;
+      try {
+        if (action === "run" || action === "recreate") {
+          const before = await containerComputerStatus(undefined, undefined, target);
+          if (!before.runtime) return json(res, 409, { error: before.problem ?? "No container runtime is installed" });
+          if (action === "run" && !(await containerComputerExists(before.runtime, target))) {
+            const count = await existingPerBotLocalVmCount(before.runtime);
+            if (count >= localVmMaxInstances(cfg)) {
+              return json(res, 409, {
+                error: `The per-bot Local VM limit is ${localVmMaxInstances(cfg)} — delete an unused bot VM or raise the limit in App Settings`,
+              });
+            }
+          }
+          if (action === "recreate" && before.container === "missing") {
+            return json(res, 409, { error: "this bot has no Local VM to recreate — use Create instead" });
+          }
+          if (action === "recreate") await containerComputerAction("remove", undefined, undefined, target);
+        }
+        const status = await containerComputerAction(action === "recreate" ? "run" : action, undefined, undefined, target);
+        if (action === "run" || action === "recreate") localVmIdleFor(target).touch();
+        if (action === "stop") localVmIdleFor(target).cancel();
+        return json(res, 200, await projectLocalVmStatus(status, {
+          mode: localVmMode(cfg),
+          maxInstances: localVmMaxInstances(cfg),
+          busy: false,
+        }));
+      } finally {
+        if (action === "run" || action === "recreate") localVmProvisionBusy = false;
+        localVmLifecycleBusy.delete(target.key);
+      }
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer\/(run|stop|remove)$/);
     if (m && method === "POST") {

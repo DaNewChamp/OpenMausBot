@@ -59,6 +59,46 @@ final class ComputerPresentationStateTests: XCTestCase {
         XCTAssertNotEqual(ComputerPresentationState(bot: bot(computer: "vm")), .cloudViewerAvailable)
     }
 
+    func testLocalVmControlsRequireCapabilityAndPerBotMode() {
+        let status = LocalVmStatus(
+            mode: .perBot,
+            maxInstances: 2,
+            state: .missing,
+            container: "missing",
+            daemonUp: true,
+            imageReady: true,
+            desktopReady: false,
+            ready: false,
+            createSupported: true,
+            busy: false,
+            canCreate: true,
+            canStop: false,
+            canRecreate: false,
+            problem: "Create this bot's Local VM."
+        )
+        let vm = bot(computer: "vm")
+        XCTAssertTrue(ComputerPresentationState.supportsLocalVmControls(vm, status: status, accessGranted: true))
+        XCTAssertFalse(ComputerPresentationState.supportsLocalVmControls(vm, status: status, accessGranted: false))
+        let shared = LocalVmStatus(
+            mode: .shared,
+            maxInstances: 1,
+            state: .ready,
+            container: "running",
+            daemonUp: true,
+            imageReady: true,
+            desktopReady: true,
+            ready: true,
+            createSupported: true,
+            busy: false,
+            canCreate: false,
+            canStop: false,
+            canRecreate: false,
+            problem: nil
+        )
+        XCTAssertFalse(ComputerPresentationState.supportsLocalVmControls(vm, status: shared, accessGranted: true))
+        XCTAssertFalse(ComputerPresentationState.supportsLocalVmControls(bot(computer: "local"), status: status, accessGranted: true))
+    }
+
     func testMissingFrameStartsBeforeFailure() {
         XCTAssertEqual(ComputerPresentationState(bot: bot(computer: "local")), .starting)
     }

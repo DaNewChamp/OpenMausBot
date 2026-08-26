@@ -7,7 +7,12 @@
 // and the one that quietly stopped being true once before.
 import { describe, expect, it } from "vitest";
 
-import { denyReason, validateConnectorCardBody, validateConnectorCardThreadId } from "../src/routes.ts";
+import {
+  denyReason,
+  validateConnectorCardBody,
+  validateConnectorCardThreadId,
+  validateLocalVmActionBody,
+} from "../src/routes.ts";
 
 const ask = (method: string, path: string, authenticated = true) =>
   denyReason({ method, path, authenticated });
@@ -54,6 +59,10 @@ describe("what the app may do", () => {
     ["PATCH", "/api/bots/bot_123/model"],
     ["POST", "/api/bots/bot_123/avatar/generate"],
     ["POST", "/api/bots/bot_123/computer/join"],
+    ["GET", "/api/bots/bot_123/local-computer"],
+    ["POST", "/api/bots/bot_123/local-computer/run"],
+    ["POST", "/api/bots/bot_123/local-computer/stop"],
+    ["POST", "/api/bots/bot_123/local-computer/recreate"],
     ["POST", "/api/groups/room-1/messages"],
     ["POST", "/api/groups/room-1/interrupt"],
     ["POST", "/api/groups/room-1/read"],
@@ -147,6 +156,26 @@ describe("what it may not", () => {
     expect(allowed("POST", "/api/bots/bot_123/computer/sleep")).toBe(false);
     expect(allowed("POST", "/api/bots/bot_123/computer/exec")).toBe(false);
     expect(allowed("POST", "/api/bots/bot_123/computer/screenshot")).toBe(false);
+  });
+
+  it("opens only per-bot Local VM status and guarded actions", () => {
+    expect(allowed("GET", "/api/bots/bot_123/local-computer")).toBe(true);
+    expect(allowed("POST", "/api/bots/bot_123/local-computer/run")).toBe(true);
+    expect(allowed("POST", "/api/bots/bot_123/local-computer/stop")).toBe(true);
+    expect(allowed("POST", "/api/bots/bot_123/local-computer/recreate")).toBe(true);
+    expect(allowed("POST", "/api/local-computer/run")).toBe(false);
+    expect(allowed("POST", "/api/bots/bot_123/local-computer/start")).toBe(false);
+    expect(allowed("POST", "/api/bots/bot_123/local-computer/remove")).toBe(false);
+    expect(allowed("POST", "/api/bots/bot_123/local-computer/screenshot")).toBe(false);
+    expect(allowed("POST", "/api/bots/bot_123/local-computer/run/extra")).toBe(false);
+  });
+
+  it("requires an empty JSON object for Local VM actions", () => {
+    const path = "/api/bots/bot_123/local-computer/run";
+    expect(validateLocalVmActionBody("POST", path, {})).toBeNull();
+    expect(validateLocalVmActionBody("POST", path, { command: "rm -rf /" })).toMatchObject({ status: 400 });
+    expect(validateLocalVmActionBody("POST", path, [])).toMatchObject({ status: 400 });
+    expect(validateLocalVmActionBody("GET", path, { ignored: true })).toBeNull();
   });
 
   // The method is part of the allowance, not decoration: reading the fleet
