@@ -69,6 +69,7 @@ struct ChatView: View {
     @State private var showCommandHUD = false
     @State private var shareFile: ShareFile?
     @State private var commRoom: Room?
+    @State private var groupProfileRoom: Room?
     @FocusState private var composerFocused: Bool
     @StateObject private var dictation = SpeechDictation()
     /// Manual disclosure state, keyed by the run's first message id. Failures
@@ -182,6 +183,9 @@ struct ChatView: View {
                                             endsRun: endsRun(at: row.startIndex, in: transcript),
                                             onOpenComm: { groupId in
                                                 commRoom = session.state.rooms.first { $0.id == groupId }
+                                            },
+                                            onReply: { _ in
+                                                composerFocused = true
                                             }
                                         )
                                     }
@@ -310,6 +314,9 @@ struct ChatView: View {
         .navigationDestination(item: $commRoom) { room in
             ChatView(chat: .room(room))
         }
+        .navigationDestination(item: $groupProfileRoom) { room in
+            GroupProfileView(room: room)
+        }
         .task(id: threadId) {
             // opening a chat is what marks it read, exactly as on the desktop
             if current.unread { await session.markRead(current) }
@@ -351,6 +358,9 @@ struct ChatView: View {
         }
         .onChange(of: showingProfile) { _, shown in
             if shown { dictation.stop() }
+        }
+        .onChange(of: groupProfileRoom) { _, room in
+            if room != nil { dictation.stop() }
         }
         .onChange(of: showingPlus) { _, shown in
             if shown { dictation.stop() }
@@ -449,7 +459,7 @@ struct ChatView: View {
 
             Button {
                 if current.isBot { showingProfile = true }
-                else { showingPlus = true }
+                else if case let .room(room) = current { groupProfileRoom = room }
             } label: {
                 HStack(spacing: 8) {
                     ChatAvatarView(
@@ -470,8 +480,8 @@ struct ChatView: View {
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(current.isBot ? "Open \(current.name) profile" : "Open \(current.name) chat options")
-            .accessibilityHint(current.isBot ? "Edits this agent's identity, avatar, notifications, and voice" : "Opens conversation options")
+            .accessibilityLabel(current.isBot ? "Open \(current.name) profile" : "Open \(current.name) group profile")
+            .accessibilityHint(current.isBot ? "Edits this agent's identity, avatar, notifications, and voice" : "Shows group members, instructions, and routines")
 
             Spacer(minLength: 0)
 
@@ -1338,12 +1348,13 @@ struct MessageRow: View {
     /// Last bubble of a run from the same side: the one that gets the tail.
     var endsRun = true
     var onOpenComm: (String) -> Void = { _ in }
+    var onReply: (Message) -> Void = { _ in }
     @EnvironmentObject private var session: Session
     @Environment(\.conversationTypography) private var typography
     @State private var editingText = ""
     @State private var showingEdit = false
 
-    private static let reactionChoices = ["👍", "❤️", "😂", "🎉", "👀"]
+    private static let reactionChoices = ["👍", "👎", "❤️", "😂", "🎉", "😮"]
 
     private var versions: [Message] {
         session.state.versions(of: message, inThread: chat.threadId)
@@ -1387,6 +1398,16 @@ struct MessageRow: View {
         .contextMenu {
             ForEach(Self.reactionChoices, id: \.self) { emoji in
                 Button(emoji) { Task { await session.react(to: message, in: chat.threadId, emoji: emoji) } }
+            }
+            if message.kind == .text, let text = message.text,
+               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Divider()
+                Button("Reply", systemImage: "arrowshape.turn.up.left") {
+                    onReply(message)
+                }
+                Button("Copy", systemImage: "doc.on.doc") {
+                    PlatformBridge.copyToPasteboard(text)
+                }
             }
             if message.role == .user, message.kind == .text, case let .bot(bot) = chat {
                 Divider()
