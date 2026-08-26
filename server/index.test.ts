@@ -757,9 +757,11 @@ describe("harness HTTP API", () => {
       });
       await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
 
-      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "@Quill take this" })).status).toBe(202);
+      const archivedOnly = await api("POST", `/api/groups/${room.id}/messages`, { text: "@Quill take this" });
+      expect(archivedOnly).toEqual({ status: 202, body: { ok: true, disposition: "started" } });
       let state = (await api("GET", "/api/bots?messages=20")).body;
       let messages = state.groups.find((group: { id: string }) => group.id === room.id).messages;
+      expect(messages.find((message: { text?: string }) => message.text === "@Quill take this")).not.toHaveProperty("queueId");
       expect(messages.at(-1)).toMatchObject({
         kind: "activity",
         tool: {
@@ -797,11 +799,13 @@ describe("harness HTTP API", () => {
       await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
 
       const beforeUnmentioned = messages.length;
-      await api("POST", `/api/groups/${room.id}/messages`, { text: "no mention" });
+      const unmentioned = await api("POST", `/api/groups/${room.id}/messages`, { text: "no mention" });
+      expect(unmentioned).toEqual({ status: 202, body: { ok: true, disposition: "started" } });
       state = (await api("GET", "/api/bots?messages=20")).body;
       messages = state.groups.find((group: { id: string }) => group.id === room.id).messages;
       expect(messages).toHaveLength(beforeUnmentioned + 1);
       expect(messages.at(-1)).toMatchObject({ kind: "text", role: "user", text: "no mention" });
+      expect(messages.at(-1)).not.toHaveProperty("queueId");
 
       await api("PATCH", `/api/bots/${active.id}`, { hidden: true });
       await api("POST", `/api/groups/${room.id}/messages`, { text: "hello everyone" });

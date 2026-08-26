@@ -15,11 +15,12 @@ describe("message delivery contract", () => {
     expect(() => parseDeliveryMode("later")).toThrow();
   });
 
-  it("accepts the companion field and its staggered-rollout aliases", () => {
+  it("accepts the canonical companion field and preserves omitted auto mode", () => {
     expect(parseDeliveryModeFromBody({ delivery: "steer" })).toBe("steer");
-    expect(parseDeliveryModeFromBody({ deliveryMode: "queue" })).toBe("queue");
-    expect(parseDeliveryModeFromBody({ mode: "auto" })).toBe("auto");
-    expect(() => parseDeliveryModeFromBody({ delivery: "steer", mode: "queue" })).toThrow();
+    expect(parseDeliveryModeFromBody({ delivery: "queue" })).toBe("queue");
+    expect(parseDeliveryModeFromBody({})).toBe("auto");
+    expect(parseDeliveryModeFromBody({ deliveryMode: "queue" })).toBe("auto");
+    expect(parseDeliveryModeFromBody({ mode: "steer" })).toBe("auto");
   });
 
   it("starts an idle conversation regardless of the requested mode", () => {

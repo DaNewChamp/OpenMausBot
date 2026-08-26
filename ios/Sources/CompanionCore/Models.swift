@@ -134,16 +134,35 @@ public struct MessageDeliveryReceipt: Codable, Equatable, Sendable {
         self.threadId = threadId
     }
 
-    private enum CodingKeys: String, CodingKey { case ok, disposition, queueId, threadId }
+    private enum CodingKeys: String, CodingKey { case ok, disposition, queueId, threadId, queued, steered }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        // Older harnesses acknowledged a send with only {ok:true}; treating
-        // that as a started turn keeps a staggered companion rollout usable.
         ok = try container.decodeIfPresent(Bool.self, forKey: .ok) ?? true
-        disposition = try container.decodeIfPresent(Disposition.self, forKey: .disposition) ?? .started
         queueId = try container.decodeIfPresent(String.self, forKey: .queueId)
         threadId = try container.decodeIfPresent(String.self, forKey: .threadId)
+        let legacyQueued = try container.decodeIfPresent(Bool.self, forKey: .queued) == true
+        let legacySteered = try container.decodeIfPresent(Bool.self, forKey: .steered) == true
+        if let explicit = try container.decodeIfPresent(Disposition.self, forKey: .disposition) {
+            disposition = explicit
+        } else if queueId != nil || legacyQueued {
+            disposition = .queued
+        } else if legacySteered {
+            disposition = .steered
+        } else {
+            // Older harnesses acknowledged a send with only {ok:true};
+            // treating that as a started turn keeps a staggered companion
+            // rollout usable.
+            disposition = .started
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(ok, forKey: .ok)
+        try container.encode(disposition, forKey: .disposition)
+        try container.encodeIfPresent(queueId, forKey: .queueId)
+        try container.encodeIfPresent(threadId, forKey: .threadId)
     }
 }
 

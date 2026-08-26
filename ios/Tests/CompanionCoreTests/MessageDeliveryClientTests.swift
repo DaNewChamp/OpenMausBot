@@ -103,4 +103,33 @@ final class MessageDeliveryClientTests: XCTestCase {
         XCTAssertNil(receipt.queueId)
         XCTAssertNil(receipt.threadId)
     }
+
+    func testLegacyQueuedAcknowledgementInfersQueuedDisposition() async throws {
+        MessageDeliveryRequestStub.responseBody = Data(#"{"ok":true,"queued":true,"queueId":"legacy-q","threadId":"legacy-t"}"#.utf8)
+
+        let receipt = try await client.send(text: "hold this", toBot: "bot-1")
+
+        XCTAssertEqual(receipt.disposition, .queued)
+        XCTAssertEqual(receipt.queueId, "legacy-q")
+        XCTAssertEqual(receipt.threadId, "legacy-t")
+    }
+
+    func testLegacyQueuedAcknowledgementInfersQueuedFromQueueId() async throws {
+        MessageDeliveryRequestStub.responseBody = Data(#"{"ok":true,"queueId":"legacy-q"}"#.utf8)
+
+        let receipt = try await client.send(text: "hold this", toRoom: "room-1")
+
+        XCTAssertEqual(receipt.disposition, .queued)
+        XCTAssertEqual(receipt.queueId, "legacy-q")
+    }
+
+    func testLegacySteeredAcknowledgementInfersSteeredDisposition() async throws {
+        MessageDeliveryRequestStub.responseBody = Data(#"{"ok":true,"steered":true}"#.utf8)
+
+        let receipt = try await client.send(text: "urgent", toBot: "bot-1")
+
+        XCTAssertEqual(receipt.disposition, .steered)
+        XCTAssertNil(receipt.queueId)
+        XCTAssertNil(receipt.threadId)
+    }
 }

@@ -31,20 +31,9 @@ export function parseDeliveryMode(value: unknown): DeliveryMode {
   throw Object.assign(new Error("delivery must be auto, steer, or queue"), { status: 400 });
 }
 
-/**
- * Read the wire field while tolerating the names used by early companion
- * builds. New clients send `delivery`; the aliases cost no state and make a
- * staggered desktop/phone rollout safe.
- */
+/** Read the canonical wire field. An omitted field preserves legacy auto mode. */
 export function parseDeliveryModeFromBody(body: Record<string, unknown>): DeliveryMode {
-  const fields = ["delivery", "deliveryMode", "mode"].filter((field) => Object.prototype.hasOwnProperty.call(body, field));
-  if (fields.length > 1) {
-    const first = body[fields[0]!];
-    if (fields.some((field) => body[field] !== first)) {
-      throw Object.assign(new Error("delivery fields must agree"), { status: 400 });
-    }
-  }
-  return parseDeliveryMode(fields.length ? body[fields[0]!] : undefined);
+  return parseDeliveryMode(body.delivery);
 }
 
 /**

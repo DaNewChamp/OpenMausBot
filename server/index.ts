@@ -37,6 +37,7 @@ import { guardedBotModelSwitch, parseBotModelPatch } from "./bot-model.ts";
 import { parseChatPin } from "./chat-pin.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
+import { runWhenRoomIdle } from "./room-queue.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { cloudBackendChangeError, vpsAliasChangeError } from "./cloud-backend.ts";
@@ -2153,14 +2154,6 @@ function startGroupTurn(
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
   }
   const busyAtEnqueue = Boolean(group.busyBotId) || (groupQueuePending.get(groupId) ?? 0) > 0;
-  const queueId = busyAtEnqueue ? options.queueId ?? randomUUID() : undefined;
-  store.appendMessage(group.threadId, {
-    role: "user",
-    kind: "text",
-    text,
-    replyToId: replyTo?.id,
-    ...(queueId ? { queueId } : {}),
-  });
 
   const members = group.memberIds
     .map((id) => store.bot(id))
@@ -2168,6 +2161,24 @@ function startGroupTurn(
   const availableMembers = members.filter((member) => !member.hidden);
   const archived = members.filter((member) => member.hidden);
   const mentionedArchived = mentionedBots(text, archived.map(({ name }) => ({ name })))[0];
+  let responders = roomResponders(text, members, group.defaultResponder);
+  // bot⇄bot channels: chipping in without a tag addresses the last speaker
+  if (!responders.length && group.dm) {
+    const lastSpeakerId = [...store.messagesFor(group.threadId)]
+      .reverse()
+      .find((msg) => msg.kind === "text" && msg.from)?.from?.botId;
+    const last = availableMembers.find((b) => b.id === lastSpeakerId) ?? availableMembers[0];
+    responders = last ? [last] : [];
+  }
+
+  const queueId = responders.length > 0 && busyAtEnqueue ? options.queueId ?? randomUUID() : undefined;
+  store.appendMessage(group.threadId, {
+    role: "user",
+    kind: "text",
+    text,
+    replyToId: replyTo?.id,
+    ...(queueId ? { queueId } : {}),
+  });
   if (mentionedArchived) {
     store.appendMessage(group.threadId, {
       role: "bot",
@@ -2177,15 +2188,6 @@ function startGroupTurn(
         ok: false,
       },
     });
-  }
-  let responders = roomResponders(text, members, group.defaultResponder);
-  // bot⇄bot channels: chipping in without a tag addresses the last speaker
-  if (!responders.length && group.dm) {
-    const lastSpeakerId = [...store.messagesFor(group.threadId)]
-      .reverse()
-      .find((msg) => msg.kind === "text" && msg.from)?.from?.botId;
-    const last = availableMembers.find((b) => b.id === lastSpeakerId) ?? availableMembers[0];
-    responders = last ? [last] : [];
   }
   if (!responders.length) {
     const defaultArchivedId = group.defaultResponder.kind === "member" ? group.defaultResponder.botId : undefined;
@@ -2210,21 +2212,13 @@ function startGroupTurn(
   groupQueuePending.set(groupId, (groupQueuePending.get(groupId) ?? 0) + 1);
   const next = prev.then(async () => {
     try {
-      const current = store.group(groupId);
-      if (current?.busyBotId) {
-        const owner = store.bot(current.busyBotId);
-        store.appendMessage(current.threadId, {
-          role: "bot",
-          kind: "activity",
-          tool: { name: `${owner?.name ?? "A room member"} is still stopping — this message was not dispatched`, ok: false },
-        });
-        return;
-      }
-      const spoken = new Set<string>();
-      for (const responder of responders) {
-        if (spoken.has(responder.id)) continue;
-        if (!(await runGroupMemberTurn(groupId, responder.id, 0, spoken))) break;
-      }
+      await runWhenRoomIdle(store, groupId, async () => {
+        const spoken = new Set<string>();
+        for (const responder of responders) {
+          if (spoken.has(responder.id)) continue;
+          if (!(await runGroupMemberTurn(groupId, responder.id, 0, spoken))) break;
+        }
+      });
     } finally {
       const pending = (groupQueuePending.get(groupId) ?? 1) - 1;
       if (pending > 0) groupQueuePending.set(groupId, pending);
