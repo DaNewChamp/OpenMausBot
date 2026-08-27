@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { chiefOfStaffSystemPrompt } from "./chief-of-staff.ts";
+import {
+  chiefOfStaffSystemPrompt,
+  sectionPeerCoordinationPrompt,
+  taggedPeerNudge,
+} from "./chief-of-staff.ts";
 
 describe("chiefOfStaffSystemPrompt roster caps", () => {
   it("clips oversized persona fields instead of interpolating them whole", () => {
@@ -51,7 +55,8 @@ describe("chiefOfStaffSystemPrompt", () => {
     expect(prompt).not.toContain("Secret");
     expect(prompt).not.toContain("Scout");
     expect(prompt).not.toContain("Atlas —");
-    expect(prompt).toContain("Use ask_bot");
+    expect(prompt).toContain("Use ask_bot only for a short question");
+    expect(prompt).toContain("Use delegate_bot to assign real work");
     expect(prompt).toContain("use create_bot");
   });
 
@@ -60,5 +65,25 @@ describe("chiefOfStaffSystemPrompt", () => {
 
     expect(prompt).toContain("cannot contact teammates");
     expect(prompt).not.toContain("Use ask_bot");
+    expect(prompt).not.toContain("delegate_bot");
+  });
+});
+
+describe("section peer coordination", () => {
+  it("steers default bots to delegate_bot for work and ask_bot for short questions", () => {
+    const prompt = sectionPeerCoordinationPrompt();
+    expect(prompt).toContain("Use ask_bot for a short question");
+    expect(prompt).toContain("Use delegate_bot to hand off real work");
+  });
+
+  it("nudges tagged peers toward async handoff for work", () => {
+    const nudge = taggedPeerNudge([
+      { id: "helper-1", name: "Helper" },
+      { id: "writer-2", name: "Quill" },
+    ]);
+    expect(nudge).toContain("@Helper (bot_id helper-1)");
+    expect(nudge).toContain("@Quill (bot_id writer-2)");
+    expect(nudge).toContain("delegate_bot to hand them the work");
+    expect(nudge).toContain("ask_bot if you need a short answer");
   });
 });

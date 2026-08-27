@@ -174,6 +174,19 @@ describe("agents-proxy MCP surface", () => {
     expect(res.result.isError).toBeFalsy();
   });
 
+  it("renders a still-working peer as a clean answer, not a timeout error", async () => {
+    askResponse = {
+      pending: true,
+      botName: "Helper",
+      text: "@Helper is still working. This is not a failure. Their reply will appear in the conversation when they finish. Continue with the user; do not claim the work is complete.",
+    };
+    const res = await callTool("ask_bot", { bot_id: "bot-helper", message: "do the long job" });
+    expect(res.result.content[0].text).toContain("still working");
+    expect(res.result.content[0].text).not.toContain("timed out");
+    expect(res.result.content[0].text).not.toContain("Helper replied:");
+    expect(res.result.isError).toBeFalsy();
+  });
+
   it("surfaces the harness's depth refusal as a tool error", async () => {
     askResponse = { error: "message chains are limited to one hop" };
     const res = await callTool("ask_bot", { bot_id: "bot-helper", message: "ping" });

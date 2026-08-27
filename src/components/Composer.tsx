@@ -209,7 +209,7 @@ export function Composer({
   };
   const engineSupportsImages = imageTargetsSupport(text);
 
-  // ── @mention picker (tag another bot; the agent reaches it via ask_bot) ──
+  // ── @mention picker (tag another bot; the agent reaches it via ask_bot / delegate_bot) ──
   const mention = mentionQueryAt(text, caret);
   const candidates = useMemo(() => {
     if (!mention || mention.start === dismissedAt) return [];

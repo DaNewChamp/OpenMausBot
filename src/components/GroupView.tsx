@@ -3,7 +3,7 @@
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
 import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Check, ChevronDown, Folder, FolderOpen, Loader2, MessageSquareReply, Pin, PinOff, Plus, Search, X } from "lucide-react";
+import { ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Loader2, MessageSquareReply, Pin, PinOff, Plus, Search, X } from "lucide-react";
 import {
   api,
   useStore,
@@ -134,14 +134,33 @@ const Transcript = memo(function Transcript({
             </div>
           ) : m.kind === "activity" && m.tool ? (
             <div className="flex justify-start">
-              <div
-                className={cn(
-                  "flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px]",
-                  m.tool.ok === false ? "text-danger" : "text-ink-secondary",
-                )}
-              >
-                <span className="max-w-[480px] truncate font-mono">{m.tool.name}</span>
-              </div>
+              {m.comm ? (
+                <button
+                  onClick={() => m.comm && dispatch({ type: "select", id: m.comm.groupId })}
+                  title={`Open the conversation with ${m.comm.withName}`}
+                  className="flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
+                >
+                  <MausAvatar color={m.comm.withColor} state="happy" size={16} animated={false} />
+                  <span className="max-w-[480px] truncate">{m.tool.name}</span>
+                  <ChevronRight size={13} />
+                </button>
+              ) : (
+                <div
+                  className={cn(
+                    "flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px]",
+                    m.tool.ok === false ? "text-danger" : "text-ink-secondary",
+                  )}
+                >
+                  {m.tool.ok === undefined ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : m.tool.ok === false ? (
+                    <X size={13} />
+                  ) : (
+                    <Check size={13} className="text-success" />
+                  )}
+                  <span className="max-w-[480px] truncate font-mono">{m.tool.name}</span>
+                </div>
+              )}
             </div>
           ) : m.kind === "text" && m.text ? (
             <div className={cn("group flex w-full flex-col", user ? "items-end" : "items-start")}>

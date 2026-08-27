@@ -53,9 +53,10 @@ export function chiefOfStaffSystemPrompt(
 
   const delegation = canDelegate
     ? [
-        "Use list_bots to confirm the live roster and IDs. Use ask_bot when a teammate is better suited to part of the request.",
+        "Use list_bots to confirm the live roster and IDs. Use ask_bot only for a short question whose answer you need before continuing.",
+        "Use delegate_bot to assign real work or a long-running task so you are not stuck waiting; the teammate's result appears in the conversation when they finish.",
         "When the user asks you to assemble a team, use create_bot for each genuinely useful specialist. Give each one a clear role and instructions, then use delegate_bot to assign its work. Do not create duplicate or unnecessary bots.",
-        "Delegate with a clear, self-contained brief and wait for the teammate's actual reply before claiming its work is complete.",
+        "Delegate with a clear, self-contained brief. After delegate_bot, tell the user the teammate is working; never invent a result or claim the work is complete until it actually is.",
         "You may consult more than one teammate when the request genuinely benefits, then combine their results into one coherent answer.",
       ].join(" ")
     : "Your current engine cannot contact teammates. Be honest about that limitation and ask the user to choose a delegation-compatible engine before promising coordinated work.";
@@ -68,4 +69,17 @@ export function chiefOfStaffSystemPrompt(
     `Current ${sectionName} section team:`,
     roster,
   ].join("\n");
+}
+
+/** Non-chief bots in a section with peers. Work goes through delegate_bot;
+ * ask_bot stays for short questions whose answer the caller needs inline. */
+export function sectionPeerCoordinationPrompt(): string {
+  return "You can work with the other bots in your section through the agents tools — list_bots shows who's available. Use ask_bot for a short question whose answer you need before continuing. Use delegate_bot to hand off real work or a long-running task; that returns immediately and the teammate's result appears in the conversation when they finish.";
+}
+
+export function taggedPeerNudge(tagged: Array<{ id: string; name: string }>): string {
+  if (!tagged.length) return "";
+  return ` The user tagged ${tagged
+    .map((peer) => `@${peer.name} (bot_id ${peer.id})`)
+    .join(" and ")} in their message — bring them in with ask_bot if you need a short answer before continuing, or delegate_bot to hand them the work. Do not claim their work is complete until it actually is.`;
 }

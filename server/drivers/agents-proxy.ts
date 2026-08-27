@@ -5,8 +5,9 @@
 // limits:
 //
 //   list_bots()                          → the other bots in this section + their status
-//   ask_bot(bot_id, msg)                 → send msg to that bot, wait, return its reply
-//   delegate_bot(bot_id, msg, reason?)   → hand the task to a peer ASYNC: returns
+//   ask_bot(bot_id, msg)                 → send a short question, wait, return
+//                                          the reply (or a still-working note)
+//   delegate_bot(bot_id, msg, reason?)   → hand real work to a peer ASYNC: returns
 //                                          immediately, the peer runs after your
 //                                          current turn finishes, the user sees
 //                                          the peer's reply as its own turn
@@ -37,13 +38,13 @@ const TOOLS = [
   {
     name: "list_bots",
     description:
-      "List the other bots (agents) in your OpenMausBot section you can message, with their model and whether they're busy. Call this before ask_bot to discover who's available.",
+      "List the other bots (agents) in your OpenMausBot section you can message, with their model and whether they're busy. Call this before ask_bot or delegate_bot to discover who's available.",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "ask_bot",
     description:
-      "Send a message to another bot in your section and wait for its reply. Use it to delegate a subtask to a specialist bot or ask a peer a question. The other bot runs a full turn under its own model and permissions; the reply is returned to you as text. Returns promptly with a note if that bot is busy.",
+      "Send a short question to another bot in your section and wait for its reply. Use this only when you need their answer before you can continue. For real work or anything that may take more than a brief reply, use delegate_bot instead. If they are still working when the wait ends, you get a still-working note (not a failure) and their result appears in the conversation later.",
     inputSchema: {
       type: "object",
       properties: {
@@ -56,7 +57,7 @@ const TOOLS = [
   {
     name: "delegate_bot",
     description:
-      "Hand a task to another bot ASYNCHRONOUSLY: returns immediately and the peer runs after your current turn finishes. Use this when you want to keep working or hand off a long-running subtask without waiting. The user sees the peer's reply as its own turn; you do NOT receive the reply inline.",
+      "Hand real work or a long-running task to another bot ASYNCHRONOUSLY: returns immediately and the peer runs after your current turn finishes. Prefer this over ask_bot for anything that looks like a job rather than a short question. The user sees the peer's reply as its own turn; you do NOT receive the reply inline.",
     inputSchema: {
       type: "object",
       properties: {
@@ -141,6 +142,14 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
       body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, toBotId, message, depth: DEPTH }),
     });
     if (r.busy) return { text: `That bot is busy right now — try again after it finishes.` };
+    if (r.pending) {
+      return {
+        text:
+          typeof r.text === "string" && r.text.trim()
+            ? r.text
+            : `${r.botName ?? "That bot"} is still working. This is not a failure. The reply will appear in the conversation when they finish.`,
+      };
+    }
     if (r.error) return { text: `Couldn't reach that bot: ${r.error}`, isError: true };
     return { text: `${r.botName ?? "Bot"} replied:\n${r.text ?? "(no reply)"}` };
   }
