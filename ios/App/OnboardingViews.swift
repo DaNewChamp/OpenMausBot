@@ -1,4 +1,5 @@
 import SwiftUI
+import CompanionCore
 
 /// A short first-run explanation. Pairing remains opt-in and the actual
 /// connection screen keeps the existing discovery/QR experience.
@@ -137,7 +138,7 @@ struct UnpairedHomeView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    Text("On your computer, open V Bot → Settings → Phone.")
+                    Text("On your computer, open \(ProductIdentity.desktopCompanionPairingPath).")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

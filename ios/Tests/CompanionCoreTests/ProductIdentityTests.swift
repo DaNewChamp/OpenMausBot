@@ -22,4 +22,10 @@ final class ProductIdentityTests: XCTestCase {
         XCTAssertTrue(advice.contains(ProductIdentity.displayName))
         XCTAssertFalse(advice.contains("OpenMausMobile"))
     }
+
+    func testUnpairedHomeNamesCompanionNotPhoneSettings() {
+        XCTAssertTrue(ProductIdentity.desktopCompanionPairingPath.contains("Companion"))
+        XCTAssertFalse(ProductIdentity.desktopCompanionPairingPath.contains("Phone"))
+        XCTAssertTrue(ProductIdentity.desktopCompanionPairingPath.hasPrefix(ProductIdentity.displayName))
+    }
 }

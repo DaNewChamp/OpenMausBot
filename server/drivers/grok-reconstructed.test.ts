@@ -56,7 +56,7 @@ interface FakeGateway {
   agents: Array<Record<string, unknown>>;
   entries: Array<Record<string, unknown>>;
   running: boolean;
-  seen: { origins: string[]; paths: string[]; unauthorized: number; sendPrompts: unknown[] };
+  seen: { origins: string[]; paths: string[]; unauthorized: number; sendPrompts: unknown[]; slimAvatars: number };
 }
 
 async function startFakeGateway(options?: {
@@ -66,6 +66,7 @@ async function startFakeGateway(options?: {
   healthOk?: boolean;
   listAgents?: boolean;
   sendPrompt?: boolean;
+  assistantReply?: string | false;
 }): Promise<FakeGateway> {
   const token = options?.token === undefined ? TOKEN : options.token;
   const pid = options?.pid ?? 4242;
@@ -73,7 +74,8 @@ async function startFakeGateway(options?: {
   const healthOk = options?.healthOk ?? true;
   const listAgents = options?.listAgents ?? true;
   const sendPrompt = options?.sendPrompt ?? true;
-  const seen = { origins: [] as string[], paths: [] as string[], unauthorized: 0, sendPrompts: [] as unknown[] };
+  const assistantReply = options?.assistantReply === undefined ? "hello from reconstructed" : options.assistantReply;
+  const seen = { origins: [] as string[], paths: [] as string[], unauthorized: 0, sendPrompts: [] as unknown[], slimAvatars: 0 };
   const state: FakeGateway = {
     port: 0,
     pid,
@@ -118,6 +120,7 @@ async function startFakeGateway(options?: {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     seen.paths.push(`${req.method} ${url.pathname}`);
     if (typeof req.headers.origin === "string") seen.origins.push(req.headers.origin);
+    if (req.headers["x-sand-slim-avatars"] === "1") seen.slimAvatars += 1;
     if (!authorized(req)) {
       seen.unauthorized += 1;
       json(res, 401, { error: "unauthorized" });
@@ -150,11 +153,17 @@ async function startFakeGateway(options?: {
         state.running = true;
         state.entries.push({
           id: "user-1",
-          kind: "send-message",
-          message: { type: "text", content: body.prompt },
+          kind: "message",
+          content: body.prompt,
         });
         setTimeout(() => {
-          state.entries.push({ id: "asst-1", kind: "message", content: "hello from reconstructed" });
+          if (assistantReply !== false) {
+            state.entries.push({
+              id: "asst-1",
+              kind: "send-message",
+              message: { type: "text", content: assistantReply },
+            });
+          }
           state.running = false;
         }, 20);
         json(res, 200, { accepted: true });
@@ -282,14 +291,26 @@ describe("reconstructed session sanitization", () => {
     expect(
       extractAssistantText(
         [
-          { id: "u1", kind: "send-message", message: { type: "text", content: "hi" } },
-          { id: "a1", kind: "message", content: "old" },
-          { id: "u2", kind: "send-message", message: { type: "text", content: "later" } },
-          { id: "a2", kind: "message", content: "new" },
+          { id: "u1", kind: "message", content: "hi" },
+          { id: "a1", kind: "send-message", message: { type: "text", content: "old" } },
+          { id: "u2", kind: "message", content: "later" },
+          { id: "a2", kind: "send-message", message: { type: "text", content: "new" } },
         ],
         "later",
       ),
     ).toBe("new");
+  });
+
+  it("never treats a user prompt as assistant text", () => {
+    expect(
+      extractAssistantText(
+        [
+          { id: "u1", kind: "message", content: "hello reconstructed" },
+          { id: "a1", kind: "send-message", message: { type: "text", content: "hello reconstructed" } },
+        ],
+        "hello reconstructed",
+      ),
+    ).toBe("");
   });
 });
 
@@ -314,6 +335,43 @@ describe("reconstructed runtime detection", () => {
       }),
     );
     expect(probe).toEqual({ ok: false, code: "installed-not-running" });
+  });
+
+  it("accepts com.anysphere.sand.reconstructed as the installed bundle id", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "omb-recon-"));
+    const apps = join(homeDir, "Applications");
+    const appPath = join(apps, `${RECONSTRUCTED_APP_NAME}.app`);
+    mkdirSync(join(appPath, "Contents"), { recursive: true });
+    writeFileSync(join(appPath, "Contents", "Info.plist"), plist(RECONSTRUCTED_BUNDLE_ID));
+    const gateway = await startFakeGateway();
+    try {
+      const record = JSON.stringify({
+        port: gateway.port,
+        pid: gateway.pid,
+        startedAt: 1,
+        scheme: "http",
+        host: "127.0.0.1",
+        token: TOKEN,
+      });
+      const probe = await detectReconstructedRuntime(
+        hostFrom({
+          homeDir,
+          applicationsDirs: [apps],
+          existsDir: (path) => path === appPath,
+          readText: (path) => {
+            if (path.endsWith("Info.plist")) return plist(RECONSTRUCTED_BUNDLE_ID);
+            if (path === reconstructedDiscoveryPath(homeDir)) return record;
+            return null;
+          },
+          isProcessAlive: (pid) => pid === gateway.pid,
+          readProcessCommand: (pid) =>
+            pid === gateway.pid ? `${RECONSTRUCTED_BUNDLE_ID}/Contents/MacOS/host-main` : null,
+        }),
+      );
+      expect(probe.ok).toBe(true);
+    } finally {
+      await gateway.close();
+    }
   });
 
   it("refuses a non-loopback discovery record without fetching it", async () => {
@@ -473,6 +531,7 @@ describe("reconstructed provider adapter", () => {
 
       expect(gateway.seen.unauthorized).toBe(0);
       expect(gateway.seen.origins).toEqual([]);
+      expect(gateway.seen.slimAvatars).toBeGreaterThan(0);
       expect(gateway.seen.paths.some((path) => path === "POST /api/sendPrompt")).toBe(true);
       expect(gateway.seen.paths.some((path) => path.startsWith("GET /health"))).toBe(true);
       expect(gateway.seen.sendPrompts).toEqual([{ prompt: "hello reconstructed", agentId: "bot-alpha" }]);
@@ -610,6 +669,58 @@ describe("reconstructed provider adapter", () => {
       });
       expect(JSON.stringify(recorder.events)).not.toContain(TOKEN);
       expect(JSON.stringify(recorder.events)).not.toContain(String(gateway.port));
+    } finally {
+      recorder.stop();
+      await instance.dispose();
+    }
+  });
+
+  it("fails an empty or timed-out reply instead of completing ok=true", async () => {
+    const gateway = await startFakeGateway({ assistantReply: false });
+    servers.push(gateway);
+    let clock = 1_000_000;
+    const homeDir = mkdtempSync(join(tmpdir(), "omb-recon-"));
+    const record = JSON.stringify({
+      port: gateway.port,
+      pid: gateway.pid,
+      startedAt: 1,
+      scheme: "http",
+      host: "127.0.0.1",
+      token: TOKEN,
+    });
+    const driver = createGrokReconstructedDriver({
+      homeDir,
+      platform: "darwin",
+      applicationsDirs: [],
+      existsDir: () => false,
+      readText: (path) => (path === reconstructedDiscoveryPath(homeDir) ? record : null),
+      isProcessAlive: (pid) => pid === gateway.pid,
+      readProcessCommand: (pid) => (pid === gateway.pid ? `${RECONSTRUCTED_APP_NAME}.app/Contents/MacOS/host-main` : null),
+      now: () => clock,
+      delay: async () => {
+        clock += 15_000;
+      },
+    });
+    const instance = await driver.create({
+      instanceId: "grokReconstructed",
+      displayName: "Grok Reconstructed",
+      environment: {},
+      enabled: true,
+      config: {},
+    });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.refreshModels?.();
+      await instance.adapter.sendTurn({
+        threadId: "thread-empty",
+        text: "hello reconstructed",
+        model: "bot-alpha",
+      });
+      await recorder.until((event) => event.type === "turn.completed");
+      const completed = recorder.events.find((event) => event.type === "turn.completed");
+      expect(completed).toMatchObject({ ok: false, stopReason: "error" });
+      expect(recorder.events.some((event) => event.type === "item.completed")).toBe(false);
+      expect(recorder.events.some((event) => event.type === "runtime.error")).toBe(true);
     } finally {
       recorder.stop();
       await instance.dispose();
