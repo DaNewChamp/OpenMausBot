@@ -37,6 +37,8 @@ export type StableGatewayMethod = (typeof STABLE_GATEWAY_METHODS)[number];
 const STABLE_GATEWAY_METHOD_SET = new Set<string>(STABLE_GATEWAY_METHODS);
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+const GATEWAY_DISCOVERY_FILE = "gateway.json";
+const SAND_DATA_DIRNAME = "sand-data";
 const AGENT_ID = /^[\w.-]{1,200}$/;
 const LABEL_MAX = 120;
 const HEALTH_TIMEOUT_MS = 3_000;
@@ -158,7 +160,52 @@ export function parseGatewayDiscovery(value: unknown): GatewayDiscovery | null {
 }
 
 export function reconstructedDiscoveryPath(homeDir: string): string {
-  return join(homeDir, ".grokbot", "gateway.json");
+  return join(homeDir, ".grokbot", GATEWAY_DISCOVERY_FILE);
+}
+
+function reconstructedAppDataDir(homeDir: string, platform: NodeJS.Platform): string | null {
+  switch (platform) {
+    case "darwin":
+      return join(homeDir, "Library", "Application Support");
+    case "win32":
+      return join(homeDir, "AppData", "Roaming");
+    case "linux":
+      return join(homeDir, ".config");
+    default:
+      return null;
+  }
+}
+
+export function reconstructedIsolatedDiscoveryPath(
+  homeDir: string,
+  platform: NodeJS.Platform,
+): string | null {
+  const appDataDir = reconstructedAppDataDir(homeDir, platform);
+  if (appDataDir == null) return null;
+  return join(appDataDir, RECONSTRUCTED_APP_NAME, SAND_DATA_DIRNAME, GATEWAY_DISCOVERY_FILE);
+}
+
+/** Bounded local discovery candidates. Isolated packaged Electron userData
+ * comes first so a live reconstructed app is not shadowed by a leftover
+ * `~/.grokbot` record. The first present file wins; a present-but-unusable
+ * record fails closed instead of scanning the rest. */
+export function reconstructedDiscoveryPaths(
+  homeDir: string,
+  platform: NodeJS.Platform,
+): readonly string[] {
+  const isolated = reconstructedIsolatedDiscoveryPath(homeDir, platform);
+  const legacy = reconstructedDiscoveryPath(homeDir);
+  return isolated ? [isolated, legacy] : [legacy];
+}
+
+function firstPresentDiscoveryText(
+  host: ReconstructedRuntimeHost,
+): { path: string; raw: string } | null {
+  for (const path of reconstructedDiscoveryPaths(host.homeDir, host.platform)) {
+    const raw = host.readText(path);
+    if (raw != null) return { path, raw };
+  }
+  return null;
 }
 
 export function isReconstructedProcessCommand(command: string | null | undefined): boolean {
@@ -239,7 +286,7 @@ export function extractAssistantText(entries: unknown, afterPrompt?: string): st
 export function leaksSensitive(text: string, secrets: readonly string[]): boolean {
   const lower = text.toLowerCase();
   if (secrets.some((secret) => secret && text.includes(secret))) return true;
-  if (lower.includes("gateway.json") || lower.includes(".grokbot")) return true;
+  if (lower.includes("gateway.json") || lower.includes(".grokbot") || lower.includes("sand-data")) return true;
   if (/\b(?:127\.0\.0\.1|localhost):\d{2,5}\b/.test(text)) return true;
   if (/\bBearer\s+\S+/i.test(text)) return true;
   return false;
@@ -345,10 +392,10 @@ export function detectReconstructedInstall(host: ReconstructedRuntimeHost): bool
 }
 
 export function readLocalDiscovery(host: ReconstructedRuntimeHost): GatewayDiscovery | null {
-  const raw = host.readText(reconstructedDiscoveryPath(host.homeDir));
-  if (raw == null) return null;
+  const present = firstPresentDiscoveryText(host);
+  if (present == null) return null;
   try {
-    return parseGatewayDiscovery(JSON.parse(raw));
+    return parseGatewayDiscovery(JSON.parse(present.raw));
   } catch {
     return null;
   }
@@ -395,9 +442,11 @@ export async function probeReconstructedGateway(
   const origin = originFor(discovery);
   if (origin == null) return { ok: false, code: "non-loopback-refused" };
 
-  const secrets = [discovery.token, origin, reconstructedDiscoveryPath(host.homeDir)].filter(
-    (value): value is string => typeof value === "string" && value.length > 0,
-  );
+  const secrets = [
+    discovery.token,
+    origin,
+    ...reconstructedDiscoveryPaths(host.homeDir, host.platform),
+  ].filter((value): value is string => typeof value === "string" && value.length > 0);
 
   try {
     const health = await readJson(host, `${origin}${GATEWAY_HEALTH_PATH}`, {
@@ -449,13 +498,13 @@ export async function probeReconstructedGateway(
 
 export async function detectReconstructedRuntime(host: ReconstructedRuntimeHost): Promise<ReconstructedProbe> {
   const installed = detectReconstructedInstall(host);
-  const raw = host.readText(reconstructedDiscoveryPath(host.homeDir));
-  if (raw == null) {
+  const present = firstPresentDiscoveryText(host);
+  if (present == null) {
     return { ok: false, code: installed ? "installed-not-running" : "not-detected" };
   }
   let discovery: GatewayDiscovery | null = null;
   try {
-    discovery = parseGatewayDiscovery(JSON.parse(raw));
+    discovery = parseGatewayDiscovery(JSON.parse(present.raw));
   } catch {
     discovery = null;
   }

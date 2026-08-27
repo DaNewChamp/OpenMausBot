@@ -46,22 +46,30 @@ describe("scrub", () => {
   });
 
   it("withholds reconstructed gateway location and credentials", () => {
-    const cleaned = scrub({
-      instanceId: "grokReconstructed",
-      snapshot: { state: "available" },
-      discoveryPath: "/Users/ada/.grokbot/gateway.json",
-      gatewayToken: "recon-secret",
-      reconstructedHost: "127.0.0.1",
-      reconstructedPort: 18765,
-    });
-    expect(JSON.stringify(cleaned)).not.toContain("gateway.json");
-    expect(JSON.stringify(cleaned)).not.toContain("recon-secret");
-    expect(JSON.stringify(cleaned)).not.toContain("127.0.0.1");
-    expect(JSON.stringify(cleaned)).not.toContain("18765");
-    expect(cleaned).toEqual({
-      instanceId: "grokReconstructed",
-      snapshot: { state: "available" },
-    });
+    for (const discoveryPath of [
+      "/Users/ada/.grokbot/gateway.json",
+      "/Users/ada/Library/Application Support/Grok Bot 0.18 Reconstructed/sand-data/gateway.json",
+    ]) {
+      const cleaned = scrub({
+        instanceId: "grokReconstructed",
+        snapshot: { state: "available" },
+        discoveryPath,
+        gatewayToken: "recon-secret",
+        reconstructedHost: "127.0.0.1",
+        reconstructedPort: 18765,
+      });
+      expect(JSON.stringify(cleaned)).not.toContain("gateway.json");
+      expect(JSON.stringify(cleaned)).not.toContain(".grokbot");
+      expect(JSON.stringify(cleaned)).not.toContain("sand-data");
+      expect(JSON.stringify(cleaned)).not.toContain("Application Support");
+      expect(JSON.stringify(cleaned)).not.toContain("recon-secret");
+      expect(JSON.stringify(cleaned)).not.toContain("127.0.0.1");
+      expect(JSON.stringify(cleaned)).not.toContain("18765");
+      expect(cleaned).toEqual({
+        instanceId: "grokReconstructed",
+        snapshot: { state: "available" },
+      });
+    }
   });
 
   it("leaves values it does not own alone", () => {

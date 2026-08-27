@@ -22,6 +22,8 @@ import {
   parseGatewayDiscovery,
   publicDisabledReason,
   reconstructedDiscoveryPath,
+  reconstructedDiscoveryPaths,
+  reconstructedIsolatedDiscoveryPath,
   sanitizeAgentSessions,
   sessionsToCatalog,
   type ReconstructedRuntimeHost,
@@ -246,6 +248,7 @@ describe("reconstructed gateway discovery", () => {
   });
 
   it("keeps disabled reasons free of paths, tokens, and ports", () => {
+    const isolated = reconstructedIsolatedDiscoveryPath("/Users/vincent", "darwin");
     for (const code of [
       "not-detected",
       "installed-not-running",
@@ -259,10 +262,38 @@ describe("reconstructed gateway discovery", () => {
       "send-prompt-unsupported",
     ] as const) {
       const reason = publicDisabledReason(code);
-      expect(leaksSensitive(reason, [TOKEN, "/Users/vincent/.grokbot/gateway.json"])).toBe(false);
+      expect(
+        leaksSensitive(reason, [TOKEN, "/Users/vincent/.grokbot/gateway.json", isolated ?? ""]),
+      ).toBe(false);
       expect(reason).not.toMatch(/127\.0\.0\.1:\d+/);
       expect(reason).not.toContain(TOKEN);
+      expect(reason).not.toContain("gateway.json");
+      expect(reason).not.toContain(".grokbot");
+      expect(reason).not.toContain("sand-data");
+      expect(reason).not.toContain("Application Support");
     }
+  });
+
+  it("lists isolated packaged then legacy discovery paths and nothing else", () => {
+    expect(reconstructedDiscoveryPaths("/Users/vincent", "darwin")).toEqual([
+      "/Users/vincent/Library/Application Support/Grok Bot 0.18 Reconstructed/sand-data/gateway.json",
+      "/Users/vincent/.grokbot/gateway.json",
+    ]);
+    expect(reconstructedDiscoveryPaths("/home/vincent", "linux")).toEqual([
+      "/home/vincent/.config/Grok Bot 0.18 Reconstructed/sand-data/gateway.json",
+      "/home/vincent/.grokbot/gateway.json",
+    ]);
+    expect(reconstructedDiscoveryPaths("/Users/vincent", "win32")).toEqual([
+      join("/Users/vincent", "AppData", "Roaming", "Grok Bot 0.18 Reconstructed", "sand-data", "gateway.json"),
+      join("/Users/vincent", ".grokbot", "gateway.json"),
+    ]);
+    expect(reconstructedDiscoveryPaths("/Users/vincent", "freebsd")).toEqual([
+      "/Users/vincent/.grokbot/gateway.json",
+    ]);
+    expect(reconstructedIsolatedDiscoveryPath("/Users/vincent", "darwin")).toBe(
+      "/Users/vincent/Library/Application Support/Grok Bot 0.18 Reconstructed/sand-data/gateway.json",
+    );
+    expect(reconstructedDiscoveryPath("/Users/vincent")).toBe("/Users/vincent/.grokbot/gateway.json");
   });
 });
 
@@ -437,6 +468,151 @@ describe("reconstructed runtime detection", () => {
     );
     expect(probe).toEqual({ ok: false, code: "process-dead" });
   });
+
+  it("discovers the isolated packaged Electron userData record", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "omb-recon-"));
+    const isolated = reconstructedIsolatedDiscoveryPath(homeDir, "darwin");
+    expect(isolated).toBeTruthy();
+    const gateway = await startFakeGateway();
+    try {
+      const record = JSON.stringify({
+        port: gateway.port,
+        pid: gateway.pid,
+        startedAt: 1,
+        scheme: "http",
+        host: "127.0.0.1",
+        token: TOKEN,
+      });
+      const probe = await detectReconstructedRuntime(
+        hostFrom({
+          homeDir,
+          readText: (path) => (path === isolated ? record : null),
+          isProcessAlive: (pid) => pid === gateway.pid,
+          readProcessCommand: (pid) =>
+            pid === gateway.pid ? `${RECONSTRUCTED_APP_NAME}.app/Contents/MacOS/host-main` : null,
+        }),
+      );
+      expect(probe.ok).toBe(true);
+      if (!probe.ok) return;
+      expect(probe.origin).toBe(gateway.origin);
+      expect(JSON.stringify(probe.sessions)).not.toContain("sand-data");
+      expect(JSON.stringify(probe.sessions)).not.toContain(isolated);
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("prefers the isolated packaged record over a leftover legacy file", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "omb-recon-"));
+    const isolated = reconstructedIsolatedDiscoveryPath(homeDir, "darwin");
+    expect(isolated).toBeTruthy();
+    const gateway = await startFakeGateway();
+    try {
+      const isolatedRecord = JSON.stringify({
+        port: gateway.port,
+        pid: gateway.pid,
+        startedAt: 1,
+        scheme: "http",
+        host: "127.0.0.1",
+        token: TOKEN,
+      });
+      const staleLegacy = JSON.stringify({
+        port: 18_765,
+        pid: 9999,
+        startedAt: 1,
+        scheme: "http",
+        host: "127.0.0.1",
+        token: "stale-legacy-token",
+      });
+      const probe = await detectReconstructedRuntime(
+        hostFrom({
+          homeDir,
+          readText: (path) => {
+            if (path === isolated) return isolatedRecord;
+            if (path === reconstructedDiscoveryPath(homeDir)) return staleLegacy;
+            return null;
+          },
+          isProcessAlive: (pid) => pid === gateway.pid,
+          readProcessCommand: (pid) =>
+            pid === gateway.pid ? `${RECONSTRUCTED_APP_NAME}.app/Contents/MacOS/host-main` : null,
+        }),
+      );
+      expect(probe.ok).toBe(true);
+      if (!probe.ok) return;
+      expect(probe.origin).toBe(gateway.origin);
+      expect(probe.discovery.pid).toBe(gateway.pid);
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("fails closed on a present unreadable isolated record instead of using legacy", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "omb-recon-"));
+    const isolated = reconstructedIsolatedDiscoveryPath(homeDir, "darwin");
+    expect(isolated).toBeTruthy();
+    let fetched = 0;
+    const probe = await detectReconstructedRuntime(
+      hostFrom({
+        homeDir,
+        isProcessAlive: () => true,
+        readProcessCommand: () => RECONSTRUCTED_APP_NAME,
+        readText: (path) => {
+          if (path === isolated) return "{not-json";
+          if (path === reconstructedDiscoveryPath(homeDir)) {
+            return JSON.stringify({
+              port: 18_765,
+              pid: 22,
+              startedAt: 1,
+              host: "127.0.0.1",
+              token: TOKEN,
+            });
+          }
+          return null;
+        },
+        fetch: async () => {
+          fetched += 1;
+          throw new Error("should not fetch after an unreadable isolated record");
+        },
+      }),
+    );
+    expect(probe).toEqual({ ok: false, code: "discovery-unreadable" });
+    expect(fetched).toBe(0);
+  });
+
+  it("fails closed on a non-loopback isolated record instead of using legacy", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "omb-recon-"));
+    const isolated = reconstructedIsolatedDiscoveryPath(homeDir, "darwin");
+    expect(isolated).toBeTruthy();
+    let fetched = 0;
+    const probe = await detectReconstructedRuntime(
+      hostFrom({
+        homeDir,
+        isProcessAlive: () => true,
+        readProcessCommand: () => RECONSTRUCTED_APP_NAME,
+        readText: (path) => {
+          if (path === isolated) {
+            return JSON.stringify({ port: 80, pid: 9, startedAt: 1, host: "8.8.8.8", token: TOKEN });
+          }
+          if (path === reconstructedDiscoveryPath(homeDir)) {
+            return JSON.stringify({
+              port: 18_765,
+              pid: 22,
+              startedAt: 1,
+              host: "127.0.0.1",
+              token: TOKEN,
+            });
+          }
+          return null;
+        },
+        fetch: async () => {
+          fetched += 1;
+          throw new Error("should not fetch a public gateway");
+        },
+      }),
+    );
+    expect(probe).toEqual({ ok: false, code: "non-loopback-refused" });
+    expect(fetched).toBe(0);
+  });
 });
 
 describe("reconstructed provider adapter", () => {
@@ -483,6 +659,57 @@ describe("reconstructed provider adapter", () => {
     expect(driver.defaultConfig()).toEqual({});
   });
 
+  it("snapshots an isolated packaged gateway without leaking discovery", async () => {
+    const gateway = await startFakeGateway();
+    servers.push(gateway);
+    const homeDir = mkdtempSync(join(tmpdir(), "omb-recon-"));
+    const isolated = reconstructedIsolatedDiscoveryPath(homeDir, "darwin");
+    expect(isolated).toBeTruthy();
+    const record = JSON.stringify({
+      port: gateway.port,
+      pid: gateway.pid,
+      startedAt: 1,
+      scheme: "http",
+      host: "127.0.0.1",
+      token: TOKEN,
+    });
+    const driver = createGrokReconstructedDriver({
+      homeDir,
+      platform: "darwin",
+      applicationsDirs: [],
+      existsDir: () => false,
+      readText: (path) => (path === isolated ? record : null),
+      isProcessAlive: (pid) => pid === gateway.pid,
+      readProcessCommand: (pid) =>
+        pid === gateway.pid ? `${RECONSTRUCTED_APP_NAME}.app/Contents/MacOS/host-main` : null,
+    });
+    const instance = await driver.create({
+      instanceId: "grokReconstructed",
+      displayName: "Grok Reconstructed",
+      environment: {},
+      enabled: true,
+      config: {},
+    });
+    try {
+      const snapshot = await instance.snapshot();
+      expect(snapshot).toEqual({
+        state: "available",
+        authenticated: true,
+        version: "0.18-reconstructed",
+      });
+      const publicJson = JSON.stringify({ snapshot, models: instance.models });
+      expect(publicJson).not.toContain("gateway.json");
+      expect(publicJson).not.toContain(".grokbot");
+      expect(publicJson).not.toContain("sand-data");
+      expect(publicJson).not.toContain("Application Support");
+      expect(publicJson).not.toContain(TOKEN);
+      expect(publicJson).not.toContain(String(gateway.port));
+      expect(publicJson).not.toContain(isolated);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
   it("snapshots unavailable without leaking local discovery", async () => {
     const driver = createGrokReconstructedDriver({
       homeDir: mkdtempSync(join(tmpdir(), "omb-recon-")),
@@ -501,6 +728,9 @@ describe("reconstructed provider adapter", () => {
     expect(snapshot.state).toBe("unavailable");
     expect(snapshot.reason).toBe(publicDisabledReason("not-detected"));
     expect(JSON.stringify(snapshot)).not.toContain("gateway.json");
+    expect(JSON.stringify(snapshot)).not.toContain(".grokbot");
+    expect(JSON.stringify(snapshot)).not.toContain("sand-data");
+    expect(JSON.stringify(snapshot)).not.toContain("Application Support");
     expect(JSON.stringify(snapshot)).not.toContain(TOKEN);
     await instance.dispose();
   });
