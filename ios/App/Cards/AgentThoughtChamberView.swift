@@ -7,6 +7,7 @@ public struct AgentThoughtChamberView: View {
     public let mascotColor: Color
     public let isStreaming: Bool
     
+    @Environment(\.conversationTypography) private var typography
     @Environment(\.colorScheme) private var colorScheme
     @State private var isExpanded: Bool = false
     
@@ -37,26 +38,12 @@ public struct AgentThoughtChamberView: View {
             }
         }
         .padding(6)
-        .background(
-            LinearGradient(
-                colors: isDark ? [
-                    Color(hex: "#18181B").opacity(0.92),
-                    Color(hex: "#0F172A").opacity(0.88)
-                ] : [
-                    Color.white.opacity(0.94),
-                    Color(hex: "#F8FAFC").opacity(0.88)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .background(.ultraThinMaterial)
+        .background(VBotSurface.card)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(isDark ? mascotColor.opacity(0.3) : Color.black.opacity(0.08), lineWidth: 0.65)
+                .stroke(isDark ? mascotColor.opacity(0.28) : Color.primary.opacity(0.08), lineWidth: 0.65)
         )
-        .shadow(color: Color.black.opacity(isDark ? 0.25 : 0.04), radius: 3, y: 1)
     }
     
     @ViewBuilder
@@ -72,9 +59,9 @@ public struct AgentThoughtChamberView: View {
                     .font(.system(size: 11, weight: .bold))
                     .foregroundColor(mascotColor)
                 
-                Text(isStreaming ? "Thinking…" : "Thought Process")
-                    .font(.caption2.weight(.bold))
-                    .foregroundColor(isDark ? Color(hex: "#F8FAFC") : Color(hex: "#334155"))
+                Text(isStreaming ? "Thinking…" : "Thinking")
+                    .font(typography.compact)
+                    .foregroundStyle(Color.primary)
                 
                 if isStreaming {
                     Circle()
@@ -86,8 +73,8 @@ public struct AgentThoughtChamberView: View {
                 Spacer()
                 
                 Text("\(steps.count) \(steps.count == 1 ? "step" : "steps")")
-                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                    .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
+                    .font(typography.compact)
+                    .foregroundStyle(Color.secondary)
                 
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                     .font(.system(size: 9, weight: .bold))
@@ -131,8 +118,8 @@ public struct AgentThoughtChamberView: View {
                 .foregroundColor(mascotColor)
             
             Text(step)
-                .font(.caption2)
-                .foregroundColor(isDark ? Color(hex: "#E2E8F0") : Color(hex: "#1E293B"))
+                .font(typography.detail)
+                .foregroundStyle(Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }

@@ -136,6 +136,7 @@ final class FailoverTests: XCTestCase {
         let message = ConnectionAdvice.message(for: .cannotConnectToHost, host: "192.168.1.42", port: 8810)
         XCTAssertTrue(message.contains("port 8810"))
         XCTAssertTrue(message.contains("Settings → Companion"))
+        XCTAssertTrue(message.contains(ProductIdentity.displayName))
     }
 
     func testTimeoutBlamesTheRouteNotTheApp() {

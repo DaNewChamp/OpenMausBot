@@ -94,7 +94,7 @@ struct PairingView: View {
             .fullScreenCover(isPresented: $showingScanner) {
                 PairingScannerSheet { payload in
                     guard let url = URL(string: payload), let invite = PairingInvite.parse(url) else {
-                        return "That isn't an OpenMausBot pairing QR code."
+                        return "That isn't a V Bot pairing QR code."
                     }
                     accept(invite)
                     return nil
@@ -309,7 +309,7 @@ struct PairingView: View {
             }
             .buttonStyle(.plain)
 
-            Text("In OpenMausBot, open Settings → Companion → Set up a phone to view your QR code.")
+            Text("In V Bot, open Settings → Companion → Set up a phone to view your QR code.")
                 .font(.caption2)
                 .foregroundColor(isDark ? Color(hex: "#64748B") : Color(hex: "#94A3B8"))
                 .multilineTextAlignment(.center)
@@ -638,7 +638,7 @@ struct PairingView: View {
             return "Local discovery needs attention"
         }
         if discovery.found.isEmpty {
-            return discovery.browsing ? "Searching for OpenMausBot hosts…" : "Starting local discovery…"
+            return discovery.browsing ? "Searching for V Bot hosts…" : "Starting local discovery…"
         }
         return "Found \(discovery.found.count) available host\(discovery.found.count == 1 ? "" : "s")"
     }

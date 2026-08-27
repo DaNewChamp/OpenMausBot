@@ -1,6 +1,6 @@
 // The roster.
 //
-// A quiet, Grok-shaped home: your profile and two actions at the top, pinned
+// a quiet, charcoal home: your profile and two actions at the top, pinned
 // faces in a generous hero row, then one clean list of every other chat. The
 // transcript and roster remain the visual focus; chrome should not compete
 // with them.
@@ -32,19 +32,17 @@ struct ChatListView: View {
                 header
                 StatusBanner()
 
+                if query.isEmpty, !pinnedChats.isEmpty {
+                    PinnedChatShelf(summaries: pinnedChats) { chat in
+                        Haptics.selection()
+                        open(chat)
+                    }
+                    .padding(.top, 6)
+                    .padding(.bottom, 10)
+                }
+
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        if query.isEmpty {
-                            if !pinnedChats.isEmpty {
-                                PinnedChatShelf(summaries: pinnedChats) { chat in
-                                    Haptics.selection()
-                                    open(chat)
-                                }
-                                .padding(.top, 10)
-                                .padding(.bottom, 20)
-                            }
-                        }
-
                         if !query.isEmpty, !searchHits.isEmpty {
                             HStack {
                                 Spacer()
@@ -109,7 +107,6 @@ struct ChatListView: View {
                     }
                     .padding(.bottom, 24)
                 }
-                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: pinnedChats.map(\.id))
                 .refreshable { await session.refresh() }
                 .overlay {
                     if chats.isEmpty && pinnedChats.isEmpty && searchHits.isEmpty {
@@ -125,6 +122,7 @@ struct ChatListView: View {
                     }
                 }
             }
+            .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: pinnedChats.map(\.id))
             // top-aligned: the roster fills downward from the header
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             // a bot that stopped for you grows out of the island
@@ -141,7 +139,7 @@ struct ChatListView: View {
                 showingUpdates = true
             }
             }
-            .background(RosterBackground().ignoresSafeArea())
+            .background(VBotSurface.background.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Chat.self) { ChatView(chat: $0) }
             .onChange(of: session.notificationChat) { _, chat in
@@ -213,7 +211,7 @@ struct ChatListView: View {
                 HStack(spacing: 8) {
                     searchField
                     Button("Cancel") { closeSearch() }
-                        .font(.system(size: 17))
+                        .font(.body)
                         .foregroundStyle(Color.primary)
                         .padding(.horizontal, 4)
                         .frame(minHeight: 44)
@@ -290,7 +288,7 @@ struct ChatListView: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Color.secondary)
             TextField("Search chats", text: $query)
-                .font(.system(size: 17))
+                .font(.body)
                 .submitLabel(.search)
                 .autocorrectionDisabled()
                 .focused($searchFocused)
@@ -478,7 +476,7 @@ private extension View {
 
 /// The list avatar keeps rooms recognizable without giving them a generic
 /// blue placeholder. A room's first three members are arranged like the
-/// stacked faces in the Grok roster; bots keep their own artwork and state.
+/// stacked faces in the roster; bots keep their own artwork and state.
 private struct RosterChatAvatar: View {
     let chat: Chat
     let size: CGFloat
@@ -505,7 +503,7 @@ private struct RosterChatAvatar: View {
                             animated: animated
                         )
                         .padding(2)
-                        .background(Circle().fill(RosterBackground.color))
+                        .background(Circle().fill(VBotSurface.background))
                         .offset(offset(for: index, count: min(bots.count, 3)))
                     }
                 }
@@ -532,18 +530,6 @@ private struct RosterChatAvatar: View {
     }
 }
 
-/// A slightly lifted charcoal canvas in dark mode, while retaining the
-/// system background and contrast choices in light mode.
-private struct RosterBackground: View {
-    static let color = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.07, green: 0.07, blue: 0.07, alpha: 1)
-            : .systemBackground
-    })
-
-    var body: some View { Self.color }
-}
-
 struct ChatRow: View {
     let chat: Chat
     let preview: String
@@ -566,22 +552,24 @@ struct ChatRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(chat.name)
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(Color.primary)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                         .layoutPriority(1)
 
                     Spacer(minLength: 6)
 
                     Text(RelativeStamp.list(at))
-                        .font(.system(size: 14))
+                        .font(.footnote)
                         .foregroundStyle(Color.secondary)
-                        .fixedSize()
+                        .lineLimit(1)
+                        .layoutPriority(0)
                 }
 
                 HStack(alignment: .top, spacing: 8) {
                     Text(preview.isEmpty ? " " : preview)
-                        .font(.system(size: 15))
+                        .font(.subheadline)
                         .foregroundStyle(Color.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -602,7 +590,7 @@ struct ChatRow: View {
 
                 if waiting {
                     Label("Waiting on you", systemImage: "hand.raised.fill")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(MausPalette.color(chat.color))
                         .lineLimit(1)
                         .padding(.top, 2)

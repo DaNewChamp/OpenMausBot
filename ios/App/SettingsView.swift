@@ -52,7 +52,7 @@ struct SettingsView: View {
             } header: {
                 Text("Notifications")
             } footer: {
-                Text("Approvals and finished work appear while OpenMausMobile is connected, including frames replayed after a short background pause. Closed-app push needs the separate APNs relay release.")
+                Text("Approvals and finished work appear while V Bot is connected, including frames replayed after a short background pause. Closed-app push needs the separate APNs relay release.")
             }
 
             Section {
@@ -100,7 +100,7 @@ struct SettingsView: View {
             Section {
                 Button("Unpair this phone", role: .destructive) { confirmingSignOut = true }
             } footer: {
-                Text("Removes the pairing from this phone only. To stop it reaching the computer at all, remove the device in OpenMausBot → Settings → Companion. Changing the address creates a new explicit route choice and never adds another LAN fallback automatically.")
+                Text("Removes the pairing from this phone only. To stop it reaching the computer at all, remove the device in V Bot → Settings → Companion. Changing the address creates a new explicit route choice and never adds another LAN fallback automatically.")
             }
 
             Section("Not here") {
@@ -111,6 +111,8 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .scrollContentBackground(.hidden)
+        .background(VBotSurface.background.ignoresSafeArea())
         .task { await session.refreshNotificationAuthorization() }
         .alert("Edit address", isPresented: $editingAddress) {
             TextField("https://mac.example or 192.168.1.42:8810", text: $addressText)
@@ -158,7 +160,7 @@ struct SettingsView: View {
     }
 }
 
-/// The compact account sheet behind the roster avatar. Grok keeps this menu
+/// The compact account sheet behind the roster avatar. Keep this menu
 /// lightweight: account identity and plugins first, detailed controls one tap
 /// deeper in Settings.
 struct AccountSheet: View {
@@ -256,14 +258,6 @@ struct AccountSheet: View {
 }
 
 private enum AccountSheetStyle {
-    static let canvas = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.055, green: 0.055, blue: 0.06, alpha: 1)
-            : .systemBackground
-    })
-    static let card = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.115, green: 0.115, blue: 0.125, alpha: 1)
-            : UIColor.secondarySystemBackground
-    })
+    static let canvas = VBotSurface.background
+    static let card = VBotSurface.card
 }
