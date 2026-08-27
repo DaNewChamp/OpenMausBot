@@ -456,7 +456,7 @@ public struct PairingRouteError: Error, LocalizedError, Equatable, Sendable {
 
     public var errorDescription: String? {
         let routes = attemptedHosts.joined(separator: ", ")
-        return "Couldn’t reach this computer through any available route (\(routes)). Keep OpenMausBot’s Companion turned on, then try again."
+        return "Couldn’t reach this computer through any available route (\(routes)). Keep \(ProductIdentity.displayName)’s Companion turned on, then try again."
     }
 }
 

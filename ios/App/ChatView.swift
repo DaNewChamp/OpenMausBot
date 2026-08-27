@@ -20,36 +20,6 @@ import AVFoundation
 import PhotosUI
 import UniformTypeIdentifiers
 
-/// Conversation surfaces follow Grok's quiet, ink-on-charcoal canvas rather
-/// than the app-wide Liquid Glass treatment. Keeping the palette local to the
-/// conversation lets the rest of the app retain its existing chrome while a
-/// long transcript reads as one calm surface.
-private enum GrokConversationStyle {
-    static let background = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.071, green: 0.071, blue: 0.078, alpha: 1) // #121214
-            : UIColor(red: 0.965, green: 0.965, blue: 0.973, alpha: 1) // #F6F6F8
-    })
-
-    static let assistantBubble = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.118, green: 0.118, blue: 0.129, alpha: 1) // #1E1E21
-            : UIColor(red: 0.898, green: 0.898, blue: 0.914, alpha: 1) // #E5E5E9
-    })
-
-    static let controlSurface = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.145, green: 0.145, blue: 0.157, alpha: 1) // #252528
-            : UIColor(red: 0.882, green: 0.882, blue: 0.898, alpha: 1) // #E1E1E5
-    })
-
-    static let composerSurface = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.169, green: 0.169, blue: 0.184, alpha: 1) // #2B2B2F
-            : UIColor(red: 0.914, green: 0.914, blue: 0.929, alpha: 1) // #E9E9ED
-    })
-}
-
 struct ChatView: View {
     let chat: Chat
     @EnvironmentObject private var session: Session
@@ -299,7 +269,7 @@ struct ChatView: View {
         .overlay(alignment: .bottom) { plusSheet }
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
-        .background(GrokConversationStyle.background.ignoresSafeArea())
+        .background(VBotSurface.background.ignoresSafeArea())
         .background {
             InteractivePopGestureEnabler()
                 .frame(width: 0, height: 0)
@@ -428,97 +398,112 @@ struct ChatView: View {
 
     // MARK: - Header
 
-    /// Grok's conversation chrome is intentionally asymmetric: back and the
-    /// agent capsule sit together on the leading edge, while the computer
-    /// action remains an independent trailing control.
+    /// Back and the agent pill sit together on the leading edge so the face
+    /// never covers the transcript. The pill compresses before chrome does.
     private var headerBar: some View {
-        HStack(spacing: 12) {
-            Button { dismiss() } label: {
+        HStack(spacing: 8) {
+            Button {
+                Haptics.selection()
+                dismiss()
+            } label: {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.body.weight(.semibold))
                         .frame(width: 44, height: 44)
 
                     if unreadElsewhere > 0 {
                         Text(unreadElsewhere > 99 ? "99+" : "\(unreadElsewhere)")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.caption2.weight(.bold))
                             .foregroundStyle(Color(uiColor: .systemBackground))
                             .padding(.horizontal, 4)
                             .frame(minWidth: 17, minHeight: 17)
                             .background(Capsule().fill(Color.primary))
-                            .offset(x: 3, y: -3)
+                            .offset(x: 4, y: -4)
                     }
                 }
                 .foregroundStyle(Color.primary)
-                .background(Circle().fill(GrokConversationStyle.controlSurface))
+                .background(Circle().fill(VBotSurface.controlSurface))
                 .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .fixedSize()
             .accessibilityLabel("Back")
             .accessibilityValue(unreadElsewhere > 0 ? "\(unreadElsewhere) unread elsewhere" : "")
 
             Button {
+                Haptics.selection()
                 if current.isBot { showingProfile = true }
                 else if case let .room(room) = current { groupProfileRoom = room }
             } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     ChatAvatarView(
                         chat: current,
-                        size: 28,
+                        size: 22,
                         state: MausState.forChat(current, in: session.state),
                         animated: !reduceMotion && MausState.forChat(current, in: session.state).showsActivity
                     )
                     Text(current.name)
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.primary)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                         .truncationMode(.tail)
                 }
-                .padding(.horizontal, 13)
-                .frame(minHeight: 44)
-                .background(Capsule().fill(GrokConversationStyle.controlSurface))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(minWidth: 0, minHeight: 44, alignment: .leading)
+                .background(Capsule().fill(VBotSurface.controlSurface))
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
+            .layoutPriority(0)
             .accessibilityLabel(current.isBot ? "Open \(current.name) profile" : "Open \(current.name) group profile")
             .accessibilityHint(current.isBot ? "Edits this agent's identity, avatar, notifications, and voice" : "Shows group members, instructions, and routines")
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
 
             if case .bot = current {
-                Button { showingComputer = true } label: {
+                Button {
+                    Haptics.selection()
+                    showingComputer = true
+                } label: {
                     Image(systemName: "display")
-                        .font(.system(size: 17, weight: .medium))
+                        .font(.body.weight(.medium))
                         .foregroundStyle(Color.primary)
                         .frame(width: 44, height: 44)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .background(Circle().fill(GrokConversationStyle.controlSurface))
+                .fixedSize()
+                .background(Circle().fill(VBotSurface.controlSurface))
                 .accessibilityLabel("Watch \(current.name)'s computer")
             } else {
-                Button { showingPlus = true } label: {
+                Button {
+                    Haptics.selection()
+                    showingPlus = true
+                } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(Color.primary)
                         .frame(width: 44, height: 44)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .background(Circle().fill(GrokConversationStyle.controlSurface))
+                .fixedSize()
+                .background(Circle().fill(VBotSurface.controlSurface))
                 .accessibilityLabel("Open \(current.name) chat options")
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 8)
-        .padding(.bottom, 10)
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
         .background {
             ZStack(alignment: .bottom) {
                 Rectangle()
                     .fill(.ultraThinMaterial)
                     .opacity(0.62)
                 LinearGradient(
-                    colors: [GrokConversationStyle.background.opacity(0.66), GrokConversationStyle.background.opacity(0.18), .clear],
+                    colors: [VBotSurface.background.opacity(0.66), VBotSurface.background.opacity(0.18), .clear],
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -1134,7 +1119,7 @@ struct ChatView: View {
                         .foregroundStyle(showingPlus ? Color.primary : Color.primary)
                         .rotationEffect(.degrees(showingPlus ? 45 : 0))
                         .frame(width: 48, height: 48)
-                        .background(Circle().fill(GrokConversationStyle.controlSurface))
+                        .background(Circle().fill(VBotSurface.controlSurface))
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -1209,14 +1194,14 @@ struct ChatView: View {
                 .frame(minHeight: 48)
                 .background(
                     RoundedRectangle(cornerRadius: 25, style: .continuous)
-                        .fill(GrokConversationStyle.composerSurface)
+                        .fill(VBotSurface.composerSurface)
                 )
             }
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
-        .background(GrokConversationStyle.background.opacity(0.98).ignoresSafeArea(edges: .bottom))
+        .background(VBotSurface.background.opacity(0.98).ignoresSafeArea(edges: .bottom))
     }
 
     @ViewBuilder
@@ -1709,7 +1694,7 @@ struct TextBubble: View {
                 Group {
                     if !customCard {
                         RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .fill(mine ? BubbleColor.mine : GrokConversationStyle.assistantBubble)
+                            .fill(mine ? BubbleColor.mine : VBotSurface.assistantBubble)
                     }
                 }
             )
@@ -1789,7 +1774,10 @@ private struct ToolRunDisclosure: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Button(action: onToggle) {
+            Button {
+                Haptics.selection()
+                onToggle()
+            } label: {
                 HStack(spacing: 8) {
                     headerStatus
                     Text(run.headerTitle)
@@ -2040,7 +2028,7 @@ struct ActivityChip: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Capsule().fill(GrokConversationStyle.controlSurface.opacity(0.74)))
+            .background(Capsule().fill(VBotSurface.controlSurface.opacity(0.74)))
             .accessibilityElement(children: .combine)
             .accessibilityLabel(ToolRunGrouping.displayLabel(for: tool))
             .accessibilityValue(tool.ok == nil ? "Running" : tool.ok == true ? "Done" : "Failed")
@@ -2165,7 +2153,7 @@ struct CardView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(card.isPending ? tint.opacity(0.12) : GrokConversationStyle.assistantBubble)
+                    .fill(card.isPending ? tint.opacity(0.12) : VBotSurface.assistantBubble)
             )
         }
     }
@@ -2289,7 +2277,7 @@ private struct ConnectorCardView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(connector.status == .failed ? Color.orange.opacity(0.10) : GrokConversationStyle.assistantBubble)
+                    .fill(connector.status == .failed ? Color.orange.opacity(0.10) : VBotSurface.assistantBubble)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -2495,7 +2483,7 @@ struct StreamingBubble: View {
             .padding(.vertical, 14)
             .background(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(GrokConversationStyle.assistantBubble)
+                    .fill(VBotSurface.assistantBubble)
             )
             Spacer(minLength: 18)
         }

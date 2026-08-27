@@ -7,5 +7,8 @@ final class ConversationTextSizeTests: XCTestCase {
         XCTAssertEqual(ConversationTextSize.standard.scale, 1.0)
         XCTAssertEqual(ConversationTextSize.large.scale, 1.15)
         XCTAssertEqual(ConversationTextSize(rawValue: "future") ?? .standard, .standard)
+        XCTAssertLessThan(ConversationTextSize.small.scale, ConversationTextSize.standard.scale)
+        XCTAssertLessThan(ConversationTextSize.standard.scale, ConversationTextSize.large.scale)
+        XCTAssertEqual(ConversationTextSize.allCases.count, 3)
     }
 }

@@ -1,7 +1,7 @@
 import SwiftUI
 import CompanionCore
 
-/// Grok-shaped group details. A group is a conversation, but its identity is
+/// Group details. A group is a conversation, but its identity is
 /// the set of agents in it, so the details surface leads with their stacked
 /// marks and keeps the member list one tap away.
 struct GroupProfileView: View {
@@ -251,20 +251,8 @@ struct GroupProfileView: View {
 }
 
 private enum GroupProfileStyle {
-    static let canvas = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.055, green: 0.055, blue: 0.06, alpha: 1)
-            : .systemBackground
-    })
-    static let card = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.115, green: 0.115, blue: 0.125, alpha: 1)
-            : UIColor.secondarySystemBackground
-    })
-    static let control = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.16, green: 0.16, blue: 0.17, alpha: 1)
-            : UIColor.tertiarySystemBackground
-    })
+    static let canvas = VBotSurface.background
+    static let card = VBotSurface.card
+    static let control = VBotSurface.controlSurface
     static let divider = Color.primary.opacity(0.09)
 }

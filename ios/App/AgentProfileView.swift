@@ -166,7 +166,7 @@ struct AgentProfileView: View {
         }
     }
 
-    // MARK: - Grok-style profile surface
+    // MARK: - Profile surface
 
     private var profileTopBar: some View {
         HStack {
@@ -1133,24 +1133,9 @@ private extension AvatarCrop {
 }
 
 private enum AgentProfileStyle {
-    static let canvas = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.055, green: 0.055, blue: 0.055, alpha: 1)
-            : UIColor(red: 0.965, green: 0.965, blue: 0.973, alpha: 1)
-    })
-
-    static let card = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.082, green: 0.075, blue: 0.078, alpha: 1)
-            : UIColor(red: 0.898, green: 0.898, blue: 0.914, alpha: 1)
-    })
-
-    static let control = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.129, green: 0.129, blue: 0.129, alpha: 1)
-            : UIColor(red: 0.882, green: 0.882, blue: 0.898, alpha: 1)
-    })
-
+    static let canvas = VBotSurface.background
+    static let card = VBotSurface.card
+    static let control = VBotSurface.controlSurface
     static let divider = Color.primary.opacity(0.08)
     static let mascotOrange = Color(red: 0.93, green: 0.38, blue: 0.05)
 }

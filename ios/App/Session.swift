@@ -744,7 +744,7 @@ final class Session: ObservableObject {
                code == 404,
                message == "no route: POST /api/attachments" {
                 let unavailable = APIError.transport(
-                    "This computer does not support image attachments yet. Update OpenMausBot on the computer."
+                    "This computer does not support image attachments yet. Update V Bot on the computer."
                 )
                 if !Task.isCancelled { actionError = unavailable.localizedDescription }
                 throw unavailable

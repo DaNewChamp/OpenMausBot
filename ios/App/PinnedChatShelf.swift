@@ -24,8 +24,12 @@ struct PinnedChatShelf: View {
                             .padding(.horizontal, 24)
                     }
                 } else {
-                    tileRow(spacing: spacing)
-                        .frame(maxWidth: .infinity)
+                    HStack {
+                        Spacer(minLength: 0)
+                        tileRow(spacing: spacing)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -40,7 +44,10 @@ struct PinnedChatShelf: View {
         HStack(alignment: .top, spacing: spacing) {
             ForEach(summaries) { summary in
                 Button { open(summary.chat) } label: {
-                    PinnedChatTile(chat: summary.chat, animated: !reduceMotion)
+                    PinnedChatTile(
+                        chat: summary.chat,
+                        animated: !reduceMotion && MausState.forChat(summary.chat, in: session.state).showsActivity
+                    )
                 }
                 .buttonStyle(.plain)
                 .contextMenu {
@@ -77,20 +84,21 @@ private struct PinnedChatTile: View {
                         .tint(.white)
                         .frame(width: 22, height: 22)
                         .background(Circle().fill(Color.black.opacity(0.78)))
-                        .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
+                        .overlay(Circle().stroke(VBotSurface.background, lineWidth: 2))
                 } else if chat.unread {
                     Circle()
                         .fill(MausPalette.color(chat.color))
                         .frame(width: 12, height: 12)
-                        .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
+                        .overlay(Circle().stroke(VBotSurface.background, lineWidth: 2))
                 }
             }
             .frame(width: 94, height: 94)
 
             Text(chat.name)
-                .font(.system(size: 14, weight: .medium))
+                .font(.caption.weight(.medium))
                 .foregroundStyle(Color.primary)
                 .lineLimit(1)
+                .minimumScaleFactor(0.8)
                 .truncationMode(.tail)
                 .frame(width: 108)
         }
@@ -146,7 +154,7 @@ private struct RoomPinnedAvatar: View {
                     let avatarSize = bots.count == 1 ? size * 0.72 : size * 0.48
                     BotAvatarView(bot: bot, size: avatarSize, state: .happy, animated: animated)
                         .padding(2)
-                        .background(Circle().fill(Color(uiColor: .systemBackground)))
+                        .background(Circle().fill(VBotSurface.background))
                         .offset(roomOffset(index: index, count: min(bots.count, 3), size: size))
                 }
             }

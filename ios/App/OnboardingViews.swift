@@ -54,6 +54,7 @@ struct CompanionWelcomeView: View {
             .frame(maxWidth: 560)
             .frame(maxWidth: .infinity)
         }
+        .background(VBotSurface.background.ignoresSafeArea())
         .background {
             LinearGradient(
                 colors: [MausPalette.color("blue").opacity(0.10), Color.clear],
@@ -130,13 +131,13 @@ struct UnpairedHomeView: View {
                     VStack(spacing: 8) {
                         Text("Connect when you're ready")
                             .font(.title2.bold())
-                        Text("Pair this iPhone with OpenMausBot to see your chats and respond to your bots.")
+                        Text("Pair this iPhone with V Bot on your computer to see your chats and respond to your bots.")
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    Text("On your computer, open OpenMausBot → Settings → Phone.")
+                    Text("On your computer, open V Bot → Settings → Phone.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -147,6 +148,7 @@ struct UnpairedHomeView: View {
                 .frame(maxWidth: 520)
                 .frame(maxWidth: .infinity)
             }
+            .background(VBotSurface.background.ignoresSafeArea())
             .safeAreaInset(edge: .bottom) {
                 Button(action: onConnect) {
                     Text("Connect computer")
@@ -158,7 +160,7 @@ struct UnpairedHomeView: View {
                 .padding(.vertical, 14)
                 .background(.ultraThinMaterial)
             }
-            .navigationTitle("OpenMausBot")
+            .navigationTitle("V Bot")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink { SettingsView() } label: {
@@ -194,7 +196,7 @@ struct NotificationOnboardingView: View {
                 VStack(spacing: 10) {
                     Text("Stay in the loop")
                         .font(.largeTitle.bold())
-                    Text("Get alerts while OpenMausBot is open or was recently in the background. Alerts stop after iOS fully suspends or closes the app.")
+                    Text("Get alerts while V Bot is open or was recently in the background. Alerts stop after iOS fully suspends or closes the app.")
                         .font(.title3)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
