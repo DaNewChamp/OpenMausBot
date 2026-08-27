@@ -49,7 +49,7 @@ final class Session: ObservableObject {
     @Published private(set) var focusedMessageId: String?
     @Published private(set) var notificationAuthorization: UNAuthorizationStatus = .notDetermined
     /// Distinguishes a real `.notDetermined` result from the in-memory value
-    /// used while UserNotifications is still resolving at launch.
+    /// used while notification settings are still loading at launch.
     @Published private(set) var notificationAuthorizationResolved = false
     /// A short-lived desktop handoff waiting for PairingView to present it.
     @Published private(set) var pairingInvite: PairingInvite?
@@ -232,9 +232,9 @@ final class Session: ObservableObject {
         pairRequestId: String
     ) async throws {
         var invited = connection
-        // QR invites already carry this policy. Manual entry arrives as a
-        // parsed Connection, so establish the same consent boundary before
-        // any health probe or one-time credential redemption.
+        // QR invites already carry this policy. Manual entry reaches the
+        // session as a parsed Connection, so establish the same consent
+        // boundary here before any health probe or credential redemption.
         if invited.allowedRouteKinds == nil {
             invited.establishRoutePolicyFromInvite()
         }
@@ -248,9 +248,8 @@ final class Session: ObservableObject {
         // prefer the name the computer calls itself over the Bonjour label
         var stored = outcome.connection
         if !paired.serverName.isEmpty { stored.name = paired.serverName }
-        // The computer may advertise every interface it answers on, but a
-        // pairing response cannot widen the exact route consent carried by
-        // the invite that redeemed this credential.
+        // The computer knows every address it answers on, but redemption may
+        // not widen the explicit route consent carried by the invite.
         stored.applyPairingAdvertisement(hosts: paired.hosts, endpoints: paired.endpoints)
         let winner = outcome.connection.activeEndpoint ?? CompanionEndpoint.direct(
             host: outcome.connection.host,
@@ -263,9 +262,12 @@ final class Session: ObservableObject {
         }
 
         try Keychain.save(paired.token, for: stored.id)
-        // Mark first-pair education before making this connection restorable.
-        // If the process stops between these writes, an orphan marker while
-        // unpaired is harmless; the reverse order could skip the prompt.
+        // Write the first-pair education marker before making the connection
+        // restorable. If the process stops between these writes, an orphan
+        // marker is harmless while unpaired; the reverse order could restore
+        // a pairing which permanently skipped this step.
+        // RootView may not have received iOS's notification status yet, and
+        // the app may be relaunched before that asynchronous lookup finishes.
         CompanionPairingCommitSequence.persist {
             UserDefaults.standard.set(
                 true,
@@ -689,9 +691,7 @@ final class Session: ObservableObject {
         updated.resetRoutePolicy(selecting: endpoint)
         connection = updated
         UserDefaults.standard.set(try? JSONEncoder().encode(updated), forKey: Self.connectionKey)
-        rotation = CandidateRotation(
-            endpoints: [endpoint] + updated.orderedEndpoints.filter { $0.url != endpoint.url }
-        )
+        rotation = CandidateRotation(endpoints: updated.orderedEndpoints)
         if let token {
             client = CompanionClient(connection: updated.dialing(endpoint), token: token)
         }

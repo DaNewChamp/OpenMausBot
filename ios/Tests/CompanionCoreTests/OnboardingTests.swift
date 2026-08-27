@@ -96,6 +96,8 @@ final class OnboardingTests: XCTestCase {
             authorization: .unresolved
         ))
 
+        // A second process launch reads the same durable pending marker. Once
+        // iOS resolves to notDetermined, the education step must reappear.
         let relaunchedAndResolved = CompanionOnboardingContext(
             pairingState: .paired,
             hasSeenWelcome: true,
@@ -177,7 +179,10 @@ final class OnboardingTests: XCTestCase {
     func testClearedDeferredInviteCannotReopenPairingAfterLaterUnpair() {
         var submission = CompanionPairingSubmissionState()
         XCTAssertTrue(submission.begin())
-        XCTAssertFalse(submission.allowsNavigation)
+        XCTAssertFalse(
+            submission.allowsNavigation,
+            "a second deep link stays deferred while the first pairing commits"
+        )
         submission.finish()
 
         let staleInviteRoute = CompanionOnboardingRouter.route(for: .init(
@@ -222,7 +227,7 @@ final class OnboardingTests: XCTestCase {
         XCTAssertFalse(CompanionPairingInvitePolicy.allowsIncomingInvite(
             hasConnection: true,
             pairingStateIsUnpaired: true
-        ))
+        ), "a published connection closes the deep-link race before status updates")
 
         pending = CompanionPairingInvitePolicy.nextInvite(
             current: deferred,

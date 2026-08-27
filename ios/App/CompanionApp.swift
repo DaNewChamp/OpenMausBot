@@ -1,9 +1,10 @@
 // App entry, and the one place that decides when the event stream lives.
 //
 // A phone is not a desktop: the stream is torn down the moment the app
-// leaves the screen, because iOS is going to kill it anyway and doing it
-// deliberately means the cursor is written down at a known point. Coming
-// back asks the harness what was missed rather than asking for everything.
+// leaves the screen's short background grace period, because iOS is going to
+// suspend it anyway and doing it deliberately means the cursor is written
+// down at a known point. Coming back asks the harness what was missed rather
+// than asking for everything.
 import SwiftUI
 import CompanionCore
 import UserNotifications
@@ -57,11 +58,14 @@ struct RootView: View {
                     }
                 )
             case .pairing:
-                PairingView()
-                    .onAppear {
-                        hasSeenWelcome = true
-                        pairingRequested = true
-                    }
+                PairingView {
+                    hasSeenWelcome = true
+                    pairingRequested = false
+                }
+                .onAppear {
+                    hasSeenWelcome = true
+                    pairingRequested = true
+                }
             case .unpairedHome:
                 UnpairedHomeView(onConnect: startPairing)
             case .notificationPrompt:
@@ -75,6 +79,9 @@ struct RootView: View {
                 ChatListView()
                     .onAppear {
                         hasSeenWelcome = true
+                        // This is either an existing pairing or a new pairing
+                        // which needed no notification education. Do not let
+                        // a later voluntary unpair reopen Pairing by itself.
                         pairingRequested = false
                         reconcileNotificationOnboarding()
                     }
@@ -136,6 +143,8 @@ struct RootView: View {
 
     private var notificationAuthorizationState: CompanionNotificationAuthorizationState {
         #if DEBUG
+        // Store-preview runs are deterministic screenshot fixtures, not a
+        // first pairing, and must keep landing on the requested chat surface.
         if ProcessInfo.processInfo.arguments.contains("-store-preview") { return .determined }
         #endif
         guard session.notificationAuthorizationResolved else { return .unresolved }

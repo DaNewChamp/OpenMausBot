@@ -2,6 +2,7 @@ V Bot build 13 introduces the new black-glass identity and a cleaner agent exper
 
 • New V Bot icon and graphite home, chat, settings, and profile screens
 • Compact agent header, centered pinned chats and groups, and improved haptics
+• Default QR pairing now stays on hosted HTTPS; Tailscale and local routes remain explicit choices
 • Static idle mascots with activity animation only while agents are working
 • Cleaner collapsible tool and agent-to-agent activity
 • Secure preview support for a local Grok Reconstructed desktop engine

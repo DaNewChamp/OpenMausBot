@@ -151,8 +151,8 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
     /// Every other address the computer answered on at pairing time, best
     /// first — the tailnet name, the LAN address, the sidecar's mDNS name.
     /// Optional so connections saved before fallbacks existed still decode.
-    /// Policy-bound hosted connections may have no legacy HTTP host because
-    /// their complete route lives in `endpoints`.
+    /// Read through `orderedHosts`; policy-bound hosted connections may have
+    /// no legacy HTTP host because their complete route lives in `endpoints`.
     public var hosts: [String]?
     /// Complete route currently being dialed. Absent on connections saved by
     /// older app builds, where `host` + `port` still mean direct HTTP.
@@ -160,13 +160,15 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
     /// Full routes advertised by a newer desktop. Each carries its own scheme
     /// and port so hosted HTTPS can coexist with local HTTP fallbacks.
     public var endpoints: [CompanionEndpoint]?
-    /// Route kinds explicitly authorized by the pairing confirmation. `nil`
-    /// is retained for connections saved before route consent existed and
-    /// preserves their legacy behavior. New pairings always persist a policy.
+    /// The route kinds this pairing explicitly authorized. `nil` is reserved
+    /// for connections saved by older app versions and retains their legacy
+    /// failover behavior. New pairings always persist a non-nil policy, with
+    /// hosted HTTPS included as the one universally safe future upgrade.
     public var allowedRouteKinds: Set<CompanionEndpointKind>?
-    /// Exact cleartext origins authorized by the pairing confirmation. A
-    /// cleartext route of the same kind is not interchangeable with another
-    /// address on a later network.
+    /// Exact cleartext origins the pairing consent screen authorized. New
+    /// policies persist an empty set for hosted/Tailscale and one selected
+    /// LAN or Bonjour origin for local pairing. Absent alongside a nil kind
+    /// policy on connections saved before route consent existed.
     public var allowedLocalRouteURLs: Set<String>?
 
     public init(
@@ -290,13 +292,14 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
     /// The bearer token goes out in a header on every request, so anyone who
     /// can observe the path between phone and computer can lift it and use it
     /// until the device is revoked. What that means in practice depends
-    /// entirely on how you reach the computer, and the two supported routes
-    /// are not equivalent:
+    /// entirely on how you reach the computer, and the supported routes are
+    /// not equivalent:
     ///
-    /// - **Over a tailnet** — the recommended route, and the only one that
-    ///   works away from home — the traffic is inside WireGuard before it
-    ///   reaches any network, so it is encrypted and authenticated end to end
-    ///   even though this URL says `http`.
+    /// - **Over hosted HTTPS** — the default remote route — ordinary TLS
+    ///   encrypts the connection and authenticates the public endpoint.
+    /// - **Over a tailnet**, the traffic is inside WireGuard before it reaches
+    ///   any network, so it is encrypted and authenticated end to end even
+    ///   though this URL says `http`.
     /// - **Over a LAN**, it is cleartext on that network. Trust it exactly as
     ///   far as you trust everyone on the wifi: fine at home, not fine on a
     ///   café or conference network — pair over the tailnet there instead.
@@ -305,10 +308,10 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
     /// switched on. A self-signed certificate on a LAN address is a
     /// certificate nothing can validate, so it would have to be pinned at
     /// pairing time and re-pinned whenever the sidecar regenerates it — a
-    /// meaningful amount of machinery whose benefit, on the tailnet path, is
-    /// zero. The honest position is: the tailnet carries the encryption, the
-    /// LAN path is documented as trusted-network-only, and pinned TLS is what
-    /// this needs before it could claim otherwise. See `docs/ios-companion.md`.
+    /// meaningful amount of machinery. Hosted HTTPS and the tailnet carry
+    /// encryption; the LAN path is documented as trusted-network-only, and
+    /// pinned TLS is what it needs before it could claim otherwise. See
+    /// `docs/ios-companion.md`.
     public var baseURL: URL? {
         if let activeEndpoint {
             guard allowsEndpoint(activeEndpoint) else { return nil }
@@ -456,7 +459,7 @@ public struct PairingRouteError: Error, LocalizedError, Equatable, Sendable {
 
     public var errorDescription: String? {
         let routes = attemptedHosts.joined(separator: ", ")
-        return "Couldn’t reach this computer through any available route (\(routes)). Keep \(ProductIdentity.displayName)’s Companion turned on, then try again."
+        return "Couldn’t reach this computer through any available route (\(routes)). Keep Phone access turned on in \(ProductIdentity.displayName), then try again."
     }
 }
 
@@ -585,9 +588,9 @@ public struct CompanionClient: Sendable {
     }
 
     /// Turn a non-2xx into an `APIError` carrying the harness's own message.
-    /// Those messages are written for people ("pair this device in
-    /// OpenMausBot → Settings → Companion"), so passing them through beats
-    /// inventing a worse one here.
+    /// Those messages are written for people, so passing them through beats
+    /// inventing a different client-side explanation here. Captured fixtures
+    /// intentionally preserve the current server contract verbatim.
     static func check(_ response: URLResponse, _ data: Data) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard !(200...299).contains(http.statusCode) else { return }

@@ -21,6 +21,7 @@ import { buildDiagnosticsReport, decodeLogTail, diagnosticsFileName } from "./di
 import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace-credentials.mjs";
 import { activateExistingWindow } from "./single-instance.mjs";
 import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-link.mjs";
+import { defaultSaveName, withSavableFile } from "./save-file.mjs";
 import {
   ensureManagedComposioCredentials,
   managedComposioAccess,
@@ -36,6 +37,7 @@ import {
   withoutManagedCompanionTunnelAccess,
 } from "./managed-companion-tunnel.mjs";
 import { createSecureCredentialState } from "./secure-credential-state.mjs";
+import { readSecureCredentials } from "./secure-credentials.mjs";
 import { createControlPlaneClient } from "./control-plane-client.mjs";
 import {
   companionAccountCleanupPending,
@@ -194,25 +196,36 @@ let secureCredentialState = null;
 
 const CREDENTIALS_FILE = path.join(app.getPath("userData"), "credentials.bin");
 
+/** Set once per launch: true when the store could not be READ, which is not
+ * the same as the user having saved nothing. Everything downstream — the
+ * server's view of "configured", and whether we may register a fresh
+ * installation — keys off this rather than off an empty object. */
+let credentialStoreUnavailable = false;
+
 async function loadSecureCredentials() {
-  if (!fs.existsSync(CREDENTIALS_FILE)) return {};
-  if (!(await safeStorage.isAsyncEncryptionAvailable())) {
-    // Returning nothing here looks identical to "the user never saved keys".
-    // Say why, so an OS-store hiccup is diagnosable instead of reading as
-    // wiped credentials.
-    slog("OS credential store unavailable; saved credentials are not loaded this launch");
-    return {};
+  const result = await readSecureCredentials({
+    exists: () => fs.existsSync(CREDENTIALS_FILE),
+    isAvailable: () => safeStorage.isAsyncEncryptionAvailable(),
+    readFile: () => fs.readFileSync(CREDENTIALS_FILE),
+    decrypt: (buffer) => safeStorage.decryptStringAsync(buffer),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
+  credentialStoreUnavailable = result.status === "unavailable";
+  if (credentialStoreUnavailable) {
+    // Deliberately loud. A silent {} here is what made a keychain hiccup
+    // look like "your connected apps are gone".
+    slog(`credential store unreadable after retries (${result.error}); saved keys are not loaded this launch`);
   }
-  try {
-    const decrypted = await safeStorage.decryptStringAsync(fs.readFileSync(CREDENTIALS_FILE));
-    return JSON.parse(decrypted.result);
-  } catch (error) {
-    slog(`credential load failed: ${error?.message ?? error}`);
-    return {};
-  }
+  return result.credentials;
 }
 
 async function saveSecureCredentials(credentials) {
+  // A failed read means we do not know what the existing encrypted document
+  // contains. Never derive a replacement from that incomplete view: boot
+  // migrations must leave plaintext in place so a later launch can retry.
+  if (credentialStoreUnavailable) {
+    throw new Error("The operating-system credential store could not be read this launch");
+  }
   if (!(await safeStorage.isAsyncEncryptionAvailable())) {
     throw new Error("The operating-system credential store is unavailable");
   }
@@ -385,12 +398,15 @@ function publicManagedCompanionState() {
     : { status: "unconfigured", configured: false, ready: false };
 }
 
-async function desktopCompanionState() {
-  const state = await companionState();
+function decorateDesktopCompanionState(state) {
   // The panel polls this state, so a sidecar that exited on its own releases
   // the blocker within one poll instead of keeping the computer awake forever.
   syncCompanionKeepAwake(state.enabled && !state.error, state.keepAwake === true);
   return { ...state, managedConnection: publicManagedCompanionState() };
+}
+
+async function desktopCompanionState() {
+  return decorateDesktopCompanionState(await companionState());
 }
 
 function companionLaunchOptions(hostedUrl = null) {
@@ -647,6 +663,8 @@ async function startServerOn(port) {
     ...(secureCredentials.composioApiKey
       ? { COMPOSIO_API_KEY: secureCredentials.composioApiKey }
       : {}),
+    // "we could not read your keys" must not reach the UI as "you have none"
+    OMB_CREDENTIAL_STORE: credentialStoreUnavailable ? "unavailable" : "ok",
     // one env var per stored workspace secret (xai/box/voice/OpenCode Go);
     // the server prefers these over config.json, whose plaintext fields
     // the boot migration has deleted
@@ -1152,6 +1170,34 @@ ipcMain.handle("desktop:export-diagnostics", async (event) => {
   return result.filePath;
 });
 
+// Bots hand users files as markdown links to paths inside the OpenMausBot
+// home (workspaces, attachments). As plain anchors those resolved against the
+// page origin, so the click opened http://127.0.0.1:8799<path> in the default
+// browser and the server's SPA fallback answered with index.html — a second
+// copy of the chat UI instead of the file. Ask where to put it and copy it
+// there instead: a save dialog tells the user the file landed somewhere and
+// where, which a silent copy into ~/Downloads does not. The path is
+// renderer-controlled, so it must resolve inside ~/.openmausbot and be a
+// regular file — never a symlink escape or directory.
+ipcMain.handle("desktop:save-file", async (event, rawPath) => {
+  return withSavableFile(rawPath, { home: os.homedir() }, async ({ defaultName, copyTo }) => {
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    const defaultPath = await defaultSaveName(app.getPath("downloads"), defaultName);
+    const choice = await dialog.showSaveDialog(parent ?? undefined, {
+      title: "Where do you want to save it?",
+      message: "Where do you want to save it?",
+      defaultPath,
+      buttonLabel: "Save",
+      properties: ["createDirectory", "showOverwriteConfirmation"],
+    });
+    // Cancelling is a decision, not a failure — the bubble stays quiet.
+    if (choice.canceled || !choice.filePath) return null;
+    await copyTo(choice.filePath);
+    shell.showItemInFolder(choice.filePath);
+    return choice.filePath;
+  });
+});
+
 ipcMain.handle("desktop:open-external", async (_event, rawUrl) => {
   if (typeof rawUrl !== "string") throw new Error("A web address is required");
   let url;
@@ -1257,10 +1303,9 @@ ipcMain.handle("companion:keep-awake", async (_event, enabled) => {
   rememberCompanionKeepAwake(Boolean(enabled));
   return desktopCompanionState();
 });
-ipcMain.handle("companion:pairing", async (_event, open) => {
-  await companionPairing(Boolean(open));
-  return desktopCompanionState();
-});
+ipcMain.handle("companion:pairing", (_event, open, expectedToken) =>
+  companionPairing(Boolean(open), expectedToken).then(decorateDesktopCompanionState),
+);
 ipcMain.handle("companion:cloud-desktop", (_event, deviceId, allowed) =>
   companionCloudDesktopAccess(deviceId, Boolean(allowed)).then(() => desktopCompanionState()),
 );
@@ -1390,7 +1435,10 @@ app.whenReady().then(async () => {
   }
   // Boot migrations above are deliberately sequential. From this point on,
   // every account/API-key writer must use the shared serialized state.
-  secureCredentialState = createSecureCredentialState(secureCredentials, saveSecureCredentials);
+  // An unreadable store must not become a WRITE of an empty document.
+  secureCredentialState = createSecureCredentialState(secureCredentials, saveSecureCredentials, {
+    writable: !credentialStoreUnavailable,
+  });
   secureCredentials = secureCredentialState.read();
   const hostedAccount = ensureCompanionAccountService();
   // Display capture remains user-initiated. The renderer first sends a
@@ -1474,7 +1522,13 @@ app.whenReady().then(async () => {
   // Registration is optional network work. Start it only after the local
   // server and first window are usable, then update the server child over its
   // private parent port so Connected Apps becomes available without restart.
-  if (app.isPackaged && composioBrokerUrl()) {
+  // Registering while the store is unreadable would mint a SECOND installation
+  // identity for a user who already has one — the first thing they would
+  // notice is every connected app gone, permanently.
+  if (credentialStoreUnavailable) {
+    slog("skipping connected-apps registration: the credential store was unreadable this launch");
+  }
+  if (app.isPackaged && composioBrokerUrl() && !credentialStoreUnavailable) {
     void updateSecureCredentialDocument(async (credentials) => {
       await ensureManagedComposioCredentials({
         brokerUrl: composioBrokerUrl(),

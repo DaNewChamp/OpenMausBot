@@ -198,8 +198,8 @@ extension Connection {
         activeEndpoint?.displayAddress ?? "\(host):\(port)"
     }
 
-    /// The normalized network origin shown on the pairing confirmation. It
-    /// intentionally contains no pairing code, query, path, or credential.
+    /// The normalized network origin a person must consent to before pairing.
+    /// It deliberately contains no path, query, pairing code, or credential.
     public var pairingConsentOrigin: String {
         if let activeEndpoint { return activeEndpoint.url }
 

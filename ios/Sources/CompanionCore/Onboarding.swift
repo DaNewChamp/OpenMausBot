@@ -1,9 +1,9 @@
-/// Platform-neutral policy for the companion's first-run and pairing flow.
+/// A small, platform-neutral decision seam for the companion's first-run flow.
 ///
-/// Keeping these transitions outside SwiftUI makes the crash-sensitive
-/// lifecycle deterministic: a skip is not a pairing, a pending deep link
-/// still opens pairing, and a revoked credential never falls through to an
-/// ordinary empty state.
+/// Keeping this outside SwiftUI makes the important transitions explicit and
+/// testable: skipping setup must not look like a pairing, a pending deep link
+/// must still open pairing, and a revoked credential must never fall through
+/// to an ordinary empty state.
 public enum CompanionPairingState: Equatable, Sendable {
     case unpaired
     case paired
@@ -19,23 +19,27 @@ public enum CompanionOnboardingRoute: Equatable, Sendable {
     case revoked
 }
 
-/// UserNotifications answers asynchronously at launch. Keep that unresolved
-/// window distinct from a real `.notDetermined` result so first-pair
-/// education cannot be spent before iOS has answered.
+/// The permission lookup is asynchronous at launch. Treating that short
+/// unresolved window as a final answer can skip first-pair education forever.
 public enum CompanionNotificationAuthorizationState: Equatable, Sendable {
     case unresolved
     case notDetermined
     case determined
 }
 
+/// Durable preference names shared by the app's pairing commit and its root
+/// router. The pending marker is intentionally separate from the benign
+/// "already saw this" preference: a new pairing may finish before iOS returns
+/// the current notification authorization status.
 public enum CompanionOnboardingPreferences {
     public static let pendingNotificationOnboardingKey =
         "companion.onboarding.notificationPending"
 }
 
-/// The notification marker is written before the restorable connection. An
-/// orphan marker while unpaired is harmless; a connection without its marker
-/// could permanently skip first-pair education after a crash.
+/// Keeps the crash-sensitive part of a successful pairing commit explicit
+/// and testable. The notification marker must exist before the restorable
+/// connection: an orphan marker while unpaired is harmless, but a connection
+/// without its marker can permanently skip first-pair education.
 public enum CompanionPairingCommitSequence {
     public static func persist(
         markNotificationOnboardingPending: () -> Void,
@@ -53,9 +57,9 @@ public enum CompanionPairingInviteEvent: Equatable, Sendable {
     case signedOut
 }
 
-/// Invite lifecycle policy shared by Session and tests. Publishing a
-/// connection closes the deep-link race even before the status publisher has
-/// delivered its next value to the view hierarchy.
+/// Pure invite lifecycle shared by Session and sequence tests. In particular,
+/// a connection published just before status changes must still reject a new
+/// invite, and terminal pairing/account events always empty the queue.
 public enum CompanionPairingInvitePolicy {
     public static func allowsIncomingInvite(
         hasConnection: Bool,
@@ -69,8 +73,10 @@ public enum CompanionPairingInvitePolicy {
         after event: CompanionPairingInviteEvent
     ) -> PairingInvite? {
         switch event {
-        case let .received(invite): return invite
-        case .consumed, .pairingSucceeded, .signedOut: return nil
+        case .received(let invite):
+            return invite
+        case .consumed, .pairingSucceeded, .signedOut:
+            return nil
         }
     }
 }
@@ -83,13 +89,18 @@ public enum CompanionNotificationOnboardingPolicy {
         authorization: CompanionNotificationAuthorizationState
     ) -> Bool {
         guard isPending else { return false }
+        // A relaunch can restore the pairing before UserNotifications has
+        // answered. Never spend the marker during that temporary state.
         guard authorization != .unresolved else { return true }
+        // Once status is known, education is needed only when iOS can still
+        // ask and this user has not already completed or skipped the step.
         return authorization == .notDetermined && !hasCompletedStep
     }
 }
 
-/// Prevents a second Connect, reset, or dismissal from overtaking a pairing
-/// request which may already have persisted a device on the computer.
+/// A small state machine used by PairingView to make navigation mutually
+/// exclusive with a pairing commit. A second submit or reset cannot overtake
+/// the request which may already have persisted on the Mac and phone.
 public struct CompanionPairingSubmissionState: Equatable, Sendable {
     public private(set) var isInFlight = false
 
@@ -114,8 +125,8 @@ public struct CompanionOnboardingContext: Equatable, Sendable {
     public var hasSeenWelcome: Bool
     public var pairingRequested: Bool
     public var hasPendingPairingInvite: Bool
-    /// Set only after a new pairing commits; upgrades for existing paired
-    /// users must not unexpectedly interrupt their chat.
+    /// Persisted only after a new pairing commits. Existing paired users do
+    /// not receive first-pair education merely because they upgraded.
     public var notificationOnboardingPending: Bool
     public var hasSeenNotificationPrompt: Bool
     public var notificationAuthorization: CompanionNotificationAuthorizationState

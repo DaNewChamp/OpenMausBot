@@ -6,11 +6,12 @@
 // moment either device leaves the tailnet. The connection still carries every
 // address the computer advertised, but a bearer credential cannot safely be
 // sprayed onto whatever LAN happens to use the same private address later.
-// Automatic walking is therefore a trust ratchet: protected routes can walk
-// to other protected routes, while a user-selected cleartext route can be
-// tried exactly once and can only move to a stronger transport. Both halves
-// are pure — no sockets, no clocks — so the rules can be tested without a
-// network; `Session` owns when they run.
+// New pairings also persist the route kinds the person chose: hosted never
+// grows a Tailscale fallback, while an explicit Tailscale or local selection
+// may still upgrade to hosted HTTPS. Connections saved before that policy was
+// introduced retain the legacy protected-route ratchet. Both layers are pure
+// — no sockets, no clocks — so the rules can be tested without a network;
+// `Session` owns when they run.
 import Foundation
 
 /// The ordered walk through a connection's stored hosts.
@@ -152,7 +153,7 @@ public enum ConnectionAdvice {
         case .cannotFindHost:
             advice = "\u{201C}\(host)\u{201D} didn't resolve. If that's a Tailscale name, this phone may not be on the tailnet."
         case .cannotConnectToHost:
-            advice = "Reached your computer, but the companion isn't answering on port \(port) — open \(ProductIdentity.displayName) → Settings → Companion."
+            advice = "Reached your computer, but Phone access isn't answering on port \(port) — open \(ProductIdentity.displayName) → Settings → Phone."
         case .timedOut:
             advice = "No route to your computer at \(host) — different network, or a firewall."
         case .notConnectedToInternet:
@@ -177,16 +178,16 @@ public enum ConnectionAdvice {
 
 extension Connection {
     /// `nil` is the compatibility policy for connections persisted before
-    /// route consent existed. Once present, only an explicitly selected kind
-    /// and hosted HTTPS may receive the pairing/device token.
+    /// route consent existed. Once a policy is present, only an explicitly
+    /// selected kind and hosted HTTPS may receive the pairing/device token.
     public func allowsRouteKind(_ kind: CompanionEndpointKind) -> Bool {
         guard let allowedRouteKinds else { return true }
         return kind == .hosted || allowedRouteKinds.contains(kind)
     }
 
-    /// Kind consent is sufficient for protected transports. A cleartext route
-    /// additionally has to be the exact origin shown for confirmation; another
-    /// address of the same local kind is not interchangeable.
+    /// Kind consent is sufficient for protected transports. A cleartext
+    /// route additionally has to be the exact origin shown for confirmation;
+    /// another address of the same LAN/Bonjour kind is not interchangeable.
     public func allowsEndpoint(_ endpoint: CompanionEndpoint) -> Bool {
         guard allowsRouteKind(endpoint.kind) else { return false }
         guard endpoint.securityClass == .explicitLocal,
@@ -201,9 +202,9 @@ extension Connection {
         candidates.filter(allowsEndpoint)
     }
 
-    /// Bind a new pairing to the route the QR/manual choice selected. Other
-    /// typed-invite fallbacks are advisory, not fresh consent. Hosted HTTPS is
-    /// always retained as a safe future upgrade.
+    /// Bind a new pairing to the route the QR/manual choice actually selected.
+    /// Other fallback addresses in a typed invite are advisory, not fresh
+    /// consent. Hosted HTTPS is always retained as a safe future upgrade.
     public mutating func establishRoutePolicyFromInvite() {
         let selected = activeEndpoint ?? CompanionEndpoint.direct(
             host: host,
@@ -221,6 +222,8 @@ extension Connection {
             allowedRouteKinds = [endpoint.kind, .hosted]
             allowedLocalRouteURLs = [endpoint.url]
         case nil:
+            // A valid Connection always has a direct representation, but
+            // fail closed to hosted if a corrupted value reaches this helper.
             allowedRouteKinds = [.hosted]
             allowedLocalRouteURLs = []
         }
@@ -232,8 +235,9 @@ extension Connection {
         }
     }
 
-    /// Apply the routes returned when a pairing credential is redeemed without
-    /// widening the consent recorded from the invite carrying that credential.
+    /// Apply the routes returned when a pairing credential is redeemed. The
+    /// response may advertise every interface on the Mac, but it cannot widen
+    /// the consent recorded from the invite which carried that credential.
     public mutating func applyPairingAdvertisement(
         hosts advertisedHosts: [String]?,
         endpoints advertisedEndpoints: [CompanionEndpoint]?
@@ -243,13 +247,15 @@ extension Connection {
         }
         if let advertisedEndpoints, !advertisedEndpoints.isEmpty {
             let accepted = endpointsAllowedByRoutePolicy(advertisedEndpoints)
+            // Keep the invite's known-good selected route if a newer or
+            // compromised response contains only disallowed alternatives.
             if !accepted.isEmpty { endpoints = Array(accepted.prefix(8)) }
         }
     }
 
-    /// A hand-entered replacement is fresh explicit consent. Reset rather than
-    /// widening the old policy: selected local permits that exact origin and
-    /// hosted, selected tailnet permits tailnet and hosted.
+    /// A hand-entered replacement is fresh, explicit consent. Reset rather
+    /// than widening the old policy: selected Tailscale permits Tailscale and
+    /// hosted, selected LAN/Bonjour permits that one kind and hosted.
     public mutating func resetRoutePolicy(selecting endpoint: CompanionEndpoint) {
         let previousEndpoints = orderedEndpoints
         allowedRouteKinds = [endpoint.kind, .hosted]
@@ -325,6 +331,8 @@ extension Connection {
     }
 
     /// The subset an automatic pairing or authenticated reconnect may try.
+    /// A policy-bound connection first removes route kinds the person did not
+    /// select; the transport ratchet then removes unsafe cleartext fallbacks.
     public var automaticEndpoints: [CompanionEndpoint] {
         CompanionEndpoint.automaticCandidates(from: orderedEndpoints)
     }

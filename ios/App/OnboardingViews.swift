@@ -164,7 +164,9 @@ struct UnpairedHomeView: View {
             .navigationTitle("V Bot")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink { SettingsView() } label: {
+                    NavigationLink {
+                        SettingsView(onConnect: onConnect)
+                    } label: {
                         Image(systemName: "gearshape")
                     }
                     .accessibilityLabel("Settings")

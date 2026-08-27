@@ -19,6 +19,7 @@ import {
 } from "../shared/credential-request.ts";
 
 import { approvalKey, autoVerdict } from "./auto-approve.ts";
+import * as checkpoints from "./checkpoints.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import {
@@ -869,6 +870,9 @@ let localVmImageBusy = false;
 let localVmProvisionBusy = false;
 let localVmModeChangeBusy = false;
 const activeVpsThreads = new Map<string, string>();
+// A restore mutates and cleans a project work tree. Claim the bot across the
+// entire async Git operation so a turn cannot start in that folder midway.
+const checkpointRestoreLeases = new Set<string>();
 const LOCAL_VM_IDLE_MS = 8 * 60 * 60_000;
 const localVmIdles = new Map<string, LocalVmIdleTimer>();
 
@@ -1650,6 +1654,11 @@ async function startTurn(
 ) {
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
+  if (checkpointRestoreLeases.has(botId)) {
+    throw Object.assign(new Error("this bot's project files are being restored — wait for the restore to finish"), {
+      status: 409,
+    });
+  }
   if (bot.busy) throw Object.assign(new Error("the bot is already working — interrupt it first"), { status: 409 });
   const threadId = opts?.threadId ?? bot.threadId;
   // a webhook turn, or one inherited from a bot already running unattended
@@ -1794,6 +1803,11 @@ async function startTurn(
           ? store.pinTaskCwd(bot.id, threadId, privateWorkspace)
           : null;
       const cwd = pinnedCwd ?? undefined;
+      // Checkpoint explicit project folders, where a bot can overwrite the
+      // user's work. Its private OpenMaus workspace is app-owned and changes
+      // on nearly every ordinary chat; snapshotting it would add hidden disk
+      // and process overhead without a user project to restore.
+      const checkpointCwd = cwd && cwd !== privateWorkspace ? cwd : undefined;
       // dweb is opt-in: without an explicit daemon URL, do not advertise
       // tools that would fail on every call or spawn an unnecessary proxy.
       const dwebUrl = process.env.DWEB_URL?.trim();
@@ -1996,6 +2010,11 @@ async function startTurn(
 
       // (activeVpsThreads was already claimed above, before the provision or
       // reuse await, so the backend guards saw this turn the whole time.)
+      // Wait immediately before dispatch: resources are already claimed, but
+      // the engine cannot edit the project until the snapshot has settled.
+      // snapshot() absorbs failures, so checkpointing may delay but never fail
+      // a turn.
+      if (checkpointCwd) await checkpoints.snapshot(bot.id, checkpointCwd, `turn ${threadId.slice(0, 8)}`);
       watchdog.watch(threadId, bot.id);
       await instance.adapter.sendTurn({
         threadId,
@@ -5325,6 +5344,49 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { name, text });
     }
 
+    // ── workspace checkpoints: per-turn shadow-git snapshots ────────────
+    // The list endpoint is the source of truth (turns store nothing), and
+    // `enabled` tells the UI whether snapshots can happen here at all —
+    // false for refused folders (home, Desktop…), a missing git, or a bot
+    // whose checkpoints failed earlier this session.
+    m = path.match(/^\/api\/bots\/([\w-]+)\/checkpoints$/);
+    if (m && method === "GET") {
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const cwd = url.searchParams.get("cwd") ?? "";
+      if (!cwd.trim()) return json(res, 400, { error: "cwd query parameter required" });
+      return json(res, 200, {
+        checkpoints: await checkpoints.listCheckpoints(m[1]!, cwd),
+        enabled: await checkpoints.checkpointsEnabled(m[1]!, cwd),
+      });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/checkpoints\/restore$/);
+    if (m && method === "POST") {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const parsed = z
+        .object({ cwd: z.string().min(1), hash: z.string().regex(/^[0-9a-f]{40}$/) })
+        .safeParse(await readBody(req));
+      if (!parsed.success) {
+        return json(res, 400, { error: "cwd (absolute path) and hash (full 40-character checkpoint hash) required" });
+      }
+      // Claim synchronously with the busy check. startTurn checks the same
+      // lease before reserving the bot, so no turn can enter during the
+      // awaited Git operation.
+      if (bot.busy) return json(res, 409, { error: "the bot is working — stop the turn before restoring files" });
+      if (checkpointRestoreLeases.has(bot.id)) {
+        return json(res, 409, { error: "this bot's project files are already being restored" });
+      }
+      checkpointRestoreLeases.add(bot.id);
+      let result: checkpoints.RestoreResult;
+      try {
+        result = await checkpoints.restore(bot.id, parsed.data.cwd, parsed.data.hash);
+      } finally {
+        checkpointRestoreLeases.delete(bot.id);
+      }
+      if (!result.ok) return json(res, 400, { error: result.error });
+      return json(res, 200, { ok: true });
+    }
+
     // onboarding/ask cards persist their answered/dismissed state
     m = path.match(/^\/api\/bots\/([\w-]+)\/cards\/([\w-]+)$/);
     if (m && method === "PATCH") {
@@ -6041,15 +6103,28 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { configured: composio.configured(cfg), mode: composio.connectionMode(cfg), source, cards });
     }
     if (method === "GET" && path === "/api/connectors/connected") {
-      if (!composio.configured(cfg)) {
-        return json(res, 200, { configured: false, services: {} });
+      const availability = composio.connectorAvailability(cfg);
+      if (availability !== "configured") {
+        // `credentialStore` is what stops the panel treating this empty list
+        // as authoritative: an unreadable store means we do not KNOW what is
+        // connected, which is not the same as knowing nothing is.
+        return json(res, 200, {
+          configured: false,
+          credentialStore: availability === "unreadable" ? "unavailable" : "ok",
+          services: {},
+        });
       }
-      return json(res, 200, { configured: true, services: await composio.connectedServices(cfg) });
+      return json(res, 200, { configured: true, credentialStore: "ok", services: await composio.connectedServices(cfg) });
     }
     if (method === "GET" && path === "/api/connectors") {
       const services = (url.searchParams.get("services") ?? "").split(",").filter(Boolean);
-      if (!composio.configured(cfg)) {
-        return json(res, 200, { configured: false, services: {} });
+      const availability = composio.connectorAvailability(cfg);
+      if (availability !== "configured") {
+        return json(res, 200, {
+          configured: false,
+          credentialStore: availability === "unreadable" ? "unavailable" : "ok",
+          services: {},
+        });
       }
       const status = await composio.connectionStatus(cfg, services.length ? services : composio.CURATED_SLUGS);
       return json(res, 200, { configured: true, services: status });

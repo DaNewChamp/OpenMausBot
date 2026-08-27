@@ -108,7 +108,10 @@ final class ConnectionTests: XCTestCase {
 
     func testPairingConsentNormalizesLegacyDNSAndIPv6Origins() throws {
         let tailnet = try XCTUnwrap(Connection.parse("MacBook.Tail1234.TS.NET"))
-        XCTAssertEqual(tailnet.pairingConsentOrigin, "http://macbook.tail1234.ts.net:8810")
+        XCTAssertEqual(
+            tailnet.pairingConsentOrigin,
+            "http://macbook.tail1234.ts.net:8810"
+        )
 
         let ipv6 = try XCTUnwrap(Connection.parse("[2001:DB8::1]:9910"))
         XCTAssertEqual(ipv6.pairingConsentOrigin, "http://[2001:db8::1]:9910")
@@ -129,7 +132,6 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(invite.connection.port, 443)
         XCTAssertEqual(invite.connection.allowedRouteKinds, [.hosted])
     }
-
     func testLegacyTailnetInviteDropsUnselectedLocalFallbackKinds() throws {
         let url = try XCTUnwrap(URL(string:
             "openmausbot://pair?address=macbook.tail1234.ts.net%3A8810&code=004209" +
