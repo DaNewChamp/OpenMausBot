@@ -1,7 +1,8 @@
-Welcome to V Bot 1.0.
+V Bot build 13 introduces the new black-glass identity and a cleaner agent experience.
 
-• Pair securely with V Bot on your computer
-• Chat with bots and rooms
-• Answer approvals and questions
-• Search, manage tasks, edit versions, react, and share transcripts
-• Follow live work and reconnect without losing events
+• New V Bot icon and graphite home, chat, settings, and profile screens
+• Compact agent header, centered pinned chats and groups, and improved haptics
+• Static idle mascots with activity animation only while agents are working
+• Cleaner collapsible tool and agent-to-agent activity
+• Secure preview support for a local Grok Reconstructed desktop engine
+• Improved pairing guidance, reconnect behavior, and accessibility text sizing
