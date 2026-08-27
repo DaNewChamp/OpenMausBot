@@ -1,0 +1,50 @@
+---
+title: Grok Reconstructed
+description: Optional local adapter for a running Grok Bot 0.18 Reconstructed desktop app.
+icon: Bot
+---
+
+OpenMausBot can detect a locally running **Grok Bot 0.18 Reconstructed** app and
+use its stable loopback coordinator API as a custom engine. This does not replace
+OpenMausBot's own harness, the Grok CLI engine, or the iOS companion.
+
+<Callout type="warning" title="Desktop-local only">
+Paired phones keep talking to OpenMausBot. Reconstructed loopback ports, discovery
+tokens, and host paths are never forwarded off the Mac.
+</Callout>
+
+## Requirements
+
+- macOS with **Grok Bot 0.18 Reconstructed** installed and running
+- OpenMausBot running on the same computer
+- the reconstructed app advertising its gateway on loopback
+
+Official Grok Bot is not treated as reconstructed. OpenMausBot data stays in
+`~/.openmausbot`.
+
+## Supported capabilities
+
+Detection verifies health and bot/session listing on loopback. A send then
+uses only documented reconstructed coordinator methods:
+
+- health
+- bot/session listing
+- send prompt
+- transcript tail for reply text
+
+Send prompt is not probed during detection. If that method is missing at send
+time, the turn fails with a precise reason instead of probing unknown routes
+such as `/events`.
+
+## Using it
+
+1. Launch the reconstructed desktop app.
+2. In OpenMausBot, select **Grok Reconstructed**.
+3. Pick `active` or a discovered reconstructed bot.
+4. Chat from the desktop app or from a phone paired to OpenMausBot.
+
+Interrupt stops OpenMausBot waiting for the reconstructed reply. It does not
+claim an undocumented reconstructed cancel route.
+
+See [the repository note](https://github.com/milind-soni/OpenMausBot/blob/main/docs/grok-reconstructed.md)
+for the security boundary and unavailable reasons.

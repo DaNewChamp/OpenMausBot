@@ -119,6 +119,12 @@ describe("default fleet", () => {
     expect(map.hermes?.driver).toBe("hermesAgent");
     expect(map.cursor?.driver).toBe("cursorAgent");
     expect(map.openaiCompat?.driver).toBe("openai-compat");
+    expect(map.grokReconstructed?.driver).toBe("grokReconstructed");
+  });
+
+  it("ships Grok Reconstructed as a local desktop adapter", () => {
+    const map = instanceConfigs({});
+    expect(map.grokReconstructed).toEqual({ driver: "grokReconstructed", environment: {} });
   });
 
   it("does not expand a one-off shadow fleet", () => {

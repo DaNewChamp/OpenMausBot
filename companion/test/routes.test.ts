@@ -144,6 +144,20 @@ describe("what it may not", () => {
     expect(ask("POST", "/api/internal/ask-bot")?.status).toBe(404);
   });
 
+  it("does not expose reconstructed Grok Bot loopback routes", () => {
+    for (const [method, path] of [
+      ["GET", "/health"],
+      ["GET", "/events"],
+      ["POST", "/api/listAgents"],
+      ["POST", "/api/sendPrompt"],
+      ["POST", "/api/getAgentTranscriptTail"],
+      ["GET", "/api/grok-reconstructed"],
+    ] as Array<[string, string]>) {
+      const denial = ask(method, path);
+      expect(denial?.status, `${method} ${path}`).toBe(404);
+    }
+  });
+
   it("does not serve the desktop UI", () => {
     expect(ask("GET", "/")?.status).toBe(404);
     expect(ask("GET", "/index.html")?.status).toBe(404);

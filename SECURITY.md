@@ -19,3 +19,6 @@ response as soon as possible, normally within a few days.
   spoofing the broker socket) are vulnerabilities.
 - Spawning must never route user-influenced strings through a shell. Report any `shell: true` /
   `cmd.exe` string-building you find.
+- The optional Grok Bot 0.18 Reconstructed adapter must stay loopback-only on the
+  desktop. Exposing that gateway off-machine, or forwarding its discovery token,
+  port, or host paths to iOS / the companion sidecar, is a vulnerability.

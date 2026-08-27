@@ -378,7 +378,9 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // installed and logged in (it shows up unavailable otherwise). The API-key
   // `grok` driver stays registered but out of the default fleet — that key is
   // a credential Milind doesn't want to manage; an `instances` entry brings
-  // it back anytime.
+  // it back anytime. `grokReconstructed` is a separate local adapter for a
+  // running Grok Bot 0.18 Reconstructed desktop app; it does not replace
+  // grokAgent and stays unavailable until that app is detected on loopback.
   //
   // Google rides `antigravityAgent` (the `agy` CLI), not `geminiAgent`:
   // Google retired Gemini CLI for the free/Pro/Ultra tiers on 2026-06-18
@@ -397,6 +399,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     opencodeGo: { driver: "opencodeGo" },
     computer: { driver: "boxAgent" },
     openaiCompat: { driver: "openai-compat" },
+    grokReconstructed: { driver: "grokReconstructed" },
     qwen: { driver: "qwenAgent" },
     hermes: { driver: "hermesAgent" },
     pi: { driver: "piAgent" },
@@ -412,6 +415,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   const PRODUCT_FLEET_ADDITIONS = {
     cursor: { driver: "cursorAgent" },
     openaiCompat: { driver: "openai-compat" },
+    grokReconstructed: { driver: "grokReconstructed" },
     ...CUSTOM_ONLY,
   } as const;
   const configured = cfg.instances && Object.keys(cfg.instances).length ? cfg.instances : null;

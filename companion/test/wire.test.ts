@@ -45,6 +45,25 @@ describe("scrub", () => {
     expect(cleaned).toEqual({ box: { configured: false }, vps: { configured: true } });
   });
 
+  it("withholds reconstructed gateway location and credentials", () => {
+    const cleaned = scrub({
+      instanceId: "grokReconstructed",
+      snapshot: { state: "available" },
+      discoveryPath: "/Users/ada/.grokbot/gateway.json",
+      gatewayToken: "recon-secret",
+      reconstructedHost: "127.0.0.1",
+      reconstructedPort: 18765,
+    });
+    expect(JSON.stringify(cleaned)).not.toContain("gateway.json");
+    expect(JSON.stringify(cleaned)).not.toContain("recon-secret");
+    expect(JSON.stringify(cleaned)).not.toContain("127.0.0.1");
+    expect(JSON.stringify(cleaned)).not.toContain("18765");
+    expect(cleaned).toEqual({
+      instanceId: "grokReconstructed",
+      snapshot: { state: "available" },
+    });
+  });
+
   it("leaves values it does not own alone", () => {
     expect(scrub(null)).toBe(null);
     expect(scrub(42)).toBe(42);

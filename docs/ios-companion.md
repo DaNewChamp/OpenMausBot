@@ -30,6 +30,11 @@ voice, and App Store release automation are not part of this version. The
 optional hosted transport connects to the user's own computer; it is not a
 cloud transcript store and cannot wake a terminated iOS app.
 
+Optional Grok Bot 0.18 Reconstructed compatibility is desktop-local. The
+Mac detects that app and talks to its loopback gateway itself. The phone
+still talks only to OpenMausBot's authenticated companion; reconstructed
+ports, discovery tokens, and host paths are never forwarded.
+
 The Mac must be running OpenMausBot and must not be asleep. Companion Settings
 offers an off-by-default **Keep this computer awake** switch that prevents
 system sleep while Companion is on; the display may still turn off. A sleeping
