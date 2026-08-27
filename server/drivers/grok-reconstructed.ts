@@ -216,8 +216,7 @@ export function extractAssistantText(entries: unknown, afterPrompt?: string): st
       const entry = entries[i];
       if (typeof entry !== "object" || entry == null) continue;
       const rec = entry as Record<string, unknown>;
-      const message = rec.message && typeof rec.message === "object" ? (rec.message as Record<string, unknown>) : null;
-      if (rec.kind === "send-message" && message?.type === "text" && message.content === afterPrompt) {
+      if (rec.kind === "message" && typeof rec.content === "string" && rec.content === afterPrompt) {
         start = i + 1;
         break;
       }
@@ -228,9 +227,11 @@ export function extractAssistantText(entries: unknown, afterPrompt?: string): st
     const entry = entries[i];
     if (typeof entry !== "object" || entry == null) continue;
     const rec = entry as Record<string, unknown>;
-    if (rec.kind === "message" && typeof rec.content === "string" && rec.content.length > 0) {
-      parts.push(rec.content);
-    }
+    if (rec.kind !== "send-message") continue;
+    const message = rec.message && typeof rec.message === "object" ? (rec.message as Record<string, unknown>) : null;
+    if (message?.type !== "text" || typeof message.content !== "string" || message.content.length === 0) continue;
+    if (afterPrompt && message.content === afterPrompt) continue;
+    parts.push(message.content);
   }
   return parts.join("");
 }
@@ -375,7 +376,11 @@ async function readJson(
 }
 
 function requestHeaders(token: string | null | undefined, extra?: Record<string, string>): Record<string, string> {
-  const headers: Record<string, string> = { accept: "application/json", ...extra };
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    "x-sand-slim-avatars": "1",
+    ...extra,
+  };
   if (token) headers.authorization = `${GATEWAY_AUTH_SCHEME} ${token}`;
   return headers;
 }
@@ -690,14 +695,15 @@ export function createGrokReconstructedDriver(
               await waitFor(abort.signal, host.delay, POLL_MS);
             }
 
-            if (lastText.trim()) {
-              emit({
-                ...base(turn.threadId, turnId),
-                type: "item.completed",
-                itemType: "assistant_text",
-                text: lastText,
-              });
+            if (!lastText.trim()) {
+              throw new Error("The reconstructed host did not return a reply before the turn timed out.");
             }
+            emit({
+              ...base(turn.threadId, turnId),
+              type: "item.completed",
+              itemType: "assistant_text",
+              text: lastText,
+            });
             appendNative(turn.threadId, {
               dir: "in",
               source: "grok-reconstructed.sendPrompt",
@@ -708,7 +714,7 @@ export function createGrokReconstructedDriver(
               ...base(turn.threadId, turnId),
               type: "turn.completed",
               ok: true,
-              stopReason: lastText.trim() ? null : "accepted",
+              stopReason: null,
               cost: null,
             });
           } catch (error) {
