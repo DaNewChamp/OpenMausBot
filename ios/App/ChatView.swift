@@ -90,11 +90,12 @@ struct ChatView: View {
         // array as a unit; repeatedly reaching through ObservableObject for
         // every row only recomputes the same value.
         let transcript = messages
-        // A VStack with the composer as a sibling, rather than a scroll view
-        // with `.safeAreaInset`. The inset version sized itself to its
-        // content, so a short transcript left the composer floating in the
-        // middle of the screen with black beneath it. Here the scroll area is
-        // explicitly told to take everything the composer does not.
+        // Full-height stack, then composer as a bottom safe-area inset.
+        // Putting the inset on the ScrollView itself sized the transcript
+        // to its content, so a short chat left the composer floating in the
+        // middle. The outer frame is forced to fill, then the inset shrinks
+        // it for the composer *and* the keyboard. `.ignoresSafeArea()` on
+        // the canvas must stay `.container` so it never eats the keyboard.
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -220,6 +221,7 @@ struct ChatView: View {
                 // navigation transitions cannot leave a floating avatar
                 // behind.
                 .safeAreaInset(edge: .top, spacing: 0) { headerBar }
+                .scrollDismissesKeyboard(.interactively)
                 // A conversation grows from the bottom: a transcript shorter
                 // than the screen rests at the bottom, and opening a chat
                 // starts on the newest message rather than the oldest.
@@ -262,14 +264,13 @@ struct ChatView: View {
             }
             .id(threadId)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            composer
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
         .overlay(alignment: .bottom) { plusSheet }
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
-        .background(VBotSurface.background.ignoresSafeArea())
+        .background(VBotSurface.background.ignoresSafeArea(.container))
         .background {
             InteractivePopGestureEnabler()
                 .frame(width: 0, height: 0)
@@ -502,7 +503,7 @@ struct ChatView: View {
         .padding(.horizontal, 12)
         .padding(.top, 4)
         .padding(.bottom, 8)
-        .background(VBotSurface.background.ignoresSafeArea(edges: .top))
+        .background(VBotSurface.background.ignoresSafeArea(.container, edges: .top))
     }
 
     // MARK: - The + sheet
@@ -927,6 +928,38 @@ struct ChatView: View {
         VBotMutationRouting.composerCapabilities(for: session.engineSync)
     }
 
+    private var roomMembers: [GroupRouting.Member] {
+        guard case let .room(room) = current else { return [] }
+        return room.memberIds.compactMap { id in
+            session.state.bot(id).map {
+                GroupRouting.Member(id: $0.id, name: $0.name, hidden: $0.hidden == true)
+            }
+        }
+    }
+
+    private var activeMentionQuery: String? {
+        guard case .room = current else { return nil }
+        return GroupRouting.activeMentionQuery(in: draft)
+    }
+
+    private var mentionCandidates: [GroupRouting.Member] {
+        guard let query = activeMentionQuery else { return [] }
+        return GroupRouting.mentionCandidates(query: query, members: roomMembers)
+    }
+
+    private var composerPlaceholder: String {
+        if dictation.isListening { return "Listening…" }
+        if case let .room(room) = current {
+            return GroupRouting.groupComposerHint(room: room, members: roomMembers)
+        }
+        return "Ask \(current.name)"
+    }
+
+    private func insertMention(_ name: String) {
+        draft = GroupRouting.applyingMention(name, to: draft)
+        Haptics.selection()
+    }
+
     private var primaryAction: ComposerPrimaryAction {
         // The shared policy knows about text only. A selected image is still
         // a sendable message, so pass a non-empty sentinel without changing
@@ -1076,7 +1109,16 @@ struct ChatView: View {
                     .accessibilityLabel("Attachment error")
             }
 
-            if showCommandHUD {
+            if let query = activeMentionQuery, case .room = current {
+                MentionMenuView(
+                    query: query,
+                    members: mentionCandidates,
+                    includeEveryone: "everyone".hasPrefix(query.lowercased()),
+                    accentColor: MausPalette.color(current.color)
+                ) { name in
+                    insertMention(name)
+                }
+            } else if showCommandHUD {
                 CommandSkillHUDView(
                     text: $draft,
                     isVisible: $showCommandHUD,
@@ -1140,7 +1182,7 @@ struct ChatView: View {
                     }
 
                     TextField(
-                        dictation.isListening ? "Listening…" : "Ask \(current.name)",
+                        composerPlaceholder,
                         text: $draft,
                         axis: .vertical
                     )
@@ -1191,7 +1233,7 @@ struct ChatView: View {
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
-        .background(VBotSurface.background.ignoresSafeArea(edges: .bottom))
+        .background(VBotSurface.background.ignoresSafeArea(.container, edges: .bottom))
     }
 
     @ViewBuilder
@@ -1318,6 +1360,72 @@ struct ChatView: View {
             .padding(.bottom, 6)
             .accessibilityLabel("Send")
         }
+    }
+}
+
+private struct MentionMenuView: View {
+    let query: String
+    let members: [GroupRouting.Member]
+    let includeEveryone: Bool
+    let accentColor: Color
+    let onPick: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if includeEveryone {
+                mentionRow(title: "@everyone", subtitle: "Every bot in this chat") {
+                    onPick("everyone")
+                }
+            }
+            ForEach(members, id: \.id) { member in
+                mentionRow(title: "@\(member.name)", subtitle: "Bring \(member.name) in") {
+                    onPick(member.name)
+                }
+            }
+            if members.isEmpty && !includeEveryone {
+                Text("No matching bot")
+                    .font(.footnote)
+                    .foregroundStyle(Color.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(VBotSurface.controlSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+        .accessibilityLabel("Mention a bot")
+    }
+
+    private func mentionRow(title: String, subtitle: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(accentColor.opacity(0.28))
+                    .frame(width: 28, height: 28)
+                    .overlay {
+                        Text(String(title.dropFirst().prefix(1)).uppercased())
+                            .font(.caption.weight(.semibold))
+                    }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(Color.primary)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(Color.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

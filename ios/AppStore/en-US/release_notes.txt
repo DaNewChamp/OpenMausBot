@@ -7,5 +7,8 @@ V Bot build 13 introduces the new black-glass identity and a cleaner agent exper
 • Cleaner collapsible tool and agent-to-agent activity
 • Secure preview support for a local Grok Reconstructed desktop engine
 • Improved pairing guidance, reconnect behavior, and accessibility text sizing
+• Composer stays above the keyboard instead of hiding under it
+• Group chats get Grok-style @mentions so you pick which bot talks
+• Pinning a conversation now gives a confirmation haptic
 • Fixed message sending when the optional desktop-engine status route is unavailable
 • Older OpenMaus desktops now appear as OpenMaus-only instead of showing an error

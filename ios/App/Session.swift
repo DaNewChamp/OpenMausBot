@@ -878,10 +878,12 @@ final class Session: ObservableObject {
                 case let .updated(updated):
                     state.apply(.bot(updated))
                     persistPinnedOverrides()
+                    Haptics.success()
                     return .bot(updated)
                 case .unsupported:
                     state.setLocalPinned(pinned, for: chat.stableID)
                     persistPinnedOverrides()
+                    Haptics.success()
                     return state.bot(bot.id).map(Chat.bot) ?? .bot(bot)
                 }
             case let .room(room):
@@ -891,10 +893,12 @@ final class Session: ObservableObject {
                 case let .updated(updated):
                     state.apply(.room(updated))
                     persistPinnedOverrides()
+                    Haptics.success()
                     return .room(updated)
                 case .unsupported:
                     state.setLocalPinned(pinned, for: chat.stableID)
                     persistPinnedOverrides()
+                    Haptics.success()
                     return state.rooms.first(where: { $0.id == room.id }).map(Chat.room) ?? .room(room)
                 }
             }

@@ -370,6 +370,11 @@ public extension Bot {
 public struct GroupResponder: Codable, Hashable, Sendable {
     public var kind: String
     public var botId: String?
+
+    public init(kind: String, botId: String? = nil) {
+        self.kind = kind
+        self.botId = botId
+    }
 }
 
 public struct Room: Codable, Hashable, Identifiable, Sendable {
