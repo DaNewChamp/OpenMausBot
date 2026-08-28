@@ -1108,17 +1108,6 @@ struct ChatView: View {
             if let replyingTo {
                 replyBanner(for: replyingTo)
             }
-            if current.busy {
-                Label(
-                    "V Bot keeps updating for a short time after you leave",
-                    systemImage: "dot.radiowaves.left.and.right"
-                )
-                    .font(chatTypography.detail)
-                    .foregroundStyle(Color.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 6)
-                    .accessibilityLabel("Agent is working")
-            }
             attachmentPreviewStrip
 
             if pendingCount > 0 {
@@ -1257,23 +1246,7 @@ struct ChatView: View {
                         }
                         .onSubmit { activatePrimaryAction() }
 
-                    if primaryAction == .none || dictation.isListening {
-                        Button {
-                            composerFocused = false
-                            dictation.toggle(capturing: draft)
-                        } label: {
-                            Image(systemName: dictation.isListening ? "mic.fill" : "mic")
-                                .font(.system(size: 17, weight: .medium))
-                                .foregroundStyle(dictation.isListening ? Color.red : Color.secondary)
-                                .frame(width: 36, height: 36)
-                                .symbolEffect(.pulse, isActive: dictation.isListening && !reduceMotion)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.trailing, 10)
-                        .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
-                    } else {
-                        primaryActionButton
-                    }
+                    composerTrailingControl
                 }
                 .frame(minHeight: 44)
                 .background(VBotSurface.composerSurface, in: Capsule())
@@ -1382,70 +1355,96 @@ struct ChatView: View {
     }
 
     @ViewBuilder
-    private var primaryActionButton: some View {
-        switch primaryAction {
-        case .stop:
-            Button { activatePrimaryAction() } label: {
-                Image(systemName: "stop.fill")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Color.white)
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color.red))
-            }
-            .buttonStyle(.plain)
-            .disabled(composerRequestGate.isInFlight)
-            .padding(.trailing, 6)
-            .accessibilityLabel(current.isBot ? "Stop current work" : "Stop active responder")
-            .accessibilityHint(
-                current.isBot
-                    ? "Interrupts the active turn for this conversation"
-                    : "Interrupts the active responder; queued messages remain"
-            )
-
-        case .send(let mode):
-            Button { submit(mode: mode) } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Color.black)
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color.white))
-            }
-            .buttonStyle(.plain)
-            .disabled(composerRequestGate.isInFlight)
-            .contextMenu {
-                if composerCapabilities.steer {
-                    Button {
-                        submit(mode: .steer)
-                    } label: {
-                        Label("Steer now", systemImage: "arrow.turn.up.right")
-                    }
-                }
-                if composerCapabilities.queueing {
-                    Button {
-                        submit(mode: .queue)
-                    } label: {
-                        Label("Queue after current work", systemImage: "clock.arrow.circlepath")
-                    }
+    private var composerTrailingControl: some View {
+        Group {
+            if dictation.isListening {
+                composerMicButton
+            } else {
+                switch primaryAction {
+                case .stop:
+                    composerStopButton
+                case .send(let mode):
+                    composerSendButton(mode: mode)
+                case .none:
+                    composerMicButton
                 }
             }
-            .padding(.trailing, 6)
-            .accessibilityLabel(mode == .steer ? "Send and steer" : mode == .queue ? "Send and queue" : "Send")
-            .accessibilityHint("Touch and hold for explicit steer or queue choices")
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: canSend)
-
-        case .none:
-            Button { activatePrimaryAction() } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Color.secondary)
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color.secondary.opacity(0.18)))
-            }
-            .buttonStyle(.plain)
-            .disabled(true)
-            .padding(.trailing, 6)
-            .accessibilityLabel("Send")
         }
+        .id(composerTrailingControlIdentity)
+        .frame(width: 36, height: 36)
+        .padding(.trailing, 10)
+    }
+
+    private var composerTrailingControlIdentity: String {
+        if dictation.isListening { return "mic-listening" }
+        switch primaryAction {
+        case .stop: return "stop"
+        case .send(let mode): return "send-\(mode.rawValue)"
+        case .none: return "mic-idle"
+        }
+    }
+
+    private var composerMicButton: some View {
+        Button {
+            composerFocused = false
+            dictation.toggle(capturing: draft)
+        } label: {
+            Image(systemName: dictation.isListening ? "mic.fill" : "mic")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(dictation.isListening ? Color.red : Color.secondary)
+                .frame(width: 36, height: 36)
+                .symbolEffect(.pulse, isActive: dictation.isListening && !reduceMotion)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
+    }
+
+    private var composerStopButton: some View {
+        Button { activatePrimaryAction() } label: {
+            Image(systemName: "stop.fill")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Color.white)
+                .frame(width: 32, height: 32)
+                .background(Circle().fill(Color.red))
+        }
+        .buttonStyle(.plain)
+        .disabled(composerRequestGate.isInFlight)
+        .accessibilityLabel(current.isBot ? "Stop current work" : "Stop active responder")
+        .accessibilityHint(
+            current.isBot
+                ? "Interrupts the active turn for this conversation"
+                : "Interrupts the active responder; queued messages remain"
+        )
+    }
+
+    private func composerSendButton(mode: MessageDeliveryMode) -> some View {
+        Button { submit(mode: mode) } label: {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Color.black)
+                .frame(width: 32, height: 32)
+                .background(Circle().fill(Color.white))
+        }
+        .buttonStyle(.plain)
+        .disabled(composerRequestGate.isInFlight)
+        .contextMenu {
+            if composerCapabilities.steer {
+                Button {
+                    submit(mode: .steer)
+                } label: {
+                    Label("Steer now", systemImage: "arrow.turn.up.right")
+                }
+            }
+            if composerCapabilities.queueing {
+                Button {
+                    submit(mode: .queue)
+                } label: {
+                    Label("Queue after current work", systemImage: "clock.arrow.circlepath")
+                }
+            }
+        }
+        .accessibilityLabel(mode == .steer ? "Send and steer" : mode == .queue ? "Send and queue" : "Send")
+        .accessibilityHint("Touch and hold for explicit steer or queue choices")
     }
 }
 
