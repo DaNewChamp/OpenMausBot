@@ -50,7 +50,7 @@ struct AgentProfileView: View {
     @State private var routines: [Routine] = []
     @State private var routinesLoading = true
     @State private var showingMedia = false
-    @State private var showingModelAndVoice = false
+    @State private var showingModelAndVoice = true
 
     init(bot: Bot) {
         self.bot = bot
