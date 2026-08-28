@@ -94,7 +94,8 @@ struct VMViewerWebView: UIViewRepresentable {
         private static let chromeScript = """
         (function() {
           var style = document.createElement('style');
-          style.textContent = '#noVNC_control_bar_anchor,#noVNC_status_bar,.noVNC_center{display:none!important;}'
+          style.textContent = '#noVNC_control_bar_anchor,#noVNC_status_bar,.noVNC_center,#noVNC_clipboard_button,'
+            + '#noVNC_keyboard_button,.noVNC_button{display:none!important;}'
             + '#noVNC_container,#noVNC_canvas{position:absolute!important;top:0!important;left:0!important;'
             + 'width:100%!important;height:100%!important;}';
           document.head.appendChild(style);

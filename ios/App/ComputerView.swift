@@ -75,6 +75,12 @@ struct ComputerView: View {
         isLocalVm && localVmStatus?.ready == true && session.localVmAccess
     }
 
+    /// Clipboard + keyboard chrome stays pinned for every Local VM session,
+    /// including while the desktop is still starting — not behind a toggle.
+    private var showsLocalVmBottomChrome: Bool {
+        isLocalVm && session.localVmAccess
+    }
+
     private var usingLiveViewer: Bool {
         localVmInteractive && localVmViewerURL != nil
     }
@@ -197,7 +203,7 @@ struct ComputerView: View {
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: presentationState)
         .safeAreaInset(edge: .bottom) {
-            if localVmInteractive {
+            if showsLocalVmBottomChrome {
                 localVmChrome
             } else if case .watching = presentationState, image != nil {
                 VStack(spacing: 0) {
@@ -489,6 +495,7 @@ struct ComputerView: View {
         LocalVmInteractionChrome(
             canPaste: UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
             canCopy: image != nil,
+            canType: localVmInteractive,
             keyboardActive: vmKeyboardFocused,
             onPasteFromPhone: { Task { await pasteFromPhoneToVm() } },
             onCopyToPhone: { copyScreen() },
