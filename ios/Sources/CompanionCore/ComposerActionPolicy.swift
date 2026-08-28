@@ -51,6 +51,20 @@ public struct EngineComposerCapabilities: Equatable, Sendable {
     }
 }
 
+public enum VBotMutationRouting {
+    public static func target(for sync: VBotEngineSync?) -> VBotPrimaryEngine {
+        sync?.usesReconstructedMutations == true ? .grokReconstructed : .openmaus
+    }
+
+    public static func composerCapabilities(for sync: VBotEngineSync?) -> EngineComposerCapabilities {
+        guard target(for: sync) == .grokReconstructed else { return .openmaus }
+        guard sync?.reconstructedMutationsReady == true,
+              let capabilities = sync?.modelCapabilities
+        else { return EngineComposerCapabilities(queueing: false, steer: false, stop: false) }
+        return EngineComposerCapabilities(capabilities)
+    }
+}
+
 /// Pure state policy for the composer's primary control. Whitespace-only
 /// drafts count as empty so a busy chat never presents a send action that the
 /// server would reject.

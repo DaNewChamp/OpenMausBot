@@ -745,6 +745,29 @@ public struct VBotEngineSync: Codable, Sendable {
             && servingEngine == .grokReconstructed
             && modelCapabilities?.sendPrompt == true
     }
+
+    public static let openMausOnly = VBotEngineSync(
+        primaryEngine: VBotPrimaryEngine.openmaus.rawValue,
+        activeSource: VBotPrimaryEngine.openmaus.rawValue,
+        fallback: false,
+        fallbackCode: nil,
+        fallbackReason: nil,
+        engines: [
+            VBotEngineStatus(
+                id: VBotPrimaryEngine.openmaus.rawValue,
+                displayName: VBotPrimaryEngine.openmaus.displayName,
+                state: "available",
+                code: nil,
+                reason: nil,
+                version: nil
+            )
+        ],
+        bots: [],
+        groups: [],
+        modelCapabilities: nil,
+        providers: nil,
+        router: nil
+    )
 }
 
 public struct VBotProviderModel: Codable, Hashable, Identifiable, Sendable {

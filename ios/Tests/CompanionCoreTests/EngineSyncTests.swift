@@ -2,6 +2,13 @@ import XCTest
 @testable import CompanionCore
 
 final class EngineSyncTests: XCTestCase {
+    func testMissingEngineSyncDefaultsMutationsToOpenMaus() {
+        XCTAssertEqual(VBotMutationRouting.target(for: nil), .openmaus)
+        XCTAssertEqual(VBotMutationRouting.composerCapabilities(for: nil), .openmaus)
+        XCTAssertEqual(VBotEngineSync.openMausOnly.selectedEngine, .openmaus)
+        XCTAssertEqual(VBotEngineSync.openMausOnly.servingEngine, .openmaus)
+    }
+
     func testDecodesEngineSyncAndPrimaryEnginePatch() throws {
         let sync = try JSONDecoder().decode(
             VBotEngineSync.self,

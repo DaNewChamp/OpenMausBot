@@ -924,19 +924,7 @@ struct ChatView: View {
     }
 
     private var composerCapabilities: EngineComposerCapabilities {
-        if let sync = session.engineSync {
-            if sync.usesReconstructedMutations {
-                guard sync.reconstructedMutationsReady,
-                      let capabilities = sync.modelCapabilities
-                else { return EngineComposerCapabilities(queueing: false, steer: false, stop: false) }
-                return EngineComposerCapabilities(capabilities)
-            }
-            return .openmaus
-        }
-        // Until the selected engine is known, hide every mutating action
-        // rather than risking an OpenMaus send while Grok Reconstructed is
-        // selected on the desktop.
-        return EngineComposerCapabilities(queueing: false, steer: false, stop: false)
+        VBotMutationRouting.composerCapabilities(for: session.engineSync)
     }
 
     private var primaryAction: ComposerPrimaryAction {

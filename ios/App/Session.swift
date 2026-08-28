@@ -722,19 +722,15 @@ final class Session: ObservableObject {
         mode: MessageDeliveryMode = .auto
     ) async -> MessageDeliveryReceipt? {
         guard let client else { return nil }
-        guard let sync = engineSync else {
-            actionError = "Engine status is not available yet. Try again in a moment."
-            return nil
-        }
         do {
             switch chat {
             case let .bot(bot):
-                if sync.usesReconstructedMutations {
+                if VBotMutationRouting.target(for: engineSync) == .grokReconstructed {
                     return try await sendReconstructed(text, toBot: bot.id, mode: mode)
                 }
                 return try await client.send(text: text, toBot: bot.id, mode: mode)
             case let .room(room):
-                if sync.usesReconstructedMutations {
+                if VBotMutationRouting.target(for: engineSync) == .grokReconstructed {
                     actionError = "Grok Reconstructed cannot send to a group from this app."
                     return nil
                 }
@@ -913,12 +909,8 @@ final class Session: ObservableObject {
     }
 
     func interrupt(chat: Chat) async {
-        guard let sync = engineSync else {
-            actionError = "Engine status is not available yet. Try again in a moment."
-            return
-        }
         await perform {
-            if sync.usesReconstructedMutations {
+            if VBotMutationRouting.target(for: engineSync) == .grokReconstructed {
                 switch chat {
                 case let .bot(bot):
                     _ = try await $0.stopReconstructedBot(botId: bot.id)
@@ -1205,6 +1197,9 @@ final class Session: ObservableObject {
             let loaded = try await client.engineSync()
             engineSync = loaded
             return loaded
+        } catch let APIError.status(code, _) where code == 404 {
+            engineSync = .openMausOnly
+            return engineSync
         } catch {
             if !Task.isCancelled { actionError = error.localizedDescription }
             return nil
@@ -1227,6 +1222,8 @@ final class Session: ObservableObject {
         guard let client else { return }
         do {
             engineSync = try await client.engineSync()
+        } catch let APIError.status(code, _) where code == 404 {
+            engineSync = .openMausOnly
         } catch {
             if !quietly, !Task.isCancelled { actionError = error.localizedDescription }
         }
@@ -1297,12 +1294,8 @@ final class Session: ObservableObject {
 
     func updateModel(_ patch: BotModelPatch, for bot: Bot) async -> Bot? {
         guard let client else { return nil }
-        guard let sync = engineSync else {
-            actionError = "Engine status is not available yet. Try again in a moment."
-            return nil
-        }
         do {
-            if sync.usesReconstructedMutations {
+            if VBotMutationRouting.target(for: engineSync) == .grokReconstructed {
                 let router = try await client.setReconstructedRouter(
                     VBotRouterPatch(provider: patch.instanceId, modelId: patch.model)
                 )
