@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import CompanionCore
 
 /// Group details. A group is a conversation, but its identity is
@@ -22,15 +23,17 @@ struct GroupProfileView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 18) {
+            VStack(spacing: 16) {
                 groupMark
                     .padding(.top, 18)
 
                 Text(currentRoom.name)
-                    .font(.system(size: 21, weight: .semibold))
+                    .font(.title3.weight(.semibold))
+                    .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
+                    .padding(.vertical, 18)
                     .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .accessibilityAddTraits(.isHeader)
 
                 membersCard
                 instructionsCard
@@ -42,6 +45,11 @@ struct GroupProfileView: View {
         .scrollIndicators(.hidden)
         .background(GroupProfileStyle.canvas.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .navigationBarBackButtonHidden(true)
+        .background {
+            InteractivePopGestureEnabler()
+                .frame(width: 0, height: 0)
+        }
         .safeAreaInset(edge: .top, spacing: 0) { topBar }
         .task {
             let loaded = await session.loadRoutines()
@@ -51,13 +59,10 @@ struct GroupProfileView: View {
 
     private var topBar: some View {
         HStack {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 44, height: 44)
-                    .background(GroupProfileStyle.control, in: Circle())
+            ChromeCircleButton(systemImage: "chevron.left") {
+                Haptics.selection()
+                dismiss()
             }
-            .buttonStyle(.plain)
             .accessibilityLabel("Back")
 
             Spacer()
@@ -74,10 +79,7 @@ struct GroupProfileView: View {
                     Label(currentRoom.pinned == true ? "Unpin" : "Pin", systemImage: currentRoom.pinned == true ? "pin.slash" : "pin")
                 }
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 44, height: 44)
-                    .background(GroupProfileStyle.control, in: Circle())
+                ChromeCircleButton(systemImage: "ellipsis")
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Group actions")
@@ -90,162 +92,184 @@ struct GroupProfileView: View {
     }
 
     private var groupMark: some View {
-        ZStack {
-            ForEach(Array(members.prefix(4).enumerated()), id: \.element.id) { index, bot in
-                BotAvatarView(
-                    bot: bot,
-                    size: members.count == 1 ? 106 : 68,
-                    state: MausState.forChat(.bot(bot), in: session.state),
-                    animated: !reduceMotion && bot.isWorking
-                )
-                .background(Circle().fill(GroupProfileStyle.canvas))
-                .offset(markOffset(index: index, count: min(members.count, 4)))
-            }
+        let shown = Array(members.prefix(3))
+        let overflow = max(0, members.count - 3)
+        return ZStack {
             if members.isEmpty {
                 Image(systemName: "person.2.fill")
                     .font(.system(size: 42, weight: .medium))
                     .foregroundStyle(Color.secondary)
+            } else if members.count == 1 {
+                BotAvatarView(
+                    bot: members[0],
+                    size: 108,
+                    state: MausState.forChat(.bot(members[0]), in: session.state),
+                    animated: !reduceMotion && members[0].isWorking
+                )
+            } else {
+                ForEach(Array(shown.enumerated()), id: \.element.id) { index, bot in
+                    BotAvatarView(
+                        bot: bot,
+                        size: 64,
+                        state: MausState.forChat(.bot(bot), in: session.state),
+                        animated: !reduceMotion && bot.isWorking
+                    )
+                    .offset(markOffset(index: index, count: overflow > 0 ? 4 : shown.count))
+                }
+                if overflow > 0 {
+                    Text("+\(overflow)")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                        .frame(width: 56, height: 56)
+                        .background(GroupProfileStyle.control, in: Circle())
+                        .offset(markOffset(index: 3, count: 4))
+                        .accessibilityHidden(true)
+                }
             }
         }
-        .frame(width: 170, height: 126)
+        .frame(width: 168, height: 140)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(members.count) group members")
     }
 
     private var membersCard: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(members.enumerated()), id: \.element.id) { index, bot in
-                NavigationLink(value: Chat.bot(bot)) {
-                    HStack(spacing: 12) {
-                        BotAvatarView(
-                            bot: bot,
-                            size: 34,
-                            state: MausState.forChat(.bot(bot), in: session.state),
-                            animated: !reduceMotion && bot.isWorking
-                        )
-                        Text(bot.name)
-                            .font(.system(size: 16))
-                            .foregroundStyle(Color.primary)
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(spacing: 0) {
+                ForEach(Array(members.enumerated()), id: \.element.id) { index, bot in
+                    NavigationLink(value: Chat.bot(bot)) {
+                        HStack(spacing: 12) {
+                            BotAvatarView(
+                                bot: bot,
+                                size: 34,
+                                state: MausState.forChat(.bot(bot), in: session.state),
+                                animated: !reduceMotion && bot.isWorking
+                            )
+                            Text(bot.name)
+                                .font(.body)
+                                .foregroundStyle(Color.primary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color.secondary)
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 56)
                     }
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: 58)
-                }
-                .buttonStyle(.plain)
-                if index < members.count - 1 {
-                    Divider().overlay(GroupProfileStyle.divider).padding(.leading, 62)
+                    .buttonStyle(.plain)
+                    if index < members.count - 1 {
+                        Divider().overlay(GroupProfileStyle.divider).padding(.leading, 62)
+                    }
                 }
             }
+            .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+            Text("Groups can have up to 6 members.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 18)
         }
-        .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private var instructionsCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 12) {
-                Image(systemName: "doc.text")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(Color.secondary)
-                    .frame(width: 28)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Instructions")
-                        .font(.system(size: 16))
-                        .foregroundStyle(Color.primary)
-                    Text(currentRoom.bulletin.isEmpty ? "Tell this group how to work" : currentRoom.bulletin)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.secondary)
-                        .lineLimit(2)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.secondary)
-            }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 64)
+        HStack(spacing: 12) {
+            Image(systemName: "doc.text")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(Color.secondary)
+                .frame(width: 28)
+            Text("Instructions")
+                .font(.body)
+                .foregroundStyle(Color.primary)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.secondary)
         }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 56)
         .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(currentRoom.bulletin.isEmpty ? "Tell this group how to work" : currentRoom.bulletin)
     }
 
     private var routinesCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if routines.isEmpty {
-                Text("No routines yet")
-                    .font(.system(size: 16))
-                    .foregroundStyle(Color.secondary)
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: 58, alignment: .leading)
-            } else {
-                ForEach(routines.prefix(4)) { routine in
-                    HStack(spacing: 12) {
-                        Image(systemName: "clock")
-                            .foregroundStyle(Color.purple)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(routine.name).font(.system(size: 16)).foregroundStyle(Color.primary)
-                            Text(routineSummary(routine.schedule))
-                                .font(.system(size: 13))
-                                .foregroundStyle(Color.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Routines")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 18)
+
+            VStack(alignment: .leading, spacing: 0) {
+                if routines.isEmpty {
+                    Text("No routines yet")
+                        .font(.body)
+                        .foregroundStyle(Color.secondary)
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 56, alignment: .leading)
+                } else {
+                    ForEach(Array(routines.prefix(4).enumerated()), id: \.element.id) { index, routine in
+                        NavigationLink {
+                            TasksRoutinesView()
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "clock")
+                                    .font(.system(size: 18, weight: .medium))
+                                    .foregroundStyle(Color(red: 0.58, green: 0.45, blue: 1))
+                                    .frame(width: 28)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(routine.name).font(.body).foregroundStyle(Color.primary)
+                                    Text(ProfileScheduleText.summary(routine))
+                                        .font(.footnote)
+                                        .foregroundStyle(Color.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color.secondary)
+                            }
+                            .padding(.horizontal, 16)
+                            .frame(minHeight: 58)
                         }
-                        Spacer()
+                        .buttonStyle(.plain)
+                        if index < min(routines.count, 4) - 1 {
+                            Divider().overlay(GroupProfileStyle.divider).padding(.leading, 56)
+                        }
                     }
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: 58)
+                }
+
+                Divider().overlay(GroupProfileStyle.divider)
+
+                NavigationLink {
+                    TasksRoutinesView()
+                } label: {
+                    Label("Add routine", systemImage: "plus")
+                        .font(.body)
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 52, alignment: .leading)
                 }
             }
-
-            Divider().overlay(GroupProfileStyle.divider)
-
-            NavigationLink {
-                TasksRoutinesView()
-            } label: {
-                Label("Add routine", systemImage: "plus")
-                    .font(.system(size: 16))
-                    .foregroundStyle(Color.accentColor)
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: 56, alignment: .leading)
-            }
+            .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
-        .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private func markOffset(index: Int, count: Int) -> CGSize {
         switch count {
         case 1: return .zero
         case 2:
-            return CGSize(width: index == 0 ? -30 : 30, height: index == 0 ? -8 : 8)
+            return CGSize(width: index == 0 ? -36 : 36, height: 0)
         case 3:
             switch index {
-            case 0: return CGSize(width: -28, height: -16)
-            case 1: return CGSize(width: 28, height: -16)
-            default: return CGSize(width: 0, height: 25)
+            case 0: return CGSize(width: -36, height: -28)
+            case 1: return CGSize(width: 36, height: -28)
+            default: return CGSize(width: 0, height: 30)
             }
         default:
             switch index {
-            case 0: return CGSize(width: -30, height: -18)
-            case 1: return CGSize(width: 30, height: -18)
-            case 2: return CGSize(width: -30, height: 28)
-            default: return CGSize(width: 30, height: 28)
+            case 0: return CGSize(width: -36, height: -28)
+            case 1: return CGSize(width: 36, height: -28)
+            case 2: return CGSize(width: -36, height: 30)
+            default: return CGSize(width: 36, height: 30)
             }
-        }
-    }
-
-    private func routineSummary(_ schedule: RoutineSchedule) -> String {
-        switch schedule.type {
-        case .once:
-            guard let at = schedule.at else { return "One time" }
-            return Date(timeIntervalSince1970: at / 1_000).formatted(date: .abbreviated, time: .shortened)
-        case .daily:
-            let days = schedule.weekdays ?? []
-            let dayText: String
-            if days.count == 7 { dayText = "Every day" }
-            else if days == [1, 2, 3, 4, 5] { dayText = "Weekdays" }
-            else { dayText = "Selected days" }
-            return "\(dayText) at \(schedule.time ?? "—")"
-        case .unknown:
-            return "Newer schedule"
         }
     }
 }

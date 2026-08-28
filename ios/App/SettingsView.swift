@@ -126,6 +126,7 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .scrollContentBackground(.hidden)
         .background(VBotSurface.background.ignoresSafeArea())
+        .tint(Color.accentColor)
         .task { await session.refreshNotificationAuthorization() }
     }
 
@@ -179,6 +180,7 @@ private struct ComputerSettingsRow: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(name)
+                    .font(.body.weight(.medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 HStack(spacing: 5) {
@@ -192,7 +194,7 @@ private struct ComputerSettingsRow: View {
                 }
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
     }
 }
@@ -314,6 +316,8 @@ struct ConnectionSecurityView: View {
         }
         .navigationTitle("Connection & Security")
         .navigationBarTitleDisplayMode(.inline)
+        .scrollContentBackground(.hidden)
+        .background(VBotSurface.background.ignoresSafeArea())
         .alert("Edit address", isPresented: $editingAddress) {
             TextField("Computer address", text: $addressText)
                 .textInputAutocapitalization(.never)

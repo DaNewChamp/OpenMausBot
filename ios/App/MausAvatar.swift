@@ -222,10 +222,10 @@ struct MausAvatar: View {
     let color: String
     var size: CGFloat = 52
     var state: MausState = .idle
-    /// The persisted character mark. Droplet preserves the original mascot
-    /// silhouette; the other marks render their own Grok-style body geometry.
-    /// Raw value keeps this shared renderer usable by the widget target,
-    /// which intentionally has no dependency on the full CompanionCore API.
+    /// The persisted character mark. Every mark, including droplet, is a
+    /// Grok-style silhouette with a shared face layout so a saved shape does
+    /// not change size or crop the eyes when it appears in a list, profile,
+    /// or widget. Raw value keeps this renderer usable by the widget target.
     var shape: String = "droplet"
     /// Animation is OPT-IN: a mounted face costs a 30fps Canvas redraw, and a
     /// roster of them once pegged the app (and SimRenderServer) all night.
@@ -282,69 +282,119 @@ struct MascotMarkClip: Shape {
         case "circle":
             return Path(ellipseIn: rect)
         case "oval":
-            return Path(ellipseIn: rect.insetBy(dx: 0, dy: rect.height * 0.16))
+            return Path(ellipseIn: rect.insetBy(dx: 0, dy: rect.height * 0.14))
         case "square":
-            return Path(roundedRect: rect, cornerRadius: rect.width * 0.18)
+            return Path(roundedRect: rect, cornerRadius: rect.width * 0.28)
         case "pill":
-            // Grok's tablet mark is a horizontal pill. Keep the same
-            // normalized face box as the other marks so a saved character
-            // never jumps in size when it changes shape.
-            let tablet = rect.insetBy(dx: 0, dy: rect.height * 0.18)
+            // Horizontal tablet. Same normalized face box as the other marks
+            // so a saved character never jumps in size when it changes shape.
+            let tablet = rect.insetBy(dx: 0, dy: rect.height * 0.20)
             return Path(roundedRect: tablet, cornerRadius: tablet.height / 2)
         case "triangle":
-            var path = Path()
-            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-            path.closeSubpath()
-            return path
+            return wedgePath(in: rect)
         case "hexagon":
             var path = Path()
+            let rx = rect.width * 0.48
+            let ry = rect.height * 0.48
             for index in 0..<6 {
                 let angle = -CGFloat.pi / 2 + CGFloat(index) * CGFloat.pi / 3
                 let point = CGPoint(
-                    x: rect.midX + cos(angle) * rect.width * 0.5,
-                    y: rect.midY + sin(angle) * rect.height * 0.5
+                    x: rect.midX + cos(angle) * rx,
+                    y: rect.midY + sin(angle) * ry
                 )
                 if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
             }
             path.closeSubpath()
             return path
         case "cloud":
-            // One continuous cloud outline, rather than overlapping clip
-            // subpaths. This produces the same visible body in Canvas and in
-            // SwiftUI's Shape clipper at every size.
-            var path = Path()
-            let x = rect.minX, y = rect.minY, w = rect.width, h = rect.height
-            path.move(to: CGPoint(x: x + w * 0.16, y: y + h * 0.78))
-            path.addCurve(
-                to: CGPoint(x: x + w * 0.30, y: y + h * 0.40),
-                control1: CGPoint(x: x + w * 0.03, y: y + h * 0.76),
-                control2: CGPoint(x: x + w * 0.10, y: y + h * 0.48)
-            )
-            path.addCurve(
-                to: CGPoint(x: x + w * 0.57, y: y + h * 0.28),
-                control1: CGPoint(x: x + w * 0.31, y: y + h * 0.18),
-                control2: CGPoint(x: x + w * 0.47, y: y + h * 0.17)
-            )
-            path.addCurve(
-                to: CGPoint(x: x + w * 0.82, y: y + h * 0.47),
-                control1: CGPoint(x: x + w * 0.70, y: y + h * 0.18),
-                control2: CGPoint(x: x + w * 0.84, y: y + h * 0.25)
-            )
-            path.addCurve(
-                to: CGPoint(x: x + w * 0.86, y: y + h * 0.78),
-                control1: CGPoint(x: x + w * 1.03, y: y + h * 0.48),
-                control2: CGPoint(x: x + w * 0.99, y: y + h * 0.78)
-            )
-            path.addLine(to: CGPoint(x: x + w * 0.16, y: y + h * 0.78))
-            path.closeSubpath()
-            return path
+            return cloudPath(in: rect)
         case "droplet":
-            return Path(rect)
+            return teardropPath(in: rect)
         default:
-            return Path(rect)
+            return Path(ellipseIn: rect)
         }
+    }
+
+    /// Point-up drop with a round bowl. Original path, sized so the picker
+    /// swatch and the live avatar share the same silhouette.
+    private static func teardropPath(in rect: CGRect) -> Path {
+        var path = Path()
+        let x = rect.minX, y = rect.minY, w = rect.width, h = rect.height
+        path.move(to: CGPoint(x: x + w * 0.50, y: y + h * 0.02))
+        path.addCurve(
+            to: CGPoint(x: x + w * 0.10, y: y + h * 0.58),
+            control1: CGPoint(x: x + w * 0.49, y: y + h * 0.18),
+            control2: CGPoint(x: x + w * 0.10, y: y + h * 0.36)
+        )
+        path.addCurve(
+            to: CGPoint(x: x + w * 0.50, y: y + h * 0.98),
+            control1: CGPoint(x: x + w * 0.10, y: y + h * 0.82),
+            control2: CGPoint(x: x + w * 0.28, y: y + h * 0.98)
+        )
+        path.addCurve(
+            to: CGPoint(x: x + w * 0.90, y: y + h * 0.58),
+            control1: CGPoint(x: x + w * 0.72, y: y + h * 0.98),
+            control2: CGPoint(x: x + w * 0.90, y: y + h * 0.82)
+        )
+        path.addCurve(
+            to: CGPoint(x: x + w * 0.50, y: y + h * 0.02),
+            control1: CGPoint(x: x + w * 0.90, y: y + h * 0.36),
+            control2: CGPoint(x: x + w * 0.51, y: y + h * 0.18)
+        )
+        path.closeSubpath()
+        return path
+    }
+
+    /// Three-lobe cloud as one outline so Canvas fill and Shape clipping agree.
+    private static func cloudPath(in rect: CGRect) -> Path {
+        var path = Path()
+        let x = rect.minX, y = rect.minY, w = rect.width, h = rect.height
+        path.move(to: CGPoint(x: x + w * 0.14, y: y + h * 0.78))
+        path.addCurve(
+            to: CGPoint(x: x + w * 0.22, y: y + h * 0.42),
+            control1: CGPoint(x: x + w * 0.00, y: y + h * 0.78),
+            control2: CGPoint(x: x + w * 0.02, y: y + h * 0.50)
+        )
+        path.addCurve(
+            to: CGPoint(x: x + w * 0.52, y: y + h * 0.22),
+            control1: CGPoint(x: x + w * 0.28, y: y + h * 0.16),
+            control2: CGPoint(x: x + w * 0.40, y: y + h * 0.14)
+        )
+        path.addCurve(
+            to: CGPoint(x: x + w * 0.84, y: y + h * 0.40),
+            control1: CGPoint(x: x + w * 0.66, y: y + h * 0.12),
+            control2: CGPoint(x: x + w * 0.84, y: y + h * 0.20)
+        )
+        path.addCurve(
+            to: CGPoint(x: x + w * 0.90, y: y + h * 0.78),
+            control1: CGPoint(x: x + w * 1.04, y: y + h * 0.44),
+            control2: CGPoint(x: x + w * 1.00, y: y + h * 0.78)
+        )
+        path.addLine(to: CGPoint(x: x + w * 0.14, y: y + h * 0.78))
+        path.closeSubpath()
+        return path
+    }
+
+    /// Soft wedge, point up, with slightly bowed sides so compact faces
+    /// do not crop the eyes the way a hard triangle does.
+    private static func wedgePath(in rect: CGRect) -> Path {
+        var path = Path()
+        let x = rect.minX, y = rect.minY, w = rect.width, h = rect.height
+        path.move(to: CGPoint(x: x + w * 0.50, y: y + h * 0.04))
+        path.addQuadCurve(
+            to: CGPoint(x: x + w * 0.96, y: y + h * 0.92),
+            control: CGPoint(x: x + w * 0.86, y: y + h * 0.38)
+        )
+        path.addQuadCurve(
+            to: CGPoint(x: x + w * 0.04, y: y + h * 0.92),
+            control: CGPoint(x: x + w * 0.50, y: y + h * 1.02)
+        )
+        path.addQuadCurve(
+            to: CGPoint(x: x + w * 0.50, y: y + h * 0.04),
+            control: CGPoint(x: x + w * 0.14, y: y + h * 0.38)
+        )
+        path.closeSubpath()
+        return path
     }
 }
 
@@ -359,9 +409,7 @@ struct MascotMarkIcon: View {
     var body: some View {
         Canvas { context, canvasSize in
             let rect = CGRect(origin: .zero, size: canvasSize).insetBy(dx: 1, dy: 1)
-            let path = kind == "droplet"
-                ? MausSilhouette.path(in: rect)
-                : MascotMarkClip.path(kind: kind, in: rect)
+            let path = MascotMarkClip.path(kind: kind, in: MausFaceEngine.markRect(kind: kind, in: rect))
             context.fill(path, with: .color(color))
         }
         .frame(width: size, height: size)
@@ -678,15 +726,11 @@ final class MausFaceEngine {
         animateFace: Bool,
         now: Date
     ) {
-        let body: Path
-        if shape == "droplet" {
-            body = MausSilhouette.inFaceBox
-        } else {
-            body = MascotMarkClip.path(
-                kind: shape,
-                in: CGRect(origin: .zero, size: CGSize(width: MausFaceData.faceBox, height: MausFaceData.faceBox))
-            )
-        }
+        let canvas = CGRect(
+            origin: .zero,
+            size: CGSize(width: MausFaceData.faceBox, height: MausFaceData.faceBox)
+        )
+        let body = MascotMarkClip.path(kind: shape, in: Self.markRect(kind: shape, in: canvas))
         context.fill(body, with: .color(MausPalette.color(color)))
 
         // The face is painted on the body and clipped to it. The original
@@ -762,28 +806,45 @@ final class MausFaceEngine {
         }
     }()
 
+    /// Inset each mark so picker swatches and live avatars share visual weight.
+    static func markRect(kind: String, in rect: CGRect) -> CGRect {
+        let inset: CGFloat
+        switch kind {
+        case "circle": inset = 0.08
+        case "oval": inset = 0.04
+        case "square": inset = 0.12
+        case "pill": inset = 0.02
+        case "triangle": inset = 0.06
+        case "hexagon": inset = 0.08
+        case "cloud": inset = 0.02
+        case "droplet": inset = 0.04
+        default: inset = 0.08
+        }
+        return rect.insetBy(dx: rect.width * inset, dy: rect.height * inset)
+    }
+
     private static func faceLayout(for shape: String, in bounds: CGRect) -> FaceLayout {
-        guard shape != "droplet", restingFaceBounds.width > 0, restingFaceBounds.height > 0 else {
+        guard restingFaceBounds.width > 0, restingFaceBounds.height > 0 else {
             return FaceLayout(
-                centre: CGPoint(x: MausFaceData.anchor.x, y: MausFaceData.anchor.y),
-                scale: MausFaceData.anchor.scale
+                centre: CGPoint(x: bounds.midX, y: bounds.midY),
+                scale: 0.84
             )
         }
 
         // Fractions describe the safe patch of each silhouette, not the
-        // canvas. The face keeps the same visual weight as Grok's 228-point
-        // marks, while the vertical allowance prevents a short oval/pill or
-        // a pointed triangle from cropping the eyes at compact sizes.
+        // canvas. Eyes stay inside the bowl of a drop, the lobes of a cloud,
+        // and the lower two-thirds of a wedge so compact sizes never crop them.
         let spec: (x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat)
         switch shape {
-        case "circle":   spec = (0.50, 0.46, 0.38, 0.36)
-        case "oval":     spec = (0.50, 0.48, 0.38, 0.40)
-        case "square":   spec = (0.50, 0.46, 0.38, 0.36)
-        case "pill":     spec = (0.50, 0.50, 0.34, 0.42)
-        case "triangle": spec = (0.50, 0.46, 0.30, 0.34)
-        case "hexagon":  spec = (0.50, 0.47, 0.36, 0.36)
-        case "cloud":    spec = (0.56, 0.48, 0.34, 0.44)
-        default:          spec = (0.50, 0.48, 0.36, 0.36)
+        case "circle":   spec = (0.50, 0.46, 0.36, 0.34)
+        case "oval":     spec = (0.50, 0.48, 0.34, 0.38)
+        case "square":   spec = (0.50, 0.46, 0.34, 0.32)
+        case "pill":     spec = (0.50, 0.50, 0.30, 0.40)
+        case "triangle": spec = (0.50, 0.60, 0.28, 0.26)
+        case "hexagon":  spec = (0.50, 0.48, 0.32, 0.32)
+        case "cloud":    spec = (0.54, 0.50, 0.30, 0.34)
+        case "droplet":  spec = (0.50, 0.58, 0.30, 0.28)
+        default:          spec = (0.50, 0.48, 0.34, 0.34)
         }
 
         let scale = min(

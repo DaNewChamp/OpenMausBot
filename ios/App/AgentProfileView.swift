@@ -12,6 +12,8 @@ struct AgentProfileView: View {
 
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .largeTitle) private var heroSize: CGFloat = 108
     @State private var name: String
     @State private var title: String
     @State private var description: String
@@ -115,7 +117,7 @@ struct AgentProfileView: View {
                         notificationsRow
                         secondaryControls
                     }
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, 20)
                     .padding(.bottom, 36)
                 }
                 .scrollIndicators(.hidden)
@@ -178,14 +180,10 @@ struct AgentProfileView: View {
 
     private var profileTopBar: some View {
         HStack {
-            Button { leaveProfile() } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
+            ChromeCircleButton(systemImage: "chevron.left") {
+                Haptics.selection()
+                leaveProfile()
             }
-            .buttonStyle(.plain)
-            .background(AgentProfileStyle.control, in: Circle())
             .accessibilityLabel("Back")
 
             Spacer()
@@ -211,17 +209,13 @@ struct AgentProfileView: View {
                     showingModelAndVoice = true
                 }
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
+                ChromeCircleButton(systemImage: "ellipsis")
             }
             .buttonStyle(.plain)
-            .background(AgentProfileStyle.control, in: Circle())
             .accessibilityLabel("Profile actions")
         }
         .foregroundStyle(Color.primary)
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 4)
     }
@@ -229,15 +223,21 @@ struct AgentProfileView: View {
     private var profileHero: some View {
         BotAvatarView(
             bot: heroBot,
-            size: 94,
+            size: heroSize,
             state: .idle,
             animated: false
         )
+        .shadow(
+            color: reduceMotion ? .clear : MausPalette.color(selectedColor).opacity(0.45),
+            radius: 28,
+            y: 2
+        )
         .frame(maxWidth: .infinity)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
+        .padding(.top, 16)
+        .padding(.bottom, 14)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(current.name) avatar")
+        .accessibilityAddTraits(.isImage)
     }
 
     private var identityCard: some View {
@@ -247,7 +247,7 @@ struct AgentProfileView: View {
                 .multilineTextAlignment(.center)
                 .textInputAutocapitalization(.words)
                 .padding(.horizontal, 18)
-                .frame(minHeight: 50)
+                .frame(minHeight: 54)
 
             Divider().overlay(AgentProfileStyle.divider)
 
@@ -256,7 +256,7 @@ struct AgentProfileView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 18)
-                .frame(minHeight: 44)
+                .frame(minHeight: 48)
         }
         .profileCard()
         .accessibilityElement(children: .contain)
@@ -269,10 +269,11 @@ struct AgentProfileView: View {
             VStack(spacing: 0) {
                 LazyVGrid(
                     columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 6),
-                    spacing: 14
+                    spacing: 16
                 ) {
                     ForEach(profileColors) { choice in
                         Button {
+                            Haptics.selection()
                             selectedColor = choice.id
                             scheduleAppearanceSave()
                         } label: {
@@ -280,77 +281,67 @@ struct AgentProfileView: View {
                                 .fill(choice.color)
                                 .frame(width: 28, height: 28)
                                 .overlay {
-                                    Circle()
-                                        .stroke(
-                                            selectedColor == choice.id ? Color.white.opacity(0.28) : .clear,
-                                            lineWidth: 2
-                                        )
-                                        .padding(-6)
-                                }
-                                .overlay {
-                                    if selectedColor == choice.id {
-                                        Circle()
-                                            .stroke(Color.black.opacity(0.35), lineWidth: 1)
-                                            .padding(-2)
-                                    }
-                                }
-                                .overlay {
                                     if choice.id == "white" {
                                         Circle().stroke(Color.primary.opacity(0.22), lineWidth: 1)
                                     }
                                 }
+                                .overlay {
+                                    Circle()
+                                        .stroke(
+                                            isSelectedColor(choice.id) ? Color.white.opacity(0.72) : .clear,
+                                            lineWidth: 1.5
+                                        )
+                                        .padding(-5)
+                                }
                         }
                         .buttonStyle(.plain)
+                        .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.78), value: selectedColor)
                         .accessibilityLabel("\(choice.name) character color")
-                        .accessibilityAddTraits(selectedColor == choice.id ? .isSelected : [])
+                        .accessibilityAddTraits(isSelectedColor(choice.id) ? .isSelected : [])
                     }
                 }
                 .padding(.horizontal, 18)
-                .padding(.top, 14)
+                .padding(.top, 16)
                 .padding(.bottom, 16)
 
                 Divider().overlay(AgentProfileStyle.divider)
 
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     ForEach(MascotMark.allCases) { mark in
                         Button {
+                            Haptics.selection()
                             selectedShape = mark
                             scheduleAppearanceSave()
                         } label: {
                             MascotMarkIcon(
                                 kind: mark.rawValue,
                                 color: MausPalette.color(selectedColor),
-                                size: 28
+                                size: 26
                             )
-                            .frame(width: 30, height: 30)
-                                .overlay {
-                                    Circle()
-                                        .stroke(
-                                            selectedShape == mark ? Color.white.opacity(0.28) : .clear,
-                                            lineWidth: 2
-                                        )
-                                        .padding(-6)
-                                }
-                                .overlay {
-                                    if selectedShape == mark {
-                                        Circle()
-                                            .stroke(Color.black.opacity(0.35), lineWidth: 1)
-                                            .padding(-2)
-                                    }
-                                }
+                            .frame(width: 32, height: 32)
+                            .overlay {
+                                Circle()
+                                    .stroke(
+                                        selectedShape == mark ? Color.white.opacity(0.72) : .clear,
+                                        lineWidth: 1.5
+                                    )
+                                    .padding(-4)
+                            }
                         }
                         .buttonStyle(.plain)
+                        .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.78), value: selectedShape)
                         .accessibilityLabel("\(mark.label) character mark")
                         .accessibilityAddTraits(selectedShape == mark ? .isSelected : [])
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 14)
                 .padding(.vertical, 14)
 
                 Divider().overlay(AgentProfileStyle.divider)
 
                 Button("Reset to default") {
+                    Haptics.selection()
                     selectedColor = "green"
                     selectedShape = .droplet
                     scheduleAppearanceSave()
@@ -360,10 +351,11 @@ struct AgentProfileView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 18)
                 .padding(.vertical, 14)
+                .accessibilityHint("Sets the green droplet mark")
             }
             .profileCard()
 
-            Text("How this bot's mark looks everywhere")
+            Text("How this Bot's mark looks everywhere")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 18)
@@ -376,9 +368,12 @@ struct AgentProfileView: View {
                     .accessibilityLabel("Character appearance pending synchronization")
             }
         }
-        .padding(.top, 20)
+        .padding(.top, 18)
     }
 
+    /// Eleven Grok picker swatches. `cyan` is the same hue as teal, so an
+    /// older saved cyan still lights the teal chip instead of wrapping a
+    /// twelfth lonely row.
     private var profileColors: [ProfileColorChoice] {
         [
             .init(id: "white", name: "White", color: MausPalette.color("white")),
@@ -387,51 +382,46 @@ struct AgentProfileView: View {
             .init(id: "orange", name: "Orange", color: MausPalette.color("orange")),
             .init(id: "yellow", name: "Yellow", color: MausPalette.color("yellow")),
             .init(id: "green", name: "Green", color: MausPalette.color("green")),
-            .init(id: "teal", name: "Teal", color: MausPalette.color("teal")),
+            .init(id: "teal", name: "Teal", color: MausPalette.color("cyan")),
             .init(id: "blue", name: "Blue", color: MausPalette.color("blue")),
             .init(id: "purple", name: "Purple", color: MausPalette.color("purple")),
             .init(id: "pink", name: "Pink", color: MausPalette.color("pink")),
             .init(id: "gray", name: "Gray", color: MausPalette.color("gray")),
-            .init(id: "cyan", name: "Cyan", color: MausPalette.color("cyan")),
         ]
     }
 
+    private func isSelectedColor(_ id: String) -> Bool {
+        if selectedColor == id { return true }
+        if id == "teal" && (selectedColor == "cyan" || selectedColor == "teal") { return true }
+        return false
+    }
+
     private var instructionsRow: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            profileSectionLabel("Instructions")
-            Button {
-                instructionsBaseline = description
-                showingInstructions = true
-            } label: {
-                HStack(spacing: 14) {
-                    Image(systemName: "doc.text")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 26)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Instructions")
-                            .font(.body.weight(.medium))
-                            .foregroundStyle(Color.primary)
-                        Text(description.isEmpty ? "Tell this bot how to work" : description)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
-                    }
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 17)
-                .contentShape(Rectangle())
+        Button {
+            instructionsBaseline = description
+            showingInstructions = true
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26)
+                Text("Instructions")
+                    .font(.body)
+                    .foregroundStyle(Color.primary)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.plain)
-            .profileCard()
-            .accessibilityHint("Edit this agent's instructions")
+            .padding(.horizontal, 18)
+            .frame(minHeight: 56)
+            .contentShape(Rectangle())
         }
-        .padding(.top, 22)
+        .buttonStyle(.plain)
+        .profileCard()
+        .accessibilityHint(description.isEmpty ? "Tell this Bot how to work" : "Edit this agent's instructions")
+        .padding(.top, 18)
     }
 
     private var routinesSection: some View {
@@ -448,7 +438,7 @@ struct AgentProfileView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 18)
-                        .padding(.vertical, 19)
+                        .frame(minHeight: 56, alignment: .leading)
                 } else {
                     ForEach(Array(botRoutines.prefix(4).enumerated()), id: \.element.id) { index, routine in
                         routineRow(routine)
@@ -465,7 +455,7 @@ struct AgentProfileView: View {
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "plus")
-                            .font(.system(size: 19, weight: .medium))
+                            .font(.system(size: 17, weight: .medium))
                             .foregroundStyle(Color.accentColor)
                             .frame(width: 28)
                         Text("Add routine")
@@ -474,14 +464,14 @@ struct AgentProfileView: View {
                         Spacer()
                     }
                     .padding(.horizontal, 18)
-                    .padding(.vertical, 16)
+                    .frame(minHeight: 52)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
             .profileCard()
         }
-        .padding(.top, 22)
+        .padding(.top, 18)
     }
 
     private func routineRow(_ routine: Routine) -> some View {
@@ -490,7 +480,7 @@ struct AgentProfileView: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "clock")
-                    .font(.system(size: 20, weight: .medium))
+                    .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(Color(red: 0.58, green: 0.45, blue: 1))
                     .frame(width: 28)
                 VStack(alignment: .leading, spacing: 3) {
@@ -498,7 +488,7 @@ struct AgentProfileView: View {
                         .font(.body)
                         .foregroundStyle(Color.primary)
                         .lineLimit(1)
-                    Text(routineSummary(routine))
+                    Text(ProfileScheduleText.summary(routine))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -509,43 +499,12 @@ struct AgentProfileView: View {
                     .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 18)
-            .padding(.vertical, 14)
+            .padding(.vertical, 12)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Routine \(routine.name)")
-        .accessibilityValue(routineSummary(routine))
-    }
-
-    private func routineSummary(_ routine: Routine) -> String {
-        let schedule: String
-        switch routine.schedule.type {
-        case .daily:
-            let days = routine.schedule.weekdays ?? []
-            let dayLabel: String
-            if days.count == 7 {
-                dayLabel = "Every day"
-            } else if days.isEmpty {
-                dayLabel = "Daily"
-            } else {
-                let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-                dayLabel = days.compactMap { index in
-                    guard names.indices.contains(index) else { return nil }
-                    return names[index]
-                }.joined(separator: ", ")
-            }
-            schedule = "\(dayLabel) at \(routine.schedule.time ?? "scheduled time")"
-        case .once:
-            if let at = routine.schedule.at {
-                schedule = Date(timeIntervalSince1970: at / 1_000)
-                    .formatted(.dateTime.month(.abbreviated).day().hour().minute())
-            } else {
-                schedule = "One time"
-            }
-        case .unknown:
-            schedule = "Schedule from computer"
-        }
-        return routine.enabled ? schedule : "\(schedule) · Paused"
+        .accessibilityValue(ProfileScheduleText.summary(routine))
     }
 
     private var notificationsRow: some View {
@@ -564,12 +523,12 @@ struct AgentProfileView: View {
             .padding(.vertical, 13)
             .profileCard()
 
-            Text("Get notified when this bot finishes or needs your help")
+            Text("Get notified when this Bot finishes or needs input")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 18)
         }
-        .padding(.top, 22)
+        .padding(.top, 18)
     }
 
     @ViewBuilder
@@ -742,10 +701,9 @@ struct AgentProfileView: View {
     }
 
     private func profileSectionLabel(_ label: String) -> some View {
-        Text(label.uppercased())
-            .font(.caption.weight(.medium))
+        Text(label)
+            .font(.subheadline)
             .foregroundStyle(.secondary)
-            .tracking(0.4)
             .padding(.horizontal, 18)
     }
 
@@ -760,7 +718,7 @@ struct AgentProfileView: View {
                     .background(AgentProfileStyle.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                     .padding(24)
                 if description.isEmpty {
-                    Text("Tell this bot how to work, what to prioritize, and when to ask for help.")
+                    Text("Tell this Bot how to work, what to prioritize, and when to ask for help.")
                         .font(.body)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 42)
@@ -1230,7 +1188,7 @@ private enum MascotMark: String, CaseIterable, Identifiable {
 }
 
 private extension View {
-    func profileCard(cornerRadius: CGFloat = 18) -> some View {
+    func profileCard(cornerRadius: CGFloat = 20) -> some View {
         background(
             AgentProfileStyle.card,
             in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

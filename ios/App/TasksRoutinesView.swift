@@ -75,6 +75,8 @@ struct TasksRoutinesView: View {
             }
         }
         .navigationTitle("Tasks & Routines")
+        .scrollContentBackground(.hidden)
+        .background(VBotSurface.background.ignoresSafeArea())
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("New routine", systemImage: "plus") { editor = .new }
@@ -363,23 +365,7 @@ private extension RoutineRunLocation {
 }
 
 private extension RoutineSchedule {
-    var summary: String {
-        switch type {
-        case .once:
-            guard let at else { return "One time · date unavailable" }
-            return Date(timeIntervalSince1970: at / 1_000).formatted(date: .abbreviated, time: .shortened)
-        case .unknown:
-            return "Newer schedule"
-        case .daily:
-            break
-        }
-        let dayText: String
-        let values = weekdays ?? []
-        if values.count == 7 { dayText = "Every day" }
-        else if values == [1, 2, 3, 4, 5] { dayText = "Weekdays" }
-        else { dayText = values.compactMap { (0..<7).contains($0) ? RoutineEditorView.dayNames[$0].prefix(3) : nil }.joined(separator: ", ") }
-        return "\(dayText) at \(time ?? "—")"
-    }
+    var summary: String { ProfileScheduleText.scheduleLine(self) }
 }
 
 private extension String {
