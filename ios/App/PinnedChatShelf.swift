@@ -2,8 +2,8 @@ import SwiftUI
 import CompanionCore
 
 /// The small, always-at-hand set of conversations the user chose to keep
-/// close. It follows the mobile reference: large centered faces, one-line
-/// names, and a horizontal overflow only when the row cannot fit.
+/// close. It follows the Grok Bot reference: large left-aligned faces,
+/// one-line names, and a horizontal overflow only when the row cannot fit.
 struct PinnedChatShelf: View {
     let summaries: [ChatSummary]
     let open: (Chat) -> Void
@@ -13,28 +13,25 @@ struct PinnedChatShelf: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let tileWidth: CGFloat = 108
-            let spacing: CGFloat = 24
-            let capacity = max(1, Int((proxy.size.width - 48 + spacing) / (tileWidth + spacing)))
+            let tileWidth: CGFloat = 92
+            let spacing: CGFloat = 18
+            let capacity = max(1, Int((proxy.size.width - 32 + spacing) / (tileWidth + spacing)))
 
             Group {
                 if summaries.count > capacity {
                     ScrollView(.horizontal, showsIndicators: false) {
                         tileRow(spacing: spacing)
-                            .padding(.horizontal, 24)
+                            .padding(.horizontal, 16)
                     }
                 } else {
-                    HStack {
-                        Spacer(minLength: 0)
-                        tileRow(spacing: spacing)
-                        Spacer(minLength: 0)
-                    }
-                    .frame(maxWidth: .infinity)
+                    tileRow(spacing: spacing)
+                        .padding(.horizontal, 16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(height: 132)
+        .frame(height: 128)
         .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: summaries.map(\.id))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Pinned conversations")
@@ -74,9 +71,9 @@ private struct PinnedChatTile: View {
     let animated: Bool
 
     var body: some View {
-        VStack(spacing: 7) {
+        VStack(spacing: 8) {
             ZStack(alignment: .bottomTrailing) {
-                PinnedChatAvatar(chat: chat, size: 90, animated: animated)
+                PinnedChatAvatar(chat: chat, size: 76, animated: animated)
 
                 if chat.busy {
                     ProgressView()
@@ -87,12 +84,12 @@ private struct PinnedChatTile: View {
                         .overlay(Circle().stroke(VBotSurface.background, lineWidth: 2))
                 } else if chat.unread {
                     Circle()
-                        .fill(MausPalette.color(chat.color))
+                        .fill(VBotSurface.unread)
                         .frame(width: 12, height: 12)
                         .overlay(Circle().stroke(VBotSurface.background, lineWidth: 2))
                 }
             }
-            .frame(width: 94, height: 94)
+            .frame(width: 80, height: 80)
 
             Text(chat.name)
                 .font(.caption.weight(.medium))
@@ -100,7 +97,7 @@ private struct PinnedChatTile: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .truncationMode(.tail)
-                .frame(width: 108)
+                .frame(width: 92)
         }
         .contentShape(Rectangle())
         .accessibilityLabel(chat.name)

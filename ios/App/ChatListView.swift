@@ -1,9 +1,9 @@
 // The roster.
 //
-// a quiet, charcoal home: your profile and two actions at the top, pinned
-// faces in a generous hero row, then one clean list of every other chat. The
-// transcript and roster remain the visual focus; chrome should not compete
-// with them.
+// a near-black Grok Bot home: your profile and two glass actions at the top,
+// pinned faces in a generous hero row, then one clean list of every other
+// chat. The transcript and roster remain the visual focus; chrome should not
+// compete with them.
 import SwiftUI
 import CompanionCore
 import UIKit
@@ -49,7 +49,7 @@ struct ChatListView: View {
                                 if searching { ProgressView().controlSize(.small) }
                             }
                             .frame(height: 1)
-                            .padding(.horizontal, 24)
+                            .padding(.horizontal, 16)
 
                             ForEach(searchHits) { hit in
                                 Button {
@@ -63,12 +63,12 @@ struct ChatListView: View {
                                     SearchHitRow(hit: hit)
                                 }
                                 .buttonStyle(.plain)
-                                .padding(.horizontal, 24)
+                                .padding(.horizontal, 16)
                             }
                         }
 
                         let rows = chats
-                        ForEach(Array(rows.enumerated()), id: \.element.id) { index, summary in
+                        ForEach(rows) { summary in
                             Group {
                                 if case let .room(room) = summary.chat {
                                     Button {
@@ -80,8 +80,7 @@ struct ChatListView: View {
                                             preview: summary.preview,
                                             at: summary.lastActivity,
                                             state: MausState.forChat(summary.chat, in: session.state),
-                                            waiting: waitingChats.contains(summary.chat.id),
-                                            last: index == rows.count - 1
+                                            waiting: waitingChats.contains(summary.chat.id)
                                         )
                                     }
                                     .buttonStyle(.plain)
@@ -92,8 +91,7 @@ struct ChatListView: View {
                                             preview: summary.preview,
                                             at: summary.lastActivity,
                                             state: MausState.forChat(summary.chat, in: session.state),
-                                            waiting: waitingChats.contains(summary.chat.id),
-                                            last: index == rows.count - 1
+                                            waiting: waitingChats.contains(summary.chat.id)
                                         )
                                     }
                                     .buttonStyle(.plain)
@@ -201,10 +199,10 @@ struct ChatListView: View {
 
     // MARK: - Header
 
-    /// The roster chrome follows the mobile reference: your profile on the
-    /// left and search/new-chat actions on the right. There is intentionally
-    /// no centered title; the pinned faces and chat names provide the visual
-    /// anchor instead.
+    /// The roster chrome follows the Grok Bot reference: your profile on the
+    /// left and search/new-chat glass actions on the right. There is
+    /// intentionally no centered title; the pinned faces and chat names
+    /// provide the visual anchor instead.
     private var header: some View {
         Group {
             if searchOpen {
@@ -223,12 +221,11 @@ struct ChatListView: View {
                         Haptics.selection()
                         showingAccount = true
                     } label: {
-                        ProfileAvatar(name: session.connection?.name ?? "You", size: 30)
+                        ProfileAvatar(name: session.connection?.name ?? "You", size: 32)
                             .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
-                    .background(Circle().fill(Color.primary.opacity(0.10)))
-                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                    .glassCircle()
                     .accessibilityLabel("Account and settings")
                     .contextMenu {
                         if !session.state.updates.isEmpty {
@@ -242,43 +239,46 @@ struct ChatListView: View {
 
                     Spacer(minLength: 8)
 
-                    RosterHeaderButton(systemImage: "magnifyingglass", accessibilityLabel: "Search") {
-                        withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
-                            searchOpen = true
-                        }
-                        searchFocused = true
-                    }
-
-                    Menu {
-                        Button {
-                            Task {
-                                if let bot = await session.createBot() { path.append(Chat.bot(bot)) }
+                    GlassGroup(spacing: 8) {
+                        HStack(spacing: 8) {
+                            RosterHeaderButton(systemImage: "magnifyingglass", accessibilityLabel: "Search") {
+                                withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
+                                    searchOpen = true
+                                }
+                                searchFocused = true
                             }
-                        } label: {
-                            Label("New bot", systemImage: "bubble.left.and.bubble.right")
+
+                            Menu {
+                                Button {
+                                    Task {
+                                        if let bot = await session.createBot() { path.append(Chat.bot(bot)) }
+                                    }
+                                } label: {
+                                    Label("New bot", systemImage: "bubble.left.and.bubble.right")
+                                }
+                                Button {
+                                    showingNewGroup = true
+                                } label: {
+                                    Label("New group", systemImage: "person.2")
+                                }
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 18, weight: .medium))
+                                    .foregroundStyle(Color.primary)
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .glassCircle()
+                            .accessibilityLabel("New conversation")
                         }
-                        Button {
-                            showingNewGroup = true
-                        } label: {
-                            Label("New group", systemImage: "person.2")
-                        }
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(Color.primary)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Circle())
                     }
-                    .buttonStyle(.plain)
-                    .background(Circle().fill(Color.primary.opacity(0.10)))
-                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
-                    .accessibilityLabel("New conversation")
                 }
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 8)
-        .padding(.bottom, searchOpen ? 8 : 12)
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, searchOpen ? 8 : 10)
         .animation(reduceMotion ? nil : .snappy(duration: 0.24), value: searchOpen)
     }
 
@@ -305,8 +305,8 @@ struct ChatListView: View {
         }
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity)
-        .frame(height: 46)
-        .rosterCapsule()
+        .frame(height: 44)
+        .glassCapsule()
     }
 
     private func closeSearch() {
@@ -352,9 +352,8 @@ struct ChatListView: View {
 
 }
 
-/// A quiet circular action for the roster header. Keeping the fill opaque-ish
-/// avoids the layered blur that made the previous header feel like a stack of
-/// unrelated floating controls.
+/// A round glass action for the roster header. Same material as the rest of
+/// the chrome so search and + read as one object with the profile tile.
 private struct RosterHeaderButton: View {
     let systemImage: String
     let accessibilityLabel: String
@@ -369,18 +368,8 @@ private struct RosterHeaderButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .background(Circle().fill(Color.primary.opacity(0.10)))
-        .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+        .glassCircle()
         .accessibilityLabel(accessibilityLabel)
-    }
-}
-
-private extension View {
-    /// A low-contrast surface for the search field. It keeps the hierarchy
-    /// from turning into a wall of refractive glass.
-    func rosterCapsule() -> some View {
-        background(Color.primary.opacity(0.09), in: Capsule())
-            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.11), lineWidth: 0.5))
     }
 }
 
@@ -536,20 +525,19 @@ struct ChatRow: View {
     let at: Double
     var state: MausState = .idle
     var waiting = false
-    var last = false
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .center, spacing: 14) {
             RosterChatAvatar(
                 chat: chat,
-                size: 56,
+                size: 52,
                 state: state,
                 animated: !reduceMotion && state.showsActivity
             )
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(chat.name)
                         .font(.body.weight(.semibold))
@@ -562,12 +550,12 @@ struct ChatRow: View {
 
                     Text(RelativeStamp.list(at))
                         .font(.footnote)
-                        .foregroundStyle(Color.secondary)
+                        .foregroundStyle(Color.secondary.opacity(0.9))
                         .lineLimit(1)
                         .layoutPriority(0)
                 }
 
-                HStack(alignment: .top, spacing: 8) {
+                HStack(alignment: .center, spacing: 8) {
                     Text(preview.isEmpty ? " " : preview)
                         .font(.subheadline)
                         .foregroundStyle(Color.secondary)
@@ -579,34 +567,26 @@ struct ChatRow: View {
                     if chat.busy {
                         ProgressView()
                             .controlSize(.mini)
-                            .padding(.top, 2)
                     } else if chat.unread {
                         Circle()
-                            .fill(MausPalette.color(chat.color))
+                            .fill(VBotSurface.unread)
                             .frame(width: 10, height: 10)
-                            .padding(.top, 4)
+                            .accessibilityHidden(true)
                     }
                 }
 
                 if waiting {
                     Label("Waiting on you", systemImage: "hand.raised.fill")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(MausPalette.color(chat.color))
+                        .foregroundStyle(VBotSurface.unread)
                         .lineLimit(1)
                         .padding(.top, 2)
                 }
             }
-            .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .bottom) {
-                if !last {
-                    Divider()
-                        .overlay(Color.primary.opacity(0.08))
-                }
-            }
         }
-        .padding(.horizontal, 30)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(chat.name)

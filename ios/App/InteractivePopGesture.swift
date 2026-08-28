@@ -23,9 +23,22 @@ struct InteractivePopGestureEnabler: UIViewControllerRepresentable {
         }
 
         func enableIfPossible() {
-            guard let navigationController else { return }
-            navigationController.interactivePopGestureRecognizer?.delegate = nil
-            navigationController.interactivePopGestureRecognizer?.isEnabled = navigationController.viewControllers.count > 1
+            guard let navigationController = enclosingNavigationController else { return }
+            let pop = navigationController.interactivePopGestureRecognizer
+            pop?.delegate = nil
+            pop?.isEnabled = navigationController.viewControllers.count > 1
+        }
+
+        private var enclosingNavigationController: UINavigationController? {
+            if let navigationController { return navigationController }
+            var current: UIViewController? = parent
+            while let candidate = current {
+                if let navigation = candidate as? UINavigationController {
+                    return navigation
+                }
+                current = candidate.parent
+            }
+            return view.window?.rootViewController as? UINavigationController
         }
     }
 }

@@ -21,8 +21,8 @@ struct GlassSurface<S: InsettableShape>: ViewModifier {
         } else {
             content
                 .background(.ultraThinMaterial, in: shape)
-                .background(tint?.opacity(0.18) ?? .clear, in: shape)
-                .overlay(shape.strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5))
+                .background(tint?.opacity(0.18) ?? Color.primary.opacity(0.06), in: shape)
+                .overlay(shape.strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
         }
     }
 }
@@ -31,6 +31,12 @@ extension View {
     /// A capsule of glass — pills and round buttons.
     func glassCapsule(interactive: Bool = true, tint: Color? = nil) -> some View {
         modifier(GlassSurface(shape: Capsule(), interactive: interactive, tint: tint))
+    }
+
+    /// A circular glass control. Same material as `glassCapsule`, locked to a circle
+    /// so square frames (the 44pt chrome) stay round.
+    func glassCircle(interactive: Bool = true, tint: Color? = nil) -> some View {
+        modifier(GlassSurface(shape: Circle(), interactive: interactive, tint: tint))
     }
 
     /// A rounded sheet of glass.
@@ -75,6 +81,6 @@ struct GlassButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .glassCapsule()
+        .glassCircle()
     }
 }
