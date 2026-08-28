@@ -78,6 +78,10 @@ final class Session: ObservableObject {
     /// Companion-safe projection of the selected desktop engine. Mutations
     /// follow `primaryEngine`; OpenMaus roster fallback is read-only.
     @Published private(set) var engineSync: VBotEngineSync?
+    /// Text staged from another screen (for example Computer paste) for the
+    /// next opened chat composer to absorb.
+    @Published var stagedComposerText: String?
+    @Published var stagedShareImageData: Data?
 
     private var client: CompanionClient?
     /// The device token, kept in memory so the client can be rebuilt when the
@@ -318,6 +322,10 @@ final class Session: ObservableObject {
     }
 
     func receivePairingURL(_ url: URL) {
+        if url.host?.lowercased() == "share" {
+            consumeShareInbox()
+            return
+        }
         guard CompanionPairingInvitePolicy.allowsIncomingInvite(
             hasConnection: connection != nil,
             pairingStateIsUnpaired: status == .unpaired
@@ -1071,6 +1079,83 @@ final class Session: ObservableObject {
             case let .room(room): try await $0.markRead(roomId: room.id)
             }
         }
+    }
+
+    func markUnread(_ chat: Chat) async {
+        guard let client else { return }
+        do {
+            switch chat {
+            case let .bot(bot):
+                try await client.markBotUnread(botId: bot.id)
+                if var updated = state.bot(bot.id) {
+                    updated.unread = true
+                    state.apply(.bot(updated))
+                }
+            case let .room(room):
+                try await client.markRoomUnread(roomId: room.id)
+                if let index = state.rooms.firstIndex(where: { $0.id == room.id }) {
+                    var updated = state.rooms[index]
+                    updated.unread = true
+                    state.apply(.room(updated))
+                }
+            }
+            Haptics.selection()
+        } catch {
+            if !error.isCancellation { actionError = error.localizedDescription }
+        }
+    }
+
+    func setBotHidden(_ bot: Bot, hidden: Bool) async -> Bot? {
+        guard let client else { return nil }
+        do {
+            let updated = try await client.setBotHidden(botId: bot.id, hidden: hidden)
+            state.apply(.bot(updated))
+            Haptics.selection()
+            return updated
+        } catch {
+            if !error.isCancellation { actionError = error.localizedDescription }
+            return nil
+        }
+    }
+
+    func updateGroupSetup(
+        roomId: String,
+        bulletin: String? = nil,
+        defaultResponder: GroupResponder? = nil
+    ) async -> Room? {
+        guard let client else { return nil }
+        do {
+            let room = try await client.updateGroupSetup(
+                roomId: roomId,
+                bulletin: bulletin,
+                defaultResponder: defaultResponder
+            )
+            state.apply(.room(room))
+            Haptics.success()
+            return room
+        } catch {
+            if !error.isCancellation { actionError = error.localizedDescription }
+            return nil
+        }
+    }
+
+    func stageComposerText(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        stagedComposerText = trimmed
+    }
+
+    func consumeShareInbox() {
+        guard let consumed = ShareInbox.consume() else { return }
+        if let text = consumed.payload.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            stageComposerText(text)
+        } else if let url = consumed.payload.url?.trimmingCharacters(in: .whitespacesAndNewlines), !url.isEmpty {
+            stageComposerText(url)
+        }
+        if let data = consumed.imageData {
+            stagedShareImageData = data
+        }
+        Haptics.selection()
     }
 
     func loadOlder(threadId: String) async {

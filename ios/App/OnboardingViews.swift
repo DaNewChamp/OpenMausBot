@@ -191,7 +191,7 @@ struct NotificationOnboardingView: View {
                 VStack(spacing: 10) {
                     Text("Stay in the loop")
                         .font(.largeTitle.bold())
-                    Text("Get alerts while V Bot is open or was recently in the background. The Live Activity on the island can stay accurate after you just left the app. Closed-app alerts are still not promised.")
+                    Text("Get alerts while V Bot is open or was recently in the background. Live Activities on the Dynamic Island and Lock Screen stay accurate for a short time after you leave. Push alerts when the app is fully closed are not available yet.")
                         .font(.title3)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

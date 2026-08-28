@@ -29,14 +29,17 @@ targets:
       - package: CompanionCore
         product: CompanionCore
       - target: OpenMausCompanionWidgets
+      - target: OpenMausCompanionShare
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.posival.openmausmobile
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "34"
+        CURRENT_PROJECT_VERSION: "35"
         DEVELOPMENT_TEAM: LT58RNRW7E
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_ENTITLEMENTS: App/OpenMausCompanion.entitlements
         # Catalog name is the cache key iOS uses for home-screen AND
         # notification-banner icons. VBotIcon still maps to the old
         # cursor / communication placeholder on devices that upgraded in
@@ -88,6 +91,8 @@ targets:
           V Bot listens while you dictate a message to a bot.
         NSPhotoLibraryUsageDescription: >-
           V Bot lets you pick a photo to attach to a message.
+        NSPhotoLibraryAddUsageDescription: >-
+          V Bot saves desktop screenshots to your photo library when you tap Save.
         NSSpeechRecognitionUsageDescription: >-
           V Bot converts your speech into text so you can send it
           to a bot. Recognition runs on this phone when it can.
@@ -126,7 +131,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.posival.openmausmobile.widgets
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "34"
+        CURRENT_PROJECT_VERSION: "35"
         DEVELOPMENT_TEAM: LT58RNRW7E
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
@@ -139,3 +144,22 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
+
+  OpenMausCompanionShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Share
+      - path: Shared/ShareInbox.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.posival.openmausmobile.share
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "35"
+        DEVELOPMENT_TEAM: LT58RNRW7E
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        SKIP_INSTALL: true
+        CODE_SIGN_ENTITLEMENTS: Share/OpenMausCompanionShare.entitlements
+    info:
+      path: Share/Info.plist

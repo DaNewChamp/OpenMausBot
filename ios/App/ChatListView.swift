@@ -395,9 +395,17 @@ private struct ChatPinRowActions: ViewModifier {
                     }
                 } else {
                     Button {
-                        session.actionError = "Mark unread is available from the computer."
+                        Task { await session.markUnread(chat) }
                     } label: {
                         Label("Mark Unread", systemImage: "envelope.badge")
+                    }
+                }
+
+                if case let .bot(bot) = chat, bot.hidden != true {
+                    Button {
+                        Task { _ = await session.setBotHidden(bot, hidden: true) }
+                    } label: {
+                        Label("Hide Chat", systemImage: "eye.slash")
                     }
                 }
 

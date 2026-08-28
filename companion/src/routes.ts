@@ -94,6 +94,130 @@ export function isComputerDestination(method: string, path: string): boolean {
   return method === COMPUTER_DESTINATION_ROUTE.method && COMPUTER_DESTINATION_ROUTE.path.test(path);
 }
 
+/** Paired-safe group instructions and default responder. Rewrites to harness
+ * PATCH /api/groups/:id with only bulletin and defaultResponder. */
+export const GROUP_SETUP_ROUTE = {
+  method: "PATCH",
+  path: /^\/api\/groups\/[\w-]+\/setup$/,
+} as const;
+
+export function isGroupSetup(method: string, path: string): boolean {
+  return method === GROUP_SETUP_ROUTE.method && GROUP_SETUP_ROUTE.path.test(path);
+}
+
+export function groupSetupRoomId(path: string): string | null {
+  const match = /^\/api\/groups\/([\w-]+)\/setup$/.exec(path);
+  return match?.[1] ?? null;
+}
+
+/** Hide or unhide a bot from the roster without reaching execution policy. */
+export const BOT_VISIBILITY_ROUTE = {
+  method: "PATCH",
+  path: /^\/api\/bots\/[\w-]+\/visibility$/,
+} as const;
+
+export function isBotVisibility(method: string, path: string): boolean {
+  return method === BOT_VISIBILITY_ROUTE.method && BOT_VISIBILITY_ROUTE.path.test(path);
+}
+
+export function botVisibilityBotId(path: string): string | null {
+  const match = /^\/api\/bots\/([\w-]+)\/visibility$/.exec(path);
+  return match?.[1] ?? null;
+}
+
+export const BOT_UNREAD_ROUTE = {
+  method: "POST",
+  path: /^\/api\/bots\/[\w-]+\/unread$/,
+} as const;
+
+export const GROUP_UNREAD_ROUTE = {
+  method: "POST",
+  path: /^\/api\/groups\/[\w-]+\/unread$/,
+} as const;
+
+export function isBotUnread(method: string, path: string): boolean {
+  return method === BOT_UNREAD_ROUTE.method && BOT_UNREAD_ROUTE.path.test(path);
+}
+
+export function isGroupUnread(method: string, path: string): boolean {
+  return method === GROUP_UNREAD_ROUTE.method && GROUP_UNREAD_ROUTE.path.test(path);
+}
+
+export function botUnreadBotId(path: string): string | null {
+  const match = /^\/api\/bots\/([\w-]+)\/unread$/.exec(path);
+  return match?.[1] ?? null;
+}
+
+export function groupUnreadRoomId(path: string): string | null {
+  const match = /^\/api\/groups\/([\w-]+)\/unread$/.exec(path);
+  return match?.[1] ?? null;
+}
+
+export function validateGroupSetupBody(
+  method: string,
+  path: string,
+  body: unknown,
+): { denial: Denial } | { patch: Record<string, unknown> } {
+  if (!isGroupSetup(method, path)) return { patch: {} };
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { denial: { status: 400, error: "group setup requires a JSON object" } };
+  }
+  const values = body as Record<string, unknown>;
+  const keys = Object.keys(values);
+  const allowed = new Set(["bulletin", "defaultResponder"]);
+  const extra = keys.find((key) => !allowed.has(key));
+  if (extra) {
+    return { denial: { status: 400, error: `unsupported group setup field: ${extra}` } };
+  }
+  if (!keys.length) {
+    return { denial: { status: 400, error: "group setup requires bulletin and/or defaultResponder" } };
+  }
+  const patch: Record<string, unknown> = {};
+  if (values.bulletin !== undefined) {
+    if (typeof values.bulletin !== "string") {
+      return { denial: { status: 400, error: "bulletin must be a string" } };
+    }
+    if (values.bulletin.length > 12_000) {
+      return { denial: { status: 400, error: "bulletin must be at most 12000 characters" } };
+    }
+    patch.bulletin = values.bulletin;
+  }
+  if (values.defaultResponder !== undefined) {
+    const value = values.defaultResponder as { kind?: unknown; botId?: unknown } | null;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { denial: { status: 400, error: "invalid default responder" } };
+    }
+    if (value.kind === "everyone") patch.defaultResponder = { kind: "everyone" };
+    else if (value.kind === "mentions") patch.defaultResponder = { kind: "mentions" };
+    else if (value.kind === "member" && typeof value.botId === "string" && /^[\w-]+$/.test(value.botId)) {
+      patch.defaultResponder = { kind: "member", botId: value.botId };
+    } else {
+      return { denial: { status: 400, error: "invalid default responder" } };
+    }
+  }
+  return { patch };
+}
+
+export function validateBotVisibilityBody(
+  method: string,
+  path: string,
+  body: unknown,
+): { denial: Denial } | { patch: Record<string, unknown> } {
+  if (!isBotVisibility(method, path)) return { patch: {} };
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { denial: { status: 400, error: "visibility requires a JSON object" } };
+  }
+  const values = body as Record<string, unknown>;
+  const keys = Object.keys(values);
+  if (keys.length !== 1 || keys[0] !== "hidden") {
+    return { denial: { status: 400, error: "visibility accepts only hidden" } };
+  }
+  if (typeof values.hidden !== "boolean") {
+    return { denial: { status: 400, error: "hidden must be true or false" } };
+  }
+  return { patch: { hidden: values.hidden } };
+}
+
 const COMPUTER_DESTINATIONS = new Set(["cloud", "vm", "local", "off"]);
 const CLOUD_BACKENDS = new Set(["box", "vps"]);
 
@@ -314,6 +438,8 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // Pinning is a purpose-built mutation. The broad bot PATCH remains closed
   // so a paired token cannot change execution policy or credentials.
   { method: "PATCH", path: /^\/api\/bots\/[\w-]+\/pin$/ },
+  BOT_VISIBILITY_ROUTE,
+  { method: "POST", path: /^\/api\/bots\/[\w-]+\/unread$/ },
   // Paired-safe profile subset. The harness route itself rejects fields
   // outside identity, avatar, notifications, and voice preferences.
   { method: "PATCH", path: /^\/api\/bots\/[\w-]+\/profile$/ },
@@ -339,6 +465,8 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/interrupt$/ },
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/read$/ },
   { method: "PATCH", path: /^\/api\/groups\/[\w-]+\/pin$/ },
+  GROUP_SETUP_ROUTE,
+  { method: "POST", path: /^\/api\/groups\/[\w-]+\/unread$/ },
 
   // a transcript, its images, and answering an approval
   { method: "GET", path: /^\/api\/threads\/[\w-]+\/messages$/ },
@@ -351,7 +479,7 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // App-owned profile images. Upload is image-only and capped at 10 MB by
   // the harness; GET is a single bare generated filename, never a path.
   { method: "POST", path: /^\/api\/attachments$/ },
-  { method: "GET", path: /^\/api\/attachments\/[\w-]+\.(?:png|jpe?g|gif|webp)$/i },
+  { method: "GET", path: /^\/api\/attachments\/[\w-]+\.(?:png|jpe?g|gif|webp|mp4|mov)$/i },
 
   // Renderer-neutral voice operations. Neither route reads or writes the
   // workspace ElevenLabs key; the phone receives labels or audio only.

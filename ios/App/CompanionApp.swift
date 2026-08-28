@@ -21,15 +21,20 @@ struct CompanionApp: App {
                 .environmentObject(session)
                 .onAppear {
                     session.connect()
+                    session.consumeShareInbox()
                     liveActivities.attach(to: session)
                 }
                 .onOpenURL { session.receivePairingURL($0) }
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
                     case .active:
+                        liveActivities.setBackground(false)
                         session.connect()
+                        session.consumeShareInbox()
                         Task { await session.refreshNotificationAuthorization() }
-                    case .background: session.linger()
+                    case .background:
+                        liveActivities.setBackground(true)
+                        session.linger()
                     case .inactive: break
                     @unknown default: break
                     }

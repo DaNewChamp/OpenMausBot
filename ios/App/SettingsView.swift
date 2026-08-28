@@ -8,6 +8,8 @@ struct SettingsView: View {
     @EnvironmentObject private var session: Session
     @AppStorage("conversationTextSize") private var conversationTextSize = ConversationTextSize.standard.rawValue
     @AppStorage("busySendDefault") private var busySendDefault = BusySendDefault.steer.rawValue
+    @AppStorage(CompanionPreferences.hapticsKey) private var hapticsEnabled = true
+    @AppStorage(CompanionPreferences.soundsKey) private var soundsEnabled = true
     @State private var enablingNotifications = false
     private let onConnect: (() -> Void)?
 
@@ -63,8 +65,39 @@ struct SettingsView: View {
                 Text("Alerts arrive while V Bot is open or was recently in the background. Closed-app delivery is not available yet.")
             }
 
+            Section {
+                Toggle(isOn: $hapticsEnabled) {
+                    Label {
+                        Text("Haptics")
+                    } icon: {
+                        SettingsIcon(symbol: "hand.tap", color: .purple)
+                    }
+                }
+                Toggle(isOn: $soundsEnabled) {
+                    Label {
+                        Text("Sounds")
+                    } icon: {
+                        SettingsIcon(symbol: "speaker.wave.2", color: .blue)
+                    }
+                }
+            } header: {
+                Text("Haptics & Sounds")
+            } footer: {
+                Text("Feel a light tap when you press a button, swipe a row, or save a photo. Sounds play for sends, replies, and connections.")
+            }
+
             if session.connection != nil {
                 Section("Workspace") {
+                    NavigationLink {
+                        HiddenChatsView()
+                    } label: {
+                        Label {
+                            Text("Hidden chats")
+                        } icon: {
+                            SettingsIcon(symbol: "eye.slash", color: .gray)
+                        }
+                    }
+
                     NavigationLink {
                         TasksRoutinesView()
                     } label: {
@@ -410,6 +443,17 @@ struct AccountSheet: View {
                             subtitle: "Connectors and accounts your bots can use",
                             systemImage: "link"
                         )
+                    }
+                    if session.connection != nil {
+                        NavigationLink {
+                            HiddenChatsView()
+                        } label: {
+                            rowLabel(
+                                title: "Hidden chats",
+                                subtitle: "Bots you removed from the roster",
+                                systemImage: "eye.slash"
+                            )
+                        }
                     }
                     NavigationLink {
                         SettingsView()

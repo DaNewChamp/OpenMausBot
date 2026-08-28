@@ -12,6 +12,11 @@ struct GroupProfileView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var routines: [Routine] = []
+    @State private var showingInstructions = false
+    @State private var showingResponderPicker = false
+    @State private var draftInstructions = ""
+    @State private var draftResponder: GroupResponder = GroupResponder(kind: "mentions", botId: nil)
+    @State private var savingSetup = false
 
     private var currentRoom: Room {
         session.state.rooms.first { $0.id == room.id } ?? room
@@ -19,6 +24,16 @@ struct GroupProfileView: View {
 
     private var members: [Bot] {
         currentRoom.memberIds.compactMap { session.state.bot($0) }
+    }
+
+    private var routingMembers: [GroupRouting.Member] {
+        members.map {
+            GroupRouting.Member(id: $0.id, name: $0.name, hidden: $0.hidden == true, color: $0.color)
+        }
+    }
+
+    private var canEditSetup: Bool {
+        session.status == .live && session.connection != nil
     }
 
     var body: some View {
@@ -46,6 +61,7 @@ struct GroupProfileView: View {
 
                 membersCard
                 instructionsCard
+                defaultResponderCard
                 routinesCard
             }
             .padding(.horizontal, 20)
@@ -63,6 +79,12 @@ struct GroupProfileView: View {
         .task {
             let loaded = await session.loadRoutines()
             routines = loaded.routines.filter { currentRoom.memberIds.contains($0.botId) }
+        }
+        .sheet(isPresented: $showingInstructions) {
+            instructionsEditor
+        }
+        .sheet(isPresented: $showingResponderPicker) {
+            responderPicker
         }
     }
 
@@ -182,27 +204,238 @@ struct GroupProfileView: View {
     }
 
     private var instructionsCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                Image(systemName: "doc.text")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(Color.secondary)
-                    .frame(width: 28)
-                Text("Instructions")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(Color.primary)
-            }
+        Button {
+            draftInstructions = currentRoom.bulletin
+            showingInstructions = true
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                        .frame(width: 28)
+                    Text("Instructions")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(Color.primary)
+                    Spacer()
+                    if canEditSetup {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.secondary)
+                    }
+                }
 
-            Text(currentRoom.bulletin.isEmpty ? "No instructions" : currentRoom.bulletin)
-                .font(.body)
-                .foregroundStyle(currentRoom.bulletin.isEmpty ? Color.secondary : Color.primary)
-                .fixedSize(horizontal: false, vertical: true)
+                Text(currentRoom.bulletin.isEmpty ? "No instructions" : currentRoom.bulletin)
+                    .font(.body)
+                    .foregroundStyle(currentRoom.bulletin.isEmpty ? Color.secondary : Color.primary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+            .frame(minHeight: 56, alignment: .leading)
+            .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 16)
-        .frame(minHeight: 56)
-        .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .accessibilityElement(children: .combine)
+        .buttonStyle(.plain)
+        .disabled(!canEditSetup && currentRoom.bulletin.isEmpty)
+        .accessibilityHint(canEditSetup ? "Edit group instructions" : "Instructions")
+    }
+
+    private var defaultResponderCard: some View {
+        Button {
+            draftResponder = GroupRouting.effectiveDefaultResponder(
+                currentRoom.defaultResponder,
+                members: routingMembers
+            )
+            showingResponderPicker = true
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    Image(systemName: "person.wave.2")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                        .frame(width: 28)
+                    Text("Default responder")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(Color.primary)
+                    Spacer()
+                    if canEditSetup {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.secondary)
+                    }
+                }
+
+                Text(responderSummary)
+                    .font(.body)
+                    .foregroundStyle(Color.primary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(GroupRouting.groupResponseHint(room: currentRoom, members: routingMembers))
+                    .font(.footnote)
+                    .foregroundStyle(Color.secondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+            .frame(minHeight: 56, alignment: .leading)
+            .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!canEditSetup)
+        .accessibilityHint(canEditSetup ? "Choose who responds by default" : "Shown when connected")
+    }
+
+    private var responderSummary: String {
+        let value = GroupRouting.effectiveDefaultResponder(currentRoom.defaultResponder, members: routingMembers)
+        switch value.kind {
+        case "everyone": return "Everyone"
+        case "mentions": return "Mentions only"
+        default:
+            let name = members.first { $0.id == value.botId }?.name ?? "Lead bot"
+            return name
+        }
+    }
+
+    private var instructionsEditor: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Shared instructions for every bot in this group.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 20)
+
+                TextEditor(text: $draftInstructions)
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .padding(12)
+                    .background(GroupProfileStyle.control, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .padding(.horizontal, 20)
+                    .onChange(of: draftInstructions) { _, value in
+                        if value.count > 12_000 {
+                            draftInstructions = String(value.prefix(12_000))
+                        }
+                    }
+
+                Text("\(draftInstructions.count)/12,000")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.horizontal, 20)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 12)
+            .background(VBotSurface.background.ignoresSafeArea())
+            .navigationTitle("Instructions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showingInstructions = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        Task { await saveInstructions() }
+                    }
+                    .disabled(savingSetup || draftInstructions == currentRoom.bulletin)
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private var responderPicker: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker("Mode", selection: responderKindBinding) {
+                        Text("Everyone").tag("everyone")
+                        Text("Mentions only").tag("mentions")
+                        Text("Lead bot").tag("member")
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+
+                    if draftResponder.kind == "member" {
+                        Picker("Lead bot", selection: leadBotBinding) {
+                            ForEach(members) { bot in
+                                Text(bot.name).tag(bot.id)
+                            }
+                        }
+                    }
+                } footer: {
+                    Text(GroupRouting.groupResponseHint(room: currentRoom, members: routingMembers))
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(VBotSurface.background.ignoresSafeArea())
+            .navigationTitle("Default responder")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showingResponderPicker = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        Task { await saveResponder() }
+                    }
+                    .disabled(savingSetup || draftResponder == currentRoom.defaultResponder)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private var responderKindBinding: Binding<String> {
+        Binding(
+            get: { draftResponder.kind },
+            set: { kind in
+                switch kind {
+                case "everyone", "mentions":
+                    draftResponder = GroupResponder(kind: kind, botId: nil)
+                case "member":
+                    let botId = draftResponder.botId ?? members.first?.id
+                    draftResponder = GroupResponder(kind: "member", botId: botId)
+                default:
+                    break
+                }
+            }
+        )
+    }
+
+    private var leadBotBinding: Binding<String> {
+        Binding(
+            get: { draftResponder.botId ?? members.first?.id ?? "" },
+            set: { draftResponder = GroupResponder(kind: "member", botId: $0) }
+        )
+    }
+
+    @MainActor
+    private func saveInstructions() async {
+        savingSetup = true
+        defer { savingSetup = false }
+        if await session.updateGroupSetup(
+            roomId: currentRoom.id,
+            bulletin: draftInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        ) != nil {
+            showingInstructions = false
+        }
+    }
+
+    @MainActor
+    private func saveResponder() async {
+        savingSetup = true
+        defer { savingSetup = false }
+        if await session.updateGroupSetup(
+            roomId: currentRoom.id,
+            defaultResponder: draftResponder
+        ) != nil {
+            showingResponderPicker = false
+        }
     }
 
     private var routinesCard: some View {

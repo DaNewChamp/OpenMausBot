@@ -1,4 +1,7 @@
-V Bot build 34: idle Local VM desktop on Computer.
+V Bot build 35: group setup, hidden chats, haptics, and computer paste.
 
-• Computer shows the Local VM desktop while this screen is open, not only while the agent is working
-• Try again captures a still instead of waiting for a live turn
+• Edit group instructions and choose who responds by default
+• Hide chats from the roster and manage them under Hidden chats
+• Mark chats unread from the list; haptics and sounds toggles in Settings
+• Save computer frames to Photos; paste iPhone clipboard into the composer
+• Live Activities linger honestly while the app was recently open

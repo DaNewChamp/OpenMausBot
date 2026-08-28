@@ -11,40 +11,60 @@ public typealias PlatformColorType = NSColor
 public typealias PlatformImage = NSImage
 #endif
 
+// MARK: - Preferences
+public enum CompanionPreferences {
+    public static let hapticsKey = "companion.hapticsEnabled"
+    public static let soundsKey = "companion.soundsEnabled"
+
+    public static var hapticsEnabled: Bool {
+        UserDefaults.standard.object(forKey: hapticsKey) as? Bool ?? true
+    }
+
+    public static var soundsEnabled: Bool {
+        UserDefaults.standard.object(forKey: soundsKey) as? Bool ?? true
+    }
+}
+
 // MARK: - Sound Effects
 public enum SoundEffects {
     public static func playSent() {
         #if os(iOS)
+        guard CompanionPreferences.soundsEnabled else { return }
         AudioServicesPlaySystemSound(1004)
         #endif
     }
 
     public static func playReceived() {
         #if os(iOS)
+        guard CompanionPreferences.soundsEnabled else { return }
         AudioServicesPlaySystemSound(1003)
         #endif
     }
 
     public static func playTapback() {
         #if os(iOS)
+        guard CompanionPreferences.soundsEnabled else { return }
         AudioServicesPlaySystemSound(1104)
         #endif
     }
 
     public static func playActionSuccess() {
         #if os(iOS)
+        guard CompanionPreferences.soundsEnabled else { return }
         AudioServicesPlaySystemSound(1025)
         #endif
     }
 
     public static func playCelebration() {
         #if os(iOS)
+        guard CompanionPreferences.soundsEnabled else { return }
         AudioServicesPlaySystemSound(1028)
         #endif
     }
 
     public static func playConnect() {
         #if os(iOS)
+        guard CompanionPreferences.soundsEnabled else { return }
         AudioServicesPlaySystemSound(1109)
         #endif
     }
@@ -54,6 +74,7 @@ public enum SoundEffects {
 public enum Haptics {
     public static func selection() {
         #if os(iOS)
+        guard CompanionPreferences.hapticsEnabled else { return }
         let generator = UISelectionFeedbackGenerator()
         generator.prepare()
         generator.selectionChanged()
@@ -62,6 +83,7 @@ public enum Haptics {
 
     public static func impact(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .medium) {
         #if os(iOS)
+        guard CompanionPreferences.hapticsEnabled else { return }
         let generator = UIImpactFeedbackGenerator(style: style)
         generator.prepare()
         generator.impactOccurred()
@@ -70,6 +92,7 @@ public enum Haptics {
 
     public static func notification(_ type: UINotificationFeedbackGenerator.FeedbackType) {
         #if os(iOS)
+        guard CompanionPreferences.hapticsEnabled else { return }
         let generator = UINotificationFeedbackGenerator()
         generator.prepare()
         generator.notificationOccurred(type)

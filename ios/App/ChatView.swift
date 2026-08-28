@@ -295,6 +295,24 @@ struct ChatView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
         .overlay(alignment: .bottom) { plusSheet }
+        .onChange(of: session.stagedComposerText) { _, text in
+            guard let text, !text.isEmpty else { return }
+            if draft.isEmpty {
+                draft = text
+            } else if draft.hasSuffix(" ") {
+                draft += text
+            } else {
+                draft += " \(text)"
+            }
+            session.stagedComposerText = nil
+        }
+        .onChange(of: session.stagedShareImageData) { _, data in
+            guard let data else { return }
+            Task {
+                await appendSharedImage(data)
+                session.stagedShareImageData = nil
+            }
+        }
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
         .background(VBotSurface.background.ignoresSafeArea(.container))
@@ -817,6 +835,10 @@ struct ChatView: View {
 
     private static let maxAttachmentCount = 10
 
+    private func appendSharedImage(_ data: Data) async {
+        appendAttachment(data: data, mime: "image/jpeg", name: "Shared photo")
+    }
+
     private func appendAttachment(data: Data, mime: String, name: String) {
         guard selectedAttachments.count < Self.maxAttachmentCount else {
             attachmentError = "You can attach up to (Self.maxAttachmentCount) images per message."
@@ -1200,6 +1222,17 @@ struct ChatView: View {
             let pendingCount = pendingQueueNotices.values.filter { $0.threadId == threadId }.count
             if let replyingTo {
                 replyBanner(for: replyingTo)
+            }
+            if current.busy {
+                Label(
+                    "V Bot keeps updating for a short time after you leave",
+                    systemImage: "dot.radiowaves.left.and.right"
+                )
+                    .font(chatTypography.detail)
+                    .foregroundStyle(Color.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 6)
+                    .accessibilityLabel("Agent is working")
             }
             attachmentPreviewStrip
 

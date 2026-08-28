@@ -63,6 +63,8 @@ struct ComputerView: View {
     @State private var showingControls = false
     @State private var instances: [Instance] = []
     @State private var savingDestination = false
+    @State private var savingPhoto = false
+    @State private var photoSaveMessage: String?
 
     private static let firstFrameTimeout = ComputerWatchLifecycle.firstFrameTimeout
 
@@ -183,7 +185,10 @@ struct ComputerView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: presentationState)
         .safeAreaInset(edge: .bottom) {
             if case .watching = presentationState, image != nil {
-                watchingControls
+                VStack(spacing: 0) {
+                    clipboardPasteBar
+                    watchingControls
+                }
             }
         }
         .sheet(isPresented: $showingHelp) {
@@ -521,16 +526,54 @@ struct ComputerView: View {
         }
     }
 
+    private var clipboardPasteBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "doc.on.clipboard")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Copy to composer")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color.primary)
+                Text("Paste iPhone clipboard into the active chat. VM paste needs a future route.")
+                    .font(.caption2)
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Button("Paste") {
+                pasteClipboardToComposer()
+            }
+            .font(.footnote.weight(.semibold))
+            .disabled(UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(VBotSurface.card.opacity(0.96))
+    }
+
     private var watchingControls: some View {
-        HStack {
+        HStack(spacing: 12) {
+            ChromeCircleButton(systemImage: "square.and.arrow.down", weight: .medium) {
+                saveScreenToPhotos()
+            }
+            .disabled(image == nil || savingPhoto)
+            .accessibilityLabel("Save to Photos")
+
             ChromeCircleButton(systemImage: "list.clipboard", weight: .medium) {
                 copyScreen()
             }
             .disabled(image == nil)
             .accessibilityLabel("Copy screen")
-            .accessibilityHint("Copies the latest desktop frame to the clipboard")
 
-            Spacer()
+            if let photoSaveMessage {
+                Text(photoSaveMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
 
             ChromeCircleButton(systemImage: "square.grid.2x2", weight: .medium) {
                 Haptics.selection()
@@ -662,6 +705,29 @@ struct ComputerView: View {
         guard let image else { return }
         UIPasteboard.general.image = image
         Haptics.success()
+    }
+
+    private func pasteClipboardToComposer() {
+        guard let text = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty
+        else { return }
+        session.stageComposerText(text)
+        Haptics.selection()
+        dismiss()
+    }
+
+    private func saveScreenToPhotos() {
+        guard let image else { return }
+        savingPhoto = true
+        photoSaveMessage = nil
+        UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+        savingPhoto = false
+        photoSaveMessage = "Saved"
+        Haptics.impact(.light)
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            if !Task.isCancelled { photoSaveMessage = nil }
+        }
     }
 
     private func destinationChoice(_ title: String, mode: String, enabled: Bool) -> some View {

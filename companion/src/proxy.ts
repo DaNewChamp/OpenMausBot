@@ -23,19 +23,29 @@ import {
   denyReason,
   isCloudDesktopJoin,
   isBotModel,
+  isBotUnread,
+  isBotVisibility,
   isComputerDestination,
   isConnectorCardAction,
   isConnectorCardStatus,
+  isGroupSetup,
+  isGroupUnread,
   isLocalVmAction,
   isLocalVmScreenshot,
   isLocalVmPhoneSurface,
   validateBotModelBody,
+  validateBotVisibilityBody,
   validateComputerDestinationBody,
   validateConnectorCardBody,
   validateConnectorCardThreadId,
+  validateGroupSetupBody,
   validateLocalVmActionBody,
   botModelBotId,
+  botUnreadBotId,
+  botVisibilityBotId,
   computerDestinationBotId,
+  groupSetupRoomId,
+  groupUnreadRoomId,
 } from "./routes.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
@@ -447,15 +457,78 @@ export function createProxyHandler(options: ProxyOptions) {
       return;
     }
 
+    if (isGroupSetup(method, path)) {
+      const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+      if (!contentType.startsWith("application/json")) {
+        return sendJson(res, 415, { error: "group setup requires application/json" });
+      }
+      const roomId = groupSetupRoomId(path);
+      if (!roomId) return sendJson(res, 404, { error: `no route: ${method} ${path}` });
+      readJson(req, 64 * 1024, true).then(
+        (body) => {
+          const parsed = validateGroupSetupBody(method, path, body);
+          if ("denial" in parsed) return sendJson(res, parsed.denial.status, { error: parsed.denial.error });
+          forward(Buffer.from(JSON.stringify(parsed.patch), "utf8"), { path: `/api/groups/${roomId}` });
+        },
+        (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
+      return;
+    }
+
+    if (isBotVisibility(method, path)) {
+      const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+      if (!contentType.startsWith("application/json")) {
+        return sendJson(res, 415, { error: "visibility requires application/json" });
+      }
+      const botId = botVisibilityBotId(path);
+      if (!botId) return sendJson(res, 404, { error: `no route: ${method} ${path}` });
+      readJson(req, 64 * 1024, true).then(
+        (body) => {
+          const parsed = validateBotVisibilityBody(method, path, body);
+          if ("denial" in parsed) return sendJson(res, parsed.denial.status, { error: parsed.denial.error });
+          forward(Buffer.from(JSON.stringify(parsed.patch), "utf8"), { path: `/api/bots/${botId}` });
+        },
+        (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
+      return;
+    }
+
+    if (isBotUnread(method, path) || isGroupUnread(method, path)) {
+      const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+      if (!contentType.startsWith("application/json")) {
+        return sendJson(res, 415, { error: "unread requires application/json" });
+      }
+      readJson(req, 64 * 1024, true).then(
+        (body) => {
+          if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 0) {
+            return sendJson(res, 400, { error: "unread accepts an empty JSON object only" });
+          }
+          const botId = botUnreadBotId(path);
+          if (botId) {
+            forward(Buffer.from(JSON.stringify({ unread: true }), "utf8"), { path: `/api/bots/${botId}`, method: "PATCH" });
+            return;
+          }
+          const roomId = groupUnreadRoomId(path);
+          if (roomId) {
+            forward(Buffer.from(JSON.stringify({ unread: true }), "utf8"), { path: `/api/groups/${roomId}`, method: "PATCH" });
+            return;
+          }
+          sendJson(res, 404, { error: `no route: ${method} ${path}` });
+        },
+        (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
+      return;
+    }
+
     forward();
 
-    function forward(requestBody?: Buffer, rewrite?: { path?: string }): void {
+    function forward(requestBody?: Buffer, rewrite?: { path?: string; method?: string }): void {
     const upstream = httpRequest(
       {
         hostname: "127.0.0.1",
         port: options.harnessPort,
         path: rewrite?.path ?? req.url,
-        method,
+        method: rewrite?.method ?? method,
         headers: forwardHeaders(req),
       },
       (harness) => {

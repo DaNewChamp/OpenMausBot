@@ -11,6 +11,7 @@ export const ATTACHMENTS_DIR = join(DATA_DIR, "attachments");
 /** The spec's ceiling: a screenshot bigger than this is rejected before it
  * is ever buffered, matching the composer's existing size discipline. */
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+export const VIDEO_MAX_BYTES = 50 * 1024 * 1024;
 
 /** Mimes the endpoint accepts, mapped to the extension stored on disk.
  * Sniffing is not attempted — a lie here only changes the filename. */
@@ -21,9 +22,16 @@ const IMAGE_MIMES: Record<string, string> = {
   "image/webp": ".webp",
 };
 
+const VIDEO_MIMES: Record<string, string> = {
+  "video/mp4": ".mp4",
+  "video/quicktime": ".mov",
+};
+
+const ATTACHMENT_MIMES: Record<string, string> = { ...IMAGE_MIMES, ...VIDEO_MIMES };
+
 export function extensionForMime(mime: string | undefined): string | null {
   if (!mime) return null;
-  return IMAGE_MIMES[mime.split(";")[0]!.trim().toLowerCase()] ?? null;
+  return ATTACHMENT_MIMES[mime.split(";")[0]!.trim().toLowerCase()] ?? null;
 }
 
 export function ensureAttachmentsDir(): void {
@@ -40,11 +48,17 @@ export interface SavedAttachment {
  * is never attacker-controlled and never collides; the extension preserves
  * the format the sender claimed. */
 export function saveImage(bytes: Buffer, mime: string): SavedAttachment {
+  return saveAttachment(bytes, mime);
+}
+
+/** Persist one attachment and return its path. */
+export function saveAttachment(bytes: Buffer, mime: string): SavedAttachment {
   const ext = extensionForMime(mime);
-  if (!ext) throw Object.assign(new Error("unsupported image type"), { status: 400 });
-  if (bytes.byteLength === 0) throw Object.assign(new Error("empty image"), { status: 400 });
-  if (bytes.byteLength > IMAGE_MAX_BYTES) {
-    throw Object.assign(new Error(`image exceeds ${IMAGE_MAX_BYTES} bytes`), { status: 413 });
+  if (!ext) throw Object.assign(new Error("unsupported attachment type"), { status: 400 });
+  if (bytes.byteLength === 0) throw Object.assign(new Error("empty attachment"), { status: 400 });
+  const max = mime.startsWith("video/") ? VIDEO_MAX_BYTES : IMAGE_MAX_BYTES;
+  if (bytes.byteLength > max) {
+    throw Object.assign(new Error(`attachment exceeds ${max} bytes`), { status: 413 });
   }
   ensureAttachmentsDir();
   const name = `${randomUUID()}${ext}`;
@@ -56,7 +70,7 @@ export function saveImage(bytes: Buffer, mime: string): SavedAttachment {
 /** Existence check with the same name discipline as readAttachment, without
  * reading up to 10MB of pixels just to learn the file is there. */
 export function attachmentExists(name: string): boolean {
-  if (!/^[A-Za-z0-9-]+\.(png|jpg|gif|webp)$/.test(name)) return false;
+  if (!/^[A-Za-z0-9-]+\.(png|jpg|gif|webp|mp4|mov)$/.test(name)) return false;
   try {
     return statSync(join(ATTACHMENTS_DIR, name)).isFile();
   } catch {
@@ -68,7 +82,7 @@ export function attachmentExists(name: string): boolean {
  * filename (no separators, no dotfiles) inside ATTACHMENTS_DIR resolve —
  * the route must never become a general file server for the data dir. */
 export function readAttachment(name: string): { bytes: Buffer; mime: string } | null {
-  if (!/^[A-Za-z0-9-]+\.(png|jpg|jpeg|gif|webp)$/.test(name)) return null;
+  if (!/^[A-Za-z0-9-]+\.(png|jpg|jpeg|gif|webp|mp4|mov)$/.test(name)) return null;
   const path = join(ATTACHMENTS_DIR, name);
   if (extname(path) === ".jpeg") return null; // saved as .jpg; .jpeg is not a name we write
   try {
@@ -88,6 +102,10 @@ function mimeForExt(ext: string): string {
       return "image/gif";
     case ".webp":
       return "image/webp";
+    case ".mp4":
+      return "video/mp4";
+    case ".mov":
+      return "video/quicktime";
     default:
       return "application/octet-stream";
   }

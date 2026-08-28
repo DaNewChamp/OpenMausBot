@@ -30,8 +30,12 @@ public struct UploadedAttachment: Codable, Equatable, Sendable {
 /// treating a message-provided URL as an arbitrary image source.
 public enum AttachmentPath {
     public static let maxBytes = 10 * 1_024 * 1_024
-    public static let supportedMIMEs = ["image/png", "image/jpeg", "image/gif", "image/webp"]
-    private static let supportedExtensions = ["png", "jpg", "gif", "webp"]
+    public static let maxVideoBytes = 50 * 1_024 * 1_024
+    public static let supportedMIMEs = [
+        "image/png", "image/jpeg", "image/gif", "image/webp",
+        "video/mp4", "video/quicktime",
+    ]
+    private static let supportedExtensions = ["png", "jpg", "gif", "webp", "mp4", "mov"]
 
     public static func normalizedMIME(_ mime: String) -> String? {
         let value = mime.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
@@ -41,14 +45,15 @@ public enum AttachmentPath {
     }
 
     public static func validate(data: Data, mime: String) throws {
-        guard normalizedMIME(mime) != nil else {
-            throw APIError.transport("Choose a PNG, JPEG, GIF, or WebP image.")
+        guard let normalized = normalizedMIME(mime) else {
+            throw APIError.transport("Choose a PNG, JPEG, GIF, WebP, MP4, or MOV file.")
         }
         guard !data.isEmpty else {
-            throw APIError.transport("That image is empty.")
+            throw APIError.transport("That attachment is empty.")
         }
-        guard data.count <= maxBytes else {
-            throw APIError.transport("That image is larger than 10 MB.")
+        let limit = normalized.hasPrefix("video/") ? maxVideoBytes : maxBytes
+        guard data.count <= limit else {
+            throw APIError.transport("That attachment is too large.")
         }
     }
 
@@ -1605,6 +1610,40 @@ public struct CompanionClient: Sendable {
 
     public func markRead(roomId: String) async throws {
         try await send(try makeRequest("POST", "/api/groups/\(roomId)/read"))
+    }
+
+    public func markBotUnread(botId: String) async throws {
+        try await send(try makeRequest("POST", "/api/bots/\(botId)/unread", body: [:]))
+    }
+
+    public func markRoomUnread(roomId: String) async throws {
+        try await send(try makeRequest("POST", "/api/groups/\(roomId)/unread", body: [:]))
+    }
+
+    public func updateGroupSetup(
+        roomId: String,
+        bulletin: String? = nil,
+        defaultResponder: GroupResponder? = nil
+    ) async throws -> Room {
+        try await send(
+            try makeRequest(
+                "PATCH",
+                "/api/groups/\(roomId)/setup",
+                encodedBody: GroupSetupPatch(bulletin: bulletin, defaultResponder: defaultResponder)
+            ),
+            as: RoomResponse.self
+        ).group
+    }
+
+    public func setBotHidden(botId: String, hidden: Bool) async throws -> Bot {
+        try await send(
+            try makeRequest(
+                "PATCH",
+                "/api/bots/\(botId)/visibility",
+                encodedBody: BotVisibilityPatch(hidden: hidden)
+            ),
+            as: BotResponse.self
+        ).bot
     }
 
     // MARK: - Events

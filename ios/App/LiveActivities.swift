@@ -17,6 +17,13 @@ final class LiveActivityCoordinator {
     private var lastSent: [String: BotActivityAttributes.ContentState] = [:]
     /// When each bot's current kind began, so an update does not reset the clock.
     private var since: [String: (kind: String, at: Date)] = [:]
+    /// While the app is backgrounded, keep working/needs-you activities on
+    /// screen until an authoritative hydrated snapshot says they ended.
+    private var isBackground = false
+
+    func setBackground(_ background: Bool) {
+        isBackground = background
+    }
 
     func attach(to session: Session) {
         // Answer from the island: the intent runs in this process.
@@ -87,7 +94,9 @@ final class LiveActivityCoordinator {
 
         // Do not retire a prior activity from the launch-time empty state.
         // Only a hydrated idle snapshot is authoritative enough to end it.
-        if hydrated {
+        // While backgrounded, linger keeps the stream alive briefly — do not
+        // dismiss island/lock-screen updates until we return and hydrate.
+        if hydrated, !isBackground {
             for activity in Activity<BotActivityAttributes>.activities where !wantedIds.contains(activity.attributes.botId) {
                 lastSent.removeValue(forKey: activity.attributes.botId)
                 since.removeValue(forKey: activity.attributes.botId)

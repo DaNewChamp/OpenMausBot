@@ -1019,6 +1019,34 @@ public struct ChatPinPatch: Encodable, Sendable {
     }
 }
 
+public struct GroupSetupPatch: Encodable, Sendable {
+    public var bulletin: String?
+    public var defaultResponder: GroupResponder?
+
+    public init(bulletin: String? = nil, defaultResponder: GroupResponder? = nil) {
+        self.bulletin = bulletin
+        self.defaultResponder = defaultResponder
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(bulletin, forKey: .bulletin)
+        try container.encodeIfPresent(defaultResponder, forKey: .defaultResponder)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case bulletin, defaultResponder
+    }
+}
+
+public struct BotVisibilityPatch: Encodable, Sendable {
+    public let hidden: Bool
+
+    public init(hidden: Bool) {
+        self.hidden = hidden
+    }
+}
+
 public struct BotProfilePatch: Encodable, Sendable {
     /// `nil` means "leave the field alone". Profile actions deliberately send
     /// only the fields they own so an avatar upload cannot overwrite identity
