@@ -333,32 +333,7 @@ struct ComputerView: View {
             }
         }
         .task(id: "\(computerSignature)-\(screenWatch.attempt)-\(wantsScreenPreview)") {
-            guard ComputerPresentationState.hasKnownComputer(current) else { return }
-            guard wantsScreenPreview else { return }
-            if screenWatch.phase == .idle {
-                if let streamFailure {
-                    screenWatch.failed(streamFailure)
-                } else if frame != nil {
-                    if image != nil {
-                        screenWatch.receivedFrame()
-                    } else {
-                        screenWatch.failed("The latest screen frame could not be decoded.")
-                    }
-                } else {
-                    screenWatch.begin()
-                    return
-                }
-            }
-            guard screenWatch.isWaiting else { return }
-            let attempt = screenWatch.attempt
-            try? await Task.sleep(for: Self.firstFrameTimeout)
-            guard !Task.isCancelled,
-                  screenWatch.attempt == attempt,
-                  screenWatch.isWaiting,
-                  frame == nil,
-                  wantsScreenPreview
-            else { return }
-            screenWatch.timedOut()
+            await runScreenWatchTimeoutTask()
         }
     }
 
@@ -933,6 +908,35 @@ struct ComputerView: View {
     private func retryScreen() {
         guard ComputerPresentationState.hasKnownComputer(current) else { return }
         restartScreenWatch()
+    }
+
+    private func runScreenWatchTimeoutTask() async {
+        guard ComputerPresentationState.hasKnownComputer(current) else { return }
+        guard wantsScreenPreview else { return }
+        if screenWatch.phase == .idle {
+            if let streamFailure {
+                screenWatch.failed(streamFailure)
+            } else if frame != nil {
+                if image != nil {
+                    screenWatch.receivedFrame()
+                } else {
+                    screenWatch.failed("The latest screen frame could not be decoded.")
+                }
+            } else {
+                screenWatch.begin()
+                return
+            }
+        }
+        guard screenWatch.isWaiting else { return }
+        let attempt = screenWatch.attempt
+        try? await Task.sleep(for: Self.firstFrameTimeout)
+        guard !Task.isCancelled,
+              screenWatch.attempt == attempt,
+              screenWatch.isWaiting,
+              frame == nil,
+              wantsScreenPreview
+        else { return }
+        screenWatch.timedOut()
     }
 
     private func syncScreenWatch(resetFrame: Bool) {
