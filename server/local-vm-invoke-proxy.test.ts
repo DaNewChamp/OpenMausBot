@@ -95,11 +95,11 @@ describe("Local VM invoke MCP", () => {
     expect(createCalls).toBe(0);
   });
 
-  it("ensures the VM on the first computer tool call and returns a retryable starting state", async () => {
+  it("ensures the VM on the first computer tool call and returns a retryable starting state with retry guidance", async () => {
     invokeResponse = {
       state: "starting",
       retryable: true,
-      message: "The Local VM desktop is still starting. Retry this computer action shortly. Do not control the user's Mac.",
+      message: "The Local VM desktop is still starting. Retry the exact same computer action shortly. Do not control the user's Mac.",
     };
     const res = await callTool("open_url", { url: "https://google.com" });
     expect(lastAuth).toBe(`Bearer ${TOKEN}`);
@@ -110,8 +110,33 @@ describe("Local VM invoke MCP", () => {
       arguments: { url: "https://google.com" },
     });
     const payload = JSON.parse(res.result.content[0].text);
-    expect(payload).toMatchObject({ state: "starting", retryable: true });
+    expect(payload).toMatchObject({
+      state: "starting",
+      retryable: true,
+      message: expect.stringContaining("Retry the exact same computer action"),
+      retry: expect.stringContaining("Retry the exact same tool call"),
+    });
     expect(res.result.isError).toBe(false);
+  });
+
+  it("proves subsequent ready call executes open_url", async () => {
+    invokeResponse = {
+      state: "ready",
+      result: {
+        text: "Opened https://google.com in this bot's Local VM browser.",
+        isError: false,
+      },
+    };
+    const res = await callTool("open_url", { url: "https://google.com" });
+    expect(lastAuth).toBe(`Bearer ${TOKEN}`);
+    expect(lastInvoke).toMatchObject({
+      botId: "bot-vm",
+      threadId: "thread-vm",
+      tool: "open_url",
+      arguments: { url: "https://google.com" },
+    });
+    expect(res.result.isError).toBe(false);
+    expect(res.result.content[0].text).toBe("Opened https://google.com in this bot's Local VM browser.");
   });
 
   it("refuses host-terminal tools instead of forwarding them", async () => {

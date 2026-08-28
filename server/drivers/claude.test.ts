@@ -440,6 +440,33 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(instance.adapter.capabilities.localComputerMcp).toBe(true);
   });
 
+  it("mounts stable Local VM adapter into computer MCP and pre-allows its tools", async () => {
+    await create();
+    const dump = join(scratch, "vm-dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({
+      threadId: "t-vm",
+      text: "open google",
+      integrations: {
+        localComputer: {
+          command: process.execPath,
+          args: ["/path/to/local-vm-invoke-proxy.ts"],
+          env: { OMB_BOT_ID: "b-vm", OMB_THREAD_ID: "t-vm", OMB_COMMS_TOKEN: "tok-123" },
+        },
+      },
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpConfig.mcpServers.computer).toEqual({
+      command: process.execPath,
+      args: ["/path/to/local-vm-invoke-proxy.ts"],
+      env: { OMB_BOT_ID: "b-vm", OMB_THREAD_ID: "t-vm", OMB_COMMS_TOKEN: "tok-123" },
+    });
+    const allowed = seen.argv[seen.argv.indexOf("--allowedTools") + 1];
+    expect(allowed).toContain("mcp__computer");
+  });
+
   it("resumes with --resume when a cursor exists and reports that session id", async () => {
     await create();
     const dump = join(scratch, "dump.json");

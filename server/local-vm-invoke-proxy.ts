@@ -5,7 +5,7 @@
 import readline from "node:readline";
 
 import { CONTROL_REFUSAL_PLAIN, createControlClient } from "./control-client.ts";
-import { LOCAL_VM_INVOKE_TOOLS, isLocalVmInvokeTool } from "./local-vm-invoke.ts";
+import { LOCAL_VM_INVOKE_TOOLS, LOCAL_VM_STARTING_MESSAGE, isLocalVmInvokeTool } from "./local-vm-invoke.ts";
 
 const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
@@ -80,7 +80,8 @@ async function handle(msg: Json) {
             JSON.stringify({
               state: "starting",
               retryable: true,
-              message: String(body.message ?? "The Local VM is starting. Retry this computer action shortly."),
+              message: String(body.message ?? LOCAL_VM_STARTING_MESSAGE),
+              retry: "Retry the exact same tool call with the same arguments.",
             }),
             false,
           );

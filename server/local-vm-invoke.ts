@@ -17,7 +17,7 @@ import {
 
 export type BotComputer = "cloud" | "vm" | "local" | "off" | undefined;
 export type LocalVmMode = "shared" | "per-bot";
-export type LocalVmMount = "cua" | "lazy";
+export type LocalVmMount = "vm";
 
 export interface LocalVmTurnContract {
   error: string | null;
@@ -50,7 +50,7 @@ export type LocalVmEnsureResult =
   | { state: "blocked"; retryable: false; message: string };
 
 export const LOCAL_VM_STARTING_MESSAGE =
-  "The Local VM desktop is still starting. Retry this computer action shortly. Do not control the user's Mac.";
+  "The Local VM desktop is still starting. Retry the exact same computer action shortly. Do not control the user's Mac.";
 
 const HOST_ENGINE_ERROR =
   "this model engine cannot use the Local VM — choose Claude or an ACP engine, or select another computer destination";
@@ -140,6 +140,7 @@ export function localVmSelfInvokePrompt(mode: LocalVmMode): string {
     " This is YOUR computer, not the user's Mac. Never inspect, click, type, or otherwise control the user's macOS desktop, and never fall back to it." +
     " Only /home/cua/workspace is durable; save downloads, repositories, working files, and browser profiles there because everything else inside the VM is disposable. No other host folder is mounted." +
     " When a request needs this computer — browsing, opening a site, clicking, typing, or other desktop work — use the computer and browser tools immediately. Do not ask whether you should use them, and do not wait for a tool picker." +
+    " If a tool reports that the Local VM desktop is still starting or booting, it is a retryable starting state: wait briefly and retry the exact same computer action on this VM. Do not give up or fall back to the user's Mac." +
     " Inspect the desktop state before acting, prefer accessibility targets over raw coordinates, and work carefully."
   );
 }
@@ -148,7 +149,7 @@ export function localVmTurnContract(input: {
   computer: BotComputer;
   mountsComputerMcp: boolean;
   driverKind: string;
-  vmReady: boolean;
+  vmReady?: boolean;
   mode?: LocalVmMode;
 }): LocalVmTurnContract {
   if (input.computer !== "vm") {
@@ -167,7 +168,7 @@ export function localVmTurnContract(input: {
     error: null,
     prompt: localVmSelfInvokePrompt(input.mode ?? "shared"),
     exposeTools: true,
-    mount: input.vmReady ? "cua" : "lazy",
+    mount: "vm",
     allowHostFallback: false,
   };
 }
@@ -192,7 +193,7 @@ export function decideLocalVmEnsure(input: {
     return { action: "blocked", message: "this Local VM is already being used by another turn — wait for that turn to finish" };
   }
   if (input.imageBusy || input.modeChangeBusy) {
-    return { action: "wait", message: "this Local VM is being prepared — retry shortly" };
+    return { action: "wait", message: "this Local VM is being prepared — retry the exact same computer action shortly" };
   }
   if (input.lifecycleBusy) {
     return { action: "wait", message: LOCAL_VM_STARTING_MESSAGE };
@@ -212,7 +213,7 @@ export function decideLocalVmEnsure(input: {
     return { action: "blocked", message: "This runtime cannot create a per-bot Local VM." };
   }
   if (input.provisionBusy) {
-    return { action: "wait", message: "another Local VM is being created — retry shortly" };
+    return { action: "wait", message: "another Local VM is being created — retry the exact same computer action shortly" };
   }
   if (input.mode === "per-bot" && !input.targetExists && input.existingCount >= input.maxInstances) {
     return {
@@ -252,16 +253,39 @@ export function isLocalVmInvokeTool(name: string): boolean {
 
 export function sanitizeLocalVmInvokeText(text: string): string {
   let out = redactSecretsInText(text);
-  out = out.replace(/https?:\/\/127\.0\.0\.1:\d+\S*/gi, "[redacted-local-url]");
-  out = out.replace(/https?:\/\/\[::1\]:\d+\S*/gi, "[redacted-local-url]");
-  out = out.replace(/https?:\/\/localhost:\d+\S*/gi, "[redacted-local-url]");
+
+  // Loopback and internal/private IP URLs
+  out = out.replace(/https?:\/\/(?:127(?:\.\d{1,3}){3}|localhost|\[::1\]|0\.0\.0\.0)(?::\d+)?\S*/gi, "[redacted-local-url]");
+  out = out.replace(/https?:\/\/host\.docker\.internal(?::\d+)?\S*/gi, "[redacted-local-url]");
+  out = out.replace(/https?:\/\/(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})(?::\d+)?\S*/gi, "[redacted-local-url]");
+
+  // Standalone host.docker.internal mentions
+  out = out.replace(/\bhost\.docker\.internal\b/gi, "[redacted-host]");
+
+  // VNC viewer HTML and auth tokens
   out = out.replace(/vnc\.html\S*/gi, "[redacted-viewer]");
+  out = out.replace(/\bVNC_PW=\S+/gi, "VNC_PW=[redacted]");
+  out = out.replace(/\bpassword=[^\s&#]+/gi, "password=[redacted]");
+
+  // Bare VNC port disclosures (5900-5909, 6080-6089) in VNC/port contexts
+  out = out.replace(/\b(?:port\s*[:=]?\s*)(?:590\d|608\d)\b/gi, "port [redacted-port]");
+  out = out.replace(/:(?:590\d|608\d)\b/g, ":[redacted-port]");
+  out = out.replace(/\b(?:vnc|rfb|novnc|viewer)\s+(?:on\s+)?(?:port\s+)?(?:590\d|608\d)\b/gi, "vnc [redacted-port]");
+  out = out.replace(/\b(?:rfbport|vncport)\s*[:=]?\s*\d+\b/gi, "[redacted-port]");
+
+  // Runtime socket paths
+  out = out.replace(/\bunix:\/\/[^\s"']+\.sock\b/gi, "[redacted-socket]");
+  out = out.replace(/\/(?:[^\s"']+\/)?(?:podman|docker|containerd|cua)[^\s"']*\.sock\b/gi, "[redacted-socket]");
+  out = out.replace(/\/(?:var\/)?run\/user\/\d+\/[^\s"']+/g, "[redacted-path]");
+  out = out.replace(/\/(?:var\/)?run\/[^\s"']+\.sock\b/gi, "[redacted-socket]");
+  out = out.replace(/\/tmp\/[^\s"']+\.sock\b/gi, "[redacted-socket]");
+
+  // Host filesystem paths (keep durable /home/cua paths visible)
   out = out.replace(/\/Users\/[^\s"'\\]+/g, "[redacted-path]");
   out = out.replace(/[A-Za-z]:\\[^\s"']+/g, "[redacted-path]");
   out = out.replace(/\/(?:private|var)\/folders\/[^\s"']+/g, "[redacted-path]");
   out = out.replace(/\/home\/(?!cua(?:\/|\b))[^\s"']+/g, "[redacted-path]");
-  out = out.replace(/\bVNC_PW=\S+/gi, "VNC_PW=[redacted]");
-  out = out.replace(/\bpassword=[^\s&#]+/gi, "password=[redacted]");
+
   return out;
 }
 
@@ -326,6 +350,10 @@ export async function executeLocalVmInvokeTool(
       if (!data) return { text: "The Local VM screenshot was empty. Retry shortly.", isError: true };
       return { text: "Captured this bot's Local VM desktop.", isError: false, image: data };
     }
+    if (name === "get_desktop_state") {
+      const out = await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "get_desktop_state", args);
+      return { text: sanitizeLocalVmInvokeText(out || "Inspected this bot's Local VM desktop state."), isError: false };
+    }
     if (name === "open_url") {
       const url = field(args, "url");
       const normalized = normalizeBrowserUrl(url);
@@ -373,8 +401,7 @@ export async function executeLocalVmInvokeTool(
       const out = await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "launch_app", { app });
       return { text: sanitizeLocalVmInvokeText(out || `Launched ${app} on this bot's Local VM.`), isError: false };
     }
-    const out = await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, name, args);
-    return { text: sanitizeLocalVmInvokeText(out || "Done on this bot's Local VM."), isError: false };
+    return { text: "That computer tool is not available on this bot's Local VM.", isError: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { text: sanitizeLocalVmInvokeText(message), isError: true };

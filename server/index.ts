@@ -63,7 +63,6 @@ import {
 import {
   containerComputerAction,
   containerComputerExists,
-  containerComputerMcp,
   containerComputerScreenshot,
   containerComputerStatus,
   containerRuntimeStatus,
@@ -154,6 +153,7 @@ import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
 import { projectLocalVmStatus } from "./local-vm-phone.ts";
 import {
+  LOCAL_VM_STARTING_MESSAGE,
   ensureLocalVm,
   executeLocalVmInvokeTool,
   isLocalVmInvokeTool,
@@ -1934,7 +1934,7 @@ async function startTurn(
           computer: "vm",
           mountsComputerMcp,
           driverKind: instance.driverKind,
-          vmReady: false,
+          mode: localVmMode(cfg),
         });
         if (vmPlan.error) throw new Error(vmPlan.error);
         const localVmTarget = localVmTargetForBot(bot.id);
@@ -1948,18 +1948,7 @@ async function startTurn(
         localVmActiveThreads.set(localVmTarget.key, threadId);
         localVmIdleFor(localVmTarget).touch();
         const control = controlIntegration(bot.id);
-        const localVm = await containerComputerStatus(undefined, undefined, localVmTarget);
-        const mount = localVmTurnContract({
-          computer: "vm",
-          mountsComputerMcp,
-          driverKind: instance.driverKind,
-          vmReady: Boolean(localVm.ready && localVm.runtime),
-          mode: localVmMode(cfg),
-        }).mount;
-        integrations.localComputer =
-          mount === "cua" && localVm.runtime
-            ? containerComputerMcp(localVm.runtime, control, localVmTarget)
-            : localVmInvokeIntegration(bot.id, threadId, control);
+        integrations.localComputer = localVmInvokeIntegration(bot.id, threadId, control);
         if (localComputerMountIsHost(integrations.localComputer)) {
           throw new Error("Local VM turns cannot control the host computer");
         }
@@ -4004,7 +3993,7 @@ const server = createServer(async (req, res) => {
             return json(res, 200, {
               state: "starting",
               retryable: true,
-              message: "The Local VM desktop is still starting. Retry this computer action shortly.",
+              message: LOCAL_VM_STARTING_MESSAGE,
             });
           }
           const rawArgs = body.arguments;

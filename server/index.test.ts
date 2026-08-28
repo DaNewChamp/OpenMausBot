@@ -2924,3 +2924,62 @@ describe("computer control API (who is driving)", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("Local VM startTurn and internal invoke API", () => {
+  let vmBotId = "";
+  let vmThreadId = "";
+
+  beforeAll(async () => {
+    const created = await api("POST", "/api/bots", {});
+    vmBotId = created.body.bot.id;
+    vmThreadId = created.body.bot.threadId;
+    await api("PATCH", `/api/bots/${vmBotId}`, {
+      computer: "vm",
+      modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+    });
+  });
+
+  afterAll(async () => {
+    if (vmBotId) {
+      await api("POST", `/api/bots/${vmBotId}/interrupt`).catch(() => {});
+      await api("DELETE", `/api/bots/${vmBotId}`).catch(() => {});
+    }
+  });
+
+  it("selects the stable Local VM mount in startTurn and passes proxy config", async () => {
+    rmSync(fakeClaudeDump, { force: true });
+    const res = await api("POST", `/api/bots/${vmBotId}/messages`, { text: "open browser on your computer" });
+    expect(res.status).toBe(202);
+    await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
+
+    const dump = JSON.parse(readFileSync(fakeClaudeDump, "utf8"));
+    const computerMcp = dump.mcpConfig?.mcpServers?.computer;
+    expect(computerMcp).toBeDefined();
+    expect(computerMcp.args[0]).toMatch(/local-vm-invoke-proxy/);
+    expect(computerMcp.env.OMB_BOT_ID).toBe(vmBotId);
+    expect(computerMcp.env.OMB_THREAD_ID).toBe(vmThreadId);
+    expect(computerMcp.env.OMB_COMMS_TOKEN).toBeTruthy();
+
+    const allowedIndex = dump.argv.indexOf("--allowedTools");
+    expect(allowedIndex).toBeGreaterThanOrEqual(0);
+    expect(dump.argv[allowedIndex + 1]).toContain("mcp__computer");
+
+    await api("POST", `/api/bots/${vmBotId}/interrupt`);
+  });
+
+  it("seals the internal local-vm invoke endpoint behind the boot token", async () => {
+    const noToken = await fetch(`${BASE}/api/internal/local-vm/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ botId: vmBotId, threadId: vmThreadId, tool: "open_url" }),
+    });
+    expect(noToken.status).toBe(401);
+
+    const badToken = await fetch(`${BASE}/api/internal/local-vm/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer wrong-secret-token" },
+      body: JSON.stringify({ botId: vmBotId, threadId: vmThreadId, tool: "open_url" }),
+    });
+    expect(badToken.status).toBe(401);
+  });
+});
