@@ -100,6 +100,9 @@ struct AgentProfileView: View {
         session.engineSync?.usesReconstructedMutations == true && pickedInstanceId != "cursor"
     }
     private var botRoutines: [Routine] { routines.filter { $0.botId == current.id } }
+    private var usesCustomAvatarPhoto: Bool {
+        current.avatarUrl != nil && current.displayedAvatarCrop != .mascot
+    }
     private var hasUnsavedChanges: Bool {
         !profilePatchIsEmpty || pickedInstanceId != current.modelSelection.instanceId || pickedModel != current.modelSelection.model || pickedEffort != current.modelSelection.effort
     }
@@ -282,99 +285,119 @@ struct AgentProfileView: View {
         VStack(alignment: .leading, spacing: 10) {
             profileSectionLabel("Character")
 
-            VStack(spacing: 0) {
-                LazyVGrid(
-                    columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 6),
-                    spacing: 16
-                ) {
-                    ForEach(profileColors) { choice in
-                        Button {
-                            Haptics.selection()
-                            selectedColor = choice.id
-                            scheduleAppearanceSave()
-                        } label: {
-                            Circle()
-                                .fill(choice.color)
-                                .frame(width: 28, height: 28)
-                                .overlay {
-                                    if choice.id == "white" {
-                                        Circle().stroke(Color.primary.opacity(0.22), lineWidth: 1)
+            if usesCustomAvatarPhoto {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Your photo is shown in chat. Color and mark apply if you switch back to the mascot.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 18)
+                        .padding(.top, 16)
+
+                    Picker("Shape", selection: photoCropBinding) {
+                        ForEach([AvatarCrop.circle, .rounded, .square], id: \.self) { shape in
+                            Text(shape.label).tag(shape)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 16)
+                }
+                .profileCard()
+            } else {
+                VStack(spacing: 0) {
+                    LazyVGrid(
+                        columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 6),
+                        spacing: 16
+                    ) {
+                        ForEach(profileColors) { choice in
+                            Button {
+                                Haptics.selection()
+                                selectedColor = choice.id
+                                scheduleAppearanceSave()
+                            } label: {
+                                Circle()
+                                    .fill(choice.color)
+                                    .frame(width: 28, height: 28)
+                                    .overlay {
+                                        if choice.id == "white" {
+                                            Circle().stroke(Color.primary.opacity(0.22), lineWidth: 1)
+                                        }
                                     }
-                                }
+                                    .overlay {
+                                        Circle()
+                                            .stroke(
+                                                isSelectedColor(choice.id) ? Color.white.opacity(0.72) : .clear,
+                                                lineWidth: 1.5
+                                            )
+                                            .padding(-5)
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                            .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.78), value: selectedColor)
+                            .accessibilityLabel("\(choice.name) character color")
+                            .accessibilityAddTraits(isSelectedColor(choice.id) ? .isSelected : [])
+                        }
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 16)
+                    .padding(.bottom, 16)
+
+                    Divider().overlay(AgentProfileStyle.divider)
+
+                    HStack(spacing: 6) {
+                        ForEach(MascotMark.allCases) { mark in
+                            Button {
+                                Haptics.selection()
+                                selectedShape = mark
+                                scheduleAppearanceSave()
+                            } label: {
+                                MascotMarkIcon(
+                                    kind: mark.rawValue,
+                                    color: MausPalette.color(selectedColor),
+                                    size: 26
+                                )
+                                .frame(width: 32, height: 32)
                                 .overlay {
                                     Circle()
                                         .stroke(
-                                            isSelectedColor(choice.id) ? Color.white.opacity(0.72) : .clear,
+                                            selectedShape == mark ? Color.white.opacity(0.72) : .clear,
                                             lineWidth: 1.5
                                         )
-                                        .padding(-5)
+                                        .padding(-4)
                                 }
-                        }
-                        .buttonStyle(.plain)
-                        .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.78), value: selectedColor)
-                        .accessibilityLabel("\(choice.name) character color")
-                        .accessibilityAddTraits(isSelectedColor(choice.id) ? .isSelected : [])
-                    }
-                }
-                .padding(.horizontal, 18)
-                .padding(.top, 16)
-                .padding(.bottom, 16)
-
-                Divider().overlay(AgentProfileStyle.divider)
-
-                HStack(spacing: 6) {
-                    ForEach(MascotMark.allCases) { mark in
-                        Button {
-                            Haptics.selection()
-                            selectedShape = mark
-                            scheduleAppearanceSave()
-                        } label: {
-                            MascotMarkIcon(
-                                kind: mark.rawValue,
-                                color: MausPalette.color(selectedColor),
-                                size: 26
-                            )
-                            .frame(width: 32, height: 32)
-                            .overlay {
-                                Circle()
-                                    .stroke(
-                                        selectedShape == mark ? Color.white.opacity(0.72) : .clear,
-                                        lineWidth: 1.5
-                                    )
-                                    .padding(-4)
                             }
+                            .buttonStyle(.plain)
+                            .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.78), value: selectedShape)
+                            .accessibilityLabel("\(mark.label) character mark")
+                            .accessibilityAddTraits(selectedShape == mark ? .isSelected : [])
                         }
-                        .buttonStyle(.plain)
-                        .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.78), value: selectedShape)
-                        .accessibilityLabel("\(mark.label) character mark")
-                        .accessibilityAddTraits(selectedShape == mark ? .isSelected : [])
                     }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 14)
 
-                Divider().overlay(AgentProfileStyle.divider)
+                    Divider().overlay(AgentProfileStyle.divider)
 
-                Button("Reset to default") {
-                    Haptics.selection()
-                    selectedColor = "green"
-                    selectedShape = .droplet
-                    scheduleAppearanceSave()
+                    Button("Reset to default") {
+                        Haptics.selection()
+                        selectedColor = "green"
+                        selectedShape = .droplet
+                        scheduleAppearanceSave()
+                    }
+                    .font(.body)
+                    .foregroundStyle(Color.accentColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 14)
+                    .accessibilityHint("Sets the green droplet mark")
                 }
-                .font(.body)
-                .foregroundStyle(Color.accentColor)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 14)
-                .accessibilityHint("Sets the green droplet mark")
+                .profileCard()
+
+                Text("How this Bot's mark looks everywhere")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 18)
             }
-            .profileCard()
-
-            Text("How this Bot's mark looks everywhere")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 18)
 
             if let notice = session.appearanceSaveNotice(for: current) {
                 Label(notice, systemImage: "iphone.and.arrow.forward")
@@ -385,6 +408,21 @@ struct AgentProfileView: View {
             }
         }
         .padding(.top, 18)
+    }
+
+    private var photoCropBinding: Binding<AvatarCrop> {
+        Binding(
+            get: {
+                switch crop {
+                case .circle, .rounded, .square: crop
+                default: .circle
+                }
+            },
+            set: { newCrop in
+                crop = newCrop
+                Task { await savePhotoCrop(newCrop) }
+            }
+        )
     }
 
     /// Eleven Grok picker swatches. `cyan` is the same hue as teal, so an
@@ -1031,6 +1069,15 @@ struct AgentProfileView: View {
             selectedShape = MascotMark(rawValue: updated.mascotShape?.rawValue ?? requestedShape.rawValue) ?? requestedShape
             baseline.shape = MascotShape(rawValue: selectedShape.rawValue) ?? .droplet
         }
+    }
+
+    private func savePhotoCrop(_ requested: AvatarCrop) async {
+        guard requested != baseline.crop, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let updated = await session.updateProfile(BotProfilePatch(avatarCrop: requested), for: current) else { return }
+        crop = updated.avatarCrop ?? requested
+        baseline.crop = crop
     }
 
     /// Full profile save used by the explicit menu and every dismissal path.
