@@ -5,7 +5,7 @@
 // through the companion's matching allowlist and WebSocket forward.
 import type { IncomingMessage } from "node:http";
 import { request as httpRequest } from "node:http";
-import type { Socket } from "node:net";
+import type { Duplex } from "node:stream";
 
 import type { ContainerComputerStatus } from "./container-computer.ts";
 
@@ -71,7 +71,10 @@ function endToEndHeaders(headers: IncomingMessage["headers"]): Record<string, st
     : String(headers.connection ?? "");
   for (const name of connection.split(",")) blocked.add(name.trim().toLowerCase());
   return Object.fromEntries(
-    Object.entries(headers).filter(([name, value]) => value !== undefined && !blocked.has(name.toLowerCase())),
+    Object.entries(headers).filter(
+      (entry): entry is [string, string | string[]] =>
+        entry[1] !== undefined && !blocked.has(entry[0].toLowerCase()),
+    ),
   );
 }
 
@@ -112,7 +115,7 @@ export function proxyLocalVmViewerHttp(
 
 export function proxyLocalVmViewerUpgrade(
   req: IncomingMessage,
-  clientSocket: Socket,
+  clientSocket: Duplex,
   head: Buffer,
   target: LocalVmViewerTarget,
   subpath: string,
