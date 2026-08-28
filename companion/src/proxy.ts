@@ -38,7 +38,6 @@ import {
   isLocalVmPhoneSurface,
   isLocalVmViewerUpgrade,
   localVmViewerBotId,
-  localVmViewerBotId,
   validateBotModelBody,
   validateBotVisibilityBody,
   validateComputerDestinationBody,

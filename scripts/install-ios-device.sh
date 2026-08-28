@@ -8,7 +8,7 @@ IOS="$ROOT/ios"
 SCHEME="OpenMausCompanion"
 BUNDLE_ID="com.posival.openmausmobile"
 TEAM_ID="LT58RNRW7E"
-DEVICE_UDID="${DEVICE_UDID:-00008150-001428C00247801C}"
+DEVICE_UDID="${DEVICE_UDID:-C8EA9F61-6E1A-5C41-A4DE-B3454CC89528}"
 BRANCH="${BRANCH:-cursor/build-36-local-vm-phone-a27c}"
 DERIVED="$IOS/build/DerivedData-device"
 
