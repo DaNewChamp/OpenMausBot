@@ -1101,7 +1101,7 @@ struct ChatView: View {
 
     // MARK: - Composer
 
-    /// A round + and a glass pill with dictation and send inside it.
+    /// A round + and a solid Grok-style pill with dictation and send inside it.
     private var composer: some View {
         VStack(spacing: 6) {
             let pendingCount = pendingQueueNotices.values.filter { $0.threadId == threadId }.count
@@ -1188,7 +1188,7 @@ struct ChatView: View {
                 .transition(reduceMotion ? .identity : .opacity)
             }
 
-            HStack(alignment: .bottom, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
                 Menu {
                     attachmentPickerMenuItems
                     Divider()
@@ -1208,10 +1208,10 @@ struct ChatView: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .glassCircle()
+                .background(VBotSurface.composerSurface, in: Circle())
                 .accessibilityLabel("More")
 
-                HStack(alignment: .bottom, spacing: 2) {
+                HStack(alignment: .center, spacing: 2) {
                     if showCommandHUD || draft.hasPrefix("/") {
                         Button {
                             dictation.stop()
@@ -1237,6 +1237,7 @@ struct ChatView: View {
                     )
                         .lineLimit(1...5)
                         .font(chatTypography.composer)
+                        .foregroundStyle(Color.primary)
                         .padding(.leading, showCommandHUD || draft.hasPrefix("/") ? 0 : 16)
                         .padding(.vertical, 12)
                         .focused($composerFocused)
@@ -1262,20 +1263,20 @@ struct ChatView: View {
                             dictation.toggle(capturing: draft)
                         } label: {
                             Image(systemName: dictation.isListening ? "mic.fill" : "mic")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(dictation.isListening ? Color.red : Color.primary)
+                                .font(.system(size: 17, weight: .medium))
+                                .foregroundStyle(dictation.isListening ? Color.red : Color.secondary)
                                 .frame(width: 36, height: 36)
                                 .symbolEffect(.pulse, isActive: dictation.isListening && !reduceMotion)
                         }
                         .buttonStyle(.plain)
-                        .padding(.trailing, 8)
+                        .padding(.trailing, 10)
                         .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
                     } else {
                         primaryActionButton
                     }
                 }
                 .frame(minHeight: 44)
-                .glassCapsuleBackdrop()
+                .background(VBotSurface.composerSurface, in: Capsule())
             }
         }
         .padding(.horizontal, 12)
@@ -1394,7 +1395,6 @@ struct ChatView: View {
             .buttonStyle(.plain)
             .disabled(composerRequestGate.isInFlight)
             .padding(.trailing, 6)
-            .padding(.bottom, 6)
             .accessibilityLabel(current.isBot ? "Stop current work" : "Stop active responder")
             .accessibilityHint(
                 current.isBot
@@ -1429,7 +1429,6 @@ struct ChatView: View {
                 }
             }
             .padding(.trailing, 6)
-            .padding(.bottom, 6)
             .accessibilityLabel(mode == .steer ? "Send and steer" : mode == .queue ? "Send and queue" : "Send")
             .accessibilityHint("Touch and hold for explicit steer or queue choices")
             .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: canSend)
@@ -1445,7 +1444,6 @@ struct ChatView: View {
             .buttonStyle(.plain)
             .disabled(true)
             .padding(.trailing, 6)
-            .padding(.bottom, 6)
             .accessibilityLabel("Send")
         }
     }
