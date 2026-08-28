@@ -406,9 +406,9 @@ struct AccountSheet: View {
                         ConnectedAppsView()
                     } label: {
                         rowLabel(
-                            title: "Plugins",
-                            subtitle: "Tools and skills for your agents",
-                            systemImage: "puzzlepiece.extension"
+                            title: "Connected apps",
+                            subtitle: "Connectors and accounts your bots can use",
+                            systemImage: "link"
                         )
                     }
                     NavigationLink {

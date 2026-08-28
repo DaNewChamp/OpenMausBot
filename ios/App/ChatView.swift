@@ -30,6 +30,7 @@ struct ChatView: View {
     @AppStorage("conversationTextSize") private var conversationTextSize = ConversationTextSize.standard.rawValue
     @AppStorage("busySendDefault") private var busySendDefault = BusySendDefault.steer.rawValue
     @State private var draft = ""
+    @State private var replyingTo: Message?
     @State private var composerRequestGate = ComposerRequestGate()
     @State private var pendingQueueNotices: [String: PendingQueueNotice] = [:]
     @State private var showingTasks = false
@@ -156,7 +157,8 @@ struct ChatView: View {
                                             onOpenComm: { groupId in
                                                 commRoom = session.state.rooms.first { $0.id == groupId }
                                             },
-                                            onReply: { _ in
+                                            onReply: { message in
+                                                replyingTo = message
                                                 composerFocused = true
                                             }
                                         )
@@ -827,6 +829,7 @@ struct ChatView: View {
                 )
             )
             attachmentError = nil
+            Haptics.impact(.light)
         } catch {
             attachmentError = error.localizedDescription
         }
@@ -1020,6 +1023,23 @@ struct ChatView: View {
         Haptics.selection()
     }
 
+    private func replyAuthor(for message: Message, in chat: Chat) -> String {
+        if message.role == .user { return "You" }
+        return message.from?.name ?? chat.name
+    }
+
+    private func replySnippet(for message: Message) -> String {
+        let text = message.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let oneLine = text.replacingOccurrences(of: "\n", with: " ")
+        let snippet = String(oneLine.prefix(120))
+        return snippet.isEmpty ? "Message" : snippet
+    }
+
+    private func promptText(_ text: String, replyingTo message: Message?, in chat: Chat) -> String {
+        guard let message else { return text }
+        return "> \(replyAuthor(for: message, in: chat)): \(replySnippet(for: message))\n\n\(text)"
+    }
+
     private var primaryAction: ComposerPrimaryAction {
         // The shared policy knows about text only. A selected image is still
         // a sendable message, so pass a non-empty sentinel without changing
@@ -1052,17 +1072,19 @@ struct ChatView: View {
         // open the microphone after the message has already been sent.
         dictation.stop()
         let draftAtSubmission = draft
+        let replyAtSubmission = replyingTo
         let text = (explicitText ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
         guard (!text.isEmpty || !selectedAttachments.isEmpty), composerRequestGate.begin() else { return }
         let target = current
         let mode = explicitMode ?? (target.busy ? selectedBusySendDefault.deliveryMode : .auto)
         showCommandHUD = false
         Task { @MainActor in
+            let textWithReply = promptText(text, replyingTo: replyAtSubmission, in: target)
             let prompt: String
             if selectedAttachments.isEmpty {
-                prompt = text
+                prompt = textWithReply
             } else if let paths = await uploadSelectedAttachments() {
-                prompt = AttachmentPrompt.compose(text: text, paths: paths)
+                prompt = AttachmentPrompt.compose(text: textWithReply, paths: paths)
             } else {
                 composerRequestGate.end()
                 return
@@ -1083,6 +1105,7 @@ struct ChatView: View {
                 // The editor remains usable while the request is in flight.
                 // Do not erase a newer draft that was typed after submission.
                 if draft == draftAtSubmission { draft = "" }
+                replyingTo = nil
                 selectedAttachments.removeAll()
                 attachmentError = nil
                 SoundEffects.playSent()
@@ -1136,6 +1159,9 @@ struct ChatView: View {
     private var composer: some View {
         VStack(spacing: 6) {
             let pendingCount = pendingQueueNotices.values.filter { $0.threadId == threadId }.count
+            if let replyingTo {
+                replyBanner(for: replyingTo)
+            }
             attachmentPreviewStrip
 
             if pendingCount > 0 {
@@ -1294,6 +1320,46 @@ struct ChatView: View {
         .padding(.top, 6)
         .padding(.bottom, 8)
         .background(VBotSurface.background.ignoresSafeArea(.container, edges: .bottom))
+    }
+
+    private func replyBanner(for message: Message) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "arrowshape.turn.up.left.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(MausPalette.color(current.color))
+                .frame(width: 24, height: 24)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Replying to \(replyAuthor(for: message, in: current))")
+                    .font(chatTypography.detail.weight(.semibold))
+                    .foregroundStyle(Color.primary)
+                Text(replySnippet(for: message))
+                    .font(chatTypography.detail)
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 4)
+
+            Button {
+                replyingTo = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Color.primary.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel reply")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(VBotSurface.controlSurface)
+        )
+        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder
@@ -2335,8 +2401,10 @@ private struct ConnectorCardView: View {
 
     @EnvironmentObject private var session: Session
     @Environment(\.conversationTypography) private var typography
+    @Environment(\.scenePhase) private var scenePhase
     @State private var actionInFlight = false
     @State private var localError: String?
+    @State private var playedConnectSound = false
 
     private var accent: Color { MausPalette.color(chat.color) }
 
@@ -2454,6 +2522,13 @@ private struct ConnectorCardView: View {
             .task(id: "\(message.id)|\(connector.status.rawValue)") {
                 await pollAuthorizationIfNeeded()
             }
+            .onChange(of: connector.status) { _, status in
+                if status == .connected { playConnectSoundIfNeeded() }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                Task { await refreshAuthorizationStatus() }
+            }
         }
     }
 
@@ -2495,6 +2570,24 @@ private struct ConnectorCardView: View {
         _ = await session.dismissConnectorCard(chat: chat, message: message)
     }
 
+    @MainActor
+    private func refreshAuthorizationStatus() async {
+        guard (connector.status == .authorizing || connector.status == .required),
+              !Task.isCancelled,
+              canAct
+        else { return }
+        guard let response = await session.connectorCardStatus(chat: chat, message: message) else { return }
+        if response.connected { playConnectSoundIfNeeded() }
+    }
+
+    @MainActor
+    private func playConnectSoundIfNeeded() {
+        guard !playedConnectSound else { return }
+        playedConnectSound = true
+        SoundEffects.playConnect()
+    }
+
+    @MainActor
     private func pollAuthorizationIfNeeded() async {
         guard connector.status == .authorizing else { return }
         for _ in 0..<45 {
@@ -2505,7 +2598,11 @@ private struct ConnectorCardView: View {
             }
             guard !Task.isCancelled else { return }
             guard let response = await session.connectorCardStatus(chat: chat, message: message) else { continue }
-            if response.connected || response.status?.range(of: "failed|expired|revoked|error", options: [.caseInsensitive, .regularExpression]) != nil {
+            if response.connected {
+                playConnectSoundIfNeeded()
+                return
+            }
+            if response.status?.range(of: "failed|expired|revoked|error", options: [.caseInsensitive, .regularExpression]) != nil {
                 return
             }
         }

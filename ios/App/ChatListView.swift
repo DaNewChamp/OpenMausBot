@@ -70,34 +70,24 @@ struct ChatListView: View {
 
                         let rows = chats
                         ForEach(rows) { summary in
-                            Group {
-                                if case let .room(room) = summary.chat {
-                                    Button {
-                                        Haptics.selection()
-                                        groupProfile = room
-                                    } label: {
-                                        ChatRow(
-                                            chat: summary.chat,
-                                            preview: summary.preview,
-                                            at: summary.lastActivity,
-                                            state: MausState.forChat(summary.chat, in: session.state),
-                                            waiting: waitingChats.contains(summary.chat.id)
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                } else {
-                                    NavigationLink(value: summary.chat) {
-                                        ChatRow(
-                                            chat: summary.chat,
-                                            preview: summary.preview,
-                                            at: summary.lastActivity,
-                                            state: MausState.forChat(summary.chat, in: session.state),
-                                            waiting: waitingChats.contains(summary.chat.id)
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                    .simultaneousGesture(TapGesture().onEnded { Haptics.selection() })
-                                }
+                            NavigationLink(value: summary.chat) {
+                                ChatRow(
+                                    chat: summary.chat,
+                                    preview: summary.preview,
+                                    at: summary.lastActivity,
+                                    state: MausState.forChat(summary.chat, in: session.state),
+                                    waiting: waitingChats.contains(summary.chat.id)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .simultaneousGesture(TapGesture().onEnded { Haptics.selection() })
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                PinActionButton(
+                                    chat: summary.chat,
+                                    pinned: summary.pinned,
+                                    session: session,
+                                    pinPrompt: $pinPrompt
+                                )
                             }
                             .pinRowActions(for: summary, session: session, pinPrompt: $pinPrompt) { chat in
                                 if case let .room(room) = chat { groupProfile = room }
@@ -345,11 +335,7 @@ struct ChatListView: View {
     }
 
     private func open(_ chat: Chat) {
-        if case let .room(room) = chat {
-            groupProfile = room
-        } else {
-            path.append(chat)
-        }
+        path.append(chat)
     }
 
 }

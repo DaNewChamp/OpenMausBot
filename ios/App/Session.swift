@@ -307,6 +307,8 @@ final class Session: ObservableObject {
         // keychain — the token is in hand, so there is nothing left to retry.
         restorePending = false
         connect()
+        Haptics.success()
+        SoundEffects.playConnect()
     }
 
     func receivePairingURL(_ url: URL) {

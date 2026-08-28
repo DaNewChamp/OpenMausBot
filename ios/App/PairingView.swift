@@ -53,7 +53,7 @@ struct PairingView: View {
                 .frame(maxWidth: 560)
                 .frame(maxWidth: .infinity)
             }
-            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+            .background(VBotSurface.background.ignoresSafeArea())
             .navigationTitle("Connect computer")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

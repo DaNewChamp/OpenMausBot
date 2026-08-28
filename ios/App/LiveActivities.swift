@@ -23,12 +23,17 @@ final class LiveActivityCoordinator {
         AnswerApprovalIntent.handler = { [weak session] threadId, requestId, choice, isPermission in
             await session?.answer(threadId: threadId, requestId: requestId, choice: choice, isPermission: isPermission)
         }
-        cancellable = session.$state
+        cancellable = Publishers.CombineLatest(
+            session.$state,
+            session.$authoritativeHydrationRevision
+        )
             .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
-            .sink { [weak self] state in self?.sync(state) }
+            .sink { [weak self] state, revision in
+                self?.sync(state, hydrated: revision > 0)
+            }
     }
 
-    private func sync(_ state: CompanionState) {
+    private func sync(_ state: CompanionState, hydrated: Bool) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let wanted = state.updates.filter { $0.kind != .toReview }
         var wantedIds = Set<String>()
@@ -80,11 +85,14 @@ final class LiveActivityCoordinator {
             }
         }
 
-        // bots that went quiet: let the island go
-        for activity in Activity<BotActivityAttributes>.activities where !wantedIds.contains(activity.attributes.botId) {
-            lastSent.removeValue(forKey: activity.attributes.botId)
-            since.removeValue(forKey: activity.attributes.botId)
-            Task { await activity.end(nil, dismissalPolicy: .immediate) }
+        // Do not retire a prior activity from the launch-time empty state.
+        // Only a hydrated idle snapshot is authoritative enough to end it.
+        if hydrated {
+            for activity in Activity<BotActivityAttributes>.activities where !wantedIds.contains(activity.attributes.botId) {
+                lastSent.removeValue(forKey: activity.attributes.botId)
+                since.removeValue(forKey: activity.attributes.botId)
+                Task { await activity.end(nil, dismissalPolicy: .immediate) }
+            }
         }
     }
 }

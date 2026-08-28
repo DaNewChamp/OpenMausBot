@@ -1,10 +1,8 @@
-V Bot build 17 matches Grok Bot’s conversation feel on the OpenMaus backend.
+V Bot build 19: you can leave Tasks & Routines, and group chats open as chats.
 
-• Composer stays above the keyboard instead of hiding under it
-• Group chats get Grok-style @mentions so you pick which bot talks
-• @mention picker shows each bot’s name and color
-• Group typing names the bot that’s working
-• Pin or unpin from the chat itself (header long-press, + menu, or profile), with a confirm step
-• Confirmation haptic on pin, light haptic when a reply lands, tapback haptic on reactions
-• Pinned chats stay on the home strip
-• Fixed message sending when the optional desktop-engine status route is unavailable
+• Tasks & Routines has Done and a drag handle — pull-down no longer traps you in refresh
+• Tapping a group opens the conversation; Group Details stays in the context menu
+• Reply banner quotes locally in the outgoing message
+• Pin/unpin from a roster swipe, with the same confirm step
+• Pairing and welcome screens match the rest of the graphite app
+• Camera permission copy covers pairing QR and attaching a photo

@@ -36,6 +36,15 @@ struct GroupProfileView: View {
                     .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .accessibilityAddTraits(.isHeader)
 
+                NavigationLink(value: Chat.room(currentRoom)) {
+                    Label("Open chat", systemImage: "bubble.left.and.bubble.right.fill")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, minHeight: 52)
+                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .buttonStyle(.plain)
+
                 membersCard
                 instructionsCard
                 routinesCard
@@ -159,6 +168,7 @@ struct GroupProfileView: View {
                         .frame(minHeight: 56)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Open 1:1 with \(bot.name)")
                     if index < members.count - 1 {
                         Divider().overlay(GroupProfileStyle.divider).padding(.leading, 62)
                     }
@@ -174,24 +184,27 @@ struct GroupProfileView: View {
     }
 
     private var instructionsCard: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "doc.text")
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(Color.secondary)
-                .frame(width: 28)
-            Text("Instructions")
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Color.secondary)
+                    .frame(width: 28)
+                Text("Instructions")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(Color.primary)
+            }
+
+            Text(currentRoom.bulletin.isEmpty ? "No instructions" : currentRoom.bulletin)
                 .font(.body)
-                .foregroundStyle(Color.primary)
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.secondary)
+                .foregroundStyle(currentRoom.bulletin.isEmpty ? Color.secondary : Color.primary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 16)
+        .padding(.vertical, 16)
         .frame(minHeight: 56)
         .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .accessibilityElement(children: .combine)
-        .accessibilityHint(currentRoom.bulletin.isEmpty ? "Tell this group how to work" : currentRoom.bulletin)
     }
 
     private var routinesCard: some View {

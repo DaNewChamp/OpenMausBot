@@ -172,7 +172,7 @@ struct AgentProfileView: View {
                 instructionsEditor
             }
             .sheet(isPresented: $showingRoutines) {
-                TasksRoutinesView()
+                TasksRoutinesSheet()
             }
             .pinConfirmationDialog($pinPrompt, session: session)
         }

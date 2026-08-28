@@ -1,8 +1,19 @@
 import CompanionCore
 import SwiftUI
 
+struct TasksRoutinesSheet: View {
+    var body: some View {
+        NavigationStack {
+            TasksRoutinesView(showsDone: true)
+        }
+        .presentationDragIndicator(.visible)
+    }
+}
+
 struct TasksRoutinesView: View {
     @EnvironmentObject private var session: Session
+    @Environment(\.dismiss) private var dismiss
+    var showsDone = false
     @State private var routines: [Routine] = []
     @State private var runs: [RoutineRun] = []
     @State private var editor: RoutineEditorTarget?
@@ -57,7 +68,7 @@ struct TasksRoutinesView: View {
 
             Section("Run receipts") {
                 if runs.isEmpty && !loading {
-                    Text("Completed, waiting, failed, and manually started runs appear here.")
+                    Text("No runs yet")
                         .foregroundStyle(.secondary)
                 }
                 ForEach(runs.sorted(by: { $0.scheduledFor > $1.scheduledFor }).prefix(50)) { run in
@@ -75,15 +86,25 @@ struct TasksRoutinesView: View {
             }
         }
         .navigationTitle("Tasks & Routines")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .scrollContentBackground(.hidden)
         .background(VBotSurface.background.ignoresSafeArea())
+        .background {
+            InteractivePopGestureEnabler()
+                .frame(width: 0, height: 0)
+        }
         .toolbar {
+            if showsDone {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button("New routine", systemImage: "plus") { editor = .new }
             }
         }
         .task { await reload() }
-        .refreshable { await reload() }
         .sheet(item: $editor) { target in
             RoutineEditorView(routine: target.routine) { await reload() }
         }

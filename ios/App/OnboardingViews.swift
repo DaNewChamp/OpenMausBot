@@ -14,7 +14,7 @@ struct CompanionWelcomeView: View {
 
                 ZStack {
                     RoundedRectangle(cornerRadius: 32, style: .continuous)
-                        .fill(MausPalette.color("blue").opacity(0.12))
+                        .fill(VBotSurface.controlSurface)
                         .frame(width: 148, height: 148)
                     MausAvatar(color: "blue", size: 108, state: .happy, animated: false)
                         .accessibilityHidden(true)
@@ -56,14 +56,6 @@ struct CompanionWelcomeView: View {
             .frame(maxWidth: .infinity)
         }
         .background(VBotSurface.background.ignoresSafeArea())
-        .background {
-            LinearGradient(
-                colors: [MausPalette.color("blue").opacity(0.10), Color.clear],
-                startPoint: .top,
-                endPoint: .center
-            )
-            .ignoresSafeArea()
-        }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 10) {
                 Button(action: onConnect) {
@@ -94,7 +86,7 @@ private struct WelcomeBenefit: View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: icon)
                 .font(.title3)
-                .foregroundStyle(MausPalette.color("blue"))
+                .foregroundStyle(.primary)
                 .frame(width: 30, height: 30)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
@@ -121,11 +113,11 @@ struct UnpairedHomeView: View {
 
                     ZStack {
                         Circle()
-                            .fill(MausPalette.color("blue").opacity(0.12))
+                            .fill(VBotSurface.controlSurface)
                             .frame(width: 112, height: 112)
                         Image(systemName: "laptopcomputer.and.iphone")
                             .font(.system(size: 42, weight: .medium))
-                            .foregroundStyle(MausPalette.color("blue"))
+                            .foregroundStyle(.primary)
                     }
                     .accessibilityHidden(true)
 
@@ -199,7 +191,7 @@ struct NotificationOnboardingView: View {
                 VStack(spacing: 10) {
                     Text("Stay in the loop")
                         .font(.largeTitle.bold())
-                    Text("Get alerts while V Bot is open or was recently in the background. Alerts stop after iOS fully suspends or closes the app.")
+                    Text("Get alerts while V Bot is open or was recently in the background. The Live Activity on the island can stay accurate after you just left the app. Closed-app alerts are still not promised.")
                         .font(.title3)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
