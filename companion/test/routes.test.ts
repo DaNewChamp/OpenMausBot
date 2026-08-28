@@ -210,6 +210,9 @@ describe("what it may not", () => {
     expect(allowed("POST", "/api/bots/bot_123/local-computer/stop")).toBe(true);
     expect(allowed("POST", "/api/bots/bot_123/local-computer/recreate")).toBe(true);
     expect(allowed("POST", "/api/bots/bot_123/local-computer/screenshot")).toBe(true);
+    expect(allowed("POST", "/api/bots/bot_123/local-computer/join")).toBe(true);
+    expect(allowed("POST", "/api/bots/bot_123/local-computer/input")).toBe(true);
+    expect(allowed("GET", "/api/bots/bot_123/local-computer/viewer/vnc.html")).toBe(true);
     expect(allowed("POST", "/api/local-computer/run")).toBe(false);
     expect(allowed("POST", "/api/local-computer/screenshot")).toBe(false);
     expect(allowed("POST", "/api/bots/bot_123/local-computer/start")).toBe(false);

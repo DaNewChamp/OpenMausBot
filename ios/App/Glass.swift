@@ -91,6 +91,50 @@ struct GlassGroup<Content: View>: View {
 
 /// A round glass button with one glyph — the shape of every action in the
 /// chrome that is not a pill.
+/// A soft material fade for floating chrome. The transcript scrolls beneath
+/// and blurs as it passes under back/name/actions instead of hitting a solid
+/// bar — the Grok conversation header pattern.
+struct ScrollEdgeChrome: View {
+    enum Edge {
+        case top
+        case bottom
+    }
+
+    let edge: Edge
+
+    var body: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .mask(fadeMask)
+            .allowsHitTesting(false)
+    }
+
+    private var fadeMask: LinearGradient {
+        switch edge {
+        case .top:
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black.opacity(0.78), location: 0.58),
+                    .init(color: .clear, location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        case .bottom:
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black.opacity(0.78), location: 0.42),
+                    .init(color: .black, location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+    }
+}
+
 struct GlassButton: View {
     let systemImage: String
     var size: CGFloat = 44

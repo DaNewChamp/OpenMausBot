@@ -1,9 +1,8 @@
 // A bot's computer, live.
 //
-// The phone can pick where the computer runs and watch a Local VM desktop
-// while this screen is open. Interactive mouse/keyboard stays on the paired
-// computer except for the secure Box viewer and guarded Local VM
-// create/stop/recreate actions.
+// Local VM: pinch-zoom preview with tap/right-click/keyboard input, plus an
+// optional noVNC live viewer through the companion proxy. Cloud still uses
+// the secure Box viewer when available.
 import SwiftUI
 import CompanionCore
 import UIKit
@@ -65,6 +64,13 @@ struct ComputerView: View {
     @State private var savingDestination = false
     @State private var savingPhoto = false
     @State private var photoSaveMessage: String?
+    @State private var interactionMode: RemoteDesktopInteractionMode = .touch
+    @State private var showingKeyboard = false
+    @State private var keyboardDraft = ""
+    @State private var showingVmViewer = false
+    @State private var vmViewerURL: URL?
+    @State private var vmViewerError: String?
+    @State private var openingVmViewer = false
 
     private static let firstFrameTimeout = ComputerWatchLifecycle.firstFrameTimeout
 
@@ -129,6 +135,10 @@ struct ComputerView: View {
 
     private var wantsScreenPreview: Bool {
         current.busy == true || isLocalVm
+    }
+
+    private var canControlLocalVm: Bool {
+        isLocalVm && session.localVmAccess && localVmStatus?.ready == true
     }
 
     private var streamFailure: String? {
@@ -213,6 +223,14 @@ struct ComputerView: View {
                 CloudDesktopBrowser(url: desktopURL)
                     .ignoresSafeArea()
             }
+        }
+        .sheet(isPresented: $showingVmViewer) {
+            if let vmViewerURL {
+                VMViewerWebView(url: vmViewerURL)
+            }
+        }
+        .sheet(isPresented: $showingKeyboard) {
+            remoteKeyboardSheet
         }
         .alert(item: $confirmingLocalVmAction) { action in
             Alert(
@@ -411,11 +429,22 @@ struct ComputerView: View {
     @ViewBuilder
     private var content: some View {
         if case .watching = presentationState, let image {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
+            if canControlLocalVm {
+                RemoteDesktopCanvas(
+                    image: image,
+                    interactive: true,
+                    onInput: { input in
+                        Task { await session.sendLocalVmInput(input, for: current) }
+                    }
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityLabel("\(current.name)'s computer")
+            } else {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityLabel("\(current.name)'s computer")
+            }
         } else {
             stateCard
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -554,6 +583,33 @@ struct ComputerView: View {
 
     private var watchingControls: some View {
         HStack(spacing: 12) {
+            if canControlLocalVm {
+                ChromeCircleButton(systemImage: "keyboard", weight: .medium) {
+                    Haptics.selection()
+                    keyboardDraft = ""
+                    showingKeyboard = true
+                }
+                .accessibilityLabel("Keyboard")
+
+                Menu {
+                    Picker("Interaction", selection: $interactionMode) {
+                        ForEach(RemoteDesktopInteractionMode.allCases) { mode in
+                            Label(mode.label, systemImage: mode.systemImage).tag(mode)
+                        }
+                    }
+                } label: {
+                    ChromeCircleButton(systemImage: interactionMode.systemImage, weight: .medium) {}
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Interaction mode")
+
+                ChromeCircleButton(systemImage: "display", weight: .medium) {
+                    Task { await openVmViewer() }
+                }
+                .disabled(openingVmViewer)
+                .accessibilityLabel("Open live viewer")
+            }
+
             ChromeCircleButton(systemImage: "square.and.arrow.down", weight: .medium) {
                 saveScreenToPhotos()
             }
@@ -586,6 +642,63 @@ struct ComputerView: View {
         .background(Color.black)
     }
 
+    private var remoteKeyboardSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Type into the VM") {
+                    TextField("Text to send", text: $keyboardDraft, axis: .vertical)
+                        .lineLimit(3...8)
+                }
+                Section("Special keys") {
+                    keyButton("Tab", keys: "Tab")
+                    keyButton("Return", keys: "Return")
+                    keyButton("Escape", keys: "Escape")
+                    keyButton("Ctrl+C", keys: "ctrl+c")
+                }
+            }
+            .navigationTitle("Keyboard")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { showingKeyboard = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Send") {
+                        let text = keyboardDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !text.isEmpty else { return }
+                        showingKeyboard = false
+                        Task {
+                            await session.sendLocalVmInput(.type(text), for: current)
+                        }
+                    }
+                    .disabled(keyboardDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func keyButton(_ title: String, keys: String) -> some View {
+        Button(title) {
+            showingKeyboard = false
+            Task { await session.sendLocalVmInput(.key(keys), for: current) }
+        }
+    }
+
+    @MainActor
+    private func openVmViewer() async {
+        openingVmViewer = true
+        vmViewerError = nil
+        defer { openingVmViewer = false }
+        do {
+            vmViewerURL = try await session.localVmViewer(for: current)
+            showingVmViewer = true
+        } catch {
+            vmViewerError = error.localizedDescription
+        }
+    }
+
     private var computerHelpSheet: some View {
         NavigationStack {
             List {
@@ -593,7 +706,8 @@ struct ComputerView: View {
                     Text(startingMessage)
                 }
                 Section("How to use Local VM") {
-                    Text("Tap ··· and choose Local, then Create Local VM. The desktop is a Linux container on the paired Mac. This phone shows that desktop while this screen is open.")
+                    Text("Pinch to zoom the preview. Tap to click, long-press for right click. Use Keyboard for text and shortcuts, or Open live viewer for full noVNC control.")
+                    Text("Tap ··· and choose Local, then Create Local VM. The desktop is a Linux container on the paired Mac.")
                     Text("Grok Reconstructed cannot use Local VM as an OpenMaus mount. It still has Grok’s own Mac tools, which is why “open your VM” reached this computer. Use Claude, Codex, or an ACP engine for Local VM.")
                 }
                 if let localVmStatus {
@@ -675,7 +789,7 @@ struct ComputerView: View {
                     } header: {
                         Text("Local VM")
                     } footer: {
-                        Text("Runs on the paired Mac. This phone only sends guarded VM actions.")
+                        Text("Runs on the paired Mac. Pinch, tap, keyboard, and the live viewer drive the VM when Local is ready.")
                     }
                 }
                 if canRetryScreen {

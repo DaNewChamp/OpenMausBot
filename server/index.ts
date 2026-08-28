@@ -168,6 +168,13 @@ import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
 import { projectLocalVmStatus } from "./local-vm-phone.ts";
+import { executeLocalVmPhoneInput } from "./local-vm-phone-input.ts";
+import {
+  localVmViewerJoinPath,
+  parseLocalVmViewerPath,
+  proxyLocalVmViewerHttp,
+  proxyLocalVmViewerUpgrade,
+} from "./local-vm-viewer-proxy.ts";
 import {
   LOCAL_VM_STARTING_MESSAGE,
   ensureLocalVm,
@@ -6000,6 +6007,66 @@ const server = createServer(async (req, res) => {
         image: await containerComputerScreenshot(undefined, undefined, target),
       });
     }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer\/join$/);
+    if (m && method === "POST" && req.headers["x-openmausbot-companion"] === "1") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const body = await readBody(req);
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length > 0) {
+        return json(res, 400, { error: "Local VM join accepts an empty JSON object only" });
+      }
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      if ((bot.computer ?? "").trim().toLowerCase() !== "vm") {
+        return json(res, 409, { error: "this bot is not using Local VM" });
+      }
+      const target = localVmTargetForBot(bot.id);
+      const status = await containerComputerStatus(undefined, undefined, target);
+      if (!status.ready || !status.viewer_url) {
+        return json(res, 409, { error: status.problem ?? "Local VM viewer is not ready" });
+      }
+      return json(res, 200, { joinUrl: localVmViewerJoinPath(bot.id, status.viewer_url) });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer\/input$/);
+    if (m && method === "POST" && req.headers["x-openmausbot-companion"] === "1") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      if ((bot.computer ?? "").trim().toLowerCase() !== "vm") {
+        return json(res, 409, { error: "this bot is not using Local VM" });
+      }
+      const target = localVmTargetForBot(bot.id);
+      const status = await containerComputerStatus(undefined, undefined, target);
+      if (!status.ready || !status.runtime) {
+        return json(res, 409, { error: status.problem ?? "Local VM is not ready" });
+      }
+      localVmIdleFor(target).touch();
+      const body = await readBody(req);
+      const result = await executeLocalVmPhoneInput(body, {
+        runtime: status.runtime,
+        containerName: target.containerName,
+        runner: localVmCommandRunner,
+      });
+      if (!result.ok) return json(res, result.status, { error: result.error });
+      return json(res, 200, { ok: true, ...(result.image ? { image: result.image } : {}) });
+    }
+    {
+      const viewer = parseLocalVmViewerPath(path);
+      if (viewer && (method === "GET" || method === "HEAD") && req.headers["x-openmausbot-companion"] === "1") {
+        const bot = store.bot(viewer.botId);
+        if (!bot) return json(res, 404, { error: "no such bot" });
+        if ((bot.computer ?? "").trim().toLowerCase() !== "vm") {
+          return json(res, 409, { error: "this bot is not using Local VM" });
+        }
+        const target = localVmTargetForBot(bot.id);
+        localVmIdleFor(target).touch();
+        await proxyLocalVmViewerHttp(req, res, target, viewer.suffix, url.search);
+        return;
+      }
+    }
 
     // identity handshake for the packaged app's port fallback: the forked
     // child proves it is OURS by echoing its pid (a stray dev server has
@@ -6633,6 +6700,26 @@ const server = createServer(async (req, res) => {
     const status = (e as any)?.status ?? 500;
     return json(res, status, { error: e instanceof Error ? e.message : String(e) });
   }
+});
+
+server.on("upgrade", (req, clientSocket, head) => {
+  void (async () => {
+    try {
+      const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
+      const viewer = parseLocalVmViewerPath(url.pathname);
+      if (!viewer || req.headers["x-openmausbot-companion"] !== "1") return;
+      const bot = store.bot(viewer.botId);
+      if (!bot || (bot.computer ?? "").trim().toLowerCase() !== "vm") {
+        clientSocket.destroy();
+        return;
+      }
+      const target = localVmTargetForBot(bot.id);
+      localVmIdleFor(target).touch();
+      await proxyLocalVmViewerUpgrade(req, clientSocket, head, target, viewer.suffix, url.search);
+    } catch {
+      clientSocket.destroy();
+    }
+  })();
 });
 
 server.listen(PORT, "127.0.0.1", () => {

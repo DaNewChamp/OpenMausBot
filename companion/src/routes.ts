@@ -74,12 +74,47 @@ export const LOCAL_VM_SCREENSHOT_ROUTE = {
   path: /^\/api\/bots\/[\w-]+\/local-computer\/screenshot$/,
 } as const;
 
+/** Mint a phone-reachable noVNC viewer path for interactive Local VM control. */
+export const LOCAL_VM_JOIN_ROUTE = {
+  method: "POST",
+  path: /^\/api\/bots\/[\w-]+\/local-computer\/join$/,
+} as const;
+
+/** Send one guarded desktop input action from the phone. */
+export const LOCAL_VM_INPUT_ROUTE = {
+  method: "POST",
+  path: /^\/api\/bots\/[\w-]+\/local-computer\/input$/,
+} as const;
+
+/** Static assets and the noVNC shell for a bot's Local VM viewer. */
+export const LOCAL_VM_VIEWER_ROUTE = {
+  method: "GET",
+  path: /^\/api\/bots\/[\w-]+\/local-computer\/viewer(\/.*)?$/,
+} as const;
+
 export function isLocalVmScreenshot(method: string, path: string): boolean {
   return method === LOCAL_VM_SCREENSHOT_ROUTE.method && LOCAL_VM_SCREENSHOT_ROUTE.path.test(path);
 }
 
+export function isLocalVmJoin(method: string, path: string): boolean {
+  return method === LOCAL_VM_JOIN_ROUTE.method && LOCAL_VM_JOIN_ROUTE.path.test(path);
+}
+
+export function isLocalVmInput(method: string, path: string): boolean {
+  return method === LOCAL_VM_INPUT_ROUTE.method && LOCAL_VM_INPUT_ROUTE.path.test(path);
+}
+
+export function isLocalVmViewer(method: string, path: string): boolean {
+  return method === LOCAL_VM_VIEWER_ROUTE.method && LOCAL_VM_VIEWER_ROUTE.path.test(path);
+}
+
 export function isLocalVmPhoneSurface(method: string, path: string): boolean {
-  return isLocalVmStatus(method, path) || isLocalVmAction(method, path) || isLocalVmScreenshot(method, path);
+  return isLocalVmStatus(method, path)
+    || isLocalVmAction(method, path)
+    || isLocalVmScreenshot(method, path)
+    || isLocalVmJoin(method, path)
+    || isLocalVmInput(method, path)
+    || isLocalVmViewer(method, path);
 }
 
 /** Paired-safe computer destination. The broad bot PATCH stays closed; this
@@ -458,6 +493,9 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   LOCAL_VM_STATUS_ROUTE,
   LOCAL_VM_ACTION_ROUTE,
   LOCAL_VM_SCREENSHOT_ROUTE,
+  LOCAL_VM_JOIN_ROUTE,
+  LOCAL_VM_INPUT_ROUTE,
+  LOCAL_VM_VIEWER_ROUTE,
 
   // rooms — making one, and talking in one
   { method: "POST", path: /^\/api\/groups$/ },

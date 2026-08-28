@@ -1593,6 +1593,24 @@ public struct CompanionClient: Sendable {
         )
     }
 
+    public func localVmJoin(botId: String) async throws -> LocalVmViewerSession {
+        try await send(
+            try makeRequest(
+                "POST",
+                "/api/bots/\(botId)/local-computer/join",
+                body: [String: Any](),
+            ),
+            as: LocalVmViewerSession.self
+        )
+    }
+
+    public func localVmInput(botId: String, body: [String: Any]) async throws -> LocalVmInputResponse {
+        try await send(
+            try makeRequest("POST", "/api/bots/\(botId)/local-computer/input", body: body),
+            as: LocalVmInputResponse.self
+        )
+    }
+
     private func localVmAction(botId: String, action: String) async throws -> LocalVmStatus {
         try await send(
             try makeRequest(

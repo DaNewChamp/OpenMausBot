@@ -35,7 +35,6 @@ struct ChatView: View {
     @State private var pendingQueueNotices: [String: PendingQueueNotice] = [:]
     @State private var showingTasks = false
     @State private var showingComputer = false
-    @State private var showingPlus = false
     @State private var showingProfile = false
     @State private var showCommandHUD = false
     @State private var shareFile: ShareFile?
@@ -64,6 +63,10 @@ struct ChatView: View {
     /// The live bubble's scroll target. A constant because there is at most
     /// one per chat and it has no message id to borrow.
     static let liveBubbleId = "companion.live"
+
+    /// Header control row below the status bar — used to inset scroll content
+    /// while still letting the transcript slide underneath the chrome.
+    private static let chatHeaderBarHeight: CGFloat = 52
 
     /// The live chat record, so busy/unread stay current as frames land.
     private var current: Chat {
@@ -239,11 +242,8 @@ struct ChatView: View {
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                // A real safe-area inset keeps the transcript below the
-                // compact bar. Nothing is overlaid on the first bubble, so
-                // navigation transitions cannot leave a floating avatar
-                // behind.
-                .safeAreaInset(edge: .top, spacing: 0) { headerBar }
+                .contentMargins(.top, Self.chatHeaderBarHeight, for: .scrollContent)
+                .scrollClipDisabled()
                 .scrollDismissesKeyboard(.interactively)
                 // A conversation grows from the bottom: a transcript shorter
                 // than the screen rests at the bottom, and opening a chat
@@ -291,10 +291,10 @@ struct ChatView: View {
             }
             .id(threadId)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .top) { chatTopChrome }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
-        .overlay(alignment: .bottom) { plusSheet }
         .onChange(of: session.stagedComposerText) { _, text in
             guard let text, !text.isEmpty else { return }
             if draft.isEmpty {
@@ -339,8 +339,8 @@ struct ChatView: View {
             }
             if current.unread { await session.markRead(current) }
 #if DEBUG
-            // `-open-plus`: the + sheet up, for the screenshot harness
-            if ProcessInfo.processInfo.arguments.contains("-open-plus") { showingPlus = true }
+            // `-open-plus` was for the old sheet harness; the composer now uses
+            // the system liquid-glass Menu on the + button.
             // Profile parity screenshots without automating a tap through the
             // animated island/header transition.
             if ProcessInfo.processInfo.arguments.contains("-open-profile") { showingProfile = true }
@@ -386,9 +386,6 @@ struct ChatView: View {
         }
         .onChange(of: groupProfileRoom) { _, room in
             if room != nil { dictation.stop() }
-        }
-        .onChange(of: showingPlus) { _, shown in
-            if shown { dictation.stop() }
         }
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { note in
             let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey]
@@ -438,7 +435,6 @@ struct ChatView: View {
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
             photoItems = []
-            setShowingPlus(false)
             Task { await importPhotos(items) }
         }
     }
@@ -452,6 +448,17 @@ struct ChatView: View {
     }
 
     // MARK: - Header
+
+    /// Floating chrome over the transcript: glass controls with a soft edge
+    /// fade so messages blur underneath instead of stopping at a solid bar.
+    private var chatTopChrome: some View {
+        ZStack(alignment: .top) {
+            ScrollEdgeChrome(edge: .top)
+                .frame(height: 108)
+                .ignoresSafeArea(edges: .top)
+            headerBar
+        }
+    }
 
     /// Back and the agent sit on the leading edge so the face never covers
     /// the transcript. Chrome is liquid glass; the name is the title, not a
@@ -545,9 +552,8 @@ struct ChatView: View {
                 .fixedSize()
                 .accessibilityLabel("Watch \(current.name)'s computer")
             } else {
-                Button {
-                    Haptics.selection()
-                    setShowingPlus(true)
+                Menu {
+                    chatOptionsMenuContent
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.body.weight(.semibold))
@@ -564,153 +570,79 @@ struct ChatView: View {
         .padding(.horizontal, 12)
         .padding(.top, 4)
         .padding(.bottom, 8)
-        .background(VBotSurface.background.ignoresSafeArea(.container, edges: .top))
     }
 
-    // MARK: - The + sheet
+    // MARK: - The + menu
 
-    /// What the composer's + opens: a glass sheet of the things you can do
-    /// here, each with a line saying what it does. Rises above the composer;
-    /// tapping anywhere else, or the × the + became, puts it away.
+    private func prepareForPlusMenu() {
+        dictation.stop()
+        composerFocused = false
+    }
+
     @ViewBuilder
-    private var plusSheet: some View {
-        if showingPlus {
-            ZStack(alignment: .bottom) {
-                Color.black.opacity(0.35)
-                    .ignoresSafeArea()
-                    .onTapGesture { setShowingPlus(false) }
-
-                VStack(spacing: 0) {
-                    attachmentPickerActions
-                    Divider()
-                        .padding(.horizontal, 18)
-                    ForEach(plusActions) { action in
-                        Button {
-                            setShowingPlus(false)
-                            action.run()
-                        } label: {
-                            HStack(spacing: 16) {
-                                Image(systemName: action.systemImage)
-                                    .font(.system(size: 20, weight: .medium))
-                                    .foregroundStyle(action.destructive ? Color.red : Color.primary)
-                                    .frame(width: 44, height: 44)
-                                    .background(Circle().fill(Color.primary.opacity(0.10)))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(action.title)
-                                        .font(.system(size: 19, weight: .medium))
-                                        .foregroundStyle(action.destructive ? Color.red : Color.primary)
-                                    Text(action.subtitle)
-                                        .font(.system(size: 13))
-                                        .foregroundStyle(Color.secondary)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 18)
-                            .frame(height: 64)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(action.disabled)
-                        .opacity(action.disabled ? 0.45 : 1)
-                    }
-                }
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .glassSheet(cornerRadius: 30)
-                .padding(.leading, 12)
-                .padding(.trailing, 44)
-                .padding(.bottom, 70)
-                .transition(reduceMotion ? .identity : .move(edge: .bottom).combined(with: .opacity))
+    private var chatOptionsMenuContent: some View {
+        Section {
+            ForEach(plusActions) { action in
+                plusMenuButton(action)
             }
-            .transition(reduceMotion ? .identity : .opacity)
         }
     }
 
     @ViewBuilder
-    private var attachmentPickerActions: some View {
-        PhotosPicker(
-            selection: $photoItems,
-            maxSelectionCount: max(1, Self.maxAttachmentCount - selectedAttachments.count),
-            matching: .images
-        ) {
-            HStack(spacing: 16) {
-                Image(systemName: "photo.on.rectangle")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(Color.primary)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(Color.primary.opacity(0.10)))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Photo library")
-                        .font(.system(size: 19, weight: .medium))
-                        .foregroundStyle(Color.primary)
-                    Text("Choose images from Photos")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.secondary)
-                }
-                Spacer(minLength: 0)
+    private var plusMenuContent: some View {
+        Section {
+            PhotosPicker(
+                selection: $photoItems,
+                maxSelectionCount: max(1, Self.maxAttachmentCount - selectedAttachments.count),
+                matching: .images
+            ) {
+                Label("Photo library", systemImage: "photo.on.rectangle")
             }
-            .padding(.horizontal, 18)
-            .frame(height: 64)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(selectedAttachments.count >= Self.maxAttachmentCount)
+            .disabled(selectedAttachments.count >= Self.maxAttachmentCount)
 
-        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button {
+                    prepareForPlusMenu()
+                    showingCamera = true
+                } label: {
+                    Label("Take photo", systemImage: "camera")
+                }
+                .disabled(selectedAttachments.count >= Self.maxAttachmentCount)
+            }
+
             Button {
-                setShowingPlus(false)
-                showingCamera = true
+                prepareForPlusMenu()
+                showingFileImporter = true
             } label: {
-                HStack(spacing: 16) {
-                    Image(systemName: "camera")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(Color.primary)
-                        .frame(width: 44, height: 44)
-                        .background(Circle().fill(Color.primary.opacity(0.10)))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Take photo")
-                            .font(.system(size: 19, weight: .medium))
-                            .foregroundStyle(Color.primary)
-                        Text("Use the camera")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Color.secondary)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 18)
-                .frame(height: 64)
-                .contentShape(Rectangle())
+                Label("Choose file", systemImage: "folder")
             }
-            .buttonStyle(.plain)
             .disabled(selectedAttachments.count >= Self.maxAttachmentCount)
         }
 
-        Button {
-            setShowingPlus(false)
-            showingFileImporter = true
-        } label: {
-            HStack(spacing: 16) {
-                Image(systemName: "folder")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(Color.primary)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(Color.primary.opacity(0.10)))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Choose file")
-                        .font(.system(size: 19, weight: .medium))
-                        .foregroundStyle(Color.primary)
-                    Text("PNG, JPEG, GIF, or WebP up to 10 MB")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.secondary)
+        if case .bot = current {
+            Section {
+                ForEach(plusActions.filter { ["task", "tasks", "computer"].contains($0.id) }) { action in
+                    plusMenuButton(action)
                 }
-                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 18)
-            .frame(height: 64)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .disabled(selectedAttachments.count >= Self.maxAttachmentCount)
+
+        Section {
+            ForEach(plusActions.filter { !["task", "tasks", "computer"].contains($0.id) }) { action in
+                plusMenuButton(action)
+            }
+        }
+    }
+
+    private func plusMenuButton(_ action: PlusAction) -> some View {
+        Button(role: action.destructive ? .destructive : nil) {
+            prepareForPlusMenu()
+            action.run()
+        } label: {
+            Label(action.title, systemImage: action.systemImage)
+        }
+        .disabled(action.disabled)
+        .accessibilityHint(action.subtitle)
     }
 
     private struct PlusAction: Identifiable {
@@ -817,10 +749,6 @@ struct ChatView: View {
                 openedToolRuns.insert(run.id)
             }
         }
-    }
-
-    private func setShowingPlus(_ value: Bool) {
-        updateState(.snappy(duration: 0.28)) { showingPlus = value }
     }
 
     private func updateState(_ animation: Animation, _ updates: () -> Void) {
@@ -1303,24 +1231,22 @@ struct ChatView: View {
                 .transition(reduceMotion ? .identity : .opacity)
             }
 
-            HStack(alignment: .bottom, spacing: 10) {
-                Button {
-                    dictation.stop()
-                    composerFocused = false
-                    setShowingPlus(!showingPlus)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(Color.primary)
-                        .rotationEffect(.degrees(showingPlus ? 45 : 0))
-                        .frame(width: 44, height: 44)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .glassCircle()
-                .accessibilityLabel(showingPlus ? "Close" : "More")
+            GlassGroup(spacing: 10) {
+                HStack(alignment: .bottom, spacing: 10) {
+                    Menu {
+                        plusMenuContent
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundStyle(Color.primary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .glassCircle()
+                    .accessibilityLabel("More")
 
-                HStack(alignment: .bottom, spacing: 2) {
+                    HStack(alignment: .bottom, spacing: 2) {
                     if showCommandHUD || draft.hasPrefix("/") {
                         Button {
                             dictation.stop()
@@ -1385,6 +1311,7 @@ struct ChatView: View {
                 }
                 .frame(minHeight: 44)
                 .glassCapsuleBackdrop()
+                }
             }
         }
         .padding(.horizontal, 12)

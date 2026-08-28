@@ -101,6 +101,16 @@ export const LOCAL_VM_INVOKE_TOOLS = [
     },
   },
   {
+    name: "computer_exec",
+    description:
+      "Run a shell command inside this bot's Local VM (Linux). Returns stdout; stderr when present.",
+    inputSchema: {
+      type: "object",
+      properties: { command: { type: "string" } },
+      required: ["command"],
+    },
+  },
+  {
     name: "launch_app",
     description:
       "Open an application inside this bot's Local VM, such as a browser. This cannot launch apps on the user's Mac.",
@@ -404,6 +414,18 @@ export async function executeLocalVmInvokeTool(
       if (!keys) return { text: "press_key needs keys.", isError: true };
       const out = await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "press_key", { keys });
       return { text: sanitizeLocalVmInvokeText(out || "Pressed a key on this bot's Local VM desktop."), isError: false };
+    }
+    if (name === "computer_exec") {
+      const commandRaw = field(args, "command");
+      const command = typeof commandRaw === "string" ? commandRaw.trim() : "";
+      if (!command) return { text: "computer_exec needs a command.", isError: true };
+      const { stdout } = await ctx.runner(
+        ctx.runtime,
+        ["exec", "-u", "cua", "-e", "HOME=/home/cua", ctx.containerName, "bash", "-lc", command],
+        120_000,
+      );
+      const text = stdout.trim() || "(no output)";
+      return { text: sanitizeLocalVmInvokeText(text.slice(-8000)), isError: false };
     }
     if (name === "launch_app") {
       const appRaw = field(args, "app");

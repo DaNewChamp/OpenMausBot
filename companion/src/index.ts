@@ -20,6 +20,7 @@
 // inside a process you chose to start would be ceremony: stopping it is the
 // off switch, and it is a more honest one than a flag in a file.
 import { createServer } from "node:http";
+import net from "node:net";
 
 import { createAddressWatcher } from "./advertise-watch.ts";
 import { createControlServer, hostCandidates } from "./control.ts";
@@ -150,6 +151,39 @@ const proxy = createProxyHandler({
   });
 const companion = createServer(proxy);
 const managedOrigin = PRIVATE_ORIGIN ? createServer(proxy) : null;
+
+/** Forward noVNC websocket upgrades to the harness viewer proxy. */
+const forwardViewerUpgrade = (
+  req: import("node:http").IncomingMessage,
+  clientSocket: import("node:net").Socket,
+  head: Buffer,
+) => {
+  const path = (req.url ?? "/").split("?")[0];
+  if (!path.includes("/local-computer/viewer")) return;
+  const upstream = net.connect(HARNESS_PORT, "127.0.0.1", () => {
+    const lines = [`${req.method} ${req.url} HTTP/1.1`];
+    lines.push("host: 127.0.0.1");
+    lines.push("x-openmausbot-companion: 1");
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (value === undefined) continue;
+      const lower = key.toLowerCase();
+      if (lower === "host" || lower === "x-openmausbot-companion") continue;
+      const values = Array.isArray(value) ? value : [value];
+      for (const entry of values) lines.push(`${key}: ${entry}`);
+    }
+    lines.push("", "");
+    upstream.write(lines.join("\r\n"));
+    if (head.length) upstream.write(head);
+    clientSocket.pipe(upstream);
+    upstream.pipe(clientSocket);
+  });
+  upstream.on("error", () => clientSocket.destroy());
+  clientSocket.on("error", () => upstream.destroy());
+  clientSocket.on("close", () => upstream.destroy());
+};
+
+companion.on("upgrade", forwardViewerUpgrade);
+managedOrigin?.on("upgrade", forwardViewerUpgrade);
 
 const control = createControlServer({
   devices,

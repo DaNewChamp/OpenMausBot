@@ -1031,6 +1031,59 @@ final class Session: ObservableObject {
         }
     }
 
+    func localVmViewer(for bot: Bot) async throws -> URL {
+        guard let client else { throw APIError.transport("This computer is offline.") }
+        guard let base = client.connection.baseURL else {
+            throw APIError.transport("This computer is offline.")
+        }
+        let session = try await client.localVmJoin(botId: bot.id)
+        guard let url = session.url(relativeTo: base) else {
+            throw APIError.transport("The Local VM viewer link was invalid.")
+        }
+        return url
+    }
+
+    func sendLocalVmInput(_ input: RemoteDesktopInput, for bot: Bot) async {
+        guard localVmAccess, let client else { return }
+        var body: [String: Any] = [:]
+        switch input {
+        case let .click(x, y, button, double):
+            body = [
+                "action": "click",
+                "x": x,
+                "y": y,
+                "button": button,
+                "double": double,
+            ]
+        case let .scroll(x, y, direction):
+            body = [
+                "action": "scroll",
+                "x": x,
+                "y": y,
+                "direction": direction.rawValue,
+            ]
+        case let .type(text):
+            body = ["action": "type", "text": text]
+        case let .key(keys):
+            body = ["action": "key", "keys": keys]
+        }
+        do {
+            let response = try await client.localVmInput(botId: bot.id, body: body)
+            guard !Task.isCancelled else { return }
+            if let image = response.image, let frame = ScreenFrame.fromCapture(image) {
+                state.screens[bot.id] = frame
+            } else {
+                await refreshLocalVmPreview(for: bot)
+            }
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            localVmAccess = false
+            localVmStatuses.removeAll()
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
     func localVmStatus(for bot: Bot) -> LocalVmStatus? {
         localVmStatuses[bot.id]
     }

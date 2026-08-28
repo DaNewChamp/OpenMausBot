@@ -1650,6 +1650,35 @@ public struct LocalVmScreenshot: Codable, Equatable, Sendable {
     }
 }
 
+/// Relative noVNC path minted for a bot's Local VM viewer proxy.
+public struct LocalVmViewerSession: Decodable, Sendable {
+    public let joinPath: String
+
+    private enum CodingKeys: String, CodingKey { case joinUrl }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decode(String.self, forKey: .joinUrl)
+        guard raw.hasPrefix("/"), !raw.contains("://") else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .joinUrl,
+                in: container,
+                debugDescription: "Local VM viewer path must be relative"
+            )
+        }
+        joinPath = raw
+    }
+
+    public func url(relativeTo base: URL) -> URL? {
+        URL(string: joinPath, relativeTo: base)?.absoluteURL
+    }
+}
+
+public struct LocalVmInputResponse: Decodable, Sendable {
+    public let ok: Bool
+    public let image: String?
+}
+
 /// `POST /api/bots` — the harness answers with the bot it made.
 public struct CreatedBot: Codable, Sendable {
     public var bot: Bot
