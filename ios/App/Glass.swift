@@ -118,17 +118,20 @@ struct ScrollEdgeChrome<Content: View>: View {
     var body: some View {
         content()
             .background {
-                LinearGradient(
-                    colors: [
-                        Color(uiColor: .systemBackground).opacity(edge == .top ? 0.92 : 0.96),
-                        Color(uiColor: .systemBackground).opacity(0.72),
-                        Color(uiColor: .systemBackground).opacity(0),
-                    ],
-                    startPoint: edge == .top ? .top : .bottom,
-                    endPoint: edge == .top ? .bottom : .top
-                )
-                .background(.ultraThinMaterial)
-                .ignoresSafeArea(.container, edges: edge == .top ? .top : .bottom)
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black, location: 0),
+                                .init(color: .black.opacity(0.5), location: 0.5),
+                                .init(color: .clear, location: 1),
+                            ],
+                            startPoint: edge == .top ? .top : .bottom,
+                            endPoint: edge == .top ? .bottom : .top
+                        )
+                    )
+                    .ignoresSafeArea(.container, edges: edge == .top ? .top : .bottom)
             }
     }
 }
