@@ -58,6 +58,10 @@ export function localVmViewerTarget(status: ContainerComputerStatus): LocalVmVie
 export function localVmViewerJoinPath(botId: string, target: LocalVmViewerTarget): LocalVmViewerJoin {
   const params = new URLSearchParams({ autoconnect: "true", resize: "scale" });
   if (target.password) params.set("password", target.password);
+  // Loopback websockify listens at `/` on the viewer port. Through the harness
+  // proxy the phone must open ws://<companion>/api/bots/:id/local-computer/viewer
+  // — not ws://…/websockify, which 404s and leaves noVNC spinning forever.
+  params.set("path", `api/bots/${botId}/local-computer/viewer`);
   return {
     viewerPath: `/api/bots/${botId}/local-computer/viewer/vnc.html#${params.toString()}`,
     ready: true,
