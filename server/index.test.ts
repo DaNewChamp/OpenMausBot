@@ -12,12 +12,17 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import {
+  installFakeLocalVmDockerRuntime,
+  launchAppPayloadsFromDockerLog,
+} from "./testing/fake-local-vm-docker.ts";
 import { openSse } from "./testing/sse.ts";
 import { IMAGE_MAX_BYTES } from "./attachments.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
 const FAKE_CLAUDE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
+const posixOnly = describe.skipIf(process.platform === "win32");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
 const WEBHOOK_PORT = 39000 + Math.floor(Math.random() * 10_000);
@@ -3042,23 +3047,9 @@ describe("Local VM startTurn and internal invoke API", () => {
     await api("DELETE", `/api/bots/${idleVmId}`).catch(() => {});
   });
 
-  it("exercises the real route for an owned VM turn and rejects unadvertised tools", async () => {
+  it("rejects unadvertised tools on an owned VM turn", async () => {
     const dump = JSON.parse(readFileSync(fakeClaudeDump, "utf8"));
     const commsToken = dump.mcpConfig?.mcpServers?.computer?.env?.OMB_COMMS_TOKEN;
-
-    const res = await fetch(`${BASE}/api/internal/local-vm/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${commsToken}` },
-      body: JSON.stringify({
-        botId: vmBotId,
-        threadId: vmThreadId,
-        tool: "open_url",
-        arguments: { url: "https://example.com/test" },
-      }),
-    });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { state?: string };
-    expect(["ready", "starting", "blocked"]).toContain(body.state);
 
     const badTool = await fetch(`${BASE}/api/internal/local-vm/invoke`, {
       method: "POST",
@@ -3073,5 +3064,131 @@ describe("Local VM startTurn and internal invoke API", () => {
     expect(await badTool.json()).toEqual({ error: "that computer tool is not available on this bot's Local VM" });
 
     await api("POST", `/api/bots/${vmBotId}/interrupt`);
+  });
+});
+
+posixOnly("Local VM owned invoke route with fake runtime", () => {
+  let child: ChildProcess;
+  let vmHome: string;
+  let vmFakeBin: string;
+  let vmDockerLog: string;
+  let vmFakeClaudeDump: string;
+  let vmPort = 0;
+  let vmBase = "";
+  let routeBotId = "";
+  let routeThreadId = "";
+
+  const routeApi = async (method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> => {
+    const res = await fetch(`${vmBase}${path}`, {
+      method,
+      headers: body ? { "content-type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return { status: res.status, body: await res.json() };
+  };
+
+  beforeAll(async () => {
+    vmPort = 18800 + Math.floor(Math.random() * 10_000);
+    vmBase = `http://127.0.0.1:${vmPort}`;
+    vmHome = mkdtempSync(join(tmpdir(), "omb-local-vm-route-"));
+    vmFakeBin = join(vmHome, "fakebin");
+    const staticDirLocal = join(vmHome, "static");
+    vmFakeClaudeDump = join(vmHome, "fake-claude-dump.json");
+    const installed = installFakeLocalVmDockerRuntime(vmFakeBin, vmHome);
+    vmDockerLog = installed.dockerLog;
+
+    mkdirSync(join(vmHome, ".openmausbot"), { recursive: true });
+    mkdirSync(join(staticDirLocal, "assets"), { recursive: true });
+    writeFileSync(join(staticDirLocal, "index.html"), "<!doctype html><title>test</title>");
+    writeFileSync(
+      join(vmHome, ".openmausbot", "config.json"),
+      JSON.stringify({
+        instances: {
+          claude: { driver: "claudeAgent", displayName: "Fixture Claude", config: { cli: FAKE_CLAUDE_CLI } },
+        },
+      }),
+    );
+
+    let stderrLocal = "";
+    child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+      cwd: ROOT,
+      env: {
+        ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+        HOME: vmHome,
+        USERPROFILE: vmHome,
+        OMB_PORT: String(vmPort),
+        OMB_STATIC_DIR: staticDirLocal,
+        OMB_EXTRA_PATH: vmFakeBin,
+        FAKE_DOCKER_DIR: vmFakeBin,
+        FAKE_DOCKER_LOG: vmDockerLog,
+        FAKE_CLAUDE_MODE: "hang",
+        FAKE_CLAUDE_DUMP: vmFakeClaudeDump,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.stderr!.on("data", (c) => (stderrLocal += c));
+
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+      try {
+        if ((await fetch(`${vmBase}/api/health`)).ok) break;
+      } catch {
+        /* not up yet */
+      }
+      if (Date.now() > deadline) throw new Error(`server never came up. stderr:\n${stderrLocal}`);
+      if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}. stderr:\n${stderrLocal}`);
+      await new Promise((r) => setTimeout(r, 150));
+    }
+
+    const created = await routeApi("POST", "/api/bots", {});
+    routeBotId = created.body.bot.id;
+    routeThreadId = created.body.bot.threadId;
+    await routeApi("PATCH", `/api/bots/${routeBotId}`, {
+      computer: "vm",
+      modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+    });
+  }, 40_000);
+
+  afterAll(async () => {
+    if (routeBotId) {
+      await routeApi("POST", `/api/bots/${routeBotId}/interrupt`).catch(() => {});
+      await routeApi("DELETE", `/api/bots/${routeBotId}`).catch(() => {});
+    }
+    if (child) await waitForExit(child, { signal: "SIGTERM" });
+    if (vmHome) await removeTempDir(vmHome);
+  });
+
+  it("authenticated owned POST reaches ready and executes open_url through Cua launch_app", async () => {
+    writeFileSync(vmDockerLog, "");
+    rmSync(vmFakeClaudeDump, { force: true });
+    const sent = await routeApi("POST", `/api/bots/${routeBotId}/messages`, { text: "open a page" });
+    expect(sent.status).toBe(202);
+    await expect.poll(() => existsSync(vmFakeClaudeDump), { timeout: 5_000 }).toBe(true);
+
+    const dump = JSON.parse(readFileSync(vmFakeClaudeDump, "utf8"));
+    const commsToken = dump.mcpConfig?.mcpServers?.computer?.env?.OMB_COMMS_TOKEN;
+    expect(typeof commsToken).toBe("string");
+
+    const url = "https://example.com/test";
+    const res = await fetch(`${vmBase}/api/internal/local-vm/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${commsToken}` },
+      body: JSON.stringify({
+        botId: routeBotId,
+        threadId: routeThreadId,
+        tool: "open_url",
+        arguments: { url },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { state?: string; result?: { text?: string; isError?: boolean } };
+    expect(body.state).toBe("ready");
+    expect(body.result?.isError).toBe(false);
+    expect(body.result?.text).toContain("example.com");
+
+    const payloads = launchAppPayloadsFromDockerLog(readFileSync(vmDockerLog, "utf8"));
+    expect(payloads).toEqual([{ app: "google-chrome", arguments: [url] }]);
+
+    await routeApi("POST", `/api/bots/${routeBotId}/interrupt`);
   });
 });
