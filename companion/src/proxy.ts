@@ -745,7 +745,7 @@ export function createProxyHandler(options: ProxyOptions) {
               harness.statusCode ?? 200,
             )
             : null;
-          if (viewerCookie) passthroughHeaders["set-cookie"] = viewerCookie;
+          if (viewerCookie) passthroughHeaders["set-cookie"] = [viewerCookie];
           res.writeHead(harness.statusCode ?? 200, passthroughHeaders);
           // `pipe` does not carry a failure from source to destination. An
           // upstream that dies part-way through an image would otherwise
