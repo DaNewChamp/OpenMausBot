@@ -253,15 +253,20 @@ export function projectReconstructedRoster(value: unknown): {
           memberIds.push(trimmed);
         }
       }
-      const group: SyncedReconstructedGroup = { id, label: finalLabel, memberIds };
-      if (typeof rec.isActive === "boolean") group.isActive = rec.isActive;
-      groups.push(group);
+      groups.push({
+        id,
+        label: finalLabel,
+        memberIds,
+        ...(typeof rec.isActive === "boolean" ? { isActive: rec.isActive } : {}),
+      });
       continue;
     }
-    const bot: SyncedReconstructedBot = { id, label: finalLabel };
-    if (typeof rec.isRunning === "boolean") bot.isRunning = rec.isRunning;
-    if (typeof rec.isActive === "boolean") bot.isActive = rec.isActive;
-    bots.push(bot);
+    bots.push({
+      id,
+      label: finalLabel,
+      ...(typeof rec.isRunning === "boolean" ? { isRunning: rec.isRunning } : {}),
+      ...(typeof rec.isActive === "boolean" ? { isActive: rec.isActive } : {}),
+    });
   }
   return { bots, groups };
 }
