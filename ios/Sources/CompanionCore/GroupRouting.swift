@@ -8,11 +8,13 @@ public enum GroupRouting {
         public var id: String
         public var name: String
         public var hidden: Bool
+        public var color: String
 
-        public init(id: String, name: String, hidden: Bool = false) {
+        public init(id: String, name: String, hidden: Bool = false, color: String = "blue") {
             self.id = id
             self.name = name
             self.hidden = hidden
+            self.color = color
         }
     }
 

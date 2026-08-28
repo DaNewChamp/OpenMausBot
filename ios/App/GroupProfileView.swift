@@ -12,6 +12,7 @@ struct GroupProfileView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var routines: [Routine] = []
+    @State private var pinPrompt: PendingPinChange?
 
     private var currentRoom: Room {
         session.state.rooms.first { $0.id == room.id } ?? room
@@ -55,6 +56,7 @@ struct GroupProfileView: View {
             let loaded = await session.loadRoutines()
             routines = loaded.routines.filter { currentRoom.memberIds.contains($0.botId) }
         }
+        .pinConfirmationDialog($pinPrompt, session: session)
     }
 
     private var topBar: some View {
@@ -74,10 +76,11 @@ struct GroupProfileView: View {
                     Label("Copy ID", systemImage: "doc.on.doc")
                 }
                 Button {
-                    Task { _ = await session.setPinned(!(currentRoom.pinned ?? false), for: .room(currentRoom)) }
+                    pinPrompt = PendingPinChange(chat: .room(currentRoom))
                 } label: {
                     Label(currentRoom.pinned == true ? "Unpin" : "Pin", systemImage: currentRoom.pinned == true ? "pin.slash" : "pin")
                 }
+                .disabled(session.pendingPinnedChats.contains("room:\(currentRoom.id)"))
             } label: {
                 ChromeCircleButton(systemImage: "ellipsis")
             }

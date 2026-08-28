@@ -903,7 +903,10 @@ final class Session: ObservableObject {
                 }
             }
         } catch {
-            if !Task.isCancelled { actionError = error.localizedDescription }
+            if !Task.isCancelled {
+                actionError = error.localizedDescription
+                Haptics.error()
+            }
             return nil
         }
     }
@@ -1497,7 +1500,12 @@ final class Session: ObservableObject {
         do {
             let patched = try await client.toggleReaction(threadId: threadId, messageId: message.id, emoji: emoji)
             state.apply(.messagePatch(threadId: threadId, message: patched))
-        } catch { actionError = error.localizedDescription }
+            SoundEffects.playTapback()
+            Haptics.selection()
+        } catch {
+            actionError = error.localizedDescription
+            Haptics.error()
+        }
     }
 
     func edit(_ message: Message, for bot: Bot, text: String) async {
@@ -1830,6 +1838,13 @@ enum Chat: Identifiable, Hashable {
         switch self {
         case let .bot(bot): return bot.busy ?? false
         case let .room(room): return room.busyBotId != nil
+        }
+    }
+
+    var pinned: Bool {
+        switch self {
+        case let .bot(bot): return bot.pinned ?? false
+        case let .room(room): return room.pinned ?? false
         }
     }
 

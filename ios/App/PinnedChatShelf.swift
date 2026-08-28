@@ -10,6 +10,7 @@ struct PinnedChatShelf: View {
 
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pinPrompt: PendingPinChange?
 
     var body: some View {
         GeometryReader { proxy in
@@ -35,6 +36,7 @@ struct PinnedChatShelf: View {
         .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: summaries.map(\.id))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Pinned conversations")
+        .pinConfirmationDialog($pinPrompt, session: session)
     }
 
     private func tileRow(spacing: CGFloat) -> some View {
@@ -58,7 +60,7 @@ struct PinnedChatShelf: View {
     @ViewBuilder
     private func pinButton(for summary: ChatSummary) -> some View {
         Button {
-            Task { _ = await session.setPinned(!summary.pinned, for: summary.chat) }
+            pinPrompt = PendingPinChange(chat: summary.chat, pinned: summary.pinned)
         } label: {
             Label(summary.pinned ? "Unpin" : "Pin", systemImage: summary.pinned ? "pin.slash" : "pin")
         }

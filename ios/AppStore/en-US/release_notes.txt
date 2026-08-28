@@ -1,14 +1,10 @@
-V Bot build 13 introduces the new black-glass identity and a cleaner agent experience.
+V Bot build 17 matches Grok Bot’s conversation feel on the OpenMaus backend.
 
-• New V Bot icon and graphite home, chat, settings, and profile screens
-• Compact agent header, centered pinned chats and groups, and improved haptics
-• Default QR pairing now stays on hosted HTTPS; Tailscale and local routes remain explicit choices
-• Static idle mascots with activity animation only while agents are working
-• Cleaner collapsible tool and agent-to-agent activity
-• Secure preview support for a local Grok Reconstructed desktop engine
-• Improved pairing guidance, reconnect behavior, and accessibility text sizing
 • Composer stays above the keyboard instead of hiding under it
 • Group chats get Grok-style @mentions so you pick which bot talks
-• Pinning a conversation now gives a confirmation haptic
+• @mention picker shows each bot’s name and color
+• Group typing names the bot that’s working
+• Pin or unpin from the chat itself (header long-press, + menu, or profile), with a confirm step
+• Confirmation haptic on pin, light haptic when a reply lands, tapback haptic on reactions
+• Pinned chats stay on the home strip
 • Fixed message sending when the optional desktop-engine status route is unavailable
-• Older OpenMaus desktops now appear as OpenMaus-only instead of showing an error

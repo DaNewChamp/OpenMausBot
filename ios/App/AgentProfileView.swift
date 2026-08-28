@@ -50,6 +50,7 @@ struct AgentProfileView: View {
     @State private var routinesLoading = true
     @State private var showingMedia = false
     @State private var showingModelAndVoice = false
+    @State private var pinPrompt: PendingPinChange?
 
     init(bot: Bot) {
         self.bot = bot
@@ -173,6 +174,7 @@ struct AgentProfileView: View {
             .sheet(isPresented: $showingRoutines) {
                 TasksRoutinesView()
             }
+            .pinConfirmationDialog($pinPrompt, session: session)
         }
     }
 
@@ -208,6 +210,14 @@ struct AgentProfileView: View {
                 Button("Model & voice", systemImage: "slider.horizontal.3") {
                     showingModelAndVoice = true
                 }
+                Divider()
+                Button(
+                    current.pinned == true ? "Unpin" : "Pin",
+                    systemImage: current.pinned == true ? "pin.slash" : "pin"
+                ) {
+                    pinPrompt = PendingPinChange(chat: .bot(current))
+                }
+                .disabled(session.pendingPinnedChats.contains("bot:\(current.id)"))
             } label: {
                 ChromeCircleButton(systemImage: "ellipsis")
             }

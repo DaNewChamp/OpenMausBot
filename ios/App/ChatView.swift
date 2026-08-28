@@ -56,6 +56,7 @@ struct ChatView: View {
     @State private var showingCamera = false
     @State private var isUploadingAttachments = false
     @State private var attachmentError: String?
+    @State private var pinPrompt: PendingPinChange?
 
     /// The live bubble's scroll target. A constant because there is at most
     /// one per chat and it has no message id to borrow.
@@ -198,18 +199,38 @@ struct ChatView: View {
                         // that appends the message, so there is never a beat
                         // where both are on screen.
                         if let live = session.state.streaming[threadId], !live.isEmpty {
-                            StreamingBubble(text: live, reasoning: nil, color: current.color)
+                            StreamingBubble(
+                                text: live,
+                                reasoning: nil,
+                                color: streamingTintColor,
+                                speaker: streamingSpeaker
+                            )
                                 .id(Self.liveBubbleId)
                         } else if let thinking = session.state.reasoning[threadId], !thinking.isEmpty {
                             // Only while there is no answer yet. Once tokens
                             // of the reply exist, the reasoning is behind us
                             // and showing both is just noise.
-                            StreamingBubble(text: nil, reasoning: thinking, color: current.color)
+                            StreamingBubble(
+                                text: nil,
+                                reasoning: thinking,
+                                color: streamingTintColor,
+                                speaker: streamingSpeaker
+                            )
                                 .id(Self.liveBubbleId)
                         } else if current.busy {
-                            TypingIndicatorView(tintColor: MausPalette.color(current.color))
-                                .id(Self.liveBubbleId)
-                                .accessibilityLabel("\(current.name) is working")
+                            VStack(alignment: .leading, spacing: 4) {
+                                if let speaker = streamingSpeaker {
+                                    Text(speaker.name)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(MausPalette.color(speaker.color))
+                                }
+                                TypingIndicatorView(tintColor: MausPalette.color(streamingTintColor))
+                            }
+                            .id(Self.liveBubbleId)
+                            .accessibilityLabel(
+                                streamingSpeaker.map { "\($0.name) is working" }
+                                    ?? "\(current.name) is working"
+                            )
                         }
                     }
                     .padding(.horizontal, 16)
@@ -229,6 +250,10 @@ struct ChatView: View {
                 .onChange(of: transcript.last?.id) { _, _ in
                     reconcilePendingQueue(in: messages)
                     guard let last = transcript.last else { return }
+                    if last.role != .user, last.kind == .text || last.kind == .options {
+                        SoundEffects.playReceived()
+                        Haptics.impact(.light)
+                    }
                     if reduceMotion {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     } else {
@@ -288,6 +313,7 @@ struct ChatView: View {
         .navigationDestination(item: $groupProfileRoom) { room in
             GroupProfileView(room: room)
         }
+        .pinConfirmationDialog($pinPrompt, session: session)
         .task(id: threadId) {
             // opening a chat is what marks it read, exactly as on the desktop
             if current.unread { await session.markRead(current) }
@@ -463,6 +489,17 @@ struct ChatView: View {
             }
             .buttonStyle(.plain)
             .layoutPriority(0)
+            .contextMenu {
+                Button {
+                    pinPrompt = PendingPinChange(chat: current)
+                } label: {
+                    Label(
+                        current.pinned ? "Unpin" : "Pin",
+                        systemImage: current.pinned ? "pin.slash" : "pin"
+                    )
+                }
+                .disabled(session.pendingPinnedChats.contains(current.stableID))
+            }
             .accessibilityLabel(current.isBot ? "Open \(current.name) profile" : "Open \(current.name) group profile")
             .accessibilityHint(current.isBot ? "Edits this agent's identity, avatar, notifications, and voice" : "Shows group members, instructions, and routines")
 
@@ -678,6 +715,16 @@ struct ChatView: View {
                 subtitle: "Live view of what \(bot.name) is doing"
             ) { showingComputer = true })
         }
+        let pinned = current.pinned
+        out.append(PlusAction(
+            id: "pin",
+            systemImage: pinned ? "pin.slash" : "pin",
+            title: pinned ? "Unpin" : "Pin",
+            subtitle: pinned ? "Remove from the home strip" : "Keep this chat on the home strip",
+            disabled: session.pendingPinnedChats.contains(current.stableID)
+        ) {
+            pinPrompt = PendingPinChange(chat: current, pinned: pinned)
+        })
         out.append(PlusAction(
             id: "share", systemImage: "doc.plaintext", title: "Share transcript",
             subtitle: "This chat as Markdown"
@@ -932,9 +979,22 @@ struct ChatView: View {
         guard case let .room(room) = current else { return [] }
         return room.memberIds.compactMap { id in
             session.state.bot(id).map {
-                GroupRouting.Member(id: $0.id, name: $0.name, hidden: $0.hidden == true)
+                GroupRouting.Member(id: $0.id, name: $0.name, hidden: $0.hidden == true, color: $0.color)
             }
         }
+    }
+
+    /// Rooms attribute streaming text to whoever owns the active turn.
+    private var streamingSpeaker: (name: String, color: String)? {
+        guard case let .room(room) = current,
+              let botId = room.busyBotId,
+              let bot = session.state.bot(botId)
+        else { return nil }
+        return (bot.name, bot.color)
+    }
+
+    private var streamingTintColor: String {
+        streamingSpeaker?.color ?? current.color
     }
 
     private var activeMentionQuery: String? {
@@ -1373,12 +1433,16 @@ private struct MentionMenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if includeEveryone {
-                mentionRow(title: "@everyone", subtitle: "Every bot in this chat") {
+                mentionRow(title: "@everyone", subtitle: "Every bot in this chat", color: accentColor) {
                     onPick("everyone")
                 }
             }
             ForEach(members, id: \.id) { member in
-                mentionRow(title: "@\(member.name)", subtitle: "Bring \(member.name) in") {
+                mentionRow(
+                    title: member.name,
+                    subtitle: "Bring \(member.name) in",
+                    color: MausPalette.color(member.color)
+                ) {
                     onPick(member.name)
                 }
             }
@@ -1401,20 +1465,21 @@ private struct MentionMenuView: View {
         .accessibilityLabel("Mention a bot")
     }
 
-    private func mentionRow(title: String, subtitle: String, action: @escaping () -> Void) -> some View {
+    private func mentionRow(title: String, subtitle: String, color: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Circle()
-                    .fill(accentColor.opacity(0.28))
+                    .fill(color)
                     .frame(width: 28, height: 28)
                     .overlay {
-                        Text(String(title.dropFirst().prefix(1)).uppercased())
+                        Text(String(title.drop(while: { $0 == "@" }).prefix(1)).uppercased())
                             .font(.caption.weight(.semibold))
+                            .foregroundStyle(MausPalette.faceInk(""))
                     }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
+                    Text(title.hasPrefix("@") ? title : "@\(title)")
                         .font(.body.weight(.medium))
-                        .foregroundStyle(Color.primary)
+                        .foregroundStyle(color)
                     Text(subtitle)
                         .font(.caption)
                         .foregroundStyle(Color.secondary)
@@ -2556,14 +2621,20 @@ struct StreamingBubble: View {
     let text: String?
     let reasoning: String?
     var color: String = "blue"
+    var speaker: (name: String, color: String)?
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
+                if let speaker {
+                    Text(speaker.name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(MausPalette.color(speaker.color))
+                }
                 if let reasoning, !reasoning.isEmpty, text?.isEmpty != false {
                     AgentThoughtChamberView(
                         reasoning: String(reasoning.suffix(2_000)),
-                        botName: "Bot",
+                        botName: speaker?.name ?? "Bot",
                         mascotColor: MausPalette.color(color),
                         isStreaming: true
                     )

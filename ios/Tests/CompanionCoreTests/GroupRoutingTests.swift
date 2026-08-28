@@ -64,6 +64,16 @@ final class GroupRoutingTests: XCTestCase {
         XCTAssertEqual(GroupRouting.applyingMention("everyone", to: "@"), "@everyone ")
     }
 
+    func testMentionCandidatesKeepBotColor() {
+        let colored = [
+            GroupRouting.Member(id: "atlas", name: "Atlas", color: "purple"),
+            GroupRouting.Member(id: "milind", name: "Milind", color: "orange"),
+        ]
+        let hits = GroupRouting.mentionCandidates(query: "Mi", members: colored)
+        XCTAssertEqual(hits.map(\.id), ["milind"])
+        XCTAssertEqual(hits.first?.color, "orange")
+    }
+
     func testComposerHintForMentionsOnlyRoom() throws {
         let room = try JSONDecoder().decode(
             Room.self,
