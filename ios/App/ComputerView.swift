@@ -58,6 +58,8 @@ struct ComputerView: View {
     @State private var isWatchingScreen = false
     @State private var confirmingLocalVmAction: LocalVmAction?
     @State private var localVmError: String?
+    @State private var showingHelp = false
+    @State private var showingControls = false
 
     private static let firstFrameTimeout = ComputerWatchLifecycle.firstFrameTimeout
 
@@ -131,23 +133,6 @@ struct ComputerView: View {
         return "\(computer)|\(backend)"
     }
 
-    private var headerStatusTitle: String {
-        switch presentationState {
-        case .watching: return "Watching"
-        case .starting: return "Working"
-        case .cloudViewerAvailable: return "Ready"
-        case .unavailable: return "Unavailable"
-        }
-    }
-
-    private var headerStatusColor: Color {
-        switch presentationState {
-        case .watching: return .green
-        case .starting: return .orange
-        case .cloudViewerAvailable, .unavailable: return .secondary
-        }
-    }
-
     var body: some View {
         ZStack(alignment: .top) {
             Color.black.ignoresSafeArea()
@@ -155,6 +140,17 @@ struct ComputerView: View {
             VStack(spacing: 0) {
                 header
                 content
+            }
+
+            if let desktopError {
+                Text(desktopError)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 88)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .allowsHitTesting(false)
             }
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -165,11 +161,15 @@ struct ComputerView: View {
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: presentationState)
         .safeAreaInset(edge: .bottom) {
-            if canOpenCloudViewer {
-                cloudViewerFooter
-            } else if canShowLocalVmControls {
-                localVmFooter
+            if case .watching = presentationState, image != nil {
+                watchingControls
             }
+        }
+        .sheet(isPresented: $showingHelp) {
+            computerHelpSheet
+        }
+        .sheet(isPresented: $showingControls) {
+            computerControlsSheet
         }
         .alert("Open live cloud desktop?", isPresented: $confirmingDesktop) {
             Button("Cancel", role: .cancel) {}
@@ -286,39 +286,75 @@ struct ComputerView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
+        HStack(spacing: 10) {
+            ChromeCircleButton(systemImage: "chevron.left") {
+                Haptics.selection()
+                dismiss()
             }
-            .buttonStyle(.plain)
-            .glassCapsule()
             .accessibilityLabel("Back")
 
-            BotAvatarView(bot: current, size: 30, state: .idle, animated: false)
-
-            VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 8) {
+                BotAvatarView(
+                    bot: current,
+                    size: 22,
+                    state: MausState.forBot(current, last: nil),
+                    animated: !reduceMotion && current.isWorking
+                )
                 Text(current.name)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
-                Text("Computer")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.secondary)
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(current.name)
 
             Spacer(minLength: 8)
 
-            Text(headerStatusTitle)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(headerStatusColor)
+            ChromeCircleButton(systemImage: "questionmark", weight: .medium) {
+                Haptics.selection()
+                showingHelp = true
+            }
+            .accessibilityLabel("Desktop help")
+
+            Menu {
+                if canOpenCloudViewer {
+                    Button("Open secure cloud viewer", systemImage: "display") {
+                        confirmingDesktop = true
+                    }
+                }
+                if localVmStatus?.canCreate == true {
+                    Button("Create Local VM", systemImage: "plus.circle") {
+                        confirmingLocalVmAction = .create
+                    }
+                    .disabled(pendingLocalVmAction)
+                }
+                if localVmStatus?.canStop == true {
+                    Button("Stop Local VM", systemImage: "stop.circle", role: .destructive) {
+                        confirmingLocalVmAction = .stop
+                    }
+                    .disabled(pendingLocalVmAction)
+                }
+                if localVmStatus?.canRecreate == true {
+                    Button("Recreate Local VM", systemImage: "arrow.clockwise.circle") {
+                        confirmingLocalVmAction = .recreate
+                    }
+                    .disabled(pendingLocalVmAction)
+                }
+                if canRetryScreen {
+                    Button("Try again", systemImage: "arrow.clockwise") {
+                        retryScreen()
+                    }
+                }
+            } label: {
+                ChromeCircleButton(systemImage: "ellipsis")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Desktop actions")
         }
         .foregroundStyle(Color.primary)
         .padding(.horizontal, 16)
         .padding(.top, 4)
         .padding(.bottom, 10)
-        .background(.ultraThinMaterial)
+        .background(Color.black.opacity(0.88))
     }
 
     @ViewBuilder
@@ -339,19 +375,17 @@ struct ComputerView: View {
     private var stateCard: some View {
         switch presentationState {
         case .starting:
-            VStack(spacing: 14) {
+            VStack(spacing: 12) {
                 ProgressView()
                     .tint(.white)
                     .controlSize(.regular)
-                Text("Starting computer…")
-                    .font(.system(size: 17, weight: .semibold))
-                Text(startingMessage)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color.white.opacity(0.65))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
+                    .accessibilityHidden(true)
+                Text("Starting desktop...")
+                    .font(.body)
             }
             .foregroundStyle(Color.white)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Starting desktop")
 
         case .cloudViewerAvailable:
             VStack(spacing: 14) {
@@ -394,98 +428,133 @@ struct ComputerView: View {
 
     private var startingMessage: String {
         if current.cloudBackend == "vps" || current.computer == "vm" || current.computer == "local" {
-            return "This phone can watch frames while the agent works. Control stays on the computer."
+            return "This phone can watch frames while the agent works. Control stays on the paired computer."
         }
         if current.busy == true {
-            return "Waiting for the first frame…"
+            return "Waiting for the first frame."
         }
-        return "This bot's computer is captured while it is working."
+        return "This Bot's computer is captured while it is working."
     }
 
-    private var cloudViewerFooter: some View {
-        VStack(spacing: 8) {
-            if let desktopError {
-                Text(desktopError)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
+    private var watchingControls: some View {
+        HStack {
+            ChromeCircleButton(systemImage: "list.clipboard", weight: .medium) {
+                copyScreen()
             }
-            Button {
-                confirmingDesktop = true
-            } label: {
-                if openingDesktop {
-                    ProgressView()
-                        .tint(.white)
-                        .frame(maxWidth: .infinity)
-                } else {
-                    Label("Open secure cloud viewer", systemImage: "display")
-                        .frame(maxWidth: .infinity)
-                }
+            .disabled(image == nil)
+            .accessibilityLabel("Copy screen")
+            .accessibilityHint("Copies the latest desktop frame to the clipboard")
+
+            Spacer()
+
+            ChromeCircleButton(systemImage: "square.grid.2x2", weight: .medium) {
+                Haptics.selection()
+                showingControls = true
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(openingDesktop)
-            Text("The viewer is temporary and protected by this phone's pairing.")
-                .font(.caption)
-                .foregroundStyle(Color.white.opacity(0.6))
-                .multilineTextAlignment(.center)
+            .accessibilityLabel("Desktop controls")
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-        .background(.ultraThinMaterial)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(Color.black)
     }
 
-    private var localVmFooter: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: "desktopcomputer")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.green)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Local VM")
-                        .font(.system(size: 15, weight: .semibold))
-                    Text(localVmStateTitle)
-                        .font(.caption)
-                        .foregroundStyle(Color.white.opacity(0.65))
+    private var computerHelpSheet: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text(startingMessage)
                 }
-                Spacer(minLength: 8)
-                if pendingLocalVmAction {
-                    ProgressView()
-                        .tint(.white)
-                        .controlSize(.small)
+                if let localVmStatus {
+                    Section("Local VM") {
+                        Text(localVmStateTitle)
+                        if let problem = localVmStatus.problem, localVmStatus.ready != true {
+                            Text(problem)
+                        }
+                    }
                 }
             }
-
-            if let localVmError {
-                Text(localVmError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            } else if let problem = localVmStatus?.problem, localVmStatus?.ready != true {
-                Text(problem)
-                    .font(.caption)
-                    .foregroundStyle(Color.white.opacity(0.65))
-                    .lineLimit(2)
-            }
-
-            HStack(spacing: 8) {
-                if localVmStatus?.canCreate == true {
-                    localVmActionButton(.create)
-                }
-                if localVmStatus?.canStop == true {
-                    localVmActionButton(.stop)
-                }
-                if localVmStatus?.canRecreate == true {
-                    localVmActionButton(.recreate)
+            .navigationTitle("Desktop")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { showingHelp = false }
                 }
             }
-
-            Text("Runs on the paired Mac. This phone only sends guarded VM actions.")
-                .font(.caption2)
-                .foregroundStyle(Color.white.opacity(0.5))
-                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-        .background(.ultraThinMaterial)
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+    }
+
+    private var computerControlsSheet: some View {
+        NavigationStack {
+            List {
+                if canOpenCloudViewer {
+                    Button {
+                        showingControls = false
+                        confirmingDesktop = true
+                    } label: {
+                        Label("Open secure cloud viewer", systemImage: "display")
+                    }
+                }
+                if canShowLocalVmControls {
+                    Section {
+                        Text(localVmStateTitle)
+                        if pendingLocalVmAction {
+                            ProgressView()
+                        }
+                        if let localVmError {
+                            Text(localVmError).foregroundStyle(.red)
+                        } else if let problem = localVmStatus?.problem, localVmStatus?.ready != true {
+                            Text(problem).foregroundStyle(.secondary)
+                        }
+                        if localVmStatus?.canCreate == true {
+                            Button("Create", systemImage: "plus.circle") {
+                                showingControls = false
+                                confirmingLocalVmAction = .create
+                            }
+                            .disabled(pendingLocalVmAction)
+                        }
+                        if localVmStatus?.canStop == true {
+                            Button("Stop", systemImage: "stop.circle", role: .destructive) {
+                                showingControls = false
+                                confirmingLocalVmAction = .stop
+                            }
+                            .disabled(pendingLocalVmAction)
+                        }
+                        if localVmStatus?.canRecreate == true {
+                            Button("Recreate", systemImage: "arrow.clockwise.circle") {
+                                showingControls = false
+                                confirmingLocalVmAction = .recreate
+                            }
+                            .disabled(pendingLocalVmAction)
+                        }
+                    } header: {
+                        Text("Local VM")
+                    } footer: {
+                        Text("Runs on the paired Mac. This phone only sends guarded VM actions.")
+                    }
+                }
+                if !canOpenCloudViewer && !canShowLocalVmControls {
+                    Text("This phone can watch the desktop while the agent works. Interactive control stays on the paired computer.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Controls")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { showingControls = false }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func copyScreen() {
+        guard let image else { return }
+        UIPasteboard.general.image = image
+        Haptics.success()
     }
 
     private var localVmStateTitle: String {
@@ -497,20 +566,6 @@ struct ComputerView: View {
         case .unavailable: return "Unavailable"
         case .unknown, nil: return "Checking…"
         }
-    }
-
-    private func localVmActionButton(_ action: LocalVmAction) -> some View {
-        Button {
-            localVmError = nil
-            confirmingLocalVmAction = action
-        } label: {
-            Label(action.buttonTitle, systemImage: action.systemImage)
-                .font(.system(size: 13, weight: .semibold))
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-        .tint(action == .stop ? .red : .blue)
-        .disabled(pendingLocalVmAction)
     }
 
     @MainActor

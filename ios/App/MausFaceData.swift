@@ -521,7 +521,10 @@ enum MausFaceData {
         .listening: MausBodyMotion(bob: (2, 2600), pulse: (0.012, 2600)),
         .thinking: MausBodyMotion(sway: (1.6, 3000), pulse: (0.01, 3000)),
         .searching: MausBodyMotion(bob: (3, 1400), sway: (2.2, 1400)),
-        .working: MausBodyMotion(bob: (2.5, 900), squash: 0.22),
+        // Working motion is a quiet spring, not a bounce. Blink and
+        // expression carry the "this bot is busy" signal; the body only
+        // breathes so a roster of working faces does not strobe.
+        .working: MausBodyMotion(bob: (1.1, 1800), pulse: (0.01, 2200)),
         .excited: MausBodyMotion(bob: (9, 520), sway: (3, 1040), squash: 0.35),
         .surprised: MausBodyMotion(jitter: (0.8, 120), enter: (1.14, 340)),
         .suspicious: MausBodyMotion(sway: (2.4, 2600), tilt: -3),

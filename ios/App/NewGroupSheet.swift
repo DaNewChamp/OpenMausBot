@@ -25,14 +25,19 @@ struct NewGroupSheet: View {
                 Section("Bots") {
                     ForEach(bots) { bot in
                         Button {
-                            if members.contains(bot.id) { members.remove(bot.id) } else { members.insert(bot.id) }
+                            Haptics.selection()
+                            if members.contains(bot.id) {
+                                members.remove(bot.id)
+                            } else if members.count < 6 {
+                                members.insert(bot.id)
+                            }
                         } label: {
                             HStack(spacing: 12) {
                                 BotAvatarView(bot: bot, size: 36, state: .idle, animated: false)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(bot.name).font(.system(size: 16, weight: .semibold)).foregroundStyle(Color.primary)
+                                    Text(bot.name).font(.body.weight(.semibold)).foregroundStyle(Color.primary)
                                     if !bot.title.isEmpty {
-                                        Text(bot.title).font(.system(size: 13)).foregroundStyle(Color.secondary)
+                                        Text(bot.title).font(.footnote).foregroundStyle(Color.secondary)
                                     }
                                 }
                                 Spacer()
@@ -42,9 +47,18 @@ struct NewGroupSheet: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .disabled(!members.contains(bot.id) && members.count >= 6)
+                        .accessibilityAddTraits(members.contains(bot.id) ? .isSelected : [])
                     }
                 }
+                Section {
+                    Text("Groups can have up to 6 members.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .scrollContentBackground(.hidden)
+            .background(VBotSurface.background.ignoresSafeArea())
             .navigationTitle("New group")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
