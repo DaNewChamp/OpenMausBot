@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "Mac-Mini": {
+      "url": "https://local.posival.com/mcp",
+      "auth": {
+        "scopes": ["openid", "profile", "email"]
+      }
+    }
+  }
+}
