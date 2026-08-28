@@ -84,6 +84,16 @@ struct SettingsView: View {
                             SettingsIcon(symbol: "link", color: .blue)
                         }
                     }
+
+                    NavigationLink {
+                        EngineSelectionView()
+                    } label: {
+                        Label {
+                            Text("Desktop engine")
+                        } icon: {
+                            SettingsIcon(symbol: "cpu", color: .purple)
+                        }
+                    }
                 }
 
                 Section {
@@ -476,4 +486,130 @@ struct AccountSheet: View {
 private enum AccountSheetStyle {
     static let canvas = VBotSurface.background
     static let card = VBotSurface.card
+}
+
+struct EngineSelectionView: View {
+    @EnvironmentObject private var session: Session
+    @State private var sync: VBotEngineSync?
+    @State private var loading = true
+    @State private var saving = false
+    @State private var error: String?
+
+    var body: some View {
+        Form {
+            if loading {
+                Section {
+                    ProgressView("Loading engines…")
+                }
+            } else if let error {
+                Section {
+                    Text(error)
+                        .foregroundStyle(.secondary)
+                    Button("Try again") { Task { await load() } }
+                }
+            } else if let sync {
+                Section {
+                    Picker("Primary engine", selection: Binding(
+                        get: { sync.selectedEngine },
+                        set: { newEngine in Task { await save(engine: newEngine) } }
+                    )) {
+                        ForEach(VBotPrimaryEngine.allCases) { engine in
+                            Text(engine.displayName).tag(engine)
+                        }
+                    }
+                    .disabled(saving)
+                } footer: {
+                    if sync.fallback, let reason = sync.fallbackReason {
+                        Text("Using OpenMaus because Grok Reconstructed is unavailable: \(reason)")
+                    } else if sync.servingEngine == .grokReconstructed {
+                        Text("V Bot is showing agents synced from Grok Bot 0.18 Reconstructed on this Mac.")
+                    } else {
+                        Text("OpenMaus remains the default engine when Grok Reconstructed is unavailable.")
+                    }
+                }
+
+                Section("Engine status") {
+                    ForEach(sync.engines, id: \.id) { engine in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(engine.displayName)
+                                Spacer()
+                                Text(engine.isAvailable ? "Available" : "Unavailable")
+                                    .foregroundStyle(engine.isAvailable ? .green : .secondary)
+                            }
+                            if let reason = engine.reason, !engine.isAvailable {
+                                Text(reason)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                if !sync.bots.isEmpty {
+                    Section("Synced agents") {
+                        ForEach(sync.bots) { bot in
+                            HStack {
+                                Text(bot.label)
+                                Spacer()
+                                if bot.busy == true {
+                                    Text("Working")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !sync.groups.isEmpty {
+                    Section("Synced groups") {
+                        ForEach(sync.groups) { group in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(group.label)
+                                if !group.memberIds.isEmpty {
+                                    Text("\(group.memberIds.count) member\(group.memberIds.count == 1 ? "" : "s")")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Desktop engine")
+        .navigationBarTitleDisplayMode(.inline)
+        .scrollContentBackground(.hidden)
+        .background(VBotSurface.background.ignoresSafeArea())
+        .task { await load() }
+    }
+
+    private func load() async {
+        loading = true
+        defer { loading = false }
+        guard session.connection != nil else {
+            error = "Connect to your computer to choose an engine."
+            sync = nil
+            return
+        }
+        if let loaded = await session.loadEngineSync() {
+            sync = loaded
+            error = nil
+        } else {
+            error = session.actionError ?? "Could not load engine status."
+            sync = nil
+        }
+    }
+
+    private func save(engine: VBotPrimaryEngine) async {
+        saving = true
+        defer { saving = false }
+        if let updated = await session.setPrimaryEngine(engine) {
+            sync = updated
+            error = nil
+        } else {
+            error = session.actionError ?? "Could not update the primary engine."
+        }
+    }
 }

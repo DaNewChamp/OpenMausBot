@@ -628,6 +628,85 @@ public struct InstanceList: Codable, Sendable {
     public var instances: [Instance]
 }
 
+public enum VBotPrimaryEngine: String, Codable, CaseIterable, Sendable, Identifiable {
+    case openmaus
+    case grokReconstructed
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .openmaus: return "OpenMaus"
+        case .grokReconstructed: return "Grok Reconstructed"
+        }
+    }
+}
+
+public struct VBotEngineStatus: Codable, Hashable, Sendable {
+    public var id: String
+    public var displayName: String
+    public var state: String
+    public var code: String?
+    public var reason: String?
+    public var version: String?
+
+    public var isAvailable: Bool { state == "available" }
+}
+
+public struct VBotSyncedBot: Codable, Hashable, Identifiable, Sendable {
+    public var id: String
+    public var label: String
+    public var busy: Bool?
+    public var isActive: Bool?
+    public var isRunning: Bool?
+    public var model: String?
+}
+
+public struct VBotSyncedGroup: Codable, Hashable, Identifiable, Sendable {
+    public var id: String
+    public var label: String
+    public var memberIds: [String]
+    public var busyBotId: String?
+}
+
+public struct VBotModelCapabilities: Codable, Hashable, Sendable {
+    public var defaultModel: String
+    public var models: [ModelOption]
+    public var sendPrompt: Bool
+    public var images: Bool
+    public var queueing: Bool
+    public var steer: Bool
+    public var attachments: Bool
+}
+
+public struct VBotEngineSync: Codable, Sendable {
+    public var primaryEngine: String
+    public var activeSource: String
+    public var fallback: Bool
+    public var fallbackCode: String?
+    public var fallbackReason: String?
+    public var engines: [VBotEngineStatus]
+    public var bots: [VBotSyncedBot]
+    public var groups: [VBotSyncedGroup]
+    public var modelCapabilities: VBotModelCapabilities?
+
+    public var selectedEngine: VBotPrimaryEngine {
+        VBotPrimaryEngine(rawValue: primaryEngine) ?? .openmaus
+    }
+
+    public var servingEngine: VBotPrimaryEngine {
+        VBotPrimaryEngine(rawValue: activeSource) ?? .openmaus
+    }
+}
+
+public struct VBotPrimaryEnginePatch: Encodable, Sendable {
+    public var primaryEngine: String
+
+    public init(primaryEngine: VBotPrimaryEngine) {
+        self.primaryEngine = primaryEngine.rawValue
+    }
+}
+
 public struct ConfigFlag: Codable, Hashable, Sendable {
     public var configured: Bool
     public var apiKeyConfigured: Bool?

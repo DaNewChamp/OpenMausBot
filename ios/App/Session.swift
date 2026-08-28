@@ -1164,6 +1164,26 @@ final class Session: ObservableObject {
         }
     }
 
+    func loadEngineSync() async -> VBotEngineSync? {
+        guard let client else { return nil }
+        do {
+            return try await client.engineSync()
+        } catch {
+            if !Task.isCancelled { actionError = error.localizedDescription }
+            return nil
+        }
+    }
+
+    func setPrimaryEngine(_ engine: VBotPrimaryEngine) async -> VBotEngineSync? {
+        guard let client else { return nil }
+        do {
+            return try await client.setPrimaryEngine(engine)
+        } catch {
+            if !Task.isCancelled { actionError = error.localizedDescription }
+            return nil
+        }
+    }
+
     func updateModel(_ patch: BotModelPatch, for bot: Bot) async -> Bot? {
         guard let client else { return nil }
         do {

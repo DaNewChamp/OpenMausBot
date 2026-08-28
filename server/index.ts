@@ -120,6 +120,12 @@ import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { buildTurnContext, engineIsFresh } from "./turn-context.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
 import {
+  buildVBotEngineSync,
+  parseVBotPrimaryEnginePatch,
+  probeVBotReconstructed,
+  vbotPrimaryEngine,
+} from "./vbot-engine-sync.ts";
+import {
   ensureWorkspace,
   listMemoryTopics,
   isMemoryTopicName,
@@ -6032,6 +6038,59 @@ const server = createServer(async (req, res) => {
       // this the answer is frozen at boot and "check again" is a no-op.
       resetPathCache();
       return json(res, 200, { instances: await registry.describe() });
+    }
+
+    const vbotOpenMausSnapshot = () => ({
+      bots: store.bots.map((bot) => ({
+        id: bot.id,
+        name: bot.name,
+        title: bot.title,
+        busy: bot.busy,
+        activity: bot.activity,
+        modelSelection: bot.modelSelection,
+      })),
+      groups: store.groups.map((group) => ({
+        id: group.id,
+        name: group.name,
+        memberIds: group.memberIds,
+        busyBotId: group.busyBotId ?? null,
+      })),
+    });
+
+    if (method === "GET" && path === "/api/vbot/engine-sync") {
+      const reconstructed = await probeVBotReconstructed();
+      return json(
+        res,
+        200,
+        buildVBotEngineSync({
+          primaryEngine: vbotPrimaryEngine(cfg),
+          reconstructed,
+          openmaus: vbotOpenMausSnapshot(),
+        }),
+      );
+    }
+
+    if (method === "PATCH" && path === "/api/vbot/primary-engine") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const body = await readBody(req);
+      const primaryEngine = parseVBotPrimaryEnginePatch(body);
+      if (!primaryEngine) {
+        return json(res, 400, { error: "primaryEngine must be openmaus or grokReconstructed" });
+      }
+      saveConfig({ vbot: { ...(cfg.vbot ?? {}), primaryEngine } });
+      Object.assign(cfg, loadConfig());
+      const reconstructed = await probeVBotReconstructed();
+      return json(
+        res,
+        200,
+        buildVBotEngineSync({
+          primaryEngine,
+          reconstructed,
+          openmaus: vbotOpenMausSnapshot(),
+        }),
+      );
     }
 
     // ── CLI binary discovery for the Engines "detected" dropdown ──

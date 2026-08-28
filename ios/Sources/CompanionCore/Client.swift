@@ -808,6 +808,17 @@ public struct CompanionClient: Sendable {
         try await send(try makeRequest("GET", "/api/instances"), as: InstanceList.self).instances
     }
 
+    public func engineSync() async throws -> VBotEngineSync {
+        try await send(try makeRequest("GET", "/api/vbot/engine-sync"), as: VBotEngineSync.self)
+    }
+
+    public func setPrimaryEngine(_ engine: VBotPrimaryEngine) async throws -> VBotEngineSync {
+        try await send(
+            try makeRequest("PATCH", "/api/vbot/primary-engine", encodedBody: VBotPrimaryEnginePatch(primaryEngine: engine)),
+            as: VBotEngineSync.self
+        )
+    }
+
     public func config() async throws -> ConfigStatus {
         try await send(try makeRequest("GET", "/api/config"), as: ConfigStatus.self)
     }

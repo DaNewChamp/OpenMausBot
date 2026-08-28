@@ -89,17 +89,6 @@ export interface ReconstructedCapabilities {
   readonly transcriptTail: boolean;
 }
 
-export type ReconstructedProbe =
-  | {
-      readonly ok: true;
-      readonly discovery: GatewayDiscovery;
-      readonly origin: string;
-      readonly token: string | null;
-      readonly sessions: ReconstructedSession[];
-      readonly capabilities: ReconstructedCapabilities;
-    }
-  | { readonly ok: false; readonly code: ReconstructedDisabledCode };
-
 export interface ReconstructedRuntimeHost {
   readonly homeDir: string;
   readonly platform: NodeJS.Platform;
@@ -218,6 +207,82 @@ export function bundleIdFromInfoPlist(text: string): string | null {
   return match?.[1]?.trim() || null;
 }
 
+export interface SyncedReconstructedBot {
+  readonly id: string;
+  readonly label: string;
+  readonly isActive?: boolean;
+  readonly isRunning?: boolean;
+}
+
+export interface SyncedReconstructedGroup {
+  readonly id: string;
+  readonly label: string;
+  readonly memberIds: readonly string[];
+  readonly isActive?: boolean;
+}
+
+export function projectReconstructedRoster(value: unknown): {
+  readonly bots: SyncedReconstructedBot[];
+  readonly groups: SyncedReconstructedGroup[];
+} {
+  if (!Array.isArray(value)) return { bots: [], groups: [] };
+  const bots: SyncedReconstructedBot[] = [];
+  const groups: SyncedReconstructedGroup[] = [];
+  const seen = new Set<string>([ACTIVE_SESSION_ID]);
+  for (const row of value) {
+    if (typeof row !== "object" || row == null || Array.isArray(row)) continue;
+    const rec = row as Record<string, unknown>;
+    const id = typeof rec.id === "string" ? rec.id.trim() : "";
+    if (!AGENT_ID.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    const name = typeof rec.name === "string" ? rec.name.trim() : "";
+    const title = typeof rec.title === "string" ? rec.title.trim() : "";
+    let label = "";
+    for (const char of name || title || id) {
+      if (char.charCodeAt(0) >= 32) label += char;
+    }
+    label = label.slice(0, LABEL_MAX);
+    const finalLabel = label.length > 0 ? label : id;
+    if (rec.isGroup === true) {
+      const memberIds: string[] = [];
+      if (Array.isArray(rec.memberIds)) {
+        for (const member of rec.memberIds) {
+          if (typeof member !== "string") continue;
+          const trimmed = member.trim();
+          if (!AGENT_ID.test(trimmed) || memberIds.includes(trimmed)) continue;
+          memberIds.push(trimmed);
+        }
+      }
+      const group: SyncedReconstructedGroup = { id, label: finalLabel, memberIds };
+      if (typeof rec.isActive === "boolean") group.isActive = rec.isActive;
+      groups.push(group);
+      continue;
+    }
+    const bot: SyncedReconstructedBot = { id, label: finalLabel };
+    if (typeof rec.isRunning === "boolean") bot.isRunning = rec.isRunning;
+    if (typeof rec.isActive === "boolean") bot.isActive = rec.isActive;
+    bots.push(bot);
+  }
+  return { bots, groups };
+}
+
+export interface SyncedReconstructedRoster {
+  readonly bots: SyncedReconstructedBot[];
+  readonly groups: SyncedReconstructedGroup[];
+}
+
+export type ReconstructedProbe =
+  | {
+      readonly ok: true;
+      readonly discovery: GatewayDiscovery;
+      readonly origin: string;
+      readonly token: string | null;
+      readonly sessions: ReconstructedSession[];
+      readonly roster: SyncedReconstructedRoster;
+      readonly capabilities: ReconstructedCapabilities;
+    }
+  | { readonly ok: false; readonly code: ReconstructedDisabledCode };
+
 export function sanitizeAgentSessions(value: unknown): ReconstructedSession[] {
   if (!Array.isArray(value)) return [];
   const sessions: ReconstructedSession[] = [];
@@ -227,6 +292,7 @@ export function sanitizeAgentSessions(value: unknown): ReconstructedSession[] {
     const rec = row as Record<string, unknown>;
     const id = typeof rec.id === "string" ? rec.id.trim() : "";
     if (!AGENT_ID.test(id) || seen.has(id)) continue;
+    if (rec.isGroup === true) continue;
     seen.add(id);
     const name = typeof rec.name === "string" ? rec.name.trim() : "";
     const title = typeof rec.title === "string" ? rec.title.trim() : "";
@@ -478,6 +544,7 @@ export async function probeReconstructedGateway(
       origin,
       token: discovery.token,
       sessions: sanitizeAgentSessions(listed.value),
+      roster: projectReconstructedRoster(listed.value),
       capabilities: {
         health: true,
         listAgents: true,

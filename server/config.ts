@@ -64,6 +64,9 @@ const featureConfigSchema = z.object({
   /** Experimental desktop workflow recorder. Hidden unless explicitly enabled. */
   skillRecorder: z.boolean().optional(),
 });
+const vbotConfigSchema = z.object({
+  primaryEngine: z.enum(["openmaus", "grokReconstructed"]).optional(),
+});
 const instanceConfigSchema = z.object({
   driver: z.string().min(1),
   displayName: optionalText,
@@ -94,6 +97,7 @@ const appConfigSchema = z.object({
   rooms: roomConfigSchema.optional(),
   localVm: localVmConfigSchema.optional(),
   features: featureConfigSchema.optional(),
+  vbot: vbotConfigSchema.optional(),
   instances: instanceConfigMapSchema.optional(),
 });
 const appConfigPatchSchema = appConfigSchema.omit({ instances: true });
@@ -116,6 +120,8 @@ export interface AppConfig {
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
   /** Opt-in product experiments. Every flag defaults to disabled. */
   features?: { skillRecorder?: boolean };
+  /** V Bot engine selection. OpenMaus remains the default fallback. */
+  vbot?: { primaryEngine?: "openmaus" | "grokReconstructed" };
   instances?: InstanceConfigMap;
 }
 export type ConfigPatch = z.output<typeof appConfigPatchSchema>;
