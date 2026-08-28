@@ -82,8 +82,56 @@ struct ChatAvatarView: View {
         switch chat {
         case let .bot(bot):
             BotAvatarView(bot: bot, size: size, state: state, animated: animated, comets: comets)
-        case .room:
-            MausAvatar(color: "blue", size: size, state: state, animated: animated, comets: comets)
+        case let .room(room):
+            RoomFaceStack(room: room, size: size, animated: animated)
+        }
+    }
+}
+
+/// Grok Bot stacks the first three members instead of a generic group glyph.
+struct RoomFaceStack: View {
+    let room: Room
+    let size: CGFloat
+    var animated = false
+
+    @EnvironmentObject private var session: Session
+
+    var body: some View {
+        let bots = room.memberIds.compactMap { session.state.bot($0) }
+        ZStack {
+            if bots.isEmpty {
+                MausAvatar(color: "blue", size: size, state: .happy, animated: animated)
+            } else {
+                ForEach(Array(bots.prefix(3).enumerated()), id: \.element.id) { index, bot in
+                    BotAvatarView(
+                        bot: bot,
+                        size: bots.count == 1 ? size * 0.86 : size * 0.54,
+                        state: .idle,
+                        animated: animated
+                    )
+                    .padding(1.5)
+                    .background(Circle().fill(VBotSurface.background))
+                    .offset(offset(for: index, count: min(bots.count, 3)))
+                }
+            }
+        }
+        .frame(width: size, height: size)
+    }
+
+    private func offset(for index: Int, count: Int) -> CGSize {
+        switch count {
+        case 1: return .zero
+        case 2:
+            return CGSize(
+                width: index == 0 ? -size * 0.18 : size * 0.18,
+                height: index == 0 ? -size * 0.08 : size * 0.08
+            )
+        default:
+            switch index {
+            case 0: return CGSize(width: -size * 0.20, height: -size * 0.16)
+            case 1: return CGSize(width: size * 0.20, height: -size * 0.16)
+            default: return CGSize(width: 0, height: size * 0.18)
+            }
         }
     }
 }

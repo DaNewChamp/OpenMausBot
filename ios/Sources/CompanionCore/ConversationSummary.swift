@@ -135,6 +135,26 @@ public struct ConversationSummary: Identifiable, Hashable, Sendable {
         self.unread = unread
     }
 
+    /// Roster snippet: one flow of prose, no Markdown headings or quote prefixes.
+    public static func rosterPreview(_ raw: String) -> String {
+        let lines = raw.split(whereSeparator: \.isNewline).map {
+            var line = $0.trimmingCharacters(in: .whitespaces)
+            while line.hasPrefix("#") {
+                line.removeFirst()
+                line = line.trimmingCharacters(in: .whitespaces)
+            }
+            while line.hasPrefix(">") {
+                line.removeFirst()
+                line = line.trimmingCharacters(in: .whitespaces)
+            }
+            line = line.replacingOccurrences(of: "**", with: "")
+            line = line.replacingOccurrences(of: "__", with: "")
+            line = line.replacingOccurrences(of: "`", with: "")
+            return line
+        }.filter { !$0.isEmpty }
+        return String(lines.joined(separator: " ").prefix(180))
+    }
+
     /// Pinned conversations lead, followed by unread conversations, then the
     /// most recently active. Identity is the final key so equal timestamps
     /// are deterministic rather than depending on input order.
@@ -189,7 +209,7 @@ public extension CompanionState {
     private static func preview(of last: Message?) -> String {
         guard let last else { return "" }
         switch last.kind {
-        case .text: return last.text ?? ""
+        case .text: return ConversationSummary.rosterPreview(last.text ?? "")
         case .options:
             guard let card = last.card else { return "" }
             return card.isPending && !card.subtitle.isEmpty ? card.subtitle : card.title

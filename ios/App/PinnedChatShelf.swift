@@ -14,8 +14,8 @@ struct PinnedChatShelf: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let tileWidth: CGFloat = 92
-            let spacing: CGFloat = 18
+            let tileWidth: CGFloat = 88
+            let spacing: CGFloat = 16
             let capacity = max(1, Int((proxy.size.width - 32 + spacing) / (tileWidth + spacing)))
 
             Group {
@@ -32,7 +32,7 @@ struct PinnedChatShelf: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(height: 128)
+        .frame(height: 132)
         .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: summaries.map(\.id))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Pinned conversations")
@@ -73,9 +73,9 @@ private struct PinnedChatTile: View {
     let animated: Bool
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
-                PinnedChatAvatar(chat: chat, size: 76, animated: animated)
+                PinnedChatAvatar(chat: chat, size: 74, animated: animated)
 
                 if chat.busy {
                     ProgressView()
@@ -84,22 +84,25 @@ private struct PinnedChatTile: View {
                         .frame(width: 22, height: 22)
                         .background(Circle().fill(Color.black.opacity(0.78)))
                         .overlay(Circle().stroke(VBotSurface.background, lineWidth: 2))
-                } else if chat.unread {
-                    Circle()
-                        .fill(VBotSurface.unread)
-                        .frame(width: 12, height: 12)
-                        .overlay(Circle().stroke(VBotSurface.background, lineWidth: 2))
                 }
             }
-            .frame(width: 80, height: 80)
+            .frame(width: 76, height: 76)
 
-            Text(chat.name)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(Color.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .truncationMode(.tail)
-                .frame(width: 92)
+            HStack(spacing: 4) {
+                Text(chat.name)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(Color.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                if chat.unread && !chat.busy {
+                    Circle()
+                        .fill(VBotSurface.unread)
+                        .frame(width: 8, height: 8)
+                        .accessibilityHidden(true)
+                }
+            }
+            .frame(width: 88)
         }
         .contentShape(Rectangle())
         .accessibilityLabel(chat.name)
@@ -130,50 +133,7 @@ private struct PinnedChatAvatar: View {
                 animated: animated
             )
         case let .room(room):
-            RoomPinnedAvatar(room: room, size: size, animated: animated)
-        }
-    }
-}
-
-private struct RoomPinnedAvatar: View {
-    let room: Room
-    let size: CGFloat
-    let animated: Bool
-
-    @EnvironmentObject private var session: Session
-
-    var body: some View {
-        let bots = room.memberIds.compactMap { session.state.bot($0) }
-        ZStack {
-            Circle().fill(Color.secondary.opacity(0.14))
-            if bots.isEmpty {
-                MausAvatar(color: "blue", size: size * 0.66, state: .happy, animated: animated)
-            } else {
-                ForEach(Array(bots.prefix(3).enumerated()), id: \.element.id) { index, bot in
-                    let avatarSize = bots.count == 1 ? size * 0.72 : size * 0.48
-                    BotAvatarView(bot: bot, size: avatarSize, state: .happy, animated: animated)
-                        .padding(2)
-                        .background(Circle().fill(VBotSurface.background))
-                        .offset(roomOffset(index: index, count: min(bots.count, 3), size: size))
-                }
-            }
-        }
-        .frame(width: size, height: size)
-        .clipShape(Circle())
-    }
-
-    private func roomOffset(index: Int, count: Int, size: CGFloat) -> CGSize {
-        switch count {
-        case 1: return .zero
-        case 2:
-            return CGSize(width: index == 0 ? -size * 0.17 : size * 0.17,
-                          height: index == 0 ? -size * 0.09 : size * 0.09)
-        default:
-            switch index {
-            case 0: return CGSize(width: -size * 0.18, height: -size * 0.16)
-            case 1: return CGSize(width: size * 0.18, height: -size * 0.16)
-            default: return CGSize(width: 0, height: size * 0.16)
-            }
+            RoomFaceStack(room: room, size: size, animated: animated)
         }
     }
 }

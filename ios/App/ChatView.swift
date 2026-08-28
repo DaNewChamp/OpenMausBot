@@ -507,37 +507,20 @@ struct ChatView: View {
 
             Spacer(minLength: 8)
 
-            if case .bot = current {
-                Button {
-                    Haptics.selection()
-                    showingComputer = true
-                } label: {
-                    Image(systemName: "display")
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(Color.primary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .glassCircle()
-                .fixedSize()
-                .accessibilityLabel("Watch \(current.name)'s computer")
-            } else {
-                Button {
-                    Haptics.selection()
-                    showingPlus = true
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(Color.primary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .glassCircle()
-                .fixedSize()
-                .accessibilityLabel("Open \(current.name) chat options")
+            Button {
+                Haptics.selection()
+                setShowingPlus(true)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Color.primary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
             }
+            .buttonStyle(.plain)
+            .glassCircle()
+            .fixedSize()
+            .accessibilityLabel("Open \(current.name) chat options")
         }
         .padding(.horizontal, 12)
         .padding(.top, 4)

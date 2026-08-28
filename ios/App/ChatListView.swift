@@ -38,8 +38,8 @@ struct ChatListView: View {
                         Haptics.selection()
                         open(chat)
                     }
-                    .padding(.top, 6)
-                    .padding(.bottom, 10)
+                    .padding(.top, 2)
+                    .padding(.bottom, 4)
                 }
 
                 ScrollView {
@@ -517,49 +517,12 @@ private struct RosterChatAvatar: View {
     let state: MausState
     let animated: Bool
 
-    @EnvironmentObject private var session: Session
-
     var body: some View {
         switch chat {
         case let .bot(bot):
             BotAvatarView(bot: bot, size: size, state: state, animated: animated)
         case let .room(room):
-            let bots = room.memberIds.compactMap { session.state.bot($0) }
-            ZStack {
-                if bots.isEmpty {
-                    MausAvatar(color: "blue", size: size, state: state, animated: animated)
-                } else {
-                    ForEach(Array(bots.prefix(3).enumerated()), id: \.element.id) { index, bot in
-                        BotAvatarView(
-                            bot: bot,
-                            size: bots.count == 1 ? size * 0.86 : size * 0.54,
-                            state: .idle,
-                            animated: animated
-                        )
-                        .padding(2)
-                        .background(Circle().fill(VBotSurface.background))
-                        .offset(offset(for: index, count: min(bots.count, 3)))
-                    }
-                }
-            }
-            .frame(width: size, height: size)
-        }
-    }
-
-    private func offset(for index: Int, count: Int) -> CGSize {
-        switch count {
-        case 1: return .zero
-        case 2:
-            return CGSize(
-                width: index == 0 ? -size * 0.17 : size * 0.17,
-                height: index == 0 ? -size * 0.10 : size * 0.10
-            )
-        default:
-            switch index {
-            case 0: return CGSize(width: -size * 0.18, height: -size * 0.16)
-            case 1: return CGSize(width: size * 0.18, height: -size * 0.16)
-            default: return CGSize(width: 0, height: size * 0.17)
-            }
+            RoomFaceStack(room: room, size: size, animated: animated)
         }
     }
 }
@@ -574,15 +537,15 @@ struct ChatRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
+        HStack(alignment: .top, spacing: 12) {
             RosterChatAvatar(
                 chat: chat,
-                size: 52,
+                size: 56,
                 state: state,
                 animated: !reduceMotion && state.showsActivity
             )
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(chat.name)
                         .font(.body.weight(.semibold))
@@ -595,16 +558,16 @@ struct ChatRow: View {
 
                     Text(RelativeStamp.list(at))
                         .font(.footnote)
-                        .foregroundStyle(Color.secondary.opacity(0.9))
+                        .foregroundStyle(Color.secondary)
                         .lineLimit(1)
                         .layoutPriority(0)
                 }
 
-                HStack(alignment: .center, spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
                     Text(preview.isEmpty ? " " : preview)
                         .font(.subheadline)
                         .foregroundStyle(Color.secondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
                         .truncationMode(.tail)
 
                     Spacer(minLength: 0)
@@ -612,10 +575,12 @@ struct ChatRow: View {
                     if chat.busy {
                         ProgressView()
                             .controlSize(.mini)
+                            .padding(.top, 2)
                     } else if chat.unread {
                         Circle()
                             .fill(VBotSurface.unread)
                             .frame(width: 10, height: 10)
+                            .padding(.top, 4)
                             .accessibilityHidden(true)
                     }
                 }
@@ -631,7 +596,7 @@ struct ChatRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(chat.name)

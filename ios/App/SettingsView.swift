@@ -441,15 +441,15 @@ struct AccountSheet: View {
             SettingsView()
         } label: {
             HStack(spacing: 14) {
-                ProfileAvatar(name: session.connection?.name ?? "You", size: 44)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(session.connection?.name ?? "Vincent Posival")
-                        .font(.system(size: 17, weight: .semibold))
+                ProfileAvatar(name: session.connection?.name ?? "You", size: 56)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(session.connection?.name ?? "You")
+                        .font(.title3.weight(.semibold))
                         .foregroundStyle(Color.primary)
                     Text(session.connection?.pairingConsentOrigin ?? "Paired computer")
-                        .font(.system(size: 13))
+                        .font(.subheadline)
                         .foregroundStyle(Color.secondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
@@ -457,7 +457,7 @@ struct AccountSheet: View {
                     .foregroundStyle(Color.secondary)
             }
             .padding(16)
-            .background(AccountSheetStyle.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(AccountSheetStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
         .buttonStyle(.plain)
     }
