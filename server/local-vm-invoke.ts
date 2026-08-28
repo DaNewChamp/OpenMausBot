@@ -149,7 +149,6 @@ export function localVmTurnContract(input: {
   computer: BotComputer;
   mountsComputerMcp: boolean;
   driverKind: string;
-  vmReady?: boolean;
   mode?: LocalVmMode;
 }): LocalVmTurnContract {
   if (input.computer !== "vm") {
@@ -175,6 +174,10 @@ export function localVmTurnContract(input: {
 
 export function localComputerMountIsHost(localComputer: { scope?: string } | null | undefined): boolean {
   return localComputer?.scope === "local-computer";
+}
+
+export function localComputerMountIsVm(localComputer: { scope?: string } | null | undefined): boolean {
+  return localComputer?.scope === "local-vm";
 }
 
 export function decideLocalVmEnsure(input: {
@@ -254,10 +257,18 @@ export function isLocalVmInvokeTool(name: string): boolean {
 export function sanitizeLocalVmInvokeText(text: string): string {
   let out = redactSecretsInText(text);
 
-  // Loopback and internal/private IP URLs
-  out = out.replace(/https?:\/\/(?:127(?:\.\d{1,3}){3}|localhost|\[::1\]|0\.0\.0\.0)(?::\d+)?\S*/gi, "[redacted-local-url]");
-  out = out.replace(/https?:\/\/host\.docker\.internal(?::\d+)?\S*/gi, "[redacted-local-url]");
-  out = out.replace(/https?:\/\/(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})(?::\d+)?\S*/gi, "[redacted-local-url]");
+  // file:// URLs
+  out = out.replace(/file:\/\/\S*/gi, "[redacted-local-url]");
+
+  // Explicit URL schemes (http, https, vnc, rfb) for loopback, link-local, cloud metadata, host.docker.internal, and private IPs
+  out = out.replace(/(?:https?|vnc|rfb):\/\/(?:127(?:\.\d{1,3}){3}|localhost|\[::1\]|0\.0\.0\.0|169\.254(?:\.\d{1,3}){2})(?::\d+)?\S*/gi, "[redacted-local-url]");
+  out = out.replace(/(?:https?|vnc|rfb):\/\/host\.docker\.internal(?::\d+)?\S*/gi, "[redacted-local-url]");
+  out = out.replace(/(?:https?|vnc|rfb):\/\/(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})(?::\d+)?\S*/gi, "[redacted-local-url]");
+
+  // Scheme-less loopback, link-local metadata, and internal endpoints
+  out = out.replace(/\b(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|169\.254(?:\.\d{1,3}){2}|\[::1\]):\d+\S*/gi, "[redacted-local-url]");
+  out = out.replace(/\b169\.254\.169\.254(?:\/\S*)?\b/g, "[redacted-local-url]");
+  out = out.replace(/\b127\.(?:(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){2}(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\b/g, "[redacted-local-url]");
 
   // Standalone host.docker.internal mentions
   out = out.replace(/\bhost\.docker\.internal\b/gi, "[redacted-host]");

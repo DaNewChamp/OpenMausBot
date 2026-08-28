@@ -431,6 +431,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.mcpConfig.mcpServers.computer).toEqual({
+      scope: "local-computer",
       command: "/opt/cua driver/cua-driver",
       args: ["mcp", "--embedded", "--socket", "/run/user/1000/driver.sock"],
       env: { CUA_DRIVER_EMBEDDED: "1" },
@@ -449,6 +450,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
       text: "open google",
       integrations: {
         localComputer: {
+          scope: "local-vm",
           command: process.execPath,
           args: ["/path/to/local-vm-invoke-proxy.ts"],
           env: { OMB_BOT_ID: "b-vm", OMB_THREAD_ID: "t-vm", OMB_COMMS_TOKEN: "tok-123" },
@@ -459,6 +461,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.mcpConfig.mcpServers.computer).toEqual({
+      scope: "local-vm",
       command: process.execPath,
       args: ["/path/to/local-vm-invoke-proxy.ts"],
       env: { OMB_BOT_ID: "b-vm", OMB_THREAD_ID: "t-vm", OMB_COMMS_TOKEN: "tok-123" },

@@ -158,6 +158,7 @@ import {
   executeLocalVmInvokeTool,
   isLocalVmInvokeTool,
   localComputerMountIsHost,
+  localComputerMountIsVm,
   localVmSelfInvokePrompt,
   localVmTurnContract,
   sanitizeLocalVmInvokeText,
@@ -278,6 +279,7 @@ function phoneIntegration() {
 
 function localVmInvokeIntegration(botId: string, threadId: string, control: { url: string; token: string }) {
   return {
+    scope: "local-vm" as const,
     command: process.execPath,
     args: [SPAWNED_PROXIES.localVmInvoke],
     env: {
@@ -1949,7 +1951,7 @@ async function startTurn(
         localVmIdleFor(localVmTarget).touch();
         const control = controlIntegration(bot.id);
         integrations.localComputer = localVmInvokeIntegration(bot.id, threadId, control);
-        if (localComputerMountIsHost(integrations.localComputer)) {
+        if (localComputerMountIsHost(integrations.localComputer) || !localComputerMountIsVm(integrations.localComputer)) {
           throw new Error("Local VM turns cannot control the host computer");
         }
         computerKind = "vm";
@@ -2060,7 +2062,7 @@ async function startTurn(
         }
       }
       if (wants === "vm") {
-        if (!integrations.localComputer || localComputerMountIsHost(integrations.localComputer)) {
+        if (!integrations.localComputer || localComputerMountIsHost(integrations.localComputer) || !localComputerMountIsVm(integrations.localComputer)) {
           throw new Error("Local VM turns cannot control the host computer");
         }
       }

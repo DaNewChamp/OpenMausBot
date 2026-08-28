@@ -578,6 +578,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           command: local.command,
           args: local.args,
           env: local.env,
+          ...(local.scope ? { scope: local.scope } : {}),
         };
         // The isolated Local VM preserves the established pre-allow behavior.
         // Host tools always route through OpenMausBot's permission broker.

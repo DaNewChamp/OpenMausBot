@@ -183,7 +183,7 @@ export interface SendTurnInput {
       env: Record<string, string>;
       platform?: "darwin" | "linux" | "win32";
       generation?: string;
-      scope?: "local-computer";
+      scope?: "local-computer" | "local-vm";
     };
     /** Peer-agent comms: an MCP proxy (list_bots / ask_bot) that routes back
      * through the harness so this bot can message other bots. The harness

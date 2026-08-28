@@ -2955,16 +2955,16 @@ describe("Local VM startTurn and internal invoke API", () => {
     const dump = JSON.parse(readFileSync(fakeClaudeDump, "utf8"));
     const computerMcp = dump.mcpConfig?.mcpServers?.computer;
     expect(computerMcp).toBeDefined();
+    expect(computerMcp.scope).toBe("local-vm");
     expect(computerMcp.args[0]).toMatch(/local-vm-invoke-proxy/);
     expect(computerMcp.env.OMB_BOT_ID).toBe(vmBotId);
     expect(computerMcp.env.OMB_THREAD_ID).toBe(vmThreadId);
-    expect(computerMcp.env.OMB_COMMS_TOKEN).toBeTruthy();
+    expect(typeof computerMcp.env.OMB_COMMS_TOKEN).toBe("string");
+    expect(computerMcp.env.OMB_COMMS_TOKEN.length).toBeGreaterThan(0);
 
     const allowedIndex = dump.argv.indexOf("--allowedTools");
     expect(allowedIndex).toBeGreaterThanOrEqual(0);
     expect(dump.argv[allowedIndex + 1]).toContain("mcp__computer");
-
-    await api("POST", `/api/bots/${vmBotId}/interrupt`);
   });
 
   it("seals the internal local-vm invoke endpoint behind the boot token", async () => {
@@ -2981,5 +2981,97 @@ describe("Local VM startTurn and internal invoke API", () => {
       body: JSON.stringify({ botId: vmBotId, threadId: vmThreadId, tool: "open_url" }),
     });
     expect(badToken.status).toBe(401);
+  });
+
+  it("proves 403 for non-VM bots and wrong-thread ownership with valid auth", async () => {
+    const dump = JSON.parse(readFileSync(fakeClaudeDump, "utf8"));
+    const commsToken = dump.mcpConfig?.mcpServers?.computer?.env?.OMB_COMMS_TOKEN;
+    expect(typeof commsToken).toBe("string");
+    expect(commsToken.length).toBeGreaterThan(0);
+
+    // Non-VM bot
+    const nonVm = await api("POST", "/api/bots", {});
+    const nonVmBotId = nonVm.body.bot.id;
+    const nonVmThreadId = nonVm.body.bot.threadId;
+    await api("PATCH", `/api/bots/${nonVmBotId}`, { computer: "off" });
+    const resNonVm = await fetch(`${BASE}/api/internal/local-vm/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${commsToken}` },
+      body: JSON.stringify({
+        botId: nonVmBotId,
+        threadId: nonVmThreadId,
+        tool: "open_url",
+        arguments: { url: "https://example.com" },
+      }),
+    });
+    expect(resNonVm.status).toBe(403);
+    expect(await resNonVm.json()).toEqual({ error: "this bot does not have Local VM access" });
+    await api("DELETE", `/api/bots/${nonVmBotId}`).catch(() => {});
+
+    // Wrong thread on VM bot
+    const resWrongThread = await fetch(`${BASE}/api/internal/local-vm/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${commsToken}` },
+      body: JSON.stringify({
+        botId: vmBotId,
+        threadId: "wrong-thread-ownership-123",
+        tool: "open_url",
+        arguments: { url: "https://example.com" },
+      }),
+    });
+    expect(resWrongThread.status).toBe(403);
+    expect(await resWrongThread.json()).toEqual({ error: "this turn does not own the Local VM" });
+
+    // VM bot without active turn ownership
+    const idleVm = await api("POST", "/api/bots", {});
+    const idleVmId = idleVm.body.bot.id;
+    const idleThreadId = idleVm.body.bot.threadId;
+    await api("PATCH", `/api/bots/${idleVmId}`, { computer: "vm" });
+    const resIdle = await fetch(`${BASE}/api/internal/local-vm/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${commsToken}` },
+      body: JSON.stringify({
+        botId: idleVmId,
+        threadId: idleThreadId,
+        tool: "open_url",
+        arguments: { url: "https://example.com" },
+      }),
+    });
+    expect(resIdle.status).toBe(403);
+    expect(await resIdle.json()).toEqual({ error: "this turn does not own the Local VM" });
+    await api("DELETE", `/api/bots/${idleVmId}`).catch(() => {});
+  });
+
+  it("exercises the real route for an owned VM turn and rejects unadvertised tools", async () => {
+    const dump = JSON.parse(readFileSync(fakeClaudeDump, "utf8"));
+    const commsToken = dump.mcpConfig?.mcpServers?.computer?.env?.OMB_COMMS_TOKEN;
+
+    const res = await fetch(`${BASE}/api/internal/local-vm/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${commsToken}` },
+      body: JSON.stringify({
+        botId: vmBotId,
+        threadId: vmThreadId,
+        tool: "open_url",
+        arguments: { url: "https://example.com/test" },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { state?: string };
+    expect(["ready", "starting", "blocked"]).toContain(body.state);
+
+    const badTool = await fetch(`${BASE}/api/internal/local-vm/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${commsToken}` },
+      body: JSON.stringify({
+        botId: vmBotId,
+        threadId: vmThreadId,
+        tool: "computer_exec",
+      }),
+    });
+    expect(badTool.status).toBe(400);
+    expect(await badTool.json()).toEqual({ error: "that computer tool is not available on this bot's Local VM" });
+
+    await api("POST", `/api/bots/${vmBotId}/interrupt`);
   });
 });

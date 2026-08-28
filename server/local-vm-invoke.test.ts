@@ -10,6 +10,7 @@ import {
   executeLocalVmInvokeTool,
   isLocalVmInvokeTool,
   localComputerMountIsHost,
+  localComputerMountIsVm,
   localVmSelfInvokePrompt,
   localVmTurnContract,
   sanitizeLocalVmInvokeText,
@@ -41,7 +42,6 @@ describe("Local VM self-invoke capability gate", () => {
         computer,
         mountsComputerMcp: true,
         driverKind: "claude",
-        vmReady: false,
       });
       expect(botOwnsLocalVm(computer)).toBe(false);
       expect(contract.prompt).toBe("");
@@ -56,7 +56,6 @@ describe("Local VM self-invoke capability gate", () => {
       computer: "vm",
       mountsComputerMcp: true,
       driverKind: "claude",
-      vmReady: false,
       mode: "per-bot",
     });
     expect(contract.error).toBeNull();
@@ -89,13 +88,11 @@ describe("Local VM self-invoke capability gate", () => {
       computer: "vm",
       mountsComputerMcp: true,
       driverKind: "acp",
-      vmReady: false,
     });
     const ready = localVmTurnContract({
       computer: "vm",
       mountsComputerMcp: true,
       driverKind: "acp",
-      vmReady: true,
     });
     expect(cold.mount).toBe("vm");
     expect(ready.mount).toBe("vm");
@@ -104,7 +101,12 @@ describe("Local VM self-invoke capability gate", () => {
     expect(cold.prompt).toBe(ready.prompt);
     expect(ready.allowHostFallback).toBe(false);
     expect(localComputerMountIsHost({ scope: "local-computer" })).toBe(true);
+    expect(localComputerMountIsHost({ scope: "local-vm" })).toBe(false);
     expect(localComputerMountIsHost({})).toBe(false);
+    expect(localComputerMountIsVm({ scope: "local-vm" })).toBe(true);
+    expect(localComputerMountIsVm({ scope: "local-computer" })).toBe(false);
+    expect(localComputerMountIsVm({})).toBe(false);
+    expect(localComputerMountIsVm(null)).toBe(false);
   });
 
   it("keeps an unsupported engine from exposing Local VM tools or falling back to the host", () => {
@@ -112,7 +114,6 @@ describe("Local VM self-invoke capability gate", () => {
       computer: "vm",
       mountsComputerMcp: false,
       driverKind: "grok",
-      vmReady: false,
     });
     expect(contract.exposeTools).toBe(false);
     expect(contract.prompt).toBe("");
@@ -289,6 +290,24 @@ describe("Local VM invoke sanitization", () => {
     expect(clean).toContain("[redacted-host]");
     expect(clean).toContain("[redacted-viewer]");
     expect(clean).toContain("VNC_PW=[redacted]");
+  });
+
+  it("strips cloud metadata 169.254.169.254, file:// URLs, and scheme-less loopback/VNC endpoints", () => {
+    const leaked =
+      "metadata http://169.254.169.254/latest/meta-data " +
+      "bare metadata 169.254.169.254:80 and 169.254.169.254 " +
+      "file-url file:///Users/vincent/secret.txt and file:///etc/passwd " +
+      "schemeless localhost:6080/vnc.html and 127.0.0.1:5900 and [::1]:5900 " +
+      "vnc-scheme vnc://127.0.0.1:5900 and rfb://localhost:5900";
+    const clean = sanitizeLocalVmInvokeText(leaked);
+    expect(clean).not.toContain("169.254.169.254");
+    expect(clean).not.toContain("file:///");
+    expect(clean).not.toContain("localhost:6080");
+    expect(clean).not.toContain("127.0.0.1:5900");
+    expect(clean).not.toContain("[::1]:5900");
+    expect(clean).not.toContain("vnc://");
+    expect(clean).not.toContain("rfb://");
+    expect(clean).toContain("[redacted-local-url]");
   });
 
   it("strips runtime socket paths and bare VNC port disclosures", () => {
