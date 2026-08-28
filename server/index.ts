@@ -1,11 +1,13 @@
 // OpenMausBot server — the harness host. Clients hold no transports
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
+import { execFile } from "node:child_process";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { extname, join } from "node:path";
+import { promisify } from "node:util";
 
 import { z } from "zod";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
@@ -151,6 +153,15 @@ import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
 import { projectLocalVmStatus } from "./local-vm-phone.ts";
+import {
+  ensureLocalVm,
+  executeLocalVmInvokeTool,
+  isLocalVmInvokeTool,
+  localComputerMountIsHost,
+  localVmSelfInvokePrompt,
+  localVmTurnContract,
+  sanitizeLocalVmInvokeText,
+} from "./local-vm-invoke.ts";
 import { RepeatDetector, callKey } from "./repeat-detector.ts";
 import * as vps from "./vps-computer.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
@@ -263,6 +274,22 @@ function phoneIntegration() {
   if (process.env.OMB_RESOURCES_PATH) env.OMB_RESOURCES_PATH = process.env.OMB_RESOURCES_PATH;
   if (process.env.PH_ANDROID_SERIAL) env.PH_ANDROID_SERIAL = process.env.PH_ANDROID_SERIAL;
   return { command: process.execPath, args: [phoneProxyPath], env };
+}
+
+function localVmInvokeIntegration(botId: string, threadId: string, control: { url: string; token: string }) {
+  return {
+    command: process.execPath,
+    args: [SPAWNED_PROXIES.localVmInvoke],
+    env: {
+      ...AGENTS_NODE_FLAG,
+      OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`,
+      OMB_BOT_ID: botId,
+      OMB_THREAD_ID: threadId,
+      OMB_COMMS_TOKEN: COMMS_TOKEN,
+      OMB_CONTROL_URL: control.url,
+      OMB_CONTROL_TOKEN: control.token,
+    },
+  };
 }
 
 async function connectedAppsIntegration(botId: string, threadId: string, roomRun?: RoomTurnIdentity) {
@@ -915,6 +942,83 @@ function releaseLocalVmThread(threadId: string): void {
   localVmLeaseFor(target).release(threadId);
   if (localVmActiveThreads.get(target.key) === threadId) localVmActiveThreads.delete(target.key);
   localVmThreadTargets.delete(threadId);
+}
+
+const runLocalVmCommand = promisify(execFile);
+
+async function localVmCommandRunner(command: string, args: string[], timeout = 8000): Promise<{ stdout: string }> {
+  const { stdout } = await runLocalVmCommand(command, args, {
+    timeout,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    env: { ...process.env, PATH: augmentedPath() },
+  });
+  return { stdout };
+}
+
+async function ensureLocalVmForTurn(target: LocalVmTarget, threadId: string) {
+  const owner = localVmLeaseFor(target).current(localVmOwnerBusy);
+  const status = await containerComputerStatus(undefined, undefined, target);
+  if (status.ready) return { state: "ready" as const };
+  if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(target.key)) {
+    return {
+      state: "starting" as const,
+      retryable: true as const,
+      message: "this Local VM is being started, stopped, or replaced — retry shortly",
+    };
+  }
+  localVmLifecycleBusy.add(target.key);
+  let provisioned = false;
+  try {
+    const fresh = await containerComputerStatus(undefined, undefined, target);
+    if (fresh.ready) return { state: "ready" as const };
+    const targetExists = fresh.runtime ? await containerComputerExists(fresh.runtime, target) : false;
+    const existingCount = fresh.runtime && localVmMode(cfg) === "per-bot"
+      ? await existingPerBotLocalVmCount(fresh.runtime)
+      : 0;
+    const snapshot = {
+      ready: fresh.ready,
+      container: fresh.container,
+      image: fresh.image,
+      daemonUp: fresh.daemonUp,
+      runtime: fresh.runtime,
+      create_supported: fresh.create_supported,
+    };
+    const runLifecycle = async (action: "run" | "recreate") => {
+      provisioned = true;
+      localVmProvisionBusy = true;
+      if (action === "recreate" && fresh.container !== "missing") {
+        await containerComputerAction("remove", undefined, undefined, target);
+      }
+      const next = await containerComputerAction("run", undefined, undefined, target);
+      localVmIdleFor(target).touch();
+      return {
+        ready: next.ready,
+        container: next.container,
+        image: next.image,
+        daemonUp: next.daemonUp,
+        runtime: next.runtime,
+        create_supported: next.create_supported,
+      };
+    };
+    return await ensureLocalVm({
+      status: snapshot,
+      lifecycleBusy: false,
+      imageBusy: false,
+      modeChangeBusy: false,
+      provisionBusy: localVmProvisionBusy,
+      leaseOwnedByThisTurn: owner?.threadId === threadId,
+      existingCount,
+      maxInstances: localVmMaxInstances(cfg),
+      mode: localVmMode(cfg),
+      targetExists,
+      create: () => runLifecycle("run"),
+      recreate: () => runLifecycle("recreate"),
+    });
+  } finally {
+    if (provisioned) localVmProvisionBusy = false;
+    localVmLifecycleBusy.delete(target.key);
+  }
 }
 
 // A running VM may have survived an app/server restart. Start its idle
@@ -1826,13 +1930,14 @@ async function startTurn(
       // Explicit destinations are strict. In particular, Local VM must never
       // fall through to host CUA and accidentally click on the user's Mac.
       if (wants === "vm") {
-        if (!mountsComputerMcp || instance.driverKind === "boxAgent") {
-          throw new Error("this model engine cannot use the Local VM — choose Claude or an ACP engine, or select another computer destination");
-        }
+        const vmPlan = localVmTurnContract({
+          computer: "vm",
+          mountsComputerMcp,
+          driverKind: instance.driverKind,
+          vmReady: false,
+        });
+        if (vmPlan.error) throw new Error(vmPlan.error);
         const localVmTarget = localVmTargetForBot(bot.id);
-        if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(localVmTarget.key)) {
-          throw new Error("this Local VM is being started, stopped, or replaced — wait for setup to finish");
-        }
         // Claim before the first await. The lifecycle route performs its
         // matching check synchronously, so neither side can enter while the
         // other is between inspection and mutation.
@@ -1842,15 +1947,22 @@ async function startTurn(
         localVmThreadTargets.set(threadId, localVmTarget);
         localVmActiveThreads.set(localVmTarget.key, threadId);
         localVmIdleFor(localVmTarget).touch();
+        const control = controlIntegration(bot.id);
         const localVm = await containerComputerStatus(undefined, undefined, localVmTarget);
-        if (!localVm.ready || !localVm.runtime) {
-          throw new Error(`${localVm.problem ?? "the Local VM is not ready"} (App Settings → Local VM)`);
+        const mount = localVmTurnContract({
+          computer: "vm",
+          mountsComputerMcp,
+          driverKind: instance.driverKind,
+          vmReady: Boolean(localVm.ready && localVm.runtime),
+          mode: localVmMode(cfg),
+        }).mount;
+        integrations.localComputer =
+          mount === "cua" && localVm.runtime
+            ? containerComputerMcp(localVm.runtime, control, localVmTarget)
+            : localVmInvokeIntegration(bot.id, threadId, control);
+        if (localComputerMountIsHost(integrations.localComputer)) {
+          throw new Error("Local VM turns cannot control the host computer");
         }
-        integrations.localComputer = containerComputerMcp(
-          localVm.runtime,
-          controlIntegration(bot.id),
-          localVmTarget,
-        );
         computerKind = "vm";
       } else if (wants === "local") {
         if (!shouldMountLocalComputer({
@@ -1958,6 +2070,11 @@ async function startTurn(
           computerKind = "local";
         }
       }
+      if (wants === "vm") {
+        if (!integrations.localComputer || localComputerMountIsHost(integrations.localComputer)) {
+          throw new Error("Local VM turns cannot control the host computer");
+        }
+      }
       if (
         wants === undefined &&
         cloudBackend === "vps" &&
@@ -2029,9 +2146,7 @@ async function startTurn(
         system:
           persona +
           (computerKind === "vm"
-            ? localVmMode(cfg) === "per-bot"
-              ? " You have your own isolated Cua sandbox: a Linux desktop in a container reserved for this bot. Only /home/cua/workspace is durable; save downloads, repositories, working files, and browser profiles there because everything else inside the VM is disposable. No other host folder is mounted. Use the computer tools for desktop, accessibility, window, and shell work. Inspect the desktop state before acting, prefer accessibility targets over raw coordinates, and work carefully."
-              : " You have a shared, isolated Cua sandbox: a Linux desktop in a container on this machine. Only /home/cua/workspace is durable; save downloads, repositories, working files, and browser profiles there because everything else inside the VM is disposable. No other host folder is mounted. Use the computer tools for desktop, accessibility, window, and shell work. Inspect the desktop state before acting, prefer accessibility targets over raw coordinates, and work carefully."
+            ? localVmSelfInvokePrompt(localVmMode(cfg))
             : computerKind === "box" && instance.driverKind !== "boxAgent"
             ? " You have your own cloud computer. In Chrome, prefer browser_snapshot with browser_click/browser_fill for semantic, trusted actions; use screenshot/click/type_text for visual or non-browser UI, open_url for navigation, and computer_exec for Linux tasks. Every action already returns the resulting screen, so don't follow it with screenshot; batch predictable pixel actions with computer_batch."
             : computerKind === "vps"
@@ -3858,6 +3973,63 @@ const server = createServer(async (req, res) => {
           return json(res, 200, { held: snapshot.held, helpOpen: snapshot.helpReason !== null });
         }
         return json(res, 405, { error: "method not allowed" });
+      }
+      if (method === "POST" && path === "/api/internal/local-vm/invoke") {
+        const body = await readBody(req);
+        const botId = String(body.botId ?? "");
+        const threadId = String(body.threadId ?? "");
+        const tool = String(body.tool ?? "");
+        const bot = store.bot(botId);
+        if (!bot || bot.computer !== "vm") return json(res, 403, { error: "this bot does not have Local VM access" });
+        const target = localVmThreadTargets.get(threadId);
+        if (!target || localVmTargetForBot(bot.id).key !== target.key) {
+          return json(res, 403, { error: "this turn does not own the Local VM" });
+        }
+        if (!isLocalVmInvokeTool(tool)) {
+          return json(res, 400, { error: "that computer tool is not available on this bot's Local VM" });
+        }
+        localVmLeaseFor(target).touch(threadId);
+        localVmIdleFor(target).touch();
+        try {
+          const ensured = await ensureLocalVmForTurn(target, threadId);
+          if (ensured.state !== "ready") {
+            return json(res, 200, {
+              state: ensured.state,
+              retryable: ensured.retryable,
+              message: sanitizeLocalVmInvokeText(ensured.message),
+            });
+          }
+          const status = await containerComputerStatus(undefined, undefined, target);
+          if (!status.ready || !status.runtime) {
+            return json(res, 200, {
+              state: "starting",
+              retryable: true,
+              message: "The Local VM desktop is still starting. Retry this computer action shortly.",
+            });
+          }
+          const rawArgs = body.arguments;
+          const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? rawArgs : {};
+          const result = await executeLocalVmInvokeTool(tool, args, {
+            runtime: status.runtime,
+            containerName: target.containerName,
+            runner: localVmCommandRunner,
+          });
+          return json(res, 200, {
+            state: "ready",
+            result: {
+              text: sanitizeLocalVmInvokeText(result.text),
+              isError: result.isError,
+              ...(result.image ? { image: result.image } : {}),
+            },
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return json(res, 200, {
+            state: "blocked",
+            retryable: false,
+            message: sanitizeLocalVmInvokeText(message),
+          });
+        }
       }
       if (method === "POST" && path === "/api/internal/connectors/request") {
         const body = await readBody(req);
