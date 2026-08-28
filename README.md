@@ -112,7 +112,7 @@ open OpenMausCompanion.xcodeproj
 swift test
 ```
 
-App target: **OpenMausCompanion** · see [`ios/README.md`](ios/README.md) and [`ios/TESTING.md`](ios/TESTING.md) for device install and TestFlight notes.
+App target: **OpenMausCompanion** · see [`ios/README.md`](ios/README.md) and [`ios/TESTING.md`](ios/TESTING.md) for device install and TestFlight notes. When TestFlight upload is blocked, use [`ios/AppStore/RELEASE.md`](ios/AppStore/RELEASE.md#wifi-install-when-testflight-is-unavailable) or `./scripts/push-ios-wifi-release.sh`.
 
 Pair against a running harness + sidecar:
 

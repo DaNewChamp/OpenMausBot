@@ -31,3 +31,63 @@ The app is native Swift and uses XcodeGen; EAS commands do not apply.
 - Choose manual release for 1.0; enable a phased release after the first production build is stable.
 
 The unsigned simulator CI proves compilation, not distribution signing. A TestFlight upload cannot be automated until the Apple team, App Store Connect record, and protected signing/API-key secrets exist.
+
+## WiFi install when TestFlight is unavailable
+
+Use this when App Store Connect rejects upload (**error 90382** — daily upload limit), processing is slow, or you need the build on a physical iPhone immediately. This is **not** TestFlight: it installs a development-signed build over the network using `devicectl`.
+
+### Prerequisites
+
+- iPhone and MacBook on the **same Wi‑Fi**, phone **paired** in Xcode (Wireless debugging on).
+- ASC API key at `~/.appstoreconnect/private_keys/AuthKey_2RY648NNC3.p8` (same key as TestFlight archive/upload).
+- `brew install xcodegen` on the machine that archives.
+- Hosted server changes still deploy separately: `bun run deploy:hosted-runtime` on the Mac mini when the branch touches `server/` or `companion/`.
+
+### Find your device ids (they differ)
+
+| Tool | Example | Command |
+|---|---|---|
+| `xcodebuild -destination id=…` | `00008150-001428C00247801C` | `xcrun xctrace list devices` |
+| `devicectl device install` | `C8EA9F61-6E1A-5C41-A4DE-B3454CC89528` | `xcrun devicectl list devices` |
+
+Export `XCODE_DEVICE_ID` and `DEVICE_UDID` if Vincent's phone is not the default in `scripts/install-ios-device.sh`.
+
+### Path A — MacBook only (Debug, fastest loop)
+
+Run **locally in Terminal.app on the MacBook**, not over SSH — remote `xcodebuild` codesign often fails with `errSecInternalComponent` even with the ASC API key.
+
+```sh
+cd ~/Github/OpenMausBot
+./scripts/install-ios-device.sh
+```
+
+Pulls `personal/cursor/build-36-local-vm-phone-a27c` (or set `BRANCH=…`), builds Debug, installs and launches via `devicectl`.
+
+### Path B — Mac mini archives, MacBook installs (Release, most reliable for agents)
+
+Signing works headlessly on the mini with the ASC API key. The phone is only visible to the MacBook, so export a development build on the mini and install from the MacBook:
+
+```sh
+cd ~/Github/OpenMausBot
+./scripts/push-ios-wifi-release.sh
+```
+
+Or manually: `xcodegen generate` → Release `archive` → export with `ios/ExportOptions-development.plist` → unzip the `.ipa` → `rsync` the `.app` to the MacBook → `devicectl device install app`.
+
+From the Mac mini when you only need to trigger the MacBook Debug path:
+
+```sh
+./scripts/install-ios-via-macbook-hop.sh
+```
+
+### Path C — TestFlight archive without upload
+
+If the upload limit is the only blocker, keep the `.xcarchive` under `build/` and retry `xcodebuild -exportArchive` with `ios/ExportOptions.plist` (`destination: upload`) the next day. Do not rebuild unless source changed.
+
+### Gotchas
+
+- **`xcodegen generate` strips bare Share-extension keys** from `ios/Share/Info.plist`. NSExtension metadata must live under `OpenMausCompanionShare.info.properties` in `ios/project.yml` or device install fails with `AppexBundleMissingNSExtensionDict`.
+- **Release compile**: if `ComputerView.swift` times out in `-O`, extract heavy `.task` bodies into private methods (see commit `9de7756`).
+- **Wrong destination id** makes `xcodebuild` list simulators only — use the `xctrace` id for build, the `devicectl` UUID for install.
+- WiFi install replaces the app at `com.posival.openmausmobile`; delete and reinstall if icon/notification cache looks stale after a branding change.
+
