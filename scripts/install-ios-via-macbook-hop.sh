@@ -27,5 +27,5 @@ if run_on_macbook "$MACBOOK_HOST"; then
   exit 0
 fi
 
-echo "==> Primary host failed ($MACBOOK_HOST), trying $MACBOOK_HOST_FALLBACK…" >&2
+echo "==> Primary host failed ($MACBOOK_HOST), trying ${MACBOOK_HOST_FALLBACK}..." >&2
 run_on_macbook "$MACBOOK_HOST_FALLBACK"

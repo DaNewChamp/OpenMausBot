@@ -18,7 +18,7 @@ echo "    device: $DEVICE_UDID"
 
 cd "$ROOT"
 if [[ -d .git ]]; then
-  if git remote | rg -q '^personal$'; then
+  if git remote | grep -qx personal; then
     git fetch personal "$BRANCH" 2>/dev/null || true
     git checkout "$BRANCH" 2>/dev/null || git checkout -B "$BRANCH" "personal/$BRANCH"
     git pull --ff-only "personal/$BRANCH" 2>/dev/null || git reset --hard "personal/$BRANCH"
