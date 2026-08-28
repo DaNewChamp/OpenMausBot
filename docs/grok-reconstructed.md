@@ -22,23 +22,31 @@ does not proxy reconstructed routes.
 
 ## What this slice supports
 
-Detection only verifies the reconstructed process identity and these
+Detection verifies the reconstructed process identity and these
 loopback methods:
 
 | Capability | Local method | When |
 |---|---|---|
 | Runtime health | `GET /health` | detection |
 | Bot / session discovery | `POST /api/listAgents` | detection |
-| Send a chat turn | `POST /api/sendPrompt` | send time |
-| Read reply text | `POST /api/getAgentTranscriptTail` | send time |
+| V Bot interoperability | `GET /vbot/v1` | detection, optional |
+| Bots / groups / providers / router / activity | `GET /vbot/v1/...` | read |
+| Host provider / Cursor model | `PUT /vbot/v1/router` | mutation |
+| Send a chat turn | `POST /vbot/v1/bots/{id}/turns` or `POST /api/sendPrompt` | send time |
+| Steer | `POST /vbot/v1/bots/{id}/steer` | send time |
+| Stop | `POST /vbot/v1/bots/{id}/stop` | when the runner interrupt is bound |
+| Read reply text | `POST /api/getAgentTranscriptTail` | OpenMaus provider send time |
 
-`sendPrompt` and transcript tail are not claimed during detection, because
-probing them would send a real turn. If they are missing at send time, the
-turn fails with a public reason.
+iPhone clients still talk only to authenticated OpenMaus `/api/vbot/*`
+routes. Those routes never return gateway URLs, tokens, or host paths.
+OpenMaus roster fallback is read-only: a selected Grok Reconstructed engine
+does not silently send, steer, or stop on OpenMaus.
+
+`sendPrompt` and transcript tail are not claimed during detection unless
+`/vbot/v1` advertises them, because probing `sendPrompt` would send a real
+turn. If they are missing at send time, the turn fails with a public reason.
 
 Undocumented reconstructed routes, including `/events`, are not guessed.
-Interrupt stops OpenMausBot from waiting on the reply; it does not invent a
-reconstructed cancel API.
 
 ## Setup
 
@@ -75,3 +83,5 @@ include ports, tokens, or paths:
 - Changing OpenMausBot or iOS bundle, protocol, or data identifiers
 - Approvals, computer-use, MCP, or attachments against reconstructed APIs
 - Treating official Grok Bot as reconstructed
+- Queueing on Grok Reconstructed
+- Silently sending, steering, or stopping on OpenMaus while Grok Reconstructed is the selected engine

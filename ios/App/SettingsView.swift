@@ -576,6 +576,34 @@ struct EngineSelectionView: View {
                         }
                     }
                 }
+
+                if let router = sync.router, sync.reconstructedMutationsReady {
+                    Section {
+                        Picker("Provider", selection: Binding(
+                            get: { router.selected.provider },
+                            set: { provider in Task { await saveRouter(provider: provider, modelId: nil) } }
+                        )) {
+                            ForEach(router.providers.filter(\.selectable)) { provider in
+                                Text(provider.label).tag(provider.id)
+                            }
+                            if router.providers.contains(where: { $0.id == router.selected.provider && $0.selectable }) == false {
+                                Text(router.selected.provider).tag(router.selected.provider)
+                            }
+                        }
+                        .disabled(saving)
+                        if router.selected.provider == "cursor" {
+                            cursorModelPicker(router: router)
+                        } else {
+                            Text("Only Cursor models can be changed here. Other providers keep their local model.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    } header: {
+                        Text("Host provider")
+                    } footer: {
+                        Text("This selection is host-wide on Grok Reconstructed, not per agent.")
+                    }
+                }
             }
         }
         .navigationTitle("Desktop engine")
@@ -611,5 +639,37 @@ struct EngineSelectionView: View {
         } else {
             error = session.actionError ?? "Could not update the primary engine."
         }
+    }
+
+    private func saveRouter(provider: String, modelId: String?) async {
+        saving = true
+        defer { saving = false }
+        if let router = await session.setReconstructedRouter(provider: provider, modelId: modelId) {
+            if var current = sync {
+                current.router = router
+                sync = current
+            }
+            error = nil
+        } else {
+            error = session.actionError ?? "Could not update the reconstructed provider."
+        }
+    }
+
+    private func selectableCursorModels(for router: VBotRouterState) -> [VBotProviderModel] {
+        guard let cursor = router.providers.first(where: { $0.id == "cursor" }) else { return [] }
+        return cursor.models.filter { $0.selectable || $0.id == router.selected.modelId }
+    }
+
+    private func cursorModelPicker(router: VBotRouterState) -> some View {
+        let models = selectableCursorModels(for: router)
+        return Picker("Cursor model", selection: Binding(
+            get: { router.selected.modelId },
+            set: { modelId in Task { await saveRouter(provider: "cursor", modelId: modelId) } }
+        )) {
+            ForEach(models, id: \.id) { model in
+                Text(model.id).tag(model.id)
+            }
+        }
+        .disabled(saving)
     }
 }

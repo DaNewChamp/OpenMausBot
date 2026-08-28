@@ -8,7 +8,10 @@ import {
 } from "./drivers/grok-reconstructed.ts";
 import {
   buildVBotEngineSync,
+  mutateReconstructedVbotTurn,
   parseVBotPrimaryEnginePatch,
+  requireReconstructedMutation,
+  requireReconstructedRead,
   vbotPrimaryEngine,
 } from "./vbot-engine-sync.ts";
 
@@ -53,6 +56,10 @@ const reconstructedAvailable = {
     sendPrompt: false,
     events: false,
     transcriptTail: false,
+    vbotInterop: false,
+    steer: false,
+    stop: false,
+    selectHostRouter: false,
   },
 } satisfies Extract<ReconstructedProbe, { ok: true }>;
 
@@ -112,6 +119,8 @@ describe("vbot engine sync projection", () => {
         sendPrompt: true,
         images: true,
         queueing: true,
+        steer: true,
+        stop: true,
       },
     });
     expect(sync.engines.map((engine) => engine.id)).toEqual(["openmaus", "grokReconstructed"]);
@@ -143,6 +152,8 @@ describe("vbot engine sync projection", () => {
         sendPrompt: false,
         images: false,
         queueing: false,
+        steer: false,
+        stop: false,
       },
     });
     const wire = JSON.stringify(sync);
@@ -164,6 +175,62 @@ describe("vbot engine sync projection", () => {
       fallbackCode: "installed-not-running",
       fallbackReason: publicDisabledReason("installed-not-running"),
       bots: [{ id: "bot_1", label: "Scout" }],
+    });
+  });
+});
+
+describe("reconstructed mutation guard", () => {
+  it("lets reads fail closed when reconstructed is down instead of mixing engines", () => {
+    expect(() => requireReconstructedRead(reconstructedUnavailable)).toThrow(/installed but not running/);
+    expect(() => requireReconstructedRead(reconstructedAvailable)).toThrow(/interoperability API is not available/);
+  });
+
+  it("never falls back a mutating send to OpenMaus", async () => {
+    expect(() => requireReconstructedMutation("openmaus", reconstructedAvailable)).toThrow(
+      /not the selected desktop engine/,
+    );
+    try {
+      requireReconstructedMutation("grokReconstructed", reconstructedUnavailable);
+      throw new Error("expected mutation guard to throw");
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: "ReconstructedVbotError",
+        code: "engine-mutation-blocked",
+        status: 409,
+      });
+    }
+    await expect(
+      mutateReconstructedVbotTurn(
+        "grokReconstructed",
+        reconstructedUnavailable,
+        "bot-alpha",
+        { prompt: "hello" },
+        false,
+      ),
+    ).rejects.toMatchObject({ code: "engine-mutation-blocked", status: 409 });
+  });
+
+  it("projects reconstructed steer and stop flags from interop capabilities", () => {
+    const sync = buildVBotEngineSync({
+      primaryEngine: "grokReconstructed",
+      reconstructed: {
+        ...reconstructedAvailable,
+        capabilities: {
+          ...reconstructedAvailable.capabilities,
+          vbotInterop: true,
+          sendPrompt: true,
+          steer: true,
+          stop: true,
+          selectHostRouter: true,
+        },
+      },
+      openmaus,
+    });
+    expect(sync.modelCapabilities).toMatchObject({
+      sendPrompt: true,
+      steer: true,
+      stop: true,
+      queueing: false,
     });
   });
 });

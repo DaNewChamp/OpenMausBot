@@ -82,6 +82,14 @@ struct AgentProfileView: View {
     private var modelSwitchBlocked: Bool { busy || savingModel || current.busy == true || instancesLoading }
     private var currentProviderTitle: String { pickedInstance?.pickerTitle ?? pickedInstanceId }
     private var currentModelTitle: String { pickedInstance?.modelLabel(for: pickedModel) ?? pickedModel }
+    private var reconstructedHostHint: String {
+        session.engineSync?.usesReconstructedMutations == true
+            ? "Grok Reconstructed uses a host-wide provider and Cursor model"
+            : "Choose which engine this agent uses"
+    }
+    private var reconstructedModelDisabled: Bool {
+        session.engineSync?.usesReconstructedMutations == true && pickedInstanceId != "cursor"
+    }
     private var botRoutines: [Routine] { routines.filter { $0.botId == current.id } }
     private var hasUnsavedChanges: Bool {
         !profilePatchIsEmpty || pickedInstanceId != current.modelSelection.instanceId || pickedModel != current.modelSelection.model
@@ -668,7 +676,7 @@ struct AgentProfileView: View {
             .disabled(modelSwitchBlocked || advertisedInstances.isEmpty)
             .accessibilityLabel("Provider")
             .accessibilityValue(currentProviderTitle)
-            .accessibilityHint(current.busy == true ? "Interrupt this agent before switching models" : "Choose which engine this agent uses")
+            .accessibilityHint(current.busy == true ? "Interrupt this agent before switching models" : reconstructedHostHint)
 
             Picker("Model", selection: modelSelection) {
                 ForEach(modelsForPickedInstance) { option in
@@ -678,7 +686,7 @@ struct AgentProfileView: View {
                     Text(currentModelTitle).tag(pickedModel)
                 }
             }
-            .disabled(modelSwitchBlocked || modelsForPickedInstance.isEmpty)
+            .disabled(modelSwitchBlocked || modelsForPickedInstance.isEmpty || reconstructedModelDisabled)
             .accessibilityLabel("Model")
             .accessibilityValue(currentModelTitle)
             .accessibilityHint(current.busy == true ? "Interrupt this agent before switching models" : "Choose the model this agent uses")
@@ -811,6 +819,42 @@ struct AgentProfileView: View {
     private func loadInstances() async {
         instancesLoading = true
         defer { instancesLoading = false }
+        if session.engineSync == nil {
+            await session.refreshEngineSync()
+        }
+        guard let sync = session.engineSync else {
+            instances = []
+            instancesError = session.actionError ?? "Engine status is not available yet. Try again in a moment."
+            return
+        }
+        if sync.usesReconstructedMutations {
+            if sync.reconstructedMutationsReady != true {
+                instances = []
+                instancesError = sync.fallbackReason
+                    ?? "Grok Reconstructed is selected, so model changes cannot fall back to OpenMaus."
+                return
+            }
+            let router: VBotRouterState?
+            if let existing = sync.router {
+                router = existing
+            } else {
+                router = await session.reconstructedRouter()
+            }
+            if let router {
+                instances = router.asInstances
+                instancesError = nil
+                pickedInstanceId = router.selected.provider
+                pickedModel = AdvertisedModelCatalog.alignedModel(
+                    instanceId: pickedInstanceId,
+                    currentModel: router.selected.modelId,
+                    in: instances
+                )
+                return
+            }
+            instances = []
+            instancesError = session.actionError ?? "Could not load Grok Reconstructed providers."
+            return
+        }
         switch await session.loadInstances() {
         case let .loaded(loaded):
             guard !loaded.isEmpty else {

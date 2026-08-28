@@ -31,6 +31,7 @@ export const ACTIVE_SESSION_ID = "active";
 export const GATEWAY_AUTH_SCHEME = "Bearer";
 export const GATEWAY_API_PREFIX = "/api";
 export const GATEWAY_HEALTH_PATH = "/health";
+export const VBOT_INTEROP_PATH_PREFIX = "/vbot/v1";
 export const STABLE_GATEWAY_METHODS = ["listAgents", "sendPrompt", "getAgentTranscriptTail"] as const;
 export type StableGatewayMethod = (typeof STABLE_GATEWAY_METHODS)[number];
 
@@ -87,6 +88,105 @@ export interface ReconstructedCapabilities {
   readonly sendPrompt: boolean;
   readonly events: boolean;
   readonly transcriptTail: boolean;
+  readonly vbotInterop: boolean;
+  readonly steer: boolean;
+  readonly stop: boolean;
+  readonly selectHostRouter: boolean;
+}
+
+export const VBOT_PUBLIC_ERROR_CODES = [
+  "unauthorized",
+  "not_found",
+  "method_not_allowed",
+  "invalid_request",
+  "unsupported_action",
+  "conflict",
+  "internal",
+  "reconstructed-unavailable",
+  "engine-mutation-blocked",
+  "vbot-interop-unavailable",
+] as const;
+
+export type VbotPublicErrorCode = (typeof VBOT_PUBLIC_ERROR_CODES)[number];
+export type VbotPublicErrorAction = "per_bot_router" | "provider_model_select" | "stop" | "queue";
+
+export interface VbotTypedErrorBody {
+  readonly error: string;
+  readonly code: VbotPublicErrorCode;
+  readonly action?: VbotPublicErrorAction;
+}
+
+export class ReconstructedVbotError extends Error {
+  readonly code: VbotPublicErrorCode;
+  readonly status: number;
+  readonly action?: VbotPublicErrorAction;
+
+  constructor(
+    code: VbotPublicErrorCode,
+    message: string,
+    options?: { readonly status?: number; readonly action?: VbotPublicErrorAction },
+  ) {
+    super(message);
+    this.name = "ReconstructedVbotError";
+    this.code = code;
+    this.status = options?.status ?? statusForVbotPublicError(code);
+    if (options?.action !== undefined) this.action = options.action;
+  }
+
+  toJSON(): VbotTypedErrorBody {
+    return {
+      error: this.message,
+      code: this.code,
+      ...(this.action === undefined ? {} : { action: this.action }),
+    };
+  }
+}
+
+export function statusForVbotPublicError(code: VbotPublicErrorCode): number {
+  switch (code) {
+    case "unauthorized":
+      return 401;
+    case "not_found":
+      return 404;
+    case "method_not_allowed":
+      return 405;
+    case "invalid_request":
+      return 400;
+    case "unsupported_action":
+    case "conflict":
+    case "engine-mutation-blocked":
+      return 409;
+    case "reconstructed-unavailable":
+    case "vbot-interop-unavailable":
+      return 503;
+    case "internal":
+      return 500;
+  }
+}
+
+export function publicVbotErrorReason(code: VbotPublicErrorCode): string {
+  switch (code) {
+    case "unauthorized":
+      return "The reconstructed local gateway rejected the request.";
+    case "not_found":
+      return "That reconstructed agent was not found.";
+    case "method_not_allowed":
+      return "That reconstructed action is not available.";
+    case "invalid_request":
+      return "That reconstructed request was not valid.";
+    case "unsupported_action":
+      return "Grok Reconstructed does not support that action.";
+    case "conflict":
+      return "Grok Reconstructed could not complete that action right now.";
+    case "internal":
+      return "The reconstructed local gateway request failed.";
+    case "reconstructed-unavailable":
+      return "Grok Reconstructed is not available on this computer.";
+    case "engine-mutation-blocked":
+      return "This action stays on Grok Reconstructed and cannot fall back to OpenMaus.";
+    case "vbot-interop-unavailable":
+      return "Grok Reconstructed is running, but its V Bot interoperability API is not available.";
+  }
 }
 
 export interface ReconstructedRuntimeHost {
@@ -503,6 +603,456 @@ function requestHeaders(token: string | null | undefined, extra?: Record<string,
   return headers;
 }
 
+const VBOT_PUBLIC_ERROR_CODE_SET = new Set<string>(VBOT_PUBLIC_ERROR_CODES);
+const VBOT_PUBLIC_ERROR_ACTIONS = new Set<VbotPublicErrorAction>([
+  "per_bot_router",
+  "provider_model_select",
+  "stop",
+  "queue",
+]);
+const VBOT_PROVIDERS = ["cursor", "claude-code", "codex", "openrouter"] as const;
+export type VbotHostProvider = (typeof VBOT_PROVIDERS)[number];
+
+export function isVbotHostProvider(value: unknown): value is VbotHostProvider {
+  return typeof value === "string" && (VBOT_PROVIDERS as readonly string[]).includes(value);
+}
+
+export function isVbotBotId(id: string): boolean {
+  return AGENT_ID.test(id);
+}
+
+function secretsFor(runtime: { readonly origin: string; readonly token: string | null }): string[] {
+  return [runtime.token, runtime.origin].filter(
+    (value): value is string => typeof value === "string" && value.length > 0,
+  );
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value != null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function parseVbotGatewayError(value: unknown, status: number, secrets: readonly string[]): ReconstructedVbotError {
+  const envelope = asRecord(value);
+  const nested = asRecord(envelope?.error);
+  const rawCode = typeof nested?.code === "string" ? nested.code : typeof envelope?.code === "string" ? envelope.code : "";
+  const code: VbotPublicErrorCode = VBOT_PUBLIC_ERROR_CODE_SET.has(rawCode)
+    ? (rawCode as VbotPublicErrorCode)
+    : status === 401
+      ? "unauthorized"
+      : status === 404
+        ? "not_found"
+        : status === 405
+          ? "method_not_allowed"
+          : status === 409
+            ? "conflict"
+            : status === 400
+              ? "invalid_request"
+              : "internal";
+  const rawMessage =
+    typeof nested?.message === "string"
+      ? nested.message
+      : typeof envelope?.error === "string"
+        ? envelope.error
+        : publicVbotErrorReason(code);
+  const message = leaksSensitive(rawMessage, secrets) ? publicVbotErrorReason(code) : rawMessage.trim().slice(0, 240);
+  const rawAction =
+    typeof nested?.action === "string"
+      ? nested.action
+      : typeof envelope?.action === "string"
+        ? envelope.action
+        : undefined;
+  const action = rawAction && VBOT_PUBLIC_ERROR_ACTIONS.has(rawAction as VbotPublicErrorAction)
+    ? (rawAction as VbotPublicErrorAction)
+    : undefined;
+  return new ReconstructedVbotError(code, message.length > 0 ? message : publicVbotErrorReason(code), {
+    status,
+    action,
+  });
+}
+
+async function vbotRequest(
+  host: ReconstructedRuntimeHost,
+  runtime: { readonly origin: string; readonly token: string | null },
+  method: string,
+  pathname: string,
+  body?: unknown,
+  timeoutMs = COMMAND_TIMEOUT_MS,
+): Promise<unknown> {
+  if (!isAllowedLoopbackOrigin(runtime.origin)) {
+    throw new ReconstructedVbotError("internal", "refused non-loopback reconstructed request");
+  }
+  const secrets = secretsFor(runtime);
+  const path = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  let result: Awaited<ReturnType<typeof readJson>>;
+  try {
+    result = await readJson(host, `${runtime.origin}${path}`, {
+      method,
+      headers: requestHeaders(
+        runtime.token,
+        body === undefined ? undefined : { "content-type": "application/json" },
+      ),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch {
+    // Do not pass through fetch/URL errors: implementations commonly include
+    // the loopback origin (and, for malformed URLs, request details) in their
+    // message. The companion only needs a stable public failure reason.
+    throw new ReconstructedVbotError("internal", publicVbotErrorReason("internal"));
+  }
+  if (!result.ok) {
+    throw parseVbotGatewayError(result.value, result.status, secrets);
+  }
+  if (typeof result.text === "string" && leaksSensitive(result.text, secrets)) {
+    throw new ReconstructedVbotError("internal", publicVbotErrorReason("internal"));
+  }
+  return result.value;
+}
+
+function emptyVbotCapabilities(): Omit<ReconstructedCapabilities, "health" | "listAgents"> {
+  return {
+    sendPrompt: false,
+    events: false,
+    transcriptTail: false,
+    vbotInterop: false,
+    steer: false,
+    stop: false,
+    selectHostRouter: false,
+  };
+}
+
+function vbotCapabilitiesFrom(value: unknown): Omit<ReconstructedCapabilities, "health" | "listAgents"> {
+  const record = asRecord(value);
+  const actions = asRecord(record?.actions);
+  if (record == null || actions == null) return emptyVbotCapabilities();
+  return {
+    sendPrompt: actions.submitPrompt === true,
+    events: false,
+    transcriptTail: false,
+    vbotInterop: true,
+    steer: actions.steer === true,
+    stop: actions.stop === true,
+    selectHostRouter: actions.selectHostRouter === true,
+  };
+}
+
+export interface PublicVbotProviderModel {
+  readonly id: string;
+  readonly current: boolean;
+  readonly selectable: boolean;
+}
+
+export interface PublicVbotProvider {
+  readonly id: VbotHostProvider;
+  readonly label: string;
+  readonly current: boolean;
+  readonly selectable: boolean;
+  readonly modelSelectable: boolean;
+  readonly models: readonly PublicVbotProviderModel[];
+}
+
+export interface PublicVbotProviderCatalog {
+  readonly scope: "host";
+  readonly perBotSelection: false;
+  readonly currentProvider: VbotHostProvider;
+  readonly currentModelId: string;
+  readonly providers: readonly PublicVbotProvider[];
+}
+
+export interface PublicVbotRouterState extends PublicVbotProviderCatalog {
+  readonly selected: {
+    readonly provider: VbotHostProvider;
+    readonly modelId: string;
+    readonly scope: "host";
+  };
+}
+
+export interface PublicVbotActivity {
+  readonly botId: string;
+  readonly busy: boolean;
+  readonly isRunning: boolean;
+  readonly activityKind: "idle" | "thinking" | "tool" | "composing" | "awaiting_approval";
+  readonly hostBusy: boolean;
+}
+
+export interface PublicVbotTurnResult {
+  readonly accepted: true;
+  readonly botId: string;
+  readonly steered: boolean;
+}
+
+export interface PublicVbotStopResult {
+  readonly botId: string;
+  readonly stopped: boolean;
+}
+
+function sanitizeProviderModels(value: unknown, modelSelectable: boolean): PublicVbotProviderModel[] {
+  if (!Array.isArray(value)) return [];
+  const models: PublicVbotProviderModel[] = [];
+  for (const row of value) {
+    const rec = asRecord(row);
+    const id = typeof rec?.id === "string" ? rec.id.trim() : "";
+    if (id.length === 0 || id.length > 200) continue;
+    models.push({
+      id,
+      current: rec?.current === true,
+      selectable: modelSelectable && rec?.selectable === true,
+    });
+  }
+  return models;
+}
+
+export function sanitizeVbotProviderCatalog(value: unknown): PublicVbotProviderCatalog | null {
+  const rec = asRecord(value);
+  if (rec == null || !isVbotHostProvider(rec.currentProvider)) return null;
+  const currentModelId = typeof rec.currentModelId === "string" ? rec.currentModelId.trim() : "";
+  if (currentModelId.length === 0) return null;
+  const providers: PublicVbotProvider[] = [];
+  if (Array.isArray(rec.providers)) {
+    for (const row of rec.providers) {
+      const provider = asRecord(row);
+      if (provider == null || !isVbotHostProvider(provider.id)) continue;
+      const label = typeof provider.label === "string" ? provider.label.trim().slice(0, LABEL_MAX) : provider.id;
+      const modelSelectable = provider.modelSelectable === true && provider.id === "cursor";
+      providers.push({
+        id: provider.id,
+        label: label.length > 0 ? label : provider.id,
+        current: provider.current === true,
+        selectable: provider.selectable === true,
+        modelSelectable,
+        models: sanitizeProviderModels(provider.models, modelSelectable),
+      });
+    }
+  }
+  if (providers.length === 0) return null;
+  return {
+    scope: "host",
+    perBotSelection: false,
+    currentProvider: rec.currentProvider,
+    currentModelId,
+    providers,
+  };
+}
+
+export function sanitizeVbotRouterState(value: unknown): PublicVbotRouterState | null {
+  const catalog = sanitizeVbotProviderCatalog(value);
+  if (catalog == null) return null;
+  const rec = asRecord(value);
+  const selected = asRecord(rec?.selected);
+  const provider = isVbotHostProvider(selected?.provider) ? selected.provider : catalog.currentProvider;
+  const modelId =
+    typeof selected?.modelId === "string" && selected.modelId.trim().length > 0
+      ? selected.modelId.trim()
+      : catalog.currentModelId;
+  return {
+    ...catalog,
+    selected: { provider, modelId, scope: "host" },
+  };
+}
+
+function projectVbotBotsPayload(value: unknown): SyncedReconstructedRoster["bots"] {
+  const rec = asRecord(value);
+  return projectReconstructedRoster(rec?.bots ?? value).bots;
+}
+
+function projectVbotGroupsPayload(value: unknown): SyncedReconstructedRoster["groups"] {
+  const rec = asRecord(value);
+  const groups = rec?.groups;
+  if (!Array.isArray(groups)) return [];
+  return projectReconstructedRoster(
+    groups.map((row) => {
+      const item = asRecord(row);
+      return item == null ? row : { ...item, isGroup: true };
+    }),
+  ).groups.map(({ id, label, memberIds }) => ({ id, label, memberIds }));
+}
+
+export function sanitizeVbotActivity(value: unknown): PublicVbotActivity | null {
+  const rec = asRecord(value);
+  const bot = asRecord(rec?.bot);
+  const host = asRecord(rec?.host);
+  const botId =
+    typeof rec?.botId === "string" && isVbotBotId(rec.botId)
+      ? rec.botId
+      : typeof bot?.id === "string" && isVbotBotId(bot.id)
+        ? bot.id
+        : "";
+  if (botId.length === 0) return null;
+  const activity = asRecord(bot?.activity);
+  const kind = activity?.kind;
+  const activityKind =
+    kind === "thinking" || kind === "tool" || kind === "composing" || kind === "awaiting_approval" ? kind : "idle";
+  return {
+    botId,
+    busy: bot?.isRunning === true || bot?.isRunningTurn === true || host?.isBusy === true,
+    isRunning: bot?.isRunning === true || bot?.isRunningTurn === true,
+    activityKind,
+    hostBusy: host?.isBusy === true,
+  };
+}
+
+export function parseVbotRouterPatch(body: unknown): { provider?: VbotHostProvider; modelId?: string } | null {
+  const rec = asRecord(body);
+  if (rec == null) return null;
+  const extra = Object.keys(rec).filter((key) => key !== "provider" && key !== "modelId");
+  if (extra.length > 0) return null;
+  const provider = rec.provider === undefined ? undefined : rec.provider;
+  const modelRaw = rec.modelId === undefined ? undefined : rec.modelId;
+  if (provider !== undefined && !isVbotHostProvider(provider)) return null;
+  const modelId =
+    modelRaw === undefined
+      ? undefined
+      : typeof modelRaw === "string" && modelRaw.trim().length > 0
+        ? modelRaw.trim().slice(0, 200)
+        : null;
+  if (modelId === null) return null;
+  if (provider === undefined && modelId === undefined) return null;
+  return {
+    ...(provider === undefined ? {} : { provider }),
+    ...(modelId === undefined ? {} : { modelId }),
+  };
+}
+
+export function parseVbotPromptBody(body: unknown): { prompt: string; clientNonce?: string } | null {
+  const rec = asRecord(body);
+  if (rec == null) return null;
+  const extra = Object.keys(rec).filter((key) => key !== "prompt" && key !== "clientNonce");
+  if (extra.length > 0) return null;
+  const prompt = typeof rec.prompt === "string" ? rec.prompt : "";
+  if (prompt.trim().length === 0) return null;
+  const clientNonce =
+    typeof rec.clientNonce === "string" && rec.clientNonce.trim().length > 0
+      ? rec.clientNonce.trim().slice(0, 200)
+      : undefined;
+  return clientNonce === undefined ? { prompt } : { prompt, clientNonce };
+}
+
+export async function fetchVbotBots(
+  host: ReconstructedRuntimeHost,
+  runtime: Extract<ReconstructedProbe, { ok: true }>,
+): Promise<SyncedReconstructedBot[]> {
+  return projectVbotBotsPayload(await vbotRequest(host, runtime, "GET", `${VBOT_INTEROP_PATH_PREFIX}/bots`));
+}
+
+export async function fetchVbotGroups(
+  host: ReconstructedRuntimeHost,
+  runtime: Extract<ReconstructedProbe, { ok: true }>,
+): Promise<SyncedReconstructedGroup[]> {
+  return projectVbotGroupsPayload(await vbotRequest(host, runtime, "GET", `${VBOT_INTEROP_PATH_PREFIX}/groups`));
+}
+
+export async function fetchVbotProviders(
+  host: ReconstructedRuntimeHost,
+  runtime: Extract<ReconstructedProbe, { ok: true }>,
+): Promise<PublicVbotProviderCatalog> {
+  const catalog = sanitizeVbotProviderCatalog(
+    await vbotRequest(host, runtime, "GET", `${VBOT_INTEROP_PATH_PREFIX}/providers`),
+  );
+  if (catalog == null) {
+    throw new ReconstructedVbotError("internal", publicVbotErrorReason("internal"));
+  }
+  return catalog;
+}
+
+export async function fetchVbotRouter(
+  host: ReconstructedRuntimeHost,
+  runtime: Extract<ReconstructedProbe, { ok: true }>,
+): Promise<PublicVbotRouterState> {
+  const router = sanitizeVbotRouterState(
+    await vbotRequest(host, runtime, "GET", `${VBOT_INTEROP_PATH_PREFIX}/router`),
+  );
+  if (router == null) {
+    throw new ReconstructedVbotError("internal", publicVbotErrorReason("internal"));
+  }
+  return router;
+}
+
+export async function setVbotRouter(
+  host: ReconstructedRuntimeHost,
+  runtime: Extract<ReconstructedProbe, { ok: true }>,
+  patch: { readonly provider?: VbotHostProvider; readonly modelId?: string },
+): Promise<PublicVbotRouterState> {
+  const router = sanitizeVbotRouterState(
+    await vbotRequest(host, runtime, "PUT", `${VBOT_INTEROP_PATH_PREFIX}/router`, patch),
+  );
+  if (router == null) {
+    throw new ReconstructedVbotError("internal", publicVbotErrorReason("internal"));
+  }
+  return router;
+}
+
+export async function fetchVbotActivity(
+  host: ReconstructedRuntimeHost,
+  runtime: Extract<ReconstructedProbe, { ok: true }>,
+  botId: string,
+): Promise<PublicVbotActivity> {
+  if (!isVbotBotId(botId)) {
+    throw new ReconstructedVbotError("invalid_request", "bot id is invalid");
+  }
+  const activity = sanitizeVbotActivity(
+    await vbotRequest(
+      host,
+      runtime,
+      "GET",
+      `${VBOT_INTEROP_PATH_PREFIX}/bots/${encodeURIComponent(botId)}/activity`,
+    ),
+  );
+  if (activity == null) {
+    throw new ReconstructedVbotError("internal", publicVbotErrorReason("internal"));
+  }
+  if (activity.botId !== botId) {
+    throw new ReconstructedVbotError("internal", publicVbotErrorReason("internal"));
+  }
+  return activity;
+}
+
+export async function submitVbotTurn(
+  host: ReconstructedRuntimeHost,
+  runtime: Extract<ReconstructedProbe, { ok: true }>,
+  botId: string,
+  body: { readonly prompt: string; readonly clientNonce?: string },
+  steered: boolean,
+): Promise<PublicVbotTurnResult> {
+  if (!isVbotBotId(botId)) {
+    throw new ReconstructedVbotError("invalid_request", "bot id is invalid");
+  }
+  const path = `${VBOT_INTEROP_PATH_PREFIX}/bots/${encodeURIComponent(botId)}/${steered ? "steer" : "turns"}`;
+  const value = asRecord(await vbotRequest(host, runtime, "POST", path, body));
+  if (value?.accepted !== true || (typeof value.botId === "string" && value.botId !== botId)) {
+    throw new ReconstructedVbotError("internal", "The reconstructed host did not accept the prompt.");
+  }
+  return {
+    accepted: true,
+    botId,
+    steered: steered || value.steered === true,
+  };
+}
+
+export async function stopVbotBot(
+  host: ReconstructedRuntimeHost,
+  runtime: Extract<ReconstructedProbe, { ok: true }>,
+  botId: string,
+): Promise<PublicVbotStopResult> {
+  if (!isVbotBotId(botId)) {
+    throw new ReconstructedVbotError("invalid_request", "bot id is invalid");
+  }
+  const value = asRecord(
+    await vbotRequest(
+      host,
+      runtime,
+      "POST",
+      `${VBOT_INTEROP_PATH_PREFIX}/bots/${encodeURIComponent(botId)}/stop`,
+      {},
+    ),
+  );
+  return {
+    botId,
+    stopped: value?.stopped === true,
+  };
+}
+
 export async function probeReconstructedGateway(
   host: ReconstructedRuntimeHost,
   discovery: GatewayDiscovery,
@@ -543,6 +1093,18 @@ export async function probeReconstructedGateway(
       return { ok: false, code: "list-agents-unsupported" };
     }
 
+    let interopCaps = emptyVbotCapabilities();
+    try {
+      const interop = await readJson(host, `${origin}${VBOT_INTEROP_PATH_PREFIX}`, {
+        method: "GET",
+        headers: requestHeaders(discovery.token),
+        signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+      });
+      if (interop.ok) interopCaps = vbotCapabilitiesFrom(interop.value);
+    } catch {
+      interopCaps = emptyVbotCapabilities();
+    }
+
     return {
       ok: true,
       discovery,
@@ -553,9 +1115,7 @@ export async function probeReconstructedGateway(
       capabilities: {
         health: true,
         listAgents: true,
-        sendPrompt: false,
-        events: false,
-        transcriptTail: false,
+        ...interopCaps,
       },
     };
   } catch (error) {

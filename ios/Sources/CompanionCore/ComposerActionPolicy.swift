@@ -28,6 +28,29 @@ public enum ComposerPrimaryAction: Equatable, Sendable {
     case none
 }
 
+public struct EngineComposerCapabilities: Equatable, Sendable {
+    public var queueing: Bool
+    public var steer: Bool
+    public var stop: Bool
+
+    public static let openmaus = EngineComposerCapabilities(queueing: true, steer: true, stop: true)
+
+    public init(queueing: Bool, steer: Bool, stop: Bool) {
+        self.queueing = queueing
+        self.steer = steer
+        self.stop = stop
+    }
+
+    public init(_ capabilities: VBotModelCapabilities) {
+        self.queueing = capabilities.queueing
+        self.steer = capabilities.steer
+        // Reconstructed payloads from older desktops may omit `stop`. An
+        // omitted mutation capability must fail closed; OpenMaus payloads
+        // advertise the field explicitly.
+        self.stop = capabilities.stop == true
+    }
+}
+
 /// Pure state policy for the composer's primary control. Whitespace-only
 /// drafts count as empty so a busy chat never presents a send action that the
 /// server would reject.
@@ -35,13 +58,30 @@ public enum ComposerActionPolicy {
     public static func action(
         busy: Bool,
         draft: String,
-        defaultMode: BusySendDefault
+        defaultMode: BusySendDefault,
+        capabilities: EngineComposerCapabilities = .openmaus
     ) -> ComposerPrimaryAction {
         let hasText = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if busy {
-            return hasText ? .send(defaultMode.deliveryMode) : .stop
+            if hasText {
+                return .send(deliveryMode(defaultMode: defaultMode, capabilities: capabilities))
+            }
+            return capabilities.stop ? .stop : .none
         }
         return hasText ? .send(.auto) : .none
+    }
+
+    public static func deliveryMode(
+        defaultMode: BusySendDefault,
+        capabilities: EngineComposerCapabilities
+    ) -> MessageDeliveryMode {
+        switch defaultMode {
+        case .queue:
+            if capabilities.queueing { return .queue }
+            return capabilities.steer ? .steer : .auto
+        case .steer:
+            return capabilities.steer ? .steer : .auto
+        }
     }
 }
 

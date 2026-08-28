@@ -132,4 +132,25 @@ final class MessageDeliveryClientTests: XCTestCase {
         XCTAssertNil(receipt.queueId)
         XCTAssertNil(receipt.threadId)
     }
+
+    func testReconstructedSendAndSteerUseVBotRoutes() async throws {
+        MessageDeliveryRequestStub.responseBody = Data(
+            #"{"ok":true,"disposition":"started","accepted":true,"botId":"bot-alpha","steered":false}"#.utf8
+        )
+        let sent = try await client.sendReconstructedTurn(botId: "bot-alpha", prompt: "hello", steer: false)
+        XCTAssertEqual(sent.disposition, .started)
+        XCTAssertEqual(MessageDeliveryRequestStub.capturedRequest?.httpMethod, "POST")
+        XCTAssertEqual(MessageDeliveryRequestStub.capturedRequest?.url?.path, "/api/vbot/bots/bot-alpha/turns")
+        let sentBody = try JSONSerialization.jsonObject(
+            with: try XCTUnwrap(MessageDeliveryRequestStub.capturedBody)
+        ) as? [String: String]
+        XCTAssertEqual(sentBody, ["prompt": "hello"])
+
+        MessageDeliveryRequestStub.responseBody = Data(
+            #"{"ok":true,"disposition":"steered","accepted":true,"botId":"bot-alpha","steered":true}"#.utf8
+        )
+        let steered = try await client.sendReconstructedTurn(botId: "bot-alpha", prompt: "steer now", steer: true)
+        XCTAssertEqual(steered.disposition, .steered)
+        XCTAssertEqual(MessageDeliveryRequestStub.capturedRequest?.url?.path, "/api/vbot/bots/bot-alpha/steer")
+    }
 }

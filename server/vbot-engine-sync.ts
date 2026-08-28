@@ -3,11 +3,30 @@ import type { ModelCatalog } from "./contracts.ts";
 import {
   defaultReconstructedHost,
   detectReconstructedRuntime,
+  fetchVbotActivity,
+  fetchVbotBots,
+  fetchVbotGroups,
+  fetchVbotProviders,
+  fetchVbotRouter,
+  isVbotBotId,
+  parseVbotPromptBody,
+  parseVbotRouterPatch,
   publicDisabledReason,
+  publicVbotErrorReason,
+  ReconstructedVbotError,
   sessionsToCatalog,
+  setVbotRouter,
+  stopVbotBot,
+  submitVbotTurn,
+  type PublicVbotActivity,
+  type PublicVbotProviderCatalog,
+  type PublicVbotRouterState,
+  type PublicVbotStopResult,
+  type PublicVbotTurnResult,
   type ReconstructedDisabledCode,
   type ReconstructedProbe,
   type ReconstructedRuntimeHost,
+  type VbotTypedErrorBody,
 } from "./drivers/grok-reconstructed.ts";
 
 export type VBotPrimaryEngine = "openmaus" | "grokReconstructed";
@@ -35,6 +54,7 @@ export interface VBotModelCapabilities {
   readonly images: boolean;
   readonly queueing: boolean;
   readonly steer: boolean;
+  readonly stop: boolean;
   readonly attachments: boolean;
 }
 
@@ -57,6 +77,8 @@ export interface VBotEngineSync {
   readonly bots: readonly VBotSyncedBot[];
   readonly groups: readonly VBotSyncedGroup[];
   readonly modelCapabilities: VBotModelCapabilities | null;
+  readonly providers: PublicVbotProviderCatalog | null;
+  readonly router: PublicVbotRouterState | null;
 }
 
 export interface OpenMausSyncSnapshot {
@@ -164,7 +186,8 @@ function reconstructedModelCapabilities(
     sendPrompt: probe.capabilities.sendPrompt,
     images: false,
     queueing: false,
-    steer: false,
+    steer: probe.capabilities.steer,
+    stop: probe.capabilities.stop,
     attachments: false,
   };
 }
@@ -177,6 +200,7 @@ function openMausModelCapabilities(): VBotModelCapabilities {
     images: true,
     queueing: true,
     steer: true,
+    stop: true,
     attachments: true,
   };
 }
@@ -206,6 +230,8 @@ export function buildVBotEngineSync(input: {
       bots: reconstructedBots(input.reconstructed),
       groups: reconstructedGroups(input.reconstructed),
       modelCapabilities: reconstructedModelCapabilities(input.reconstructed, catalog),
+      providers: null,
+      router: null,
     };
   }
 
@@ -219,6 +245,8 @@ export function buildVBotEngineSync(input: {
     bots: openMausBots(input.openmaus),
     groups: openMausGroups(input.openmaus),
     modelCapabilities: openMausModelCapabilities(),
+    providers: null,
+    router: null,
   };
 }
 
@@ -226,4 +254,198 @@ export async function probeVBotReconstructed(
   host: ReconstructedRuntimeHost = defaultReconstructedHost(),
 ): Promise<ReconstructedProbe> {
   return detectReconstructedRuntime(host);
+}
+
+export function vbotTypedErrorBody(error: ReconstructedVbotError): VbotTypedErrorBody {
+  return error.toJSON();
+}
+
+export function requireReconstructedRead(
+  reconstructed: ReconstructedProbe,
+): Extract<ReconstructedProbe, { ok: true }> {
+  if (!reconstructed.ok) {
+    throw new ReconstructedVbotError(
+      "reconstructed-unavailable",
+      publicDisabledReason(reconstructed.code),
+    );
+  }
+  if (!reconstructed.capabilities.vbotInterop) {
+    throw new ReconstructedVbotError(
+      "vbot-interop-unavailable",
+      publicVbotErrorReason("vbot-interop-unavailable"),
+    );
+  }
+  return reconstructed;
+}
+
+export function requireReconstructedMutation(
+  primaryEngine: VBotPrimaryEngine,
+  reconstructed: ReconstructedProbe,
+): Extract<ReconstructedProbe, { ok: true }> {
+  if (primaryEngine !== "grokReconstructed") {
+    throw new ReconstructedVbotError(
+      "engine-mutation-blocked",
+      "Grok Reconstructed is not the selected desktop engine.",
+    );
+  }
+  if (!reconstructed.ok) {
+    throw new ReconstructedVbotError(
+      "engine-mutation-blocked",
+      publicDisabledReason(reconstructed.code),
+    );
+  }
+  if (!reconstructed.capabilities.vbotInterop) {
+    throw new ReconstructedVbotError(
+      "vbot-interop-unavailable",
+      publicVbotErrorReason("vbot-interop-unavailable"),
+    );
+  }
+  return reconstructed;
+}
+
+export async function enrichVBotEngineSync(
+  sync: VBotEngineSync,
+  reconstructed: ReconstructedProbe,
+  host: ReconstructedRuntimeHost = defaultReconstructedHost(),
+): Promise<VBotEngineSync> {
+  if (sync.activeSource !== "grokReconstructed" || !reconstructed.ok || !reconstructed.capabilities.vbotInterop) {
+    return sync;
+  }
+  try {
+    const [providers, router] = await Promise.all([
+      fetchVbotProviders(host, reconstructed),
+      fetchVbotRouter(host, reconstructed),
+    ]);
+    return { ...sync, providers, router };
+  } catch {
+    return sync;
+  }
+}
+
+export async function readReconstructedVbotBots(
+  reconstructed: ReconstructedProbe,
+  host: ReconstructedRuntimeHost = defaultReconstructedHost(),
+): Promise<VBotSyncedBot[]> {
+  const runtime = requireReconstructedRead(reconstructed);
+  const bots = await fetchVbotBots(host, runtime);
+  return bots.map((bot) => ({
+    id: bot.id,
+    label: bot.label,
+    isActive: bot.isActive,
+    isRunning: bot.isRunning,
+    busy: bot.isRunning === true,
+  }));
+}
+
+export async function readReconstructedVbotGroups(
+  reconstructed: ReconstructedProbe,
+  host: ReconstructedRuntimeHost = defaultReconstructedHost(),
+): Promise<VBotSyncedGroup[]> {
+  const runtime = requireReconstructedRead(reconstructed);
+  const groups = await fetchVbotGroups(host, runtime);
+  return groups.map((group) => ({
+    id: group.id,
+    label: group.label,
+    memberIds: [...group.memberIds],
+    busyBotId: null,
+  }));
+}
+
+export async function readReconstructedVbotProviders(
+  reconstructed: ReconstructedProbe,
+  host: ReconstructedRuntimeHost = defaultReconstructedHost(),
+): Promise<PublicVbotProviderCatalog> {
+  return fetchVbotProviders(host, requireReconstructedRead(reconstructed));
+}
+
+export async function readReconstructedVbotRouter(
+  reconstructed: ReconstructedProbe,
+  host: ReconstructedRuntimeHost = defaultReconstructedHost(),
+): Promise<PublicVbotRouterState> {
+  return fetchVbotRouter(host, requireReconstructedRead(reconstructed));
+}
+
+export async function readReconstructedVbotActivity(
+  reconstructed: ReconstructedProbe,
+  botId: string,
+  host: ReconstructedRuntimeHost = defaultReconstructedHost(),
+): Promise<PublicVbotActivity> {
+  if (!isVbotBotId(botId)) {
+    throw new ReconstructedVbotError("invalid_request", "bot id is invalid");
+  }
+  return fetchVbotActivity(host, requireReconstructedRead(reconstructed), botId);
+}
+
+export async function mutateReconstructedVbotRouter(
+  primaryEngine: VBotPrimaryEngine,
+  reconstructed: ReconstructedProbe,
+  body: unknown,
+  host: ReconstructedRuntimeHost = defaultReconstructedHost(),
+): Promise<PublicVbotRouterState> {
+  const runtime = requireReconstructedMutation(primaryEngine, reconstructed);
+  if (runtime.capabilities.selectHostRouter !== true) {
+    throw new ReconstructedVbotError(
+      "unsupported_action",
+      "Host provider selection is unavailable on Grok Reconstructed.",
+      { action: "provider_model_select" },
+    );
+  }
+  const patch = parseVbotRouterPatch(body);
+  if (patch == null) {
+    throw new ReconstructedVbotError("invalid_request", "provider or modelId is required");
+  }
+  return setVbotRouter(host, runtime, patch);
+}
+
+export async function mutateReconstructedVbotTurn(
+  primaryEngine: VBotPrimaryEngine,
+  reconstructed: ReconstructedProbe,
+  botId: string,
+  body: unknown,
+  steered: boolean,
+  host: ReconstructedRuntimeHost = defaultReconstructedHost(),
+): Promise<PublicVbotTurnResult> {
+  const runtime = requireReconstructedMutation(primaryEngine, reconstructed);
+  if (!isVbotBotId(botId)) {
+    throw new ReconstructedVbotError("invalid_request", "bot id is invalid");
+  }
+  const parsed = parseVbotPromptBody(body);
+  if (parsed == null) {
+    throw new ReconstructedVbotError("invalid_request", "prompt is required");
+  }
+  if (runtime.capabilities.sendPrompt !== true) {
+    throw new ReconstructedVbotError(
+      "unsupported_action",
+      "Prompt submission is unavailable on Grok Reconstructed.",
+      { action: "per_bot_router" },
+    );
+  }
+  if (steered && runtime.capabilities.steer !== true) {
+    throw new ReconstructedVbotError(
+      "unsupported_action",
+      "Steering is unavailable on Grok Reconstructed.",
+      { action: "per_bot_router" },
+    );
+  }
+  return submitVbotTurn(host, runtime, botId, parsed, steered);
+}
+
+export async function mutateReconstructedVbotStop(
+  primaryEngine: VBotPrimaryEngine,
+  reconstructed: ReconstructedProbe,
+  botId: string,
+  host: ReconstructedRuntimeHost = defaultReconstructedHost(),
+): Promise<PublicVbotStopResult> {
+  const runtime = requireReconstructedMutation(primaryEngine, reconstructed);
+  if (!isVbotBotId(botId)) {
+    throw new ReconstructedVbotError("invalid_request", "bot id is invalid");
+  }
+  if (runtime.capabilities.stop !== true) {
+    throw new ReconstructedVbotError(
+      "unsupported_action",
+      "Stop is unavailable because Grok Reconstructed has no bound interrupt.",
+      { action: "stop" },
+    );
+  }
+  return stopVbotBot(host, runtime, botId);
 }

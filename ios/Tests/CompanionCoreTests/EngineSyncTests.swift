@@ -27,12 +27,56 @@ final class EngineSyncTests: XCTestCase {
         XCTAssertEqual(sync.selectedEngine, .grokReconstructed)
         XCTAssertEqual(sync.servingEngine, .openmaus)
         XCTAssertTrue(sync.fallback)
+        XCTAssertTrue(sync.usesReconstructedMutations)
+        XCTAssertFalse(sync.reconstructedMutationsReady)
         XCTAssertEqual(sync.fallbackCode, "installed-not-running")
         XCTAssertEqual(sync.bots.count, 1)
         XCTAssertEqual(sync.groups.first?.memberIds, ["bot_1"])
+        XCTAssertEqual(sync.modelCapabilities?.canStop, true)
 
         let body = try JSONEncoder().encode(VBotPrimaryEnginePatch(primaryEngine: .grokReconstructed))
         let json = try JSONSerialization.jsonObject(with: body) as? [String: String]
         XCTAssertEqual(json, ["primaryEngine": "grokReconstructed"])
+    }
+
+    func testDecodesReconstructedRouterAndTypedError() throws {
+        let sync = try JSONDecoder().decode(
+            VBotEngineSync.self,
+            from: Data(
+                """
+                {
+                  "primaryEngine":"grokReconstructed",
+                  "activeSource":"grokReconstructed",
+                  "fallback":false,
+                  "engines":[],
+                  "bots":[],
+                  "groups":[],
+                  "modelCapabilities":{"defaultModel":"grok-4.5","models":[],"sendPrompt":true,"images":false,"queueing":false,"steer":true,"stop":false,"attachments":false},
+                  "router":{
+                    "scope":"host",
+                    "perBotSelection":false,
+                    "currentProvider":"cursor",
+                    "currentModelId":"grok-4.5",
+                    "providers":[{"id":"cursor","label":"Cursor","current":true,"selectable":true,"modelSelectable":true,"models":[{"id":"grok-4.5","current":true,"selectable":true}]}],
+                    "selected":{"provider":"cursor","modelId":"grok-4.5","scope":"host"}
+                  }
+                }
+                """.utf8
+            )
+        )
+        XCTAssertTrue(sync.reconstructedMutationsReady)
+        XCTAssertEqual(sync.router?.selected.provider, "cursor")
+        XCTAssertEqual(sync.modelCapabilities?.canStop, false)
+        XCTAssertEqual(sync.router?.asInstances.first?.instanceId, "cursor")
+
+        let error = try JSONDecoder().decode(
+            VBotEngineErrorBody.self,
+            from: Data(#"{"error":"This action stays on Grok Reconstructed and cannot fall back to OpenMaus.","code":"engine-mutation-blocked"}"#.utf8)
+        )
+        XCTAssertEqual(error.code, "engine-mutation-blocked")
+
+        let patch = try JSONEncoder().encode(VBotRouterPatch(provider: "cursor", modelId: "grok-4.6"))
+        let patchJSON = try JSONSerialization.jsonObject(with: patch) as? [String: String]
+        XCTAssertEqual(patchJSON, ["provider": "cursor", "modelId": "grok-4.6"])
     }
 }

@@ -31,6 +31,22 @@ struct ComposerActionPolicyTests {
         #expect(decoded == .steer)
     }
 
+    @Test("reconstructed capabilities hide queue and unbound stop")
+    func reconstructedCapabilities() {
+        let reconstructed = EngineComposerCapabilities(queueing: false, steer: true, stop: false)
+        #expect(
+            ComposerActionPolicy.action(busy: true, draft: "", defaultMode: .steer, capabilities: reconstructed)
+                == .none
+        )
+        #expect(
+            ComposerActionPolicy.action(busy: true, draft: "next", defaultMode: .queue, capabilities: reconstructed)
+                == .send(.steer)
+        )
+        #expect(
+            ComposerActionPolicy.deliveryMode(defaultMode: .queue, capabilities: reconstructed) == .steer
+        )
+    }
+
     @Test("request gate blocks duplicate work until released")
     func requestGate() {
         var gate = ComposerRequestGate()

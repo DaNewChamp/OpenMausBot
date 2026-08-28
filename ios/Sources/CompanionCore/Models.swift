@@ -238,6 +238,11 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
 public struct ModelSelection: Codable, Hashable, Sendable {
     public var instanceId: String
     public var model: String
+
+    public init(instanceId: String, model: String) {
+        self.instanceId = instanceId
+        self.model = model
+    }
 }
 
 public struct BotTask: Codable, Hashable, Sendable {
@@ -603,6 +608,24 @@ public struct Instance: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+extension VBotProviderCatalog {
+    public var asInstances: [Instance] {
+        providers.map { provider in
+            let options = provider.models.filter(\.selectable).map { ModelOption(id: $0.id, label: $0.id) }
+            let selected = provider.models.first(where: { $0.current })?.id
+                ?? (provider.current ? currentModelId : options.first?.id)
+                ?? currentModelId
+            return Instance(
+                instanceId: provider.id,
+                driverKind: provider.id,
+                displayName: provider.label,
+                snapshot: ProviderSnapshot(state: "available", reason: nil, authenticated: true, version: nil),
+                models: ModelCatalog(default: selected, options: options)
+            )
+        }
+    }
+}
+
 /// Helpers over `GET /api/instances` so the profile picker only offers
 /// currently advertised catalogs, matching the paired-safe model route.
 public enum AdvertisedModelCatalog {
@@ -669,6 +692,14 @@ public struct VBotSyncedGroup: Codable, Hashable, Identifiable, Sendable {
     public var busyBotId: String?
 }
 
+public struct VBotSyncedBotList: Codable, Sendable {
+    public var bots: [VBotSyncedBot]
+}
+
+public struct VBotSyncedGroupList: Codable, Sendable {
+    public var groups: [VBotSyncedGroup]
+}
+
 public struct VBotModelCapabilities: Codable, Hashable, Sendable {
     public var defaultModel: String
     public var models: [ModelOption]
@@ -676,7 +707,10 @@ public struct VBotModelCapabilities: Codable, Hashable, Sendable {
     public var images: Bool
     public var queueing: Bool
     public var steer: Bool
+    public var stop: Bool?
     public var attachments: Bool
+
+    public var canStop: Bool { stop ?? true }
 }
 
 public struct VBotEngineSync: Codable, Sendable {
@@ -689,6 +723,8 @@ public struct VBotEngineSync: Codable, Sendable {
     public var bots: [VBotSyncedBot]
     public var groups: [VBotSyncedGroup]
     public var modelCapabilities: VBotModelCapabilities?
+    public var providers: VBotProviderCatalog?
+    public var router: VBotRouterState?
 
     public var selectedEngine: VBotPrimaryEngine {
         VBotPrimaryEngine(rawValue: primaryEngine) ?? .openmaus
@@ -697,6 +733,122 @@ public struct VBotEngineSync: Codable, Sendable {
     public var servingEngine: VBotPrimaryEngine {
         VBotPrimaryEngine(rawValue: activeSource) ?? .openmaus
     }
+
+    /// Mutations follow the selected engine. Read fallback to OpenMaus must
+    /// never silently send, steer, or stop on a different engine.
+    public var usesReconstructedMutations: Bool {
+        selectedEngine == .grokReconstructed
+    }
+
+    public var reconstructedMutationsReady: Bool {
+        selectedEngine == .grokReconstructed
+            && servingEngine == .grokReconstructed
+            && modelCapabilities?.sendPrompt == true
+    }
+}
+
+public struct VBotProviderModel: Codable, Hashable, Identifiable, Sendable {
+    public var id: String
+    public var current: Bool
+    public var selectable: Bool
+}
+
+public struct VBotProvider: Codable, Hashable, Identifiable, Sendable {
+    public var id: String
+    public var label: String
+    public var current: Bool
+    public var selectable: Bool
+    public var modelSelectable: Bool
+    public var models: [VBotProviderModel]
+}
+
+public struct VBotProviderCatalog: Codable, Hashable, Sendable {
+    public var scope: String
+    public var perBotSelection: Bool
+    public var currentProvider: String
+    public var currentModelId: String
+    public var providers: [VBotProvider]
+}
+
+public struct VBotRouterSelection: Codable, Hashable, Sendable {
+    public var provider: String
+    public var modelId: String
+    public var scope: String
+}
+
+public struct VBotRouterState: Codable, Hashable, Sendable {
+    public var scope: String
+    public var perBotSelection: Bool
+    public var currentProvider: String
+    public var currentModelId: String
+    public var providers: [VBotProvider]
+    public var selected: VBotRouterSelection
+
+    public var asInstances: [Instance] {
+        VBotProviderCatalog(
+            scope: scope,
+            perBotSelection: perBotSelection,
+            currentProvider: currentProvider,
+            currentModelId: currentModelId,
+            providers: providers
+        ).asInstances
+    }
+}
+
+public struct VBotRouterPatch: Encodable, Sendable {
+    public var provider: String?
+    public var modelId: String?
+
+    public init(provider: String? = nil, modelId: String? = nil) {
+        self.provider = provider
+        self.modelId = modelId
+    }
+
+    private enum CodingKeys: String, CodingKey { case provider, modelId }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(provider, forKey: .provider)
+        try container.encodeIfPresent(modelId, forKey: .modelId)
+    }
+}
+
+public struct VBotPromptBody: Encodable, Sendable {
+    public var prompt: String
+    public var clientNonce: String?
+
+    public init(prompt: String, clientNonce: String? = nil) {
+        self.prompt = prompt
+        self.clientNonce = clientNonce
+    }
+
+    private enum CodingKeys: String, CodingKey { case prompt, clientNonce }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(prompt, forKey: .prompt)
+        try container.encodeIfPresent(clientNonce, forKey: .clientNonce)
+    }
+}
+
+public struct VBotActivity: Codable, Hashable, Sendable {
+    public var botId: String
+    public var busy: Bool
+    public var isRunning: Bool
+    public var activityKind: String
+    public var hostBusy: Bool
+}
+
+public struct VBotStopResult: Codable, Hashable, Sendable {
+    public var ok: Bool?
+    public var botId: String
+    public var stopped: Bool
+}
+
+public struct VBotEngineErrorBody: Codable, Sendable {
+    public var error: String
+    public var code: String?
+    public var action: String?
 }
 
 public struct VBotPrimaryEnginePatch: Encodable, Sendable {
@@ -1208,6 +1360,8 @@ public struct ConnectorStatuses: Codable, Sendable {
 /// The harness's error body. Every non-2xx response carries one.
 public struct APIErrorBody: Codable, Sendable {
     public var error: String
+    public var code: String?
+    public var action: String?
 }
 
 /// One frame of a bot's computer, as it arrives on the stream.

@@ -121,10 +121,20 @@ import { buildTurnContext, engineIsFresh } from "./turn-context.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
 import {
   buildVBotEngineSync,
+  enrichVBotEngineSync,
+  mutateReconstructedVbotRouter,
+  mutateReconstructedVbotStop,
+  mutateReconstructedVbotTurn,
   parseVBotPrimaryEnginePatch,
   probeVBotReconstructed,
+  readReconstructedVbotActivity,
+  readReconstructedVbotBots,
+  readReconstructedVbotGroups,
+  readReconstructedVbotProviders,
+  readReconstructedVbotRouter,
   vbotPrimaryEngine,
 } from "./vbot-engine-sync.ts";
+import { ReconstructedVbotError } from "./drivers/grok-reconstructed.ts";
 import {
   ensureWorkspace,
   listMemoryTopics,
@@ -6059,15 +6069,12 @@ const server = createServer(async (req, res) => {
 
     if (method === "GET" && path === "/api/vbot/engine-sync") {
       const reconstructed = await probeVBotReconstructed();
-      return json(
-        res,
-        200,
-        buildVBotEngineSync({
-          primaryEngine: vbotPrimaryEngine(cfg),
-          reconstructed,
-          openmaus: vbotOpenMausSnapshot(),
-        }),
-      );
+      const sync = buildVBotEngineSync({
+        primaryEngine: vbotPrimaryEngine(cfg),
+        reconstructed,
+        openmaus: vbotOpenMausSnapshot(),
+      });
+      return json(res, 200, await enrichVBotEngineSync(sync, reconstructed));
     }
 
     if (method === "PATCH" && path === "/api/vbot/primary-engine") {
@@ -6082,15 +6089,72 @@ const server = createServer(async (req, res) => {
       saveConfig({ vbot: { ...(cfg.vbot ?? {}), primaryEngine } });
       Object.assign(cfg, loadConfig());
       const reconstructed = await probeVBotReconstructed();
+      const sync = buildVBotEngineSync({
+        primaryEngine,
+        reconstructed,
+        openmaus: vbotOpenMausSnapshot(),
+      });
+      return json(res, 200, await enrichVBotEngineSync(sync, reconstructed));
+    }
+
+    if (method === "GET" && path === "/api/vbot/bots") {
+      return json(res, 200, { bots: await readReconstructedVbotBots(await probeVBotReconstructed()) });
+    }
+    if (method === "GET" && path === "/api/vbot/groups") {
+      return json(res, 200, { groups: await readReconstructedVbotGroups(await probeVBotReconstructed()) });
+    }
+    if (method === "GET" && path === "/api/vbot/providers") {
+      return json(res, 200, await readReconstructedVbotProviders(await probeVBotReconstructed()));
+    }
+    if (method === "GET" && path === "/api/vbot/router") {
+      return json(res, 200, await readReconstructedVbotRouter(await probeVBotReconstructed()));
+    }
+    if (method === "PUT" && path === "/api/vbot/router") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const reconstructed = await probeVBotReconstructed();
       return json(
         res,
         200,
-        buildVBotEngineSync({
-          primaryEngine,
-          reconstructed,
-          openmaus: vbotOpenMausSnapshot(),
-        }),
+        await mutateReconstructedVbotRouter(vbotPrimaryEngine(cfg), reconstructed, await readBody(req)),
       );
+    }
+
+    const vbotBotAction = path.match(/^\/api\/vbot\/bots\/([\w.-]+)\/(activity|turns|steer|stop)$/);
+    if (vbotBotAction) {
+      const botId = vbotBotAction[1];
+      const action = vbotBotAction[2];
+      const reconstructed = await probeVBotReconstructed();
+      if (action === "activity" && method === "GET") {
+        return json(res, 200, await readReconstructedVbotActivity(reconstructed, botId));
+      }
+      if ((action === "turns" || action === "steer") && method === "POST") {
+        if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+          return json(res, 415, { error: "content-type must be application/json" });
+        }
+        const result = await mutateReconstructedVbotTurn(
+          vbotPrimaryEngine(cfg),
+          reconstructed,
+          botId,
+          await readBody(req),
+          action === "steer",
+        );
+        return json(res, 202, {
+          ...deliveryReceipt(result.steered ? "steered" : "started"),
+          accepted: true,
+          botId: result.botId,
+          steered: result.steered,
+        });
+      }
+      if (action === "stop" && method === "POST") {
+        if (String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+          await readBody(req);
+        }
+        const result = await mutateReconstructedVbotStop(vbotPrimaryEngine(cfg), reconstructed, botId);
+        return json(res, 200, { ok: true, ...result });
+      }
+      return json(res, 405, { error: "method not allowed" });
     }
 
     // ── CLI binary discovery for the Engines "detected" dropdown ──
@@ -6563,6 +6627,9 @@ const server = createServer(async (req, res) => {
 
     return json(res, 404, { error: `no route: ${method} ${path}` });
   } catch (e) {
+    if (e instanceof ReconstructedVbotError) {
+      return json(res, e.status, e.toJSON());
+    }
     const status = (e as any)?.status ?? 500;
     return json(res, status, { error: e instanceof Error ? e.message : String(e) });
   }

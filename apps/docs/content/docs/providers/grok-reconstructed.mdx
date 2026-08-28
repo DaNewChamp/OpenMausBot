@@ -24,17 +24,16 @@ Official Grok Bot is not treated as reconstructed. OpenMausBot data stays in
 
 ## Supported capabilities
 
-Detection verifies health and bot/session listing on loopback. A send then
-uses only documented reconstructed coordinator methods:
+Detection verifies health, bot/session listing, and optional `/vbot/v1`
+capabilities on loopback. Authenticated V Bot routes can then:
 
-- health
-- bot/session listing
-- send prompt
-- transcript tail for reply text
+- list reconstructed bots, groups, providers, and activity
+- set the host-wide provider and Cursor model
+- submit a prompt, steer, and stop when the reconstructed runner interrupt is bound
 
-Send prompt is not probed during detection. If that method is missing at send
-time, the turn fails with a precise reason instead of probing unknown routes
-such as `/events`.
+OpenMaus roster fallback is read-only. A selected Grok Reconstructed engine
+does not silently send, steer, or stop on OpenMaus. Queueing, attachments,
+and `/events` stay out of scope.
 
 ## Using it
 
@@ -43,8 +42,9 @@ such as `/events`.
 3. Pick `active` or a discovered reconstructed bot.
 4. Chat from the desktop app or from a phone paired to OpenMausBot.
 
-Interrupt stops OpenMausBot waiting for the reconstructed reply. It does not
-claim an undocumented reconstructed cancel route.
+Interrupt uses `/vbot/v1` stop when that action is bound. Otherwise the
+request fails with a typed unsupported reason instead of falling back to
+OpenMaus.
 
 See [the repository note](https://github.com/milind-soni/OpenMausBot/blob/main/docs/grok-reconstructed.md)
 for the security boundary and unavailable reasons.

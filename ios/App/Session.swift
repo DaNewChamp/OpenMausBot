@@ -69,6 +69,9 @@ final class Session: ObservableObject {
     /// One lifecycle action per bot at a time. Keeping this in the session
     /// prevents repeated taps from racing the server-side lease/capacity guard.
     @Published private(set) var pendingLocalVmActions: Set<String> = []
+    /// Companion-safe projection of the selected desktop engine. Mutations
+    /// follow `primaryEngine`; OpenMaus roster fallback is read-only.
+    @Published private(set) var engineSync: VBotEngineSync?
 
     private var client: CompanionClient?
     /// The device token, kept in memory so the client can be rebuilt when the
@@ -295,6 +298,7 @@ final class Session: ObservableObject {
             token: paired.token
         )
         self.state = CompanionState()
+        self.engineSync = nil
         localVmStatuses.removeAll()
         localVmAccess = false
         pendingLocalVmActions.removeAll()
@@ -353,6 +357,7 @@ final class Session: ObservableObject {
         connection = nil
         client = nil
         token = nil
+        engineSync = nil
         rotation = CandidateRotation(hosts: [])
         state = CompanionState()
         localVmStatuses.removeAll()
@@ -577,6 +582,7 @@ final class Session: ObservableObject {
         if state.appearanceOverrides != previousAppearanceOverrides { persistAppearanceOverrides() }
         await retryPendingAppearanceOverrides(using: client)
         NotificationCoordinator.shared.setBadge(state.unreadCount)
+        await refreshEngineSync(quietly: true)
     }
 
     private var hydrationRevision = HydrationRevision()
@@ -716,10 +722,23 @@ final class Session: ObservableObject {
         mode: MessageDeliveryMode = .auto
     ) async -> MessageDeliveryReceipt? {
         guard let client else { return nil }
+        guard let sync = engineSync else {
+            actionError = "Engine status is not available yet. Try again in a moment."
+            return nil
+        }
         do {
             switch chat {
-            case let .bot(bot): return try await client.send(text: text, toBot: bot.id, mode: mode)
-            case let .room(room): return try await client.send(text: text, toRoom: room.id, mode: mode)
+            case let .bot(bot):
+                if sync.usesReconstructedMutations {
+                    return try await sendReconstructed(text, toBot: bot.id, mode: mode)
+                }
+                return try await client.send(text: text, toBot: bot.id, mode: mode)
+            case let .room(room):
+                if sync.usesReconstructedMutations {
+                    actionError = "Grok Reconstructed cannot send to a group from this app."
+                    return nil
+                }
+                return try await client.send(text: text, toRoom: room.id, mode: mode)
             }
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
@@ -890,11 +909,27 @@ final class Session: ObservableObject {
     }
 
     func interrupt(bot: Bot) async {
-        await perform { try await $0.interrupt(botId: bot.id) }
+        await interrupt(chat: .bot(bot))
     }
 
     func interrupt(chat: Chat) async {
+        guard let sync = engineSync else {
+            actionError = "Engine status is not available yet. Try again in a moment."
+            return
+        }
         await perform {
+            if sync.usesReconstructedMutations {
+                switch chat {
+                case let .bot(bot):
+                    _ = try await $0.stopReconstructedBot(botId: bot.id)
+                case .room:
+                    throw APIError.status(
+                        code: 409,
+                        message: "Grok Reconstructed cannot stop a group from this app."
+                    )
+                }
+                return
+            }
             switch chat {
             case let .bot(bot): try await $0.interrupt(botId: bot.id)
             case let .room(room): try await $0.interrupt(roomId: room.id)
@@ -1167,7 +1202,9 @@ final class Session: ObservableObject {
     func loadEngineSync() async -> VBotEngineSync? {
         guard let client else { return nil }
         do {
-            return try await client.engineSync()
+            let loaded = try await client.engineSync()
+            engineSync = loaded
+            return loaded
         } catch {
             if !Task.isCancelled { actionError = error.localizedDescription }
             return nil
@@ -1177,16 +1214,107 @@ final class Session: ObservableObject {
     func setPrimaryEngine(_ engine: VBotPrimaryEngine) async -> VBotEngineSync? {
         guard let client else { return nil }
         do {
-            return try await client.setPrimaryEngine(engine)
+            let loaded = try await client.setPrimaryEngine(engine)
+            engineSync = loaded
+            return loaded
         } catch {
             if !Task.isCancelled { actionError = error.localizedDescription }
             return nil
         }
     }
 
-    func updateModel(_ patch: BotModelPatch, for bot: Bot) async -> Bot? {
+    func refreshEngineSync(quietly: Bool = false) async {
+        guard let client else { return }
+        do {
+            engineSync = try await client.engineSync()
+        } catch {
+            if !quietly, !Task.isCancelled { actionError = error.localizedDescription }
+        }
+    }
+
+    func reconstructedRouter() async -> VBotRouterState? {
         guard let client else { return nil }
         do {
+            return try await client.reconstructedRouter()
+        } catch {
+            if !Task.isCancelled { actionError = error.localizedDescription }
+            return nil
+        }
+    }
+
+    func refreshReconstructedActivity(for bot: Bot, quietly: Bool = true) async {
+        guard let sync = engineSync,
+              sync.usesReconstructedMutations,
+              sync.reconstructedMutationsReady,
+              let client
+        else { return }
+        do {
+            let activity = try await client.reconstructedActivity(botId: bot.id)
+            guard !Task.isCancelled, var updated = state.bot(bot.id) else { return }
+            updated.busy = activity.busy
+            updated.activity = activity.activityKind == "idle" ? "idle" : "working"
+            state.apply(.bot(updated))
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+        } catch {
+            if !quietly, !Task.isCancelled { actionError = error.localizedDescription }
+        }
+    }
+
+    func setReconstructedRouter(provider: String?, modelId: String?) async -> VBotRouterState? {
+        guard let client else { return nil }
+        do {
+            let router = try await client.setReconstructedRouter(VBotRouterPatch(provider: provider, modelId: modelId))
+            if var sync = engineSync {
+                sync.router = router
+                engineSync = sync
+            }
+            return router
+        } catch {
+            if !Task.isCancelled { actionError = error.localizedDescription }
+            return nil
+        }
+    }
+
+    private func sendReconstructed(
+        _ text: String,
+        toBot botId: String,
+        mode: MessageDeliveryMode
+    ) async throws -> MessageDeliveryReceipt {
+        guard let client else { throw APIError.transport("This computer is offline.") }
+        if mode == .queue {
+            throw APIError.status(
+                code: 409,
+                message: "Grok Reconstructed does not support queued messages."
+            )
+        }
+        return try await client.sendReconstructedTurn(
+            botId: botId,
+            prompt: text,
+            steer: mode == .steer
+        )
+    }
+
+    func updateModel(_ patch: BotModelPatch, for bot: Bot) async -> Bot? {
+        guard let client else { return nil }
+        guard let sync = engineSync else {
+            actionError = "Engine status is not available yet. Try again in a moment."
+            return nil
+        }
+        do {
+            if sync.usesReconstructedMutations {
+                let router = try await client.setReconstructedRouter(
+                    VBotRouterPatch(provider: patch.instanceId, modelId: patch.model)
+                )
+                guard !Task.isCancelled else { return nil }
+                var updated = state.bot(bot.id) ?? bot
+                updated.modelSelection = ModelSelection(
+                    instanceId: router.selected.provider,
+                    model: router.selected.modelId
+                )
+                state.apply(.bot(updated))
+                return updated
+            }
             let updated = try await client.updateModel(botId: bot.id, patch: patch)
             guard !Task.isCancelled else { return nil }
             state.apply(.bot(updated))

@@ -304,6 +304,13 @@ struct ChatView: View {
             }
 #endif
         }
+        .task(id: "\(threadId)|reconstructed-activity") {
+            guard case let .bot(bot) = current else { return }
+            while !Task.isCancelled {
+                await session.refreshReconstructedActivity(for: bot)
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
         .onChange(of: current.unread) { _, unread in
             // A message can arrive while this chat is already on screen. The
             // initial task above will not run again, so clear that new unread
@@ -933,6 +940,22 @@ struct ChatView: View {
         BusySendDefault(rawValue: busySendDefault)
     }
 
+    private var composerCapabilities: EngineComposerCapabilities {
+        if let sync = session.engineSync {
+            if sync.usesReconstructedMutations {
+                guard sync.reconstructedMutationsReady,
+                      let capabilities = sync.modelCapabilities
+                else { return EngineComposerCapabilities(queueing: false, steer: false, stop: false) }
+                return EngineComposerCapabilities(capabilities)
+            }
+            return .openmaus
+        }
+        // Until the selected engine is known, hide every mutating action
+        // rather than risking an OpenMaus send while Grok Reconstructed is
+        // selected on the desktop.
+        return EngineComposerCapabilities(queueing: false, steer: false, stop: false)
+    }
+
     private var primaryAction: ComposerPrimaryAction {
         // The shared policy knows about text only. A selected image is still
         // a sendable message, so pass a non-empty sentinel without changing
@@ -943,7 +966,8 @@ struct ChatView: View {
         return ComposerActionPolicy.action(
             busy: current.busy,
             draft: policyDraft,
-            defaultMode: selectedBusySendDefault
+            defaultMode: selectedBusySendDefault,
+            capabilities: composerCapabilities
         )
     }
 
@@ -1293,15 +1317,19 @@ struct ChatView: View {
             .buttonStyle(.plain)
             .disabled(composerRequestGate.isInFlight)
             .contextMenu {
-                Button {
-                    submit(mode: .steer)
-                } label: {
-                    Label("Steer now", systemImage: "arrow.turn.up.right")
+                if composerCapabilities.steer {
+                    Button {
+                        submit(mode: .steer)
+                    } label: {
+                        Label("Steer now", systemImage: "arrow.turn.up.right")
+                    }
                 }
-                Button {
-                    submit(mode: .queue)
-                } label: {
-                    Label("Queue after current work", systemImage: "clock.arrow.circlepath")
+                if composerCapabilities.queueing {
+                    Button {
+                        submit(mode: .queue)
+                    } label: {
+                        Label("Queue after current work", systemImage: "clock.arrow.circlepath")
+                    }
                 }
             }
             .padding(.trailing, 6)

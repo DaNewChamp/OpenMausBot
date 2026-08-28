@@ -150,6 +150,15 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "GET", path: /^\/api\/instances$/ },
   { method: "GET", path: /^\/api\/vbot\/engine-sync$/ },
   { method: "PATCH", path: /^\/api\/vbot\/primary-engine$/ },
+  { method: "GET", path: /^\/api\/vbot\/bots$/ },
+  { method: "GET", path: /^\/api\/vbot\/groups$/ },
+  { method: "GET", path: /^\/api\/vbot\/providers$/ },
+  { method: "GET", path: /^\/api\/vbot\/router$/ },
+  { method: "PUT", path: /^\/api\/vbot\/router$/ },
+  { method: "GET", path: /^\/api\/vbot\/bots\/[\w.-]+\/activity$/ },
+  { method: "POST", path: /^\/api\/vbot\/bots\/[\w.-]+\/turns$/ },
+  { method: "POST", path: /^\/api\/vbot\/bots\/[\w.-]+\/steer$/ },
+  { method: "POST", path: /^\/api\/vbot\/bots\/[\w.-]+\/stop$/ },
   // Sidecar-owned, authenticated endpoint metadata. The proxy terminates it
   // locally; it never becomes a newly exposed harness route.
   { method: "GET", path: /^\/api\/companion\/endpoints$/ },

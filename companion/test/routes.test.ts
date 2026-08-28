@@ -46,6 +46,15 @@ describe("what the app may do", () => {
     ["GET", "/api/instances"],
     ["GET", "/api/vbot/engine-sync"],
     ["PATCH", "/api/vbot/primary-engine"],
+    ["GET", "/api/vbot/bots"],
+    ["GET", "/api/vbot/groups"],
+    ["GET", "/api/vbot/providers"],
+    ["GET", "/api/vbot/router"],
+    ["PUT", "/api/vbot/router"],
+    ["GET", "/api/vbot/bots/bot-alpha/activity"],
+    ["POST", "/api/vbot/bots/bot-alpha/turns"],
+    ["POST", "/api/vbot/bots/bot-alpha/steer"],
+    ["POST", "/api/vbot/bots/bot-alpha/stop"],
     ["GET", "/api/companion/endpoints"],
     ["GET", "/api/bots"],
     ["POST", "/api/bots"],
@@ -166,6 +175,8 @@ describe("what it may not", () => {
       ["POST", "/api/getAgentTranscriptTail"],
       ["GET", "/api/grok-reconstructed"],
       ["GET", "/api/vbot/gateway"],
+      ["GET", "/vbot/v1"],
+      ["POST", "/vbot/v1/bots/bot-alpha/turns"],
     ] as Array<[string, string]>) {
       const denial = ask(method, path);
       expect(denial?.status, `${method} ${path}`).toBe(404);

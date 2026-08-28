@@ -55,6 +55,9 @@ The desktop harness can:
 
 - Detect Grok Bot 0.18 Reconstructed on loopback and report why it is unavailable
 - List reconstructed bots as session/model options after `GET /health` and `POST /api/listAgents`
-- Send a prompt and read reply text through `POST /api/sendPrompt` and `POST /api/getAgentTranscriptTail`
+- Read `/vbot/v1` bots, groups, providers, router, and activity
+- Set the host-wide reconstructed provider and Cursor model
+- Submit, steer, and stop a selected reconstructed bot through authenticated `/api/vbot/*` companion routes
+- Keep OpenMaus roster fallback read-only: mutating send/steer/stop never silently change engines
 
-Stop/steer/queue, attachments, MCP, computer-use, reconstructed `/events`, and any companion or iOS reconstructed proxy are out of scope. Companion still only exposes the existing authenticated OpenMaus control plane.
+Queueing, attachments, MCP, computer-use, reconstructed `/events`, and merged transcripts remain out of scope. Companion still does not proxy reconstructed loopback URLs, tokens, or host paths.

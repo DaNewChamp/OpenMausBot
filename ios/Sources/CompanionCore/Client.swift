@@ -819,6 +819,52 @@ public struct CompanionClient: Sendable {
         )
     }
 
+    public func reconstructedBots() async throws -> [VBotSyncedBot] {
+        try await send(try makeRequest("GET", "/api/vbot/bots"), as: VBotSyncedBotList.self).bots
+    }
+
+    public func reconstructedGroups() async throws -> [VBotSyncedGroup] {
+        try await send(try makeRequest("GET", "/api/vbot/groups"), as: VBotSyncedGroupList.self).groups
+    }
+
+    public func reconstructedProviders() async throws -> VBotProviderCatalog {
+        try await send(try makeRequest("GET", "/api/vbot/providers"), as: VBotProviderCatalog.self)
+    }
+
+    public func reconstructedRouter() async throws -> VBotRouterState {
+        try await send(try makeRequest("GET", "/api/vbot/router"), as: VBotRouterState.self)
+    }
+
+    public func setReconstructedRouter(_ patch: VBotRouterPatch) async throws -> VBotRouterState {
+        try await send(
+            try makeRequest("PUT", "/api/vbot/router", encodedBody: patch),
+            as: VBotRouterState.self
+        )
+    }
+
+    public func reconstructedActivity(botId: String) async throws -> VBotActivity {
+        try await send(try makeRequest("GET", "/api/vbot/bots/\(botId)/activity"), as: VBotActivity.self)
+    }
+
+    public func sendReconstructedTurn(
+        botId: String,
+        prompt: String,
+        steer: Bool
+    ) async throws -> MessageDeliveryReceipt {
+        try await send(
+            try makeRequest(
+                "POST",
+                "/api/vbot/bots/\(botId)/\(steer ? "steer" : "turns")",
+                encodedBody: VBotPromptBody(prompt: prompt)
+            ),
+            as: MessageDeliveryReceipt.self
+        )
+    }
+
+    public func stopReconstructedBot(botId: String) async throws -> VBotStopResult {
+        try await send(try makeRequest("POST", "/api/vbot/bots/\(botId)/stop"), as: VBotStopResult.self)
+    }
+
     public func config() async throws -> ConfigStatus {
         try await send(try makeRequest("GET", "/api/config"), as: ConfigStatus.self)
     }
