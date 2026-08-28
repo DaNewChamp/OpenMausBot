@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.posival.openmaus-harness</string>
+  <key>ProgramArguments</key><array>
+    <string>/Users/Vincent/Library/Application Support/OpenMausBotHostedCompanion/runtime/start-harness.sh</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>/Users/Vincent/Library/Logs/OpenMausBotHostedCompanion/harness.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/Vincent/Library/Logs/OpenMausBotHostedCompanion/harness.err.log</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>OMB_PORT</key><string>8799</string>
+    <key>OMB_RUNTIME_ROOT</key><string>/Users/Vincent/Library/Application Support/OpenMausBotHostedCompanion/runtime</string>
+    <key>OMB_USER_DATA</key><string>/Users/Vincent/Library/Application Support/OpenMausBot</string>
+  </dict>
+</dict></plist>
