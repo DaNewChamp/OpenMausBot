@@ -65,10 +65,7 @@ final class ProfileSettingsVmParityTests: XCTestCase {
         let vm = Bot(testComputer: "vm", busy: false)
         XCTAssertTrue(ComputerPresentationState.supportsLocalVmControls(vm, status: status, accessGranted: true))
         XCTAssertFalse(ComputerPresentationState.supportsLocalVmControls(vm, status: status, accessGranted: false))
-        XCTAssertEqual(
-            ComputerPresentationState(bot: vm),
-            .unavailable(message: "No live screen is available until this agent is working.")
-        )
+        XCTAssertEqual(ComputerPresentationState(bot: vm), .starting)
     }
 
     func testWeekdayRoutineEncodingMatchesProfileCopy() {

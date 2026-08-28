@@ -5120,7 +5120,7 @@ const server = createServer(async (req, res) => {
       const existing = store.bot(m[1]);
       if (!existing) return json(res, 404, { error: "no such bot" });
       const current = existing.modelSelection;
-      if (current.instanceId === parsed.patch.instanceId && current.model === parsed.patch.model) {
+      if (current.instanceId === parsed.patch.instanceId && current.model === parsed.patch.model && parsed.patch.effort === undefined) {
         const visible = wireBot(existing);
         return json(res, 200, { bot: visible });
       }

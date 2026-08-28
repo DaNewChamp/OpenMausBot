@@ -57,7 +57,9 @@ struct ChatView: View {
     @State private var showingCamera = false
     @State private var isUploadingAttachments = false
     @State private var attachmentError: String?
-    @State private var pinPrompt: PendingPinChange?
+    /// Captured when this chat opened with unread lines, so the Grok-style
+    /// NEW divider survives `markRead`.
+    @State private var newAfterMessageId: String?
 
     /// The live bubble's scroll target. A constant because there is at most
     /// one per chat and it has no message id to borrow.
@@ -109,7 +111,7 @@ struct ChatView: View {
                     // height exact and the anchor land on the newest message.
                     // A thread holds 50 messages until you ask for more, so
                     // there is nothing here worth being lazy about.
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 10) {
                         if session.state.hasMore[threadId] == true {
                             Button("Load earlier messages") {
                                 // keep the reader where they were: after older
@@ -139,6 +141,9 @@ struct ChatView: View {
                                         .padding(.top, 14)
                                         .padding(.bottom, 6)
                                 }
+                                if showsNewDivider(before: row, in: transcript) {
+                                    NewMessagesDivider()
+                                }
                                 switch row.segment {
                                 case .message(let message):
                                     if row.isRedundantCommNarration {
@@ -154,6 +159,8 @@ struct ChatView: View {
                                             chat: current,
                                             message: message,
                                             endsRun: endsRun(at: row.startIndex, in: transcript),
+                                            showsSpeaker: message.role != .user
+                                                && startsSpeakerRun(at: row.startIndex, in: transcript),
                                             onOpenComm: { groupId in
                                                 commRoom = session.state.rooms.first { $0.id == groupId }
                                             },
@@ -220,19 +227,12 @@ struct ChatView: View {
                             )
                                 .id(Self.liveBubbleId)
                         } else if current.busy {
-                            VStack(alignment: .leading, spacing: 4) {
-                                if let speaker = streamingSpeaker {
-                                    Text(speaker.name)
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundStyle(MausPalette.color(speaker.color))
-                                }
-                                TypingIndicatorView(tintColor: MausPalette.color(streamingTintColor))
-                            }
-                            .id(Self.liveBubbleId)
-                            .accessibilityLabel(
-                                streamingSpeaker.map { "\($0.name) is working" }
-                                    ?? "\(current.name) is working"
-                            )
+                            TypingIndicatorView(tintColor: MausPalette.color(streamingTintColor))
+                                .id(Self.liveBubbleId)
+                                .accessibilityLabel(
+                                    streamingSpeaker.map { "\($0.name) is working" }
+                                        ?? "\(current.name) is working"
+                                )
                         }
                     }
                     .padding(.horizontal, 16)
@@ -256,11 +256,11 @@ struct ChatView: View {
                         SoundEffects.playReceived()
                         Haptics.impact(.light)
                     }
-                    if reduceMotion {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    } else {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
+                    scrollToLatest(proxy)
+                }
+                .onChange(of: current.busy) { _, busy in
+                    guard busy else { return }
+                    scrollToLatest(proxy)
                 }
                 // Follow the text as it arrives. Keyed on length rather than
                 // the string so this fires once per delta batch, and without
@@ -315,9 +315,10 @@ struct ChatView: View {
         .navigationDestination(item: $groupProfileRoom) { room in
             GroupProfileView(room: room)
         }
-        .pinConfirmationDialog($pinPrompt, session: session)
         .task(id: threadId) {
-            // opening a chat is what marks it read, exactly as on the desktop
+            if newAfterMessageId == nil, current.unread {
+                newAfterMessageId = messages.last(where: { $0.role == .user })?.id
+            }
             if current.unread { await session.markRead(current) }
 #if DEBUG
             // `-open-plus`: the + sheet up, for the screenshot harness
@@ -446,7 +447,7 @@ struct ChatView: View {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: "chevron.left")
                         .font(.body.weight(.semibold))
-                        .frame(width: 44, height: 44)
+                        .frame(width: 40, height: 40)
 
                     if unreadElsewhere > 0 {
                         Text(unreadElsewhere > 99 ? "99+" : "\(unreadElsewhere)")
@@ -486,14 +487,17 @@ struct ChatView: View {
                         .minimumScaleFactor(0.75)
                         .truncationMode(.tail)
                 }
-                .frame(minWidth: 0, minHeight: 44, alignment: .leading)
-                .contentShape(Rectangle())
+                .padding(.leading, 4)
+                .padding(.trailing, 12)
+                .frame(minHeight: 40)
+                .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .layoutPriority(0)
+            .glassCapsule()
+            .layoutPriority(1)
             .contextMenu {
                 Button {
-                    pinPrompt = PendingPinChange(chat: current)
+                    session.togglePinned(current)
                 } label: {
                     Label(
                         current.pinned ? "Unpin" : "Pin",
@@ -507,20 +511,37 @@ struct ChatView: View {
 
             Spacer(minLength: 8)
 
-            Button {
-                Haptics.selection()
-                setShowingPlus(true)
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(Color.primary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
+            if case .bot = current {
+                Button {
+                    Haptics.selection()
+                    showingComputer = true
+                } label: {
+                    Image(systemName: "display")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(Color.primary)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .glassCircle()
+                .fixedSize()
+                .accessibilityLabel("Watch \(current.name)'s computer")
+            } else {
+                Button {
+                    Haptics.selection()
+                    setShowingPlus(true)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Color.primary)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .glassCircle()
+                .fixedSize()
+                .accessibilityLabel("Open \(current.name) chat options")
             }
-            .buttonStyle(.plain)
-            .glassCircle()
-            .fixedSize()
-            .accessibilityLabel("Open \(current.name) chat options")
         }
         .padding(.horizontal, 12)
         .padding(.top, 4)
@@ -708,7 +729,7 @@ struct ChatView: View {
             subtitle: pinned ? "Remove from the home strip" : "Keep this chat on the home strip",
             disabled: session.pendingPinnedChats.contains(current.stableID)
         ) {
-            pinPrompt = PendingPinChange(chat: current, pinned: pinned)
+            session.togglePinned(current)
         })
         out.append(PlusAction(
             id: "share", systemImage: "doc.plaintext", title: "Share transcript",
@@ -941,6 +962,21 @@ struct ChatView: View {
         return messages[index].at - messages[index - 1].at > 30 * 60 * 1000
     }
 
+    private func startsSpeakerRun(at index: Int, in messages: [Message]) -> Bool {
+        guard index > 0 else { return true }
+        let this = messages[index], prev = messages[index - 1]
+        if this.role != prev.role { return true }
+        if this.from?.botId != prev.from?.botId { return true }
+        return prev.kind != .text || this.kind != .text
+    }
+
+    private func showsNewDivider(before row: ChatTranscriptRow, in messages: [Message]) -> Bool {
+        guard let newAfterMessageId,
+              let newIndex = messages.firstIndex(where: { $0.id == newAfterMessageId })
+        else { return false }
+        return row.startIndex == newIndex + 1
+    }
+
     /// True when the next message is from someone else (or there is none),
     /// which is where a run of bubbles gets its tail — one per run, like
     /// every messaging app, rather than one per bubble.
@@ -1045,6 +1081,26 @@ struct ChatView: View {
 
     private var hasPendingApproval: Bool {
         messages.contains { $0.card?.isPending == true }
+    }
+
+    private func scrollToLatest(_ proxy: ScrollViewProxy) {
+        let streaming = session.state.streaming[threadId] ?? ""
+        let thinking = session.state.reasoning[threadId] ?? ""
+        let target: String
+        if current.busy || !streaming.isEmpty || !thinking.isEmpty {
+            target = Self.liveBubbleId
+        } else if let last = messages.last {
+            target = last.id
+        } else {
+            return
+        }
+        Task { @MainActor in
+            if reduceMotion {
+                proxy.scrollTo(target, anchor: .bottom)
+            } else {
+                withAnimation { proxy.scrollTo(target, anchor: .bottom) }
+            }
+        }
     }
 
     private func submit(
@@ -1289,14 +1345,13 @@ struct ChatView: View {
                         }
                         .buttonStyle(.plain)
                         .padding(.trailing, 8)
-                        .padding(.bottom, 4)
                         .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
                     } else {
                         primaryActionButton
                     }
                 }
-                .frame(minHeight: 48)
-                .glassCapsule()
+                .frame(minHeight: 44)
+                .glassCapsuleBackdrop()
             }
         }
         .padding(.horizontal, 12)
@@ -1427,9 +1482,9 @@ struct ChatView: View {
             Button { submit(mode: mode) } label: {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Color(uiColor: .systemBackground))
+                    .foregroundStyle(Color.black)
                     .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color.primary))
+                    .background(Circle().fill(Color.white))
             }
             .buttonStyle(.plain)
             .disabled(composerRequestGate.isInFlight)
@@ -1548,6 +1603,7 @@ struct MessageRow: View {
     let message: Message
     /// Last bubble of a run from the same side: the one that gets the tail.
     var endsRun = true
+    var showsSpeaker = false
     var onOpenComm: (String) -> Void = { _ in }
     var onReply: (Message) -> Void = { _ in }
     @EnvironmentObject private var session: Session
@@ -1638,7 +1694,7 @@ struct MessageRow: View {
     private var content: some View {
         switch message.kind {
         case .text:
-            TextBubble(message: message, chat: chat, tailed: endsRun)
+            TextBubble(message: message, chat: chat, tailed: endsRun, showsSpeaker: showsSpeaker)
         case .options:
             CardView(chat: chat, message: message)
         case .activity:
@@ -1654,7 +1710,7 @@ struct MessageRow: View {
             if let connector = message.connector, connector.isUsable {
                 ConnectorCardView(chat: chat, message: message, connector: connector)
             } else if let text = message.text, !text.isEmpty {
-                TextBubble(message: message, chat: chat, tailed: endsRun)
+                TextBubble(message: message, chat: chat, tailed: endsRun, showsSpeaker: showsSpeaker)
             }
         case .screen:
             ScreenShot(threadId: chat.threadId, message: message)
@@ -1665,7 +1721,7 @@ struct MessageRow: View {
             // When there is nothing to show, show nothing — a placeholder
             // saying "unsupported" is a worse gap than the gap.
             if let text = message.text, !text.isEmpty {
-                TextBubble(message: message, chat: chat, tailed: endsRun)
+                TextBubble(message: message, chat: chat, tailed: endsRun, showsSpeaker: showsSpeaker)
             }
         }
     }
@@ -1776,6 +1832,7 @@ struct TextBubble: View {
     let message: Message
     let chat: Chat
     var tailed = true
+    var showsSpeaker = false
     @Environment(\.conversationTypography) private var typography
     @EnvironmentObject private var session: Session
 
@@ -1865,13 +1922,16 @@ struct TextBubble: View {
         // No face beside the bubble: the bot's face is in the header, and in
         // a room the name line says who spoke. The bubble sits at the edge.
         HStack(alignment: .bottom, spacing: 0) {
-            if mine { Spacer(minLength: 64) }
+            if mine { Spacer(minLength: 52) }
 
-            VStack(alignment: .leading, spacing: 4) {
-                if let speaker, !mine {
-                    Text(speaker.name)
-                        .font(typography.font(size: 13, relativeTo: .subheadline, weight: .semibold))
-                        .foregroundStyle(MausPalette.color(speaker.color))
+            VStack(alignment: .leading, spacing: 8) {
+                if !mine, showsSpeaker {
+                    HStack(spacing: 8) {
+                        speakerAvatar
+                        Text(speaker?.name ?? chat.name)
+                            .font(typography.font(size: 13, relativeTo: .subheadline, weight: .semibold))
+                            .foregroundStyle(Color.primary)
+                    }
                 }
                 // Bots get markdown, you do not — the same split the desktop
                 // makes. Markdown you did not intend is worse than markdown
@@ -1904,17 +1964,31 @@ struct TextBubble: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(.horizontal, customCard ? 0 : (mine ? 16 : 4))
-            .padding(.vertical, customCard ? 0 : (mine ? 12 : 2))
+            .padding(.horizontal, customCard ? 0 : 16)
+            .padding(.vertical, customCard ? 0 : 12)
             .background {
-                if mine && !customCard {
-                    SpeechBubble(tail: tailed ? .trailing : .none, cornerRadius: 20)
-                        .fill(BubbleColor.mine)
+                if !customCard {
+                    if mine {
+                        SpeechBubble(tail: tailed ? .trailing : .none, cornerRadius: 20)
+                            .fill(BubbleColor.mine)
+                    } else {
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .fill(BubbleColor.theirs)
+                    }
                 }
             }
             .padding(.bottom, mine && tailed && !customCard ? SpeechBubble.tailDrop(cornerRadius: 20) : 0)
 
-            if !mine { Spacer(minLength: 12) }
+            if !mine { Spacer(minLength: 36) }
+        }
+    }
+
+    @ViewBuilder
+    private var speakerAvatar: some View {
+        if let speaker = message.from, let bot = session.state.bot(speaker.botId) {
+            BotAvatarView(bot: bot, size: 22, state: .idle, animated: false)
+        } else {
+            ChatAvatarView(chat: chat, size: 22, state: .idle, animated: false)
         }
     }
 }
@@ -2705,11 +2779,11 @@ struct StreamingBubble: View {
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 8) {
                 if let speaker {
                     Text(speaker.name)
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(MausPalette.color(speaker.color))
+                        .foregroundStyle(Color.primary)
                 }
                 if let reasoning, !reasoning.isEmpty, text?.isEmpty != false {
                     AgentThoughtChamberView(
@@ -2731,12 +2805,34 @@ struct StreamingBubble: View {
                         .foregroundStyle(Color.primary)
                 }
             }
-            .padding(.horizontal, 4)
-            .padding(.vertical, 2)
-            Spacer(minLength: 12)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(BubbleColor.theirs)
+            }
+            Spacer(minLength: 36)
         }
         // No `.textSelection` on purpose: selecting text that is still growing
         // fights the reader, and the settled bubble a frame later is
         // selectable anyway.
+    }
+}
+
+private struct NewMessagesDivider: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(VBotSurface.unread)
+                .frame(height: 1)
+            Text("NEW")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(VBotSurface.unread)
+            Rectangle()
+                .fill(VBotSurface.unread)
+                .frame(height: 1)
+        }
+        .padding(.vertical, 6)
+        .accessibilityLabel("New messages")
     }
 }

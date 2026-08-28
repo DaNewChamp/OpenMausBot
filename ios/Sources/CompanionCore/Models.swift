@@ -238,10 +238,12 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
 public struct ModelSelection: Codable, Hashable, Sendable {
     public var instanceId: String
     public var model: String
+    public var effort: String?
 
-    public init(instanceId: String, model: String) {
+    public init(instanceId: String, model: String, effort: String? = nil) {
         self.instanceId = instanceId
         self.model = model
+        self.effort = effort
     }
 }
 
@@ -267,6 +269,12 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
     public var avatarUrl: String?
     /// `mascot` ignores `avatarUrl`; the other values describe the image mask.
     public var avatarCrop: AvatarCrop?
+    /// An omitted crop with a stored photo still shows the image. Only an
+    /// explicit `mascot` value hides it, matching "Use mascot" on profile.
+    public var displayedAvatarCrop: AvatarCrop {
+        if let avatarCrop { return avatarCrop }
+        return avatarUrl == nil ? .mascot : .circle
+    }
     public var unread: Bool
     public var modelSelection: ModelSelection
     public var createdAt: Double
@@ -593,12 +601,19 @@ public struct ModelCatalog: Codable, Hashable, Sendable {
     public var options: [ModelOption]
 }
 
+public struct InstanceCapabilities: Codable, Hashable, Sendable {
+    public var computerMcp: Bool?
+    public var localComputerMcp: Bool?
+    public var effortLevels: [String]?
+}
+
 public struct Instance: Codable, Hashable, Identifiable, Sendable {
     public var instanceId: String
     public var driverKind: String
     public var displayName: String?
     public var snapshot: ProviderSnapshot
     public var models: ModelCatalog
+    public var capabilities: InstanceCapabilities? = nil
 
     public var id: String { instanceId }
 
@@ -606,6 +621,17 @@ public struct Instance: Codable, Hashable, Identifiable, Sendable {
     public var pickerTitle: String {
         let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return name.isEmpty ? driverKind : name
+    }
+
+    /// Matches the desktop Computer panel: Local VM needs computer MCP on
+    /// an available non-BoxAgent engine. A missing capabilities object is treated
+    /// as unknown rather than denied, so an older sidecar still lets the
+    /// phone send the destination patch.
+    public var supportsLocalVmDestination: Bool {
+        guard snapshot.state == "available" else { return false }
+        if driverKind == "boxAgent" { return false }
+        guard let capabilities else { return true }
+        return capabilities.computerMcp == true
     }
 
     public func modelLabel(for modelId: String) -> String {
@@ -929,10 +955,59 @@ public struct ConfigStatus: Codable, Sendable {
 public struct BotModelPatch: Encodable, Sendable {
     public var instanceId: String
     public var model: String
+    public var effort: EffortUpdate
 
-    public init(instanceId: String, model: String) {
+    public enum EffortUpdate: Equatable, Sendable {
+        case omitted
+        case clear
+        case set(String)
+    }
+
+    public init(instanceId: String, model: String, effort: EffortUpdate = .omitted) {
         self.instanceId = instanceId
         self.model = model
+        self.effort = effort
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(instanceId, forKey: .instanceId)
+        try container.encode(model, forKey: .model)
+        switch effort {
+        case .omitted:
+            break
+        case .clear:
+            try container.encodeNil(forKey: .effort)
+        case let .set(level):
+            try container.encode(level, forKey: .effort)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case instanceId, model, effort
+    }
+}
+
+public struct BotComputerDestinationPatch: Encodable, Sendable {
+    public var computer: String
+    public var acknowledgeLocalAuto: Bool?
+    public var cloudBackend: String?
+
+    public init(computer: String, acknowledgeLocalAuto: Bool? = nil, cloudBackend: String? = nil) {
+        self.computer = computer
+        self.acknowledgeLocalAuto = acknowledgeLocalAuto
+        self.cloudBackend = cloudBackend
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(computer, forKey: .computer)
+        try container.encodeIfPresent(acknowledgeLocalAuto, forKey: .acknowledgeLocalAuto)
+        try container.encodeIfPresent(cloudBackend, forKey: .cloudBackend)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case computer, acknowledgeLocalAuto, cloudBackend
     }
 }
 
@@ -1405,6 +1480,22 @@ public struct ScreenFrame: Hashable, Sendable {
     /// Decoded pixels, or nil if the base64 was not what it claimed to be.
     /// Returning nil rather than throwing keeps the caller a view.
     public var data: Data? { Data(base64Encoded: png) }
+
+    /// Harness Local VM captures arrive as a data URL. SSE frames are raw
+    /// base64. Both become a `ScreenFrame` the Computer panel can draw.
+    public static func fromCapture(_ image: String, mime: String = "image/png") -> ScreenFrame? {
+        let trimmed = image.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("data:"),
+           let comma = trimmed.firstIndex(of: ",") {
+            let meta = trimmed[trimmed.index(trimmed.startIndex, offsetBy: 5)..<comma]
+            let payload = String(trimmed[trimmed.index(after: comma)...])
+            let parsedMime = meta.split(separator: ";").first.map(String.init) ?? mime
+            guard !payload.isEmpty else { return nil }
+            return ScreenFrame(png: payload, mime: parsedMime)
+        }
+        return ScreenFrame(png: trimmed, mime: mime)
+    }
 }
 
 /// The phone-safe projection returned by a paired companion for a bot's
@@ -1518,6 +1609,16 @@ public struct LocalVmStatus: Codable, Equatable, Sendable {
         canStop = try container.decodeIfPresent(Bool.self, forKey: .canStop) ?? false
         canRecreate = try container.decodeIfPresent(Bool.self, forKey: .canRecreate) ?? false
         problem = try container.decodeIfPresent(String.self, forKey: .problem)
+    }
+}
+
+/// Watch-only Local VM desktop capture. The harness returns a data URL;
+/// `ScreenFrame.fromCapture` turns it into pixels the Computer panel can draw.
+public struct LocalVmScreenshot: Codable, Equatable, Sendable {
+    public var image: String
+
+    public init(image: String) {
+        self.image = image
     }
 }
 

@@ -197,6 +197,21 @@ final class ComputerPresentationStateTests: XCTestCase {
         )
     }
 
+    func testIdleLocalVmShowsCachedFrame() {
+        let frame = ScreenFrame(png: "c2NyZWVu", mime: "image/png")
+        XCTAssertEqual(
+            ComputerPresentationState(bot: bot(computer: "vm", busy: false), frame: frame),
+            .watching
+        )
+    }
+
+    func testIdleLocalVmWithoutFrameStarts() {
+        XCTAssertEqual(
+            ComputerPresentationState(bot: bot(computer: "vm", busy: false)),
+            .starting
+        )
+    }
+
     func testLoadFailureWinsOverStaleFrame() {
         let frame = ScreenFrame(png: "c2NyZWVu", mime: "image/png")
         XCTAssertEqual(

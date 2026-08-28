@@ -74,6 +74,46 @@ final class ModelClientTests: XCTestCase {
         XCTAssertEqual(body["model"] as? String, "claude-sonnet-5")
     }
 
+    func testModelPatchEncodesEffortAndCanClearIt() throws {
+        let set = try JSONEncoder().encode(
+            BotModelPatch(instanceId: "codex", model: "gpt-5.6-sol", effort: .set("high"))
+        )
+        let setBody = try XCTUnwrap(JSONSerialization.jsonObject(with: set) as? [String: Any])
+        XCTAssertEqual(setBody.keys.sorted(), ["effort", "instanceId", "model"])
+        XCTAssertEqual(setBody["effort"] as? String, "high")
+
+        let clear = try JSONEncoder().encode(
+            BotModelPatch(instanceId: "codex", model: "gpt-5.6-sol", effort: .clear)
+        )
+        let clearBody = try XCTUnwrap(JSONSerialization.jsonObject(with: clear) as? [String: Any])
+        XCTAssertEqual(clearBody.keys.sorted(), ["effort", "instanceId", "model"])
+        XCTAssertTrue(clearBody["effort"] is NSNull)
+    }
+
+    func testUpdateComputerDestinationUsesThePairedSafeRoute() async throws {
+        ModelRequestStub.responseBody = Self.botResponse
+
+        let updated = try await client.updateComputerDestination(
+            botId: "model-bot",
+            patch: BotComputerDestinationPatch(computer: "vm")
+        )
+        XCTAssertEqual(updated.id, "model-bot")
+        XCTAssertEqual(ModelRequestStub.capturedRequest?.httpMethod, "PATCH")
+        XCTAssertEqual(ModelRequestStub.capturedRequest?.url?.path, "/api/bots/model-bot/computer-destination")
+        let body = try JSONSerialization.jsonObject(with: XCTUnwrap(ModelRequestStub.capturedBody)) as? [String: Any]
+        XCTAssertEqual(body?["computer"] as? String, "vm")
+        XCTAssertNil(body?["autoApprove"])
+        XCTAssertNil(body?["acknowledgeLocalAuto"])
+    }
+
+    func testComputerDestinationPatchOmitsUnusedFields() throws {
+        let data = try JSONEncoder().encode(BotComputerDestinationPatch(computer: "local", acknowledgeLocalAuto: true))
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(body.keys.sorted(), ["acknowledgeLocalAuto", "computer"])
+        XCTAssertEqual(body["computer"] as? String, "local")
+        XCTAssertEqual(body["acknowledgeLocalAuto"] as? Bool, true)
+    }
+
     func testUpdateModelUsesThePairedSafeRoute() async throws {
         ModelRequestStub.responseBody = Self.botResponse
 
@@ -90,6 +130,7 @@ final class ModelClientTests: XCTestCase {
         XCTAssertEqual(body.keys.sorted(), ["instanceId", "model"])
         XCTAssertEqual(updated.modelSelection.instanceId, "claude")
         XCTAssertEqual(updated.modelSelection.model, "claude-haiku-4-5")
+        XCTAssertEqual(updated.modelSelection.effort, "high")
     }
 
     func testLoadsAdvertisedInstances() async throws {
@@ -97,7 +138,8 @@ final class ModelClientTests: XCTestCase {
         {"instances":[{
           "instanceId":"claude","driverKind":"claudeAgent","displayName":"Fixture Claude",
           "snapshot":{"state":"available"},
-          "models":{"default":"claude-sonnet-5","options":[{"id":"claude-sonnet-5","label":"Claude Sonnet 5"}]}
+          "models":{"default":"claude-sonnet-5","options":[{"id":"claude-sonnet-5","label":"Claude Sonnet 5"}]},
+          "capabilities":{"computerMcp":true,"effortLevels":["low","medium","high","xhigh","max"]}
         }]}
         """.utf8)
 
@@ -108,6 +150,20 @@ final class ModelClientTests: XCTestCase {
         XCTAssertEqual(instances.map(\.instanceId), ["claude"])
         XCTAssertEqual(instances.first?.pickerTitle, "Fixture Claude")
         XCTAssertEqual(instances.first?.modelLabel(for: "claude-sonnet-5"), "Claude Sonnet 5")
+        XCTAssertTrue(instances.first?.supportsLocalVmDestination ?? false)
+        XCTAssertEqual(instances.first?.capabilities?.effortLevels, ["low", "medium", "high", "xhigh", "max"])
+    }
+
+    func testGrokReconstructedDoesNotSupportLocalVmDestination() {
+        let grok = Instance(
+            instanceId: "grokReconstructed",
+            driverKind: "grokReconstructed",
+            displayName: "Grok Reconstructed",
+            snapshot: ProviderSnapshot(state: "available", reason: nil, authenticated: true, version: nil),
+            models: ModelCatalog(default: "active", options: [ModelOption(id: "active", label: "Active")]),
+            capabilities: InstanceCapabilities(computerMcp: false, localComputerMcp: false)
+        )
+        XCTAssertFalse(grok.supportsLocalVmDestination)
     }
 
     func testLocalVmStatusUsesTheSafePerBotRoute() async throws {
@@ -140,6 +196,19 @@ final class ModelClientTests: XCTestCase {
         XCTAssertEqual(ModelRequestStub.capturedRequest?.url?.path, "/api/bots/model-bot/local-computer/stop")
         let body = try XCTUnwrap(ModelRequestStub.capturedBody)
         XCTAssertEqual(String(data: body, encoding: .utf8), "{}")
+    }
+
+    func testLocalVmScreenshotUsesTheEmptyCaptureRoute() async throws {
+        ModelRequestStub.responseBody = Data(#"{"image":"data:image/png;base64,aGVsbG8="}"#.utf8)
+
+        let capture = try await client.localVmScreenshot(botId: "model-bot")
+
+        XCTAssertEqual(ModelRequestStub.capturedRequest?.httpMethod, "POST")
+        XCTAssertEqual(ModelRequestStub.capturedRequest?.url?.path, "/api/bots/model-bot/local-computer/screenshot")
+        let body = try XCTUnwrap(ModelRequestStub.capturedBody)
+        XCTAssertEqual(String(data: body, encoding: .utf8), "{}")
+        XCTAssertEqual(capture.image, "data:image/png;base64,aGVsbG8=")
+        XCTAssertEqual(ScreenFrame.fromCapture(capture.image)?.png, "aGVsbG8=")
     }
 
     func testSelectableCatalogDropsEmptyAdvertisementsAndAlignsModels() throws {
@@ -194,7 +263,7 @@ final class ModelClientTests: XCTestCase {
     {"bot":{
       "id":"model-bot","threadId":"model-thread","name":"Scout","title":"Researcher",
       "description":"Finds evidence.","notifications":true,"color":"blue",
-      "unread":false,"modelSelection":{"instanceId":"claude","model":"claude-haiku-4-5"},
+      "unread":false,"modelSelection":{"instanceId":"claude","model":"claude-haiku-4-5","effort":"high"},
       "createdAt":1786742441013
     }}
     """.utf8)

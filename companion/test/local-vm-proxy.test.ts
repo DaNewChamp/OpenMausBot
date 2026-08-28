@@ -72,6 +72,7 @@ describe("Local VM companion boundary", () => {
     seen = [];
     expect((await device("GET", "/api/bots/bot-1/local-computer")).status).toBe(403);
     expect((await device("POST", "/api/bots/bot-1/local-computer/run", {})).status).toBe(403);
+    expect((await device("POST", "/api/bots/bot-1/local-computer/screenshot", {})).status).toBe(403);
     expect(seen).toEqual([]);
   });
 
@@ -91,6 +92,11 @@ describe("Local VM companion boundary", () => {
     expect(seen).toHaveLength(1);
     expect((await device("POST", "/api/bots/bot-1/local-computer/run", {})).status).toBe(200);
     expect(seen).toHaveLength(2);
+    expect((await device("POST", "/api/bots/bot-1/local-computer/screenshot", { image: true })).status).toBe(400);
+    expect(seen).toHaveLength(2);
+    expect((await device("POST", "/api/bots/bot-1/local-computer/screenshot", {})).status).toBe(200);
+    expect(seen).toHaveLength(3);
+    expect(seen[2]).toMatchObject({ path: "/api/bots/bot-1/local-computer/screenshot", marker: "1" });
     expect((await device("POST", "/api/bots/bot-1/local-computer/remove", {})).status).toBe(403);
     localVmAccess = false;
   });

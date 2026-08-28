@@ -67,6 +67,141 @@ export function isLocalVmAction(method: string, path: string): boolean {
   return method === LOCAL_VM_ACTION_ROUTE.method && LOCAL_VM_ACTION_ROUTE.path.test(path);
 }
 
+/** Read-only Local VM desktop capture. Same per-device Local VM gate as
+ * status. Empty body; no exec, no input. */
+export const LOCAL_VM_SCREENSHOT_ROUTE = {
+  method: "POST",
+  path: /^\/api\/bots\/[\w-]+\/local-computer\/screenshot$/,
+} as const;
+
+export function isLocalVmScreenshot(method: string, path: string): boolean {
+  return method === LOCAL_VM_SCREENSHOT_ROUTE.method && LOCAL_VM_SCREENSHOT_ROUTE.path.test(path);
+}
+
+export function isLocalVmPhoneSurface(method: string, path: string): boolean {
+  return isLocalVmStatus(method, path) || isLocalVmAction(method, path) || isLocalVmScreenshot(method, path);
+}
+
+/** Paired-safe computer destination. The broad bot PATCH stays closed; this
+ * route accepts only where the bot's computer lives. The sidecar rewrites it
+ * onto the harness's existing bot PATCH so official desktops keep working. */
+export const COMPUTER_DESTINATION_ROUTE = {
+  method: "PATCH",
+  path: /^\/api\/bots\/[\w-]+\/computer-destination$/,
+} as const;
+
+export function isComputerDestination(method: string, path: string): boolean {
+  return method === COMPUTER_DESTINATION_ROUTE.method && COMPUTER_DESTINATION_ROUTE.path.test(path);
+}
+
+const COMPUTER_DESTINATIONS = new Set(["cloud", "vm", "local", "off"]);
+const CLOUD_BACKENDS = new Set(["box", "vps"]);
+
+export function computerDestinationBotId(path: string): string | null {
+  const match = /^\/api\/bots\/([\w-]+)\/computer-destination$/.exec(path);
+  return match?.[1] ?? null;
+}
+
+/** Paired-safe model switch. Instance + model stay catalog-checked on the
+ * harness `/model` route. An explicit `effort` key is rewritten onto the
+ * existing bot PATCH as `modelSelection`, because the live desktop harness
+ * still rejects effort on `/model`. Extra keys stay refused. */
+export const BOT_MODEL_ROUTE = {
+  method: "PATCH",
+  path: /^\/api\/bots\/[\w-]+\/model$/,
+} as const;
+
+const EFFORT_LEVELS = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
+
+export function isBotModel(method: string, path: string): boolean {
+  return method === BOT_MODEL_ROUTE.method && BOT_MODEL_ROUTE.path.test(path);
+}
+
+export function botModelBotId(path: string): string | null {
+  const match = /^\/api\/bots\/([\w-]+)\/model$/.exec(path);
+  return match?.[1] ?? null;
+}
+
+export function validateBotModelBody(
+  method: string,
+  path: string,
+  body: unknown,
+): { denial: Denial } | { patch: { instanceId: string; model: string; effort?: string | null }; rewrite: boolean } {
+  if (!isBotModel(method, path)) return { patch: { instanceId: "", model: "" }, rewrite: false };
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { denial: { status: 400, error: "model requires a JSON object" } };
+  }
+  const values = body as Record<string, unknown>;
+  const keys = Object.keys(values);
+  const allowed = new Set(["instanceId", "model", "effort"]);
+  const extra = keys.find((key) => !allowed.has(key));
+  if (extra) {
+    return { denial: { status: 400, error: `unsupported model field: ${extra}` } };
+  }
+  const instanceId = values.instanceId;
+  const model = values.model;
+  if (typeof instanceId !== "string" || instanceId.length < 1 || instanceId.length > 200) {
+    return { denial: { status: 400, error: "instanceId must be a string" } };
+  }
+  if (typeof model !== "string" || model.length < 1 || model.length > 500) {
+    return { denial: { status: 400, error: "model must be a string" } };
+  }
+  const patch: { instanceId: string; model: string; effort?: string | null } = { instanceId, model };
+  if (!Object.prototype.hasOwnProperty.call(values, "effort")) {
+    return { patch, rewrite: false };
+  }
+  const effort = values.effort;
+  if (effort === null) {
+    patch.effort = null;
+    return { patch, rewrite: true };
+  }
+  if (typeof effort !== "string" || !EFFORT_LEVELS.has(effort)) {
+    return { denial: { status: 400, error: "effort must be a recognized reasoning level" } };
+  }
+  patch.effort = effort;
+  return { patch, rewrite: true };
+}
+
+/** Strip the destination patch down to the fields the harness already
+ * accepts on PATCH /api/bots/:id. Extra keys are refused here so a paired
+ * token cannot smuggle execution-policy or credential fields through the
+ * rewrite. */
+export function validateComputerDestinationBody(
+  method: string,
+  path: string,
+  body: unknown,
+): { denial: Denial } | { patch: Record<string, unknown> } {
+  if (!isComputerDestination(method, path)) return { patch: {} };
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { denial: { status: 400, error: "computer destination requires a JSON object" } };
+  }
+  const values = body as Record<string, unknown>;
+  const keys = Object.keys(values);
+  const allowed = new Set(["computer", "acknowledgeLocalAuto", "cloudBackend"]);
+  const extra = keys.find((key) => !allowed.has(key));
+  if (extra) {
+    return { denial: { status: 400, error: `unsupported computer destination field: ${extra}` } };
+  }
+  const computer = values.computer;
+  if (typeof computer !== "string" || !COMPUTER_DESTINATIONS.has(computer)) {
+    return { denial: { status: 400, error: "computer must be cloud, vm, local, or off" } };
+  }
+  const patch: Record<string, unknown> = { computer };
+  if (values.acknowledgeLocalAuto !== undefined) {
+    if (typeof values.acknowledgeLocalAuto !== "boolean") {
+      return { denial: { status: 400, error: "acknowledgeLocalAuto must be true or false" } };
+    }
+    if (computer === "local") patch.acknowledgeLocalAuto = values.acknowledgeLocalAuto;
+  }
+  if (values.cloudBackend !== undefined) {
+    if (typeof values.cloudBackend !== "string" || !CLOUD_BACKENDS.has(values.cloudBackend)) {
+      return { denial: { status: 400, error: "cloudBackend must be box or vps" } };
+    }
+    if (computer === "cloud") patch.cloudBackend = values.cloudBackend;
+  }
+  return { patch };
+}
+
 /** Local VM mutations have no caller-controlled fields. Requiring exactly
  * `{}` at the sidecar boundary prevents a future harness field from turning
  * this phone-safe route into arbitrary lifecycle or command execution. */
@@ -75,7 +210,7 @@ export function validateLocalVmActionBody(
   path: string,
   body: unknown,
 ): Denial | null {
-  if (!isLocalVmAction(method, path)) return null;
+  if (!isLocalVmAction(method, path) && !isLocalVmScreenshot(method, path)) return null;
   if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 0) {
     return { status: 400, error: "Local VM actions accept an empty JSON object only" };
   }
@@ -185,15 +320,18 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // Paired-safe model switch. Instance and model are validated against the
   // advertised catalog on the harness; the broad bot PATCH stays closed.
   { method: "PATCH", path: /^\/api\/bots\/[\w-]+\/model$/ },
+  COMPUTER_DESTINATION_ROUTE,
   { method: "POST", path: /^\/api\/bots\/[\w-]+\/avatar\/generate$/ },
   // Full cloud desktop access. The route is narrow and the proxy applies a
   // second, per-device capability check before it reaches the harness.
   CLOUD_DESKTOP_JOIN_ROUTE,
 
-  // Local VM status and narrowly guarded per-bot lifecycle actions. Shared
-  // image/runtime setup, screenshots and arbitrary exec remain desktop-only.
+  // Local VM status, a read-only desktop capture, and narrowly guarded
+  // per-bot lifecycle. Shared image/runtime setup and arbitrary exec stay
+  // desktop-only.
   LOCAL_VM_STATUS_ROUTE,
   LOCAL_VM_ACTION_ROUTE,
+  LOCAL_VM_SCREENSHOT_ROUTE,
 
   // rooms — making one, and talking in one
   { method: "POST", path: /^\/api\/groups$/ },

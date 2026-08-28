@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   denyReason,
+  validateBotModelBody,
+  validateComputerDestinationBody,
   validateConnectorCardBody,
   validateConnectorCardThreadId,
   validateLocalVmActionBody,
@@ -71,6 +73,7 @@ describe("what the app may do", () => {
     ["PATCH", "/api/bots/bot_123/pin"],
     ["PATCH", "/api/bots/bot_123/profile"],
     ["PATCH", "/api/bots/bot_123/model"],
+    ["PATCH", "/api/bots/bot_123/computer-destination"],
     ["POST", "/api/bots/bot_123/avatar/generate"],
     ["POST", "/api/bots/bot_123/computer/join"],
     ["GET", "/api/bots/bot_123/local-computer"],
@@ -197,15 +200,16 @@ describe("what it may not", () => {
     expect(allowed("POST", "/api/bots/bot_123/computer/screenshot")).toBe(false);
   });
 
-  it("opens only per-bot Local VM status and guarded actions", () => {
+  it("opens only per-bot Local VM status, capture, and guarded actions", () => {
     expect(allowed("GET", "/api/bots/bot_123/local-computer")).toBe(true);
     expect(allowed("POST", "/api/bots/bot_123/local-computer/run")).toBe(true);
     expect(allowed("POST", "/api/bots/bot_123/local-computer/stop")).toBe(true);
     expect(allowed("POST", "/api/bots/bot_123/local-computer/recreate")).toBe(true);
+    expect(allowed("POST", "/api/bots/bot_123/local-computer/screenshot")).toBe(true);
     expect(allowed("POST", "/api/local-computer/run")).toBe(false);
+    expect(allowed("POST", "/api/local-computer/screenshot")).toBe(false);
     expect(allowed("POST", "/api/bots/bot_123/local-computer/start")).toBe(false);
     expect(allowed("POST", "/api/bots/bot_123/local-computer/remove")).toBe(false);
-    expect(allowed("POST", "/api/bots/bot_123/local-computer/screenshot")).toBe(false);
     expect(allowed("POST", "/api/bots/bot_123/local-computer/run/extra")).toBe(false);
   });
 
@@ -215,6 +219,73 @@ describe("what it may not", () => {
     expect(validateLocalVmActionBody("POST", path, { command: "rm -rf /" })).toMatchObject({ status: 400 });
     expect(validateLocalVmActionBody("POST", path, [])).toMatchObject({ status: 400 });
     expect(validateLocalVmActionBody("GET", path, { ignored: true })).toBeNull();
+    const screenshot = "/api/bots/bot_123/local-computer/screenshot";
+    expect(validateLocalVmActionBody("POST", screenshot, {})).toBeNull();
+    expect(validateLocalVmActionBody("POST", screenshot, { image: true })).toMatchObject({ status: 400 });
+  });
+
+  it("accepts only destination fields on the computer-destination patch", () => {
+    const path = "/api/bots/bot_123/computer-destination";
+    expect(validateComputerDestinationBody("PATCH", path, { computer: "vm" })).toEqual({
+      patch: { computer: "vm" },
+    });
+    expect(validateComputerDestinationBody("PATCH", path, {
+      computer: "local",
+      acknowledgeLocalAuto: true,
+    })).toEqual({
+      patch: { computer: "local", acknowledgeLocalAuto: true },
+    });
+    expect(validateComputerDestinationBody("PATCH", path, {
+      computer: "vm",
+      acknowledgeLocalAuto: true,
+    })).toEqual({
+      patch: { computer: "vm" },
+    });
+    expect(validateComputerDestinationBody("PATCH", path, {
+      computer: "cloud",
+      cloudBackend: "vps",
+    })).toEqual({
+      patch: { computer: "cloud", cloudBackend: "vps" },
+    });
+    expect(validateComputerDestinationBody("PATCH", path, { computer: "vm", autoApprove: true })).toMatchObject({
+      denial: { status: 400 },
+    });
+    expect(validateComputerDestinationBody("PATCH", path, { computer: "laptop" }).denial?.status).toBe(400);
+    expect(validateComputerDestinationBody("GET", path, { computer: "vm" })).toEqual({ patch: {} });
+  });
+
+  it("accepts instance, model, and optional effort on the paired model patch", () => {
+    const path = "/api/bots/bot_123/model";
+    expect(validateBotModelBody("PATCH", path, { instanceId: "codex", model: "gpt-5.6-sol" })).toEqual({
+      patch: { instanceId: "codex", model: "gpt-5.6-sol" },
+      rewrite: false,
+    });
+    expect(validateBotModelBody("PATCH", path, {
+      instanceId: "codex",
+      model: "gpt-5.6-sol",
+      effort: "high",
+    })).toEqual({
+      patch: { instanceId: "codex", model: "gpt-5.6-sol", effort: "high" },
+      rewrite: true,
+    });
+    expect(validateBotModelBody("PATCH", path, {
+      instanceId: "codex",
+      model: "gpt-5.6-sol",
+      effort: null,
+    })).toEqual({
+      patch: { instanceId: "codex", model: "gpt-5.6-sol", effort: null },
+      rewrite: true,
+    });
+    expect(validateBotModelBody("PATCH", path, {
+      instanceId: "codex",
+      model: "gpt-5.6-sol",
+      autoApprove: true,
+    })).toMatchObject({ denial: { status: 400 } });
+    expect(validateBotModelBody("PATCH", path, {
+      instanceId: "codex",
+      model: "gpt-5.6-sol",
+      effort: "turbo",
+    }).denial?.status).toBe(400);
   });
 
   // The method is part of the allowance, not decoration: reading the fleet
@@ -226,6 +297,9 @@ describe("what it may not", () => {
     expect(allowed("GET", "/api/groups/room-1")).toBe(false);
     expect(allowed("PATCH", "/api/bots/bot_123")).toBe(false);
     expect(allowed("PATCH", "/api/bots/bot_123/model")).toBe(true);
+    expect(allowed("PATCH", "/api/bots/bot_123/computer-destination")).toBe(true);
+    expect(allowed("PUT", "/api/bots/bot_123/computer-destination")).toBe(false);
+    expect(allowed("PATCH", "/api/bots/bot_123/computer-destination/extra")).toBe(false);
     expect(allowed("PUT", "/api/bots/bot_123/model")).toBe(false);
     expect(allowed("PATCH", "/api/bots/bot_123/model/extra")).toBe(false);
     expect(allowed("PATCH", "/api/bots/bot_123/profile/execution-policy")).toBe(false);

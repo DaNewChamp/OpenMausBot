@@ -1,6 +1,4 @@
-V Bot build 20: home list matches Grok Bot’s two-line previews and pin chrome.
+V Bot build 34: idle Local VM desktop on Computer.
 
-• Pinned unread sits beside the name, names can wrap two lines
-• Chat list previews are two lines and drop Markdown ## / quotes
-• Group chats stack member faces on home and in the header
-• Chat overflow (…) is the same on bots and groups — pin and Watch computer live there
+• Computer shows the Local VM desktop while this screen is open, not only while the agent is working
+• Try again captures a still instead of waiting for a live turn

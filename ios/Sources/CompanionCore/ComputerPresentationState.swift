@@ -25,11 +25,14 @@ public enum ComputerPresentationState: Equatable, Sendable {
         } else if !Self.hasKnownComputer(bot) {
             self = .unavailable(message: Self.unavailableMessage(for: bot))
         } else if bot.busy != true {
-            // Frames are emitted only while a bot is working. A frame held
-            // after the turn ends is a cache, not a live desktop.
-            self = Self.supportsCloudViewer(bot)
-                ? .cloudViewerAvailable
-                : .unavailable(message: "No live screen is available until this agent is working.")
+            let computer = bot.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if computer == "vm" {
+                self = frame != nil ? .watching : .starting
+            } else if Self.supportsCloudViewer(bot) {
+                self = .cloudViewerAvailable
+            } else {
+                self = .unavailable(message: "No live screen is available until this agent is working.")
+            }
         } else if frame != nil {
             self = .watching
         } else if Self.supportsCloudViewer(bot) {

@@ -21,7 +21,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const OUT_DIR = join(ROOT, "ios", "App", "Assets.xcassets", "AppIcon.appiconset");
+const OUT_DIR = join(ROOT, "ios", "App", "Assets.xcassets", "VBotMark.appiconset");
 const SIZE = 1024;
 const SS = 4; // supersampling; 4 is plenty at this size
 
@@ -309,4 +309,4 @@ writeFileSync(
     2,
   ) + "\n",
 );
-console.log(`wrote ${SIZE}×${SIZE} icon to ios/App/Assets.xcassets/AppIcon.appiconset/`);
+console.log(`wrote ${SIZE}×${SIZE} icon to ios/App/Assets.xcassets/VBotMark.appiconset/`);

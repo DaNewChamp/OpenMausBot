@@ -116,6 +116,38 @@ final class ProfileClientTests: XCTestCase {
         XCTAssertEqual(body["avatarCrop"] as? String, "rounded")
     }
 
+    func testProfileClientKeepsAvatarCropPendingWhenServerEchoesMascot() async throws {
+        ProfileRequestStub.responseBody = Data(
+            Self.botResponseString
+                .replacingOccurrences(of: #""avatarCrop":"rounded""#, with: #""avatarCrop":"mascot""#)
+                .utf8
+        )
+
+        let result = try await client.updateProfileWithCompatibility(
+            botId: "avatar-bot",
+            patch: BotProfilePatch(
+                avatarUrl: .set("/api/attachments/123e4567-e89b-12d3-a456-426614174000.webp"),
+                avatarCrop: .circle
+            )
+        )
+
+        guard case let .updatedWithPendingAppearance(updated, fields) = result else {
+            return XCTFail("an omitted crop must stay pending so the home roster can show the photo")
+        }
+        XCTAssertEqual(updated.avatarCrop, .mascot)
+        XCTAssertEqual(fields, ["avatarCrop"])
+    }
+
+    func testCancelledTransportIsRecognizedAsCancellation() {
+        XCTAssertTrue(APIError.transport("cancelled").isCancellation)
+        XCTAssertTrue(APIError.transport("canceled").isCancellation)
+        XCTAssertTrue(URLError(.cancelled).isCancellation)
+        XCTAssertTrue(CancellationError().isCancellation)
+        XCTAssertFalse(APIError.transport("This computer is offline.").isCancellation)
+        XCTAssertFalse(APIError.status(code: 409, message: "cancelled").isCancellation)
+        XCTAssertTrue(RequestCancellation.matches("cancelled"))
+    }
+
     func testProfileClientEncodesCharacterColorAndMascotShape() async throws {
         ProfileRequestStub.responseBody = Self.botResponse
 

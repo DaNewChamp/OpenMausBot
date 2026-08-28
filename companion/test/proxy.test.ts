@@ -401,6 +401,25 @@ describe("the sidecar in front of an unmodified harness", () => {
     expect((await device("PATCH", `/api/groups/${room.id}`, { body: { pinned: false } })).status).toBe(404);
   });
 
+  it("rewrites computer destination onto the harness bot PATCH", async () => {
+    const { body } = await device("GET", "/api/bots");
+    const bot = body.bots[0];
+
+    const switched = await device("PATCH", `/api/bots/${bot.id}/computer-destination`, {
+      body: { computer: "vm" },
+    });
+    expect(switched.status).toBe(200);
+    expect(switched.body.bot).toMatchObject({ id: bot.id, computer: "vm" });
+
+    const rejected = await device("PATCH", `/api/bots/${bot.id}/computer-destination`, {
+      body: { computer: "vm", autoApprove: true },
+    });
+    expect(rejected.status).toBe(400);
+
+    expect((await device("PATCH", `/api/bots/${bot.id}`, { body: { computer: "off" } })).status).toBe(404);
+    expect((await device("GET", `/api/bots/${bot.id}/computer`)).status).toBe(404);
+  });
+
   it("only remembers an always-allow key carried by a pending card", async () => {
     const { body } = await device("GET", "/api/bots");
     const bot = body.bots[0];

@@ -23,7 +23,6 @@ struct ChatListView: View {
     @State private var showingNewGroup = false
     @State private var showingAccount = false
     @State private var groupProfile: Room?
-    @State private var pinPrompt: PendingPinChange?
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -81,15 +80,14 @@ struct ChatListView: View {
                             }
                             .buttonStyle(.plain)
                             .simultaneousGesture(TapGesture().onEnded { Haptics.selection() })
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 PinActionButton(
                                     chat: summary.chat,
                                     pinned: summary.pinned,
-                                    session: session,
-                                    pinPrompt: $pinPrompt
+                                    session: session
                                 )
                             }
-                            .pinRowActions(for: summary, session: session, pinPrompt: $pinPrompt) { chat in
+                            .pinRowActions(for: summary, session: session) { chat in
                                 if case let .room(room) = chat { groupProfile = room }
                             }
                         }
@@ -172,7 +170,6 @@ struct ChatListView: View {
             .navigationDestination(item: $groupProfile) { room in
                 GroupProfileView(room: room)
             }
-            .pinConfirmationDialog($pinPrompt, session: session)
             .task(id: query) {
                 let expected = query
                 guard expected.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 else {
@@ -214,7 +211,7 @@ struct ChatListView: View {
                         showingAccount = true
                     } label: {
                         ProfileAvatar(name: session.connection?.name ?? "You", size: 32)
-                            .frame(width: 44, height: 44)
+                            .frame(width: 36, height: 36)
                     }
                     .buttonStyle(.plain)
                     .glassCircle()
@@ -255,9 +252,9 @@ struct ChatListView: View {
                                 }
                             } label: {
                                 Image(systemName: "plus")
-                                    .font(.system(size: 18, weight: .medium))
+                                    .font(.system(size: 17, weight: .medium))
                                     .foregroundStyle(Color.primary)
-                                    .frame(width: 44, height: 44)
+                                    .frame(width: 36, height: 36)
                                     .contentShape(Circle())
                             }
                             .buttonStyle(.plain)
@@ -350,9 +347,9 @@ private struct RosterHeaderButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(Color.primary)
-                .frame(width: 44, height: 44)
+                .frame(width: 36, height: 36)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -365,7 +362,6 @@ private struct PinActionButton: View {
     let chat: Chat
     let pinned: Bool
     @ObservedObject var session: Session
-    @Binding var pinPrompt: PendingPinChange?
 
     private var pending: Bool {
         session.pendingPinnedChats.contains(chat.stableID)
@@ -373,7 +369,7 @@ private struct PinActionButton: View {
 
     var body: some View {
         Button {
-            pinPrompt = PendingPinChange(chat: chat, pinned: pinned)
+            session.togglePinned(chat)
         } label: {
             Label(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin")
         }
@@ -386,7 +382,6 @@ private struct ChatPinRowActions: ViewModifier {
     let chat: Chat
     let pinned: Bool
     @ObservedObject var session: Session
-    @Binding var pinPrompt: PendingPinChange?
     let openGroup: (Chat) -> Void
 
     func body(content: Content) -> some View {
@@ -406,7 +401,7 @@ private struct ChatPinRowActions: ViewModifier {
                     }
                 }
 
-                PinActionButton(chat: chat, pinned: pinned, session: session, pinPrompt: $pinPrompt)
+                PinActionButton(chat: chat, pinned: pinned, session: session)
 
                 if case .room = chat {
                     Button {
@@ -436,74 +431,16 @@ private extension View {
     func pinRowActions(
         for summary: ChatSummary,
         session: Session,
-        pinPrompt: Binding<PendingPinChange?>,
         openGroup: @escaping (Chat) -> Void = { _ in }
     ) -> some View {
         modifier(ChatPinRowActions(
             chat: summary.chat,
             pinned: summary.pinned,
             session: session,
-            pinPrompt: pinPrompt,
             openGroup: openGroup
         ))
     }
 
-}
-
-/// Snapshot of a pin/unpin request so the confirmation dialog keeps the
-/// name and current pin state after the context menu or sheet dismisses.
-struct PendingPinChange: Equatable {
-    let chat: Chat
-    let pinned: Bool
-    let name: String
-
-    init(chat: Chat, pinned: Bool? = nil) {
-        self.chat = chat
-        self.pinned = pinned ?? chat.pinned
-        self.name = chat.name
-    }
-}
-
-private struct PinConfirmationModifier: ViewModifier {
-    @Binding var prompt: PendingPinChange?
-    @ObservedObject var session: Session
-
-    func body(content: Content) -> some View {
-        let pinned = prompt?.pinned ?? false
-        let name = prompt?.name ?? ""
-        let target = prompt?.chat
-        content
-            .confirmationDialog(
-                pinned ? "Unpin \(name)?" : "Pin \(name)?",
-                isPresented: Binding(
-                    get: { prompt != nil },
-                    set: { if !$0 { prompt = nil } }
-                ),
-                titleVisibility: .visible
-            ) {
-                Button(pinned ? "Unpin" : "Pin") {
-                    if let target {
-                        Task { _ = await session.setPinned(!pinned, for: target) }
-                    }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(
-                    pinned
-                        ? "Remove \(name) from the home strip."
-                        : "Keep \(name) on the home strip."
-                )
-            }
-    }
-}
-
-extension View {
-    func pinConfirmationDialog(
-        _ prompt: Binding<PendingPinChange?>,
-        session: Session
-    ) -> some View {
-        modifier(PinConfirmationModifier(prompt: prompt, session: session))
-    }
 }
 
 // MARK: - Rows and tiles

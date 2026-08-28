@@ -33,13 +33,15 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.posival.openmausmobile
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "20"
+        CURRENT_PROJECT_VERSION: "34"
         DEVELOPMENT_TEAM: LT58RNRW7E
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
-        # The catalog lives in App/. The 1024pt App Store icon is the approved
-        # V Bot master mark, not a generated silhouette.
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Catalog name is the cache key iOS uses for home-screen AND
+        # notification-banner icons. VBotIcon still maps to the old
+        # cursor / communication placeholder on devices that upgraded in
+        # place. Bump this name when the leading banner glyph is stale.
+        ASSETCATALOG_COMPILER_APPICON_NAME: VBotMark
     info:
       path: App/Info.plist
       properties:
@@ -54,6 +56,8 @@ targets:
         # The bot's Live Activity — its face and ask in the Dynamic Island
         # and on the lock screen.
         NSSupportsLiveActivities: true
+        NSUserActivityTypes:
+          - INSendMessageIntent
         CFBundleURLTypes:
           - CFBundleURLName: com.openmausbot.companion.pairing
             CFBundleURLSchemes:
@@ -122,7 +126,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.posival.openmausmobile.widgets
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "20"
+        CURRENT_PROJECT_VERSION: "34"
         DEVELOPMENT_TEAM: LT58RNRW7E
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"

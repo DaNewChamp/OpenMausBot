@@ -30,6 +30,7 @@ struct AgentProfileView: View {
     @State private var instancesError: String?
     @State private var pickedInstanceId: String
     @State private var pickedModel: String
+    @State private var pickedEffort: String?
     @State private var busy = false
     @State private var savingModel = false
     @State private var modelSaveTask: Task<Void, Never>?
@@ -50,7 +51,6 @@ struct AgentProfileView: View {
     @State private var routinesLoading = true
     @State private var showingMedia = false
     @State private var showingModelAndVoice = false
-    @State private var pinPrompt: PendingPinChange?
 
     init(bot: Bot) {
         self.bot = bot
@@ -63,6 +63,7 @@ struct AgentProfileView: View {
         _speakReplies = State(initialValue: bot.speakReplies == true)
         _pickedInstanceId = State(initialValue: bot.modelSelection.instanceId)
         _pickedModel = State(initialValue: bot.modelSelection.model)
+        _pickedEffort = State(initialValue: bot.modelSelection.effort)
         _baseline = State(initialValue: ProfileFormSnapshot(bot: bot))
         _selectedColor = State(initialValue: bot.color)
         _selectedShape = State(initialValue: MascotMark(rawValue: bot.mascotShape?.rawValue ?? MascotMark.droplet.rawValue) ?? .droplet)
@@ -73,6 +74,7 @@ struct AgentProfileView: View {
         var value = current
         value.color = selectedColor
         value.mascotShape = MascotShape(rawValue: selectedShape.rawValue)
+        value.avatarCrop = crop
         return value
     }
     private var imageGenerationReady: Bool { config?.imageGen?.configured == true }
@@ -82,6 +84,10 @@ struct AgentProfileView: View {
     private var advertisedInstances: [Instance] { AdvertisedModelCatalog.selectableInstances(from: instances) }
     private var pickedInstance: Instance? { AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances) }
     private var modelsForPickedInstance: [ModelOption] { pickedInstance?.models.options ?? [] }
+    private var effortLevels: [String] { pickedInstance?.capabilities?.effortLevels ?? [] }
+    private var showsEffortPicker: Bool {
+        !effortLevels.isEmpty && session.engineSync?.usesReconstructedMutations != true
+    }
     private var modelSwitchBlocked: Bool { busy || savingModel || current.busy == true || instancesLoading }
     private var currentProviderTitle: String { pickedInstance?.pickerTitle ?? pickedInstanceId }
     private var currentModelTitle: String { pickedInstance?.modelLabel(for: pickedModel) ?? pickedModel }
@@ -95,7 +101,7 @@ struct AgentProfileView: View {
     }
     private var botRoutines: [Routine] { routines.filter { $0.botId == current.id } }
     private var hasUnsavedChanges: Bool {
-        !profilePatchIsEmpty || pickedInstanceId != current.modelSelection.instanceId || pickedModel != current.modelSelection.model
+        !profilePatchIsEmpty || pickedInstanceId != current.modelSelection.instanceId || pickedModel != current.modelSelection.model || pickedEffort != current.modelSelection.effort
     }
     private var profilePatchIsEmpty: Bool {
         name == baseline.name && title == baseline.title && description == baseline.description
@@ -150,6 +156,7 @@ struct AgentProfileView: View {
             .onChange(of: current.modelSelection) { _, selection in
                 pickedInstanceId = selection.instanceId
                 pickedModel = selection.model
+                pickedEffort = selection.effort
             }
             .onChange(of: photo) { _, item in
                 guard let item else { return }
@@ -174,7 +181,6 @@ struct AgentProfileView: View {
             .sheet(isPresented: $showingRoutines) {
                 TasksRoutinesSheet()
             }
-            .pinConfirmationDialog($pinPrompt, session: session)
         }
     }
 
@@ -215,7 +221,7 @@ struct AgentProfileView: View {
                     current.pinned == true ? "Unpin" : "Pin",
                     systemImage: current.pinned == true ? "pin.slash" : "pin"
                 ) {
-                    pinPrompt = PendingPinChange(chat: .bot(current))
+                    session.togglePinned(.bot(current))
                 }
                 .disabled(session.pendingPinnedChats.contains("bot:\(current.id)"))
             } label: {
@@ -558,7 +564,7 @@ struct AgentProfileView: View {
             profileSectionLabel("Avatar image")
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 14) {
-                    BotAvatarView(bot: current, size: 58, state: .idle, animated: false)
+                    BotAvatarView(bot: heroBot, size: 58, state: .idle, animated: false)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Custom artwork")
                             .font(.body.weight(.medium))
@@ -659,6 +665,19 @@ struct AgentProfileView: View {
             .accessibilityLabel("Model")
             .accessibilityValue(currentModelTitle)
             .accessibilityHint(current.busy == true ? "Interrupt this agent before switching models" : "Choose the model this agent uses")
+
+            if showsEffortPicker {
+                Picker("Reasoning", selection: effortSelection) {
+                    Text("Default").tag(Optional<String>.none)
+                    ForEach(effortLevels, id: \.self) { level in
+                        Text(Self.effortLabel(level)).tag(Optional.some(level))
+                    }
+                }
+                .disabled(modelSwitchBlocked)
+                .accessibilityLabel("Reasoning")
+                .accessibilityValue(Self.effortLabel(pickedEffort))
+                .accessibilityHint(current.busy == true ? "Interrupt this agent before switching models" : "How hard this bot thinks")
+            }
 
             if savingModel {
                 Label("Saving model…", systemImage: "arrow.triangle.2.circlepath")
@@ -769,6 +788,10 @@ struct AgentProfileView: View {
                     currentModel: pickedModel,
                     in: instances
                 )
+                let levels = AdvertisedModelCatalog.instance(id: newId, in: instances)?.capabilities?.effortLevels ?? []
+                if let effort = pickedEffort, !levels.contains(effort) {
+                    pickedEffort = nil
+                }
                 scheduleModelSave()
             }
         )
@@ -782,6 +805,24 @@ struct AgentProfileView: View {
                 scheduleModelSave()
             }
         )
+    }
+
+    private var effortSelection: Binding<String?> {
+        Binding(
+            get: { pickedEffort },
+            set: { newEffort in
+                pickedEffort = newEffort
+                scheduleModelSave()
+            }
+        )
+    }
+
+    private static func effortLabel(_ level: String?) -> String {
+        switch level {
+        case nil: return "Default"
+        case "xhigh": return "X-High"
+        case let value?: return value.capitalized
+        }
     }
 
     private func loadInstances() async {
@@ -817,6 +858,7 @@ struct AgentProfileView: View {
                     currentModel: router.selected.modelId,
                     in: instances
                 )
+                pickedEffort = nil
                 return
             }
             instances = []
@@ -838,6 +880,8 @@ struct AgentProfileView: View {
                 currentModel: current.modelSelection.model,
                 in: loaded
             )
+            let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: loaded)?.capabilities?.effortLevels ?? []
+            pickedEffort = current.modelSelection.effort.flatMap { levels.contains($0) ? $0 : nil }
         case let .failed(message):
             instances = []
             instancesError = message
@@ -852,7 +896,10 @@ struct AgentProfileView: View {
         modelSaveTask?.cancel()
 
         let selection = current.modelSelection
-        guard pickedInstanceId != selection.instanceId || pickedModel != selection.model else {
+        guard pickedInstanceId != selection.instanceId
+            || pickedModel != selection.model
+            || pickedEffort != selection.effort
+        else {
             savingModel = false
             modelSaveTask = nil
             return
@@ -860,6 +907,7 @@ struct AgentProfileView: View {
         guard current.busy != true else {
             pickedInstanceId = selection.instanceId
             pickedModel = selection.model
+            pickedEffort = selection.effort
             savingModel = false
             modelSaveTask = nil
             session.actionError = "Interrupt this agent before switching models."
@@ -882,8 +930,15 @@ struct AgentProfileView: View {
             }
         }
         guard modelSaveRevision == revision else { return }
-        let requested = BotModelPatch(instanceId: pickedInstanceId, model: pickedModel)
-        guard requested.instanceId != previous.instanceId || requested.model != previous.model else { return }
+        let requested = BotModelPatch(
+            instanceId: pickedInstanceId,
+            model: pickedModel,
+            effort: showsEffortPicker ? (pickedEffort.map(BotModelPatch.EffortUpdate.set) ?? .clear) : .omitted
+        )
+        guard requested.instanceId != previous.instanceId
+            || requested.model != previous.model
+            || pickedEffort != previous.effort
+        else { return }
 
         guard let updated = await session.updateModel(requested, for: current) else {
             // A newer picker value owns the form now. If another client
@@ -891,12 +946,14 @@ struct AgentProfileView: View {
             // server state rather than rolling back over it.
             guard modelSaveRevision == revision else { return }
             let latest = current.modelSelection
-            if latest.instanceId == requested.instanceId && latest.model == requested.model {
+            if latest.instanceId == requested.instanceId && latest.model == requested.model && latest.effort == pickedEffort {
                 pickedInstanceId = previous.instanceId
                 pickedModel = previous.model
+                pickedEffort = previous.effort
             } else {
                 pickedInstanceId = latest.instanceId
                 pickedModel = latest.model
+                pickedEffort = latest.effort
             }
             return
         }
@@ -904,6 +961,7 @@ struct AgentProfileView: View {
         guard modelSaveRevision == revision else { return }
         pickedInstanceId = updated.modelSelection.instanceId
         pickedModel = updated.modelSelection.model
+        pickedEffort = updated.modelSelection.effort
     }
 
     private func profilePatch() -> BotProfilePatch {
@@ -1016,9 +1074,16 @@ struct AgentProfileView: View {
     private func upload(_ item: PhotosPickerItem) async {
         busy = true
         defer { busy = false; photo = nil }
-        guard let data = try? await item.loadTransferable(type: Data.self),
-              let mime = Self.imageMIME(data)
-        else {
+        let data: Data
+        do {
+            guard let loaded = try await item.loadTransferable(type: Data.self) else { return }
+            data = loaded
+        } catch {
+            if error.isCancellation { return }
+            session.actionError = "Choose a PNG, JPEG, GIF, or WebP image."
+            return
+        }
+        guard let mime = Self.imageMIME(data) else {
             session.actionError = "Choose a PNG, JPEG, GIF, or WebP image."
             return
         }
@@ -1028,7 +1093,7 @@ struct AgentProfileView: View {
         }
         let intendedCrop = crop == .mascot ? AvatarCrop.circle : crop
         if let updated = await session.uploadAvatar(data, mime: mime, for: current, crop: intendedCrop) {
-            crop = updated.avatarCrop ?? intendedCrop
+            crop = updated.displayedAvatarCrop == .mascot ? intendedCrop : updated.displayedAvatarCrop
             baseline.crop = crop
         }
     }

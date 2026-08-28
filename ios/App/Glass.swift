@@ -27,10 +27,35 @@ struct GlassSurface<S: InsettableShape>: ViewModifier {
     }
 }
 
+/// Glass as a backdrop so labels and fills paint on top of it. `glassEffect`
+/// applied to the content itself turns `Color.primary` into a grey
+/// vibrancy sample — that is why the send disc stayed grey with text in it.
+private struct GlassBackdrop<S: InsettableShape>: ViewModifier {
+    let shape: S
+    var interactive: Bool = true
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            let glass: Glass = interactive ? .regular.interactive() : .regular
+            content.background { shape.fill(.clear).glassEffect(glass, in: shape) }
+        } else {
+            content
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(shape.strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+        }
+    }
+}
+
 extension View {
     /// A capsule of glass — pills and round buttons.
     func glassCapsule(interactive: Bool = true, tint: Color? = nil) -> some View {
         modifier(GlassSurface(shape: Capsule(), interactive: interactive, tint: tint))
+    }
+
+    /// Glass behind the content, not through it. Use this when a child
+    /// (the send disc) must stay opaque white instead of picking up vibrancy.
+    func glassCapsuleBackdrop(interactive: Bool = true) -> some View {
+        modifier(GlassBackdrop(shape: Capsule(), interactive: interactive))
     }
 
     /// A circular glass control. Same material as `glassCapsule`, locked to a circle

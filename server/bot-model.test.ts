@@ -11,7 +11,7 @@ describe("parseBotModelPatch", () => {
   });
 
   it("refuses privilege-bearing and catalog-adjacent fields by name", () => {
-    for (const field of ["autoApprove", "alwaysAllow", "computer", "effort", "modelSelection", "cwd"]) {
+    for (const field of ["autoApprove", "alwaysAllow", "computer", "modelSelection", "cwd"]) {
       const result = parseBotModelPatch({ instanceId: "claude", model: "claude-sonnet-5", [field]: true });
       expect(result.ok, field).toBe(false);
       if (!result.ok) expect(result.error).toContain(field);
@@ -23,6 +23,18 @@ describe("parseBotModelPatch", () => {
     expect(parseBotModelPatch({ instanceId: "claude", model: "" }).ok).toBe(false);
     expect(parseBotModelPatch({ instanceId: "x".repeat(201), model: "claude-sonnet-5" }).ok).toBe(false);
     expect(parseBotModelPatch({ instanceId: "claude", model: "m".repeat(501) }).ok).toBe(false);
+  });
+
+  it("accepts a recognized effort level or null to clear it", () => {
+    expect(parseBotModelPatch({ instanceId: "claude", model: "claude-sonnet-5", effort: "high" })).toEqual({
+      ok: true,
+      patch: { instanceId: "claude", model: "claude-sonnet-5", effort: "high" },
+    });
+    expect(parseBotModelPatch({ instanceId: "claude", model: "claude-sonnet-5", effort: null })).toEqual({
+      ok: true,
+      patch: { instanceId: "claude", model: "claude-sonnet-5", effort: null },
+    });
+    expect(parseBotModelPatch({ instanceId: "claude", model: "claude-sonnet-5", effort: "turbo" }).ok).toBe(false);
   });
 });
 
@@ -103,6 +115,41 @@ describe("resolveBotModelSelection", () => {
       ok: true,
       selection: { instanceId: "plain", model: "plain-1" },
     });
+  });
+
+  it("sets or clears a requested effort level against the target catalog", () => {
+    expect(
+      resolveBotModelSelection({
+        instanceId: "claude",
+        model: "claude-haiku-4-5",
+        currentEffort: "low",
+        requestedEffort: "high",
+        catalogs,
+      }),
+    ).toEqual({
+      ok: true,
+      selection: { instanceId: "claude", model: "claude-haiku-4-5", effort: "high" },
+    });
+    expect(
+      resolveBotModelSelection({
+        instanceId: "claude",
+        model: "claude-sonnet-5",
+        currentEffort: "high",
+        requestedEffort: null,
+        catalogs,
+      }),
+    ).toEqual({
+      ok: true,
+      selection: { instanceId: "claude", model: "claude-sonnet-5" },
+    });
+    expect(
+      resolveBotModelSelection({
+        instanceId: "claude",
+        model: "claude-sonnet-5",
+        requestedEffort: "xhigh",
+        catalogs,
+      }).ok,
+    ).toBe(false);
   });
 });
 

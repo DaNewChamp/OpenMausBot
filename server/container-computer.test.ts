@@ -28,6 +28,7 @@ import {
   perBotLocalVmTarget,
   podmanSecurityIsHardened,
   setupCommands,
+  viewerPortAllocatedError,
   type CommandRunner,
   type LocalVmTarget,
 } from "./container-computer.ts";
@@ -596,6 +597,10 @@ describe("Cua integration", () => {
     expect(dockerfile).toContain('test -r "$directory" && test -w "$directory" && test -x "$directory"');
     expect(dockerfile).toContain("migrate_profile google-chrome");
     expect(dockerfile).toContain("migrate_profile chromium");
+    expect(dockerfile).toContain("google-chrome-stable_current_amd64.deb");
+    expect(dockerfile).toContain("google-chrome-stable_current_arm64.deb");
+    expect(dockerfile).toContain("command -v google-chrome-stable");
+    expect(IMAGE_LAYER_VERSION).toBe("5");
     expect(dockerfile).toContain("SingletonLock");
     expect(dockerfile).toContain(`${IMAGE_LAYER_LABEL}="${IMAGE_LAYER_VERSION}"`);
     expect(dockerfile).toContain("did not become ready within 45 seconds");
@@ -689,6 +694,63 @@ describe("containerComputerAction", () => {
 
     await expect(containerComputerAction("start", fake.run, "linux")).rejects.toThrow("cannot safely resume");
     expect(fake.calls).not.toContain(`docker start ${CONTAINER}`);
+  });
+
+  it("retries shared Local VM create on an ephemeral viewer port when 6080 is taken", async () => {
+    const calls: string[] = [];
+    let created = false;
+    const run: CommandRunner = async (command, args) => {
+      const key = [command, ...args].join(" ");
+      calls.push(key);
+      if (key === "/usr/bin/which docker") return { stdout: "docker\n" };
+      if (key === "/usr/bin/which podman") throw new Error("missing");
+      if (key.startsWith("docker info")) return { stdout: "29\n" };
+      if (key.startsWith("docker image inspect")) return { stdout: preparedImageInspect() };
+      if (key.startsWith("docker inspect ")) {
+        if (!created) throw new Error("missing container");
+        const detail = JSON.parse(readyInspect())[0];
+        detail.NetworkSettings = {
+          Ports: { "6901/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }] },
+        };
+        return { stdout: JSON.stringify([detail]) };
+      }
+      if (key.startsWith("docker run ") && key.includes("127.0.0.1:6080:6901")) {
+        throw Object.assign(new Error("Bind for 127.0.0.1:6080 failed: port is already allocated"), {
+          stderr: "Bind for 127.0.0.1:6080 failed: port is already allocated",
+        });
+      }
+      if (key === `docker rm -f ${CONTAINER}`) return { stdout: "" };
+      if (key.startsWith("docker run ") && key.includes("127.0.0.1::6901")) {
+        created = true;
+        return { stdout: "" };
+      }
+      if (key.includes("--version")) return { stdout: `cua-driver ${CUA_DRIVER_VERSION}\n` };
+      if (key.includes("status --socket")) return { stdout: "running\n" };
+      if (key.includes("health_report")) {
+        return { stdout: JSON.stringify({ schema_version: "1", overall: "ok", checks: [] }) };
+      }
+      if (key.includes("get_desktop_state")) return { stdout: "{}\n" };
+      if (key.includes("base64")) return { stdout: validPng.toString("base64") };
+      throw new Error(`unexpected command: ${key}`);
+    };
+
+    const status = await containerComputerAction("run", run, "linux");
+
+    expect(calls.some((call) => call.includes("127.0.0.1:6080:6901"))).toBe(true);
+    expect(calls).toContain(`docker rm -f ${CONTAINER}`);
+    expect(calls.some((call) => call.includes("127.0.0.1::6901"))).toBe(true);
+    expect(status.container).toBe("running");
+  });
+
+  it("recognizes Docker's loopback bind failure as a taken viewer port", () => {
+    expect(
+      viewerPortAllocatedError(
+        Object.assign(new Error("failed to set up container networking"), {
+          stderr: "Bind for 127.0.0.1:6080 failed: port is already allocated",
+        }),
+      ),
+    ).toBe(true);
+    expect(viewerPortAllocatedError(new Error("image not found"))).toBe(false);
   });
 });
 

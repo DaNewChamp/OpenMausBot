@@ -412,6 +412,20 @@ public struct CompanionState: Sendable {
                 merged.mascotShape = shape
             }
         }
+        if let url = override.avatarUrl {
+            if bot.avatarUrl == url {
+                override.avatarUrl = nil
+            } else {
+                merged.avatarUrl = url
+            }
+        }
+        if let crop = override.avatarCrop {
+            if bot.avatarCrop == crop {
+                override.avatarCrop = nil
+            } else {
+                merged.avatarCrop = crop
+            }
+        }
         appearanceOverrides.set(override, for: stableID)
         return merged
     }

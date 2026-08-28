@@ -1,8 +1,9 @@
 // A bot's computer, live.
 //
-// The phone is a watch surface first. It can open the secure Box viewer when
-// the paired computer says that capability is available, but it never turns
-// VPS, Local VM, or local-host previews into pretend touch controls.
+// The phone can pick where the computer runs and watch a Local VM desktop
+// while this screen is open. Interactive mouse/keyboard stays on the paired
+// computer except for the secure Box viewer and guarded Local VM
+// create/stop/recreate actions.
 import SwiftUI
 import CompanionCore
 import UIKit
@@ -60,6 +61,8 @@ struct ComputerView: View {
     @State private var localVmError: String?
     @State private var showingHelp = false
     @State private var showingControls = false
+    @State private var instances: [Instance] = []
+    @State private var savingDestination = false
 
     private static let firstFrameTimeout = ComputerWatchLifecycle.firstFrameTimeout
 
@@ -75,7 +78,7 @@ struct ComputerView: View {
 
     private var presentationState: ComputerPresentationState {
         let decodeFailure = ComputerPresentationState.hasKnownComputer(current)
-            && current.busy == true
+            && (current.busy == true || isLocalVm)
             && frame != nil
             && image == nil
             ? "The latest screen frame could not be decoded."
@@ -106,6 +109,24 @@ struct ComputerView: View {
 
     private var pendingLocalVmAction: Bool {
         session.pendingLocalVmActions.contains(current.id)
+    }
+
+    private var selectedInstance: Instance? {
+        AdvertisedModelCatalog.instance(id: current.modelSelection.instanceId, in: instances)
+    }
+
+    private var localVmDestinationEnabled: Bool {
+        selectedInstance?.supportsLocalVmDestination == true
+    }
+
+    private var destination: String {
+        current.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    }
+
+    private var isLocalVm: Bool { destination == "vm" }
+
+    private var wantsScreenPreview: Bool {
+        current.busy == true || isLocalVm
     }
 
     private var streamFailure: String? {
@@ -245,19 +266,33 @@ struct ComputerView: View {
         }
         .onChange(of: current.busy) { _, busy in
             guard ComputerPresentationState.hasKnownComputer(current) else { return }
-            session.clearScreen(of: bot.id)
-            screenWatch.reset()
-            if busy == true {
+            if !isLocalVm {
+                session.clearScreen(of: bot.id)
+                screenWatch.reset()
+            }
+            if busy == true || isLocalVm {
                 screenWatch.begin()
             }
         }
         .task(id: "local-vm-\(current.id)-\(current.computer ?? "")") {
-            guard current.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "vm" else { return }
+            guard isLocalVm else { return }
             await session.refreshLocalVm(for: current)
         }
-        .task(id: "\(computerSignature)-\(screenWatch.attempt)-\(current.busy == true)") {
+        .task(id: "local-vm-preview-\(current.id)-\(current.computer ?? "")") {
+            guard isLocalVm else { return }
+            while !Task.isCancelled {
+                await session.refreshLocalVmPreview(for: current)
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+        .task(id: "instances-\(current.id)") {
+            if case let .loaded(loaded) = await session.loadInstances() {
+                instances = loaded
+            }
+        }
+        .task(id: "\(computerSignature)-\(screenWatch.attempt)-\(wantsScreenPreview)") {
             guard ComputerPresentationState.hasKnownComputer(current) else { return }
-            guard current.busy == true else { return }
+            guard wantsScreenPreview else { return }
             if screenWatch.phase == .idle {
                 if let streamFailure {
                     screenWatch.failed(streamFailure)
@@ -279,7 +314,7 @@ struct ComputerView: View {
                   screenWatch.attempt == attempt,
                   screenWatch.isWaiting,
                   frame == nil,
-                  current.busy == true
+                  wantsScreenPreview
             else { return }
             screenWatch.timedOut()
         }
@@ -316,39 +351,50 @@ struct ComputerView: View {
             .accessibilityLabel("Desktop help")
 
             Menu {
+                Button {
+                    selectDestination("vm")
+                } label: {
+                    Label("Local", systemImage: destination == "vm" ? "checkmark" : "laptopcomputer")
+                }
+                .disabled(savingDestination || !localVmDestinationEnabled)
+                Button {
+                    selectDestination("cloud")
+                } label: {
+                    Label("Cloud", systemImage: destination == "cloud" ? "checkmark" : "cloud")
+                }
+                .disabled(savingDestination)
+                if canShowLocalVmControls {
+                    Divider()
+                    if localVmStatus?.canCreate == true {
+                        Button("Create Local VM", systemImage: "plus.circle") {
+                            confirmingLocalVmAction = .create
+                        }
+                        .disabled(pendingLocalVmAction)
+                    }
+                    if localVmStatus?.canStop == true {
+                        Button("Stop Local VM", systemImage: "stop.circle", role: .destructive) {
+                            confirmingLocalVmAction = .stop
+                        }
+                        .disabled(pendingLocalVmAction)
+                    }
+                    if localVmStatus?.canRecreate == true {
+                        Button("Recreate Local VM", systemImage: "arrow.clockwise.circle") {
+                            confirmingLocalVmAction = .recreate
+                        }
+                        .disabled(pendingLocalVmAction)
+                    }
+                }
                 if canOpenCloudViewer {
+                    Divider()
                     Button("Open secure cloud viewer", systemImage: "display") {
                         confirmingDesktop = true
-                    }
-                }
-                if localVmStatus?.canCreate == true {
-                    Button("Create Local VM", systemImage: "plus.circle") {
-                        confirmingLocalVmAction = .create
-                    }
-                    .disabled(pendingLocalVmAction)
-                }
-                if localVmStatus?.canStop == true {
-                    Button("Stop Local VM", systemImage: "stop.circle", role: .destructive) {
-                        confirmingLocalVmAction = .stop
-                    }
-                    .disabled(pendingLocalVmAction)
-                }
-                if localVmStatus?.canRecreate == true {
-                    Button("Recreate Local VM", systemImage: "arrow.clockwise.circle") {
-                        confirmingLocalVmAction = .recreate
-                    }
-                    .disabled(pendingLocalVmAction)
-                }
-                if canRetryScreen {
-                    Button("Try again", systemImage: "arrow.clockwise") {
-                        retryScreen()
                     }
                 }
             } label: {
                 ChromeCircleButton(systemImage: "ellipsis")
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Desktop actions")
+            .accessibilityLabel("Choose Local or Cloud")
         }
         .foregroundStyle(Color.primary)
         .padding(.horizontal, 16)
@@ -414,6 +460,19 @@ struct ComputerView: View {
                     .foregroundStyle(Color.white.opacity(0.65))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
+                Text(destinationHelp)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color.white.opacity(0.55))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                    .padding(.top, 4)
+                if localVmDestinationEnabled, canShowLocalVmControls, localVmStatus?.canCreate == true {
+                    Button("Create Local VM") {
+                        confirmingLocalVmAction = .create
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(pendingLocalVmAction || savingDestination)
+                }
                 if canRetryScreen {
                     Button("Try again", action: retryScreen)
                         .buttonStyle(.borderedProminent)
@@ -427,13 +486,39 @@ struct ComputerView: View {
     }
 
     private var startingMessage: String {
-        if current.cloudBackend == "vps" || current.computer == "vm" || current.computer == "local" {
+        if isLocalVm {
+            return "Waiting for a desktop preview from the Local VM."
+        }
+        if current.cloudBackend == "vps" || current.computer == "local" {
             return "This phone can watch frames while the agent works. Control stays on the paired computer."
         }
         if current.busy == true {
             return "Waiting for the first frame."
         }
         return "This Bot's computer is captured while it is working."
+    }
+
+    private var destinationHelp: String {
+        switch destination {
+        case "vm":
+            if !localVmDestinationEnabled {
+                return "This engine cannot use Local VM. Grok’s computer tools still hit this Mac. Switch to Claude, Codex, or ACP on the profile, then pick Local and Create."
+            }
+            if canShowLocalVmControls, localVmStatus?.canCreate == true {
+                return "Local VM is not created yet. Create it below, then open this screen again."
+            }
+            return "Running on Local VM. The desktop updates while this screen is open."
+        case "cloud":
+            return current.cloudBackend == "vps"
+                ? "Running on your VPS. The phone can only watch."
+                : "Running on Cloud. Open a live frame while the agent is working, or use the secure viewer from ···."
+        case "local":
+            return "Running on this Mac. Use ··· to switch to Local or Cloud."
+        case "off":
+            return "Computer access is off. Use ··· to switch to Local or Cloud."
+        default:
+            return "Use ··· to choose Local or Cloud."
+        }
     }
 
     private var watchingControls: some View {
@@ -461,8 +546,12 @@ struct ComputerView: View {
     private var computerHelpSheet: some View {
         NavigationStack {
             List {
-                Section {
+                Section("This screen") {
                     Text(startingMessage)
+                }
+                Section("How to use Local VM") {
+                    Text("Tap ··· and choose Local, then Create Local VM. The desktop is a Linux container on the paired Mac. This phone shows that desktop while this screen is open.")
+                    Text("Grok Reconstructed cannot use Local VM as an OpenMaus mount. It still has Grok’s own Mac tools, which is why “open your VM” reached this computer. Use Claude, Codex, or an ACP engine for Local VM.")
                 }
                 if let localVmStatus {
                     Section("Local VM") {
@@ -488,6 +577,18 @@ struct ComputerView: View {
     private var computerControlsSheet: some View {
         NavigationStack {
             List {
+                Section {
+                    destinationChoice("Local", mode: "vm", enabled: localVmDestinationEnabled)
+                    destinationChoice("Cloud", mode: "cloud", enabled: true)
+                } header: {
+                    Text("Runs on")
+                } footer: {
+                    if localVmDestinationEnabled {
+                        Text("Local is an isolated Linux desktop on the paired Mac. Cloud is the hosted box.")
+                    } else {
+                        Text("This engine cannot use Local VM. Switch to Claude, Codex, or ACP on the profile, or pick Cloud.")
+                    }
+                }
                 if canOpenCloudViewer {
                     Button {
                         showingControls = false
@@ -534,8 +635,14 @@ struct ComputerView: View {
                         Text("Runs on the paired Mac. This phone only sends guarded VM actions.")
                     }
                 }
+                if canRetryScreen {
+                    Button("Try again", systemImage: "arrow.clockwise") {
+                        showingControls = false
+                        retryScreen()
+                    }
+                }
                 if !canOpenCloudViewer && !canShowLocalVmControls {
-                    Text("This phone can watch the desktop while the agent works. Interactive control stays on the paired computer.")
+                    Text(destinationHelp)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -555,6 +662,38 @@ struct ComputerView: View {
         guard let image else { return }
         UIPasteboard.general.image = image
         Haptics.success()
+    }
+
+    private func destinationChoice(_ title: String, mode: String, enabled: Bool) -> some View {
+        Button {
+            selectDestination(mode)
+        } label: {
+            HStack {
+                Text(title)
+                Spacer()
+                if destination == mode {
+                    Image(systemName: "checkmark")
+                }
+            }
+        }
+        .disabled(!enabled || savingDestination)
+    }
+
+    private func selectDestination(_ mode: String) {
+        guard mode == "vm" || mode == "cloud" else { return }
+        guard destination != mode else { return }
+        Haptics.selection()
+        Task { await applyDestination(mode) }
+    }
+
+    @MainActor
+    private func applyDestination(_ mode: String) async {
+        savingDestination = true
+        defer { savingDestination = false }
+        _ = await session.updateComputerDestination(
+            BotComputerDestinationPatch(computer: mode),
+            for: current
+        )
     }
 
     private var localVmStateTitle: String {
@@ -605,13 +744,13 @@ struct ComputerView: View {
         // timeout task is still waiting for its first frame.
         if let streamFailure {
             screenWatch.failed(streamFailure)
-        } else if current.busy == true, frame != nil {
+        } else if wantsScreenPreview, frame != nil {
             if image == nil {
                 screenWatch.failed("The latest screen frame could not be decoded.")
             } else {
                 screenWatch.receivedFrame()
             }
-        } else if current.busy == true, screenWatch.phase == .idle {
+        } else if wantsScreenPreview, screenWatch.phase == .idle {
             screenWatch.begin()
         }
     }

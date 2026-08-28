@@ -36,7 +36,7 @@ export const BASE_IMAGE = `${BASE_IMAGE_REPOSITORY}@${BASE_IMAGE_DIGEST}`;
 // Image and container labels below remain the authoritative compatibility
 // check, not the mutable tag.
 export const IMAGE_REPOSITORY = "localhost/openmausbot/cua-local-vm";
-export const IMAGE_LAYER_VERSION = "4";
+export const IMAGE_LAYER_VERSION = "5";
 export const IMAGE_LAYER_LABEL = "com.openmausbot.image-layer";
 export const IMAGE = `${IMAGE_REPOSITORY}:driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}`;
 export const CONTAINER = "openmausbot-computer";
@@ -140,6 +140,22 @@ RUN set -eux; \\
     install -D -m 0755 "$driver_bin" ${CUA_EXECUTABLE}; \\
     install -d -o cua -g cua -m 0700 ${VM_WORKSPACE_GUEST}; \\
     test "$(${CUA_EXECUTABLE} --version)" = "cua-driver ${CUA_DRIVER_VERSION}"
+RUN set -eux; \\
+    arch="$(uname -m)"; \\
+    case "$arch" in \\
+      x86_64) chrome_deb='google-chrome-stable_current_amd64.deb' ;; \\
+      aarch64|arm64) chrome_deb='google-chrome-stable_current_arm64.deb' ;; \\
+      *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \\
+    esac; \\
+    apt-get update; \\
+    apt-get install -y --no-install-recommends ca-certificates wget fonts-liberation; \\
+    wget -qO /tmp/chrome.deb "https://dl.google.com/linux/direct/$chrome_deb"; \\
+    apt-get install -y /tmp/chrome.deb; \\
+    rm -f /tmp/chrome.deb; \\
+    command -v google-chrome-stable; \\
+    ln -sfn /usr/bin/google-chrome-stable /usr/local/bin/google-chrome; \\
+    apt-get clean; \\
+    rm -rf /var/lib/apt/lists/*
 RUN printf '%s\\n' \\
       '#!/bin/sh' \\
       'set -eu' \\
@@ -809,6 +825,22 @@ export function podmanSecurityIsHardened(
   });
 }
 
+function commandErrorText(error: unknown): string {
+  if (!error || typeof error !== "object") return String(error ?? "");
+  const err = error as { message?: string; stderr?: unknown; stdout?: unknown };
+  return [err.message, err.stderr, err.stdout].filter(Boolean).join("\n");
+}
+
+/** Docker/Podman leave a `created` container after a failed bind. On this
+ * Mac, Grok Bot's `grok-bot-local-vm` already publishes 127.0.0.1:6080, so
+ * the shared OpenMaus target cannot keep that historical port. Retry with an
+ * ephemeral loopback publish when 6080 is taken. */
+export function viewerPortAllocatedError(error: unknown): boolean {
+  return /port is already allocated|address already in use|bind for \S+ failed/i.test(
+    commandErrorText(error),
+  );
+}
+
 export function containerRunArgs(
   runtime: Runtime,
   password = "CHANGE_ME",
@@ -951,7 +983,21 @@ export async function containerComputerAction(
         : action === "remove"
           ? ["rm", runtime === "container" ? "--force" : "-f", target.containerName]
           : [action, target.containerName];
-    await runner(runtime, args, 2 * 60_000);
+    try {
+      await runner(runtime, args, 2 * 60_000);
+    } catch (error) {
+      if (action !== "run" || !target.viewerPort || !viewerPortAllocatedError(error)) throw error;
+      await runner(
+        runtime,
+        ["rm", runtime === "container" ? "--force" : "-f", target.containerName],
+        30_000,
+      ).catch(() => undefined);
+      await runner(
+        runtime,
+        containerRunArgs(runtime, randomBytes(6).toString("base64url"), { ...target, viewerPort: null }),
+        2 * 60_000,
+      );
+    }
   }
   return containerComputerStatus(runner, platform, target);
 }

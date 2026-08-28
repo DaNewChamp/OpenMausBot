@@ -4,7 +4,8 @@
 // encodes come from the default-deny policy in `companion/src/routes.ts`: a
 // paired phone may chat, answer approvals, and read rooms. Local VM access is
 // an explicit per-device capability; its client methods are intentionally
-// limited to a scrubbed status projection and empty-body lifecycle verbs.
+// limited to a scrubbed status projection, a read-only desktop capture, and
+// empty-body lifecycle verbs.
 import Foundation
 
 /// One image saved by the companion attachment endpoint. The server returns
@@ -493,6 +494,39 @@ public enum APIError: Error, LocalizedError, Sendable {
     public var isUnauthorized: Bool {
         if case let .status(code, _) = self { return code == 401 }
         return false
+    }
+
+    /// Swiping back, dismissing a sheet, or tearing down a view cancels
+    /// in-flight `URLSession` work. That is not a failure to show.
+    public var isCancellation: Bool {
+        switch self {
+        case let .transport(detail):
+            return RequestCancellation.matches(detail)
+        case .status, .badURL:
+            return false
+        }
+    }
+}
+
+/// Interactive-pop and sheet dismissal cancel URLSession tasks. Their
+/// localized descriptions are the lowercase "cancelled" that was landing
+/// in the global "Something went wrong" alert.
+public enum RequestCancellation: Sendable {
+    public static func matches(_ message: String) -> Bool {
+        let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "cancelled"
+            || normalized == "canceled"
+            || normalized == "the operation was cancelled"
+            || normalized == "the operation was canceled"
+    }
+}
+
+extension Error {
+    public var isCancellation: Bool {
+        if self is CancellationError { return true }
+        if let url = self as? URLError, url.code == .cancelled { return true }
+        if let api = self as? APIError { return api.isCancellation }
+        return RequestCancellation.matches(localizedDescription)
     }
 }
 
@@ -1037,6 +1071,15 @@ public struct CompanionClient: Sendable {
         var pending = Set<String>()
         if let color = patch.color, bot.color != color { pending.insert("color") }
         if let shape = patch.mascotShape, bot.mascotShape != shape { pending.insert("mascotShape") }
+        if let crop = patch.avatarCrop, bot.avatarCrop != crop { pending.insert("avatarCrop") }
+        switch patch.avatarUrl {
+        case let .set(url):
+            if bot.avatarUrl != url { pending.insert("avatarUrl") }
+        case .clear:
+            if bot.avatarUrl != nil { pending.insert("avatarUrl") }
+        case nil:
+            break
+        }
         return pending.isEmpty ? .updated(bot) : .updatedWithPendingAppearance(bot, fields: pending)
     }
 
@@ -1060,12 +1103,22 @@ public struct CompanionClient: Sendable {
             patch.voice != nil || patch.speakReplies != nil
     }
 
-    /// Paired-safe model switch. The harness validates instance and model
-    /// against the currently advertised catalog; this client never sends
-    /// effort or execution-policy fields.
+    /// Paired-safe model switch. Instance and model are catalog-checked.
+    /// An explicit effort key is rewritten by the sidecar onto the harness
+    /// bot PATCH so the live desktop can persist reasoning level.
     public func updateModel(botId: String, patch: BotModelPatch) async throws -> Bot {
         try await send(
             try makeRequest("PATCH", "/api/bots/\(botId)/model", encodedBody: patch),
+            as: BotResponse.self
+        ).bot
+    }
+
+    /// Paired-safe computer destination. The sidecar rewrites this onto the
+    /// harness bot PATCH with only destination fields, and choosing Local VM
+    /// grants this phone's Local VM capability.
+    public func updateComputerDestination(botId: String, patch: BotComputerDestinationPatch) async throws -> Bot {
+        try await send(
+            try makeRequest("PATCH", "/api/bots/\(botId)/computer-destination", encodedBody: patch),
             as: BotResponse.self
         ).bot
     }
@@ -1520,6 +1573,19 @@ public struct CompanionClient: Sendable {
     /// phone-visible calls.
     public func recreateLocalVm(botId: String) async throws -> LocalVmStatus {
         try await localVmAction(botId: botId, action: "recreate")
+    }
+
+    /// Capture the bot's Local VM desktop. Watch-only: empty body, no
+    /// input, same per-device Local VM gate as status.
+    public func localVmScreenshot(botId: String) async throws -> LocalVmScreenshot {
+        try await send(
+            try makeRequest(
+                "POST",
+                "/api/bots/\(botId)/local-computer/screenshot",
+                body: [String: Any](),
+            ),
+            as: LocalVmScreenshot.self
+        )
     }
 
     private func localVmAction(botId: String, action: String) async throws -> LocalVmStatus {

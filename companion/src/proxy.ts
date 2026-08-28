@@ -22,13 +22,20 @@ import {
 import {
   denyReason,
   isCloudDesktopJoin,
+  isBotModel,
+  isComputerDestination,
   isConnectorCardAction,
   isConnectorCardStatus,
   isLocalVmAction,
-  isLocalVmStatus,
+  isLocalVmScreenshot,
+  isLocalVmPhoneSurface,
+  validateBotModelBody,
+  validateComputerDestinationBody,
   validateConnectorCardBody,
   validateConnectorCardThreadId,
   validateLocalVmActionBody,
+  botModelBotId,
+  computerDestinationBotId,
 } from "./routes.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
@@ -66,6 +73,9 @@ export interface ProxyOptions {
   /** How long the harness may take to produce response *headers*. Optional,
    * and only ever set by tests — the default is the one that ships. */
   headersTimeoutMs?: number;
+  /** Persist Local VM access for this paired device. Choosing Local VM on
+   * the phone is the consent; the Mac Companion toggle remains the revoke. */
+  grantLocalVmAccess?: (deviceId: string) => boolean;
 }
 
 export interface CompanionEndpointSnapshot {
@@ -274,7 +284,7 @@ export function createProxyHandler(options: ProxyOptions) {
       });
     }
 
-    if ((isLocalVmStatus(method, path) || isLocalVmAction(method, path)) && !device?.localVmAccess) {
+    if (isLocalVmPhoneSurface(method, path) && !device?.localVmAccess) {
       return sendJson(res, 403, {
         error: "Local VM access is off for this phone — enable it in OpenMausBot → Settings → Companion",
       });
@@ -364,10 +374,11 @@ export function createProxyHandler(options: ProxyOptions) {
       return;
     }
 
-    // Local VM actions carry no caller-controlled fields. Buffer the tiny
-    // body here, validate the exact empty object, then replay that object to
-    // the harness. Status is read-only and can pass through normally.
-    if (isLocalVmAction(method, path)) {
+    // Local VM actions and the read-only desktop capture carry no
+    // caller-controlled fields. Buffer the tiny body here, validate the
+    // exact empty object, then replay that object to the harness. Status is
+    // read-only and can pass through normally.
+    if (isLocalVmAction(method, path) || isLocalVmScreenshot(method, path)) {
       const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
       if (!contentType.startsWith("application/json")) {
         return sendJson(res, 415, { error: "Local VM actions require application/json" });
@@ -383,14 +394,67 @@ export function createProxyHandler(options: ProxyOptions) {
       return;
     }
 
+    if (isBotModel(method, path)) {
+      const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+      if (!contentType.startsWith("application/json")) {
+        return sendJson(res, 415, { error: "model requires application/json" });
+      }
+      const botId = botModelBotId(path);
+      if (!botId) return sendJson(res, 404, { error: `no route: ${method} ${path}` });
+      readJson(req, 64 * 1024, true).then(
+        (body) => {
+          const parsed = validateBotModelBody(method, path, body);
+          if ("denial" in parsed) return sendJson(res, parsed.denial.status, { error: parsed.denial.error });
+          if (parsed.rewrite) {
+            const selection: Record<string, unknown> = {
+              instanceId: parsed.patch.instanceId,
+              model: parsed.patch.model,
+            };
+            if (parsed.patch.effort != null) selection.effort = parsed.patch.effort;
+            forward(Buffer.from(JSON.stringify({ modelSelection: selection }), "utf8"), {
+              path: `/api/bots/${botId}`,
+            });
+            return;
+          }
+          forward(Buffer.from(JSON.stringify({
+            instanceId: parsed.patch.instanceId,
+            model: parsed.patch.model,
+          }), "utf8"));
+        },
+        (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
+      return;
+    }
+
+    if (isComputerDestination(method, path)) {
+      const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+      if (!contentType.startsWith("application/json")) {
+        return sendJson(res, 415, { error: "computer destination requires application/json" });
+      }
+      const botId = computerDestinationBotId(path);
+      if (!botId) return sendJson(res, 404, { error: `no route: ${method} ${path}` });
+      readJson(req, 64 * 1024, true).then(
+        (body) => {
+          const parsed = validateComputerDestinationBody(method, path, body);
+          if ("denial" in parsed) return sendJson(res, parsed.denial.status, { error: parsed.denial.error });
+          if (parsed.patch.computer === "vm" && device?.id) {
+            options.grantLocalVmAccess?.(device.id);
+          }
+          forward(Buffer.from(JSON.stringify(parsed.patch), "utf8"), { path: `/api/bots/${botId}` });
+        },
+        (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
+      return;
+    }
+
     forward();
 
-    function forward(requestBody?: Buffer): void {
+    function forward(requestBody?: Buffer, rewrite?: { path?: string }): void {
     const upstream = httpRequest(
       {
         hostname: "127.0.0.1",
         port: options.harnessPort,
-        path: req.url,
+        path: rewrite?.path ?? req.url,
         method,
         headers: forwardHeaders(req),
       },

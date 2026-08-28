@@ -17,7 +17,7 @@ struct BotAvatarView: View {
     @State private var image: UIImage?
     @State private var failed = false
 
-    private var crop: AvatarCrop { bot.avatarCrop ?? .mascot }
+    private var crop: AvatarCrop { bot.displayedAvatarCrop }
     private var usesImage: Bool { crop != .mascot && bot.avatarUrl != nil && !failed }
     /// A caller may request animation for a surface, but only the paired
     /// runtime can grant it. This keeps idle, waiting, and stale bots still
@@ -53,6 +53,7 @@ struct BotAvatarView: View {
             let data = await session.avatarData(for: bot)
             guard !Task.isCancelled else { return }
             guard let data, let decoded = UIImage(data: data) else {
+                if Task.isCancelled { return }
                 failed = true
                 return
             }

@@ -44,7 +44,13 @@ final class Session: ObservableObject {
     @Published private(set) var connection: Connection?
     @Published private(set) var status: Status = .unpaired
     /// Transient, user-facing failures from an action they just took.
-    @Published var actionError: String?
+    @Published var actionError: String? {
+        didSet {
+            if let message = actionError, RequestCancellation.matches(message) {
+                actionError = nil
+            }
+        }
+    }
     /// One exact message the next opened chat should reveal.
     @Published private(set) var focusedMessageId: String?
     @Published private(set) var notificationAuthorization: UNAuthorizationStatus = .notDetermined
@@ -543,7 +549,16 @@ final class Session: ObservableObject {
                     if state.pinnedOverrides != previousOverrides { persistPinnedOverrides() }
                     if state.appearanceOverrides != previousAppearanceOverrides { persistAppearanceOverrides() }
                     if case let .notify(notification) = frame.frame {
-                        NotificationCoordinator.shared.deliver(notification, sequence: frame.seq)
+                        let bot = state.bot(notification.botId)
+                        let seq = frame.seq
+                        Task { @MainActor in
+                            let png = await notificationAvatarPNG(for: bot)
+                            NotificationCoordinator.shared.deliver(
+                                notification,
+                                sequence: seq,
+                                avatarPNG: png
+                            )
+                        }
                     }
                     NotificationCoordinator.shared.setBadge(state.unreadCount)
                     state.advance(to: frame.seq)
@@ -863,6 +878,12 @@ final class Session: ObservableObject {
         }
     }
 
+    /// Pin or unpin immediately. Confirmations belong on destructive work,
+    /// not on a home-strip toggle.
+    func togglePinned(_ chat: Chat) {
+        Task { _ = await setPinned(!chat.pinned, for: chat) }
+    }
+
     /// Pin or unpin a conversation on the paired computer. The returned
     /// record is authoritative: state is folded only after the narrow server
     /// route acknowledges the requested value.
@@ -905,7 +926,7 @@ final class Session: ObservableObject {
                 }
             }
         } catch {
-            if !Task.isCancelled {
+            if !Task.isCancelled, !error.isCancellation {
                 actionError = error.localizedDescription
                 Haptics.error()
             }
@@ -976,6 +997,32 @@ final class Session: ObservableObject {
         }
     }
 
+    /// Capture the bot's Local VM desktop while the Computer panel is open.
+    /// SSE frames only arrive while a turn is running; this is the idle
+    /// preview Grok Bot shows. Failures here are not a chat-level error.
+    func refreshLocalVmPreview(for bot: Bot) async {
+        guard let client else { return }
+        let computer = bot.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard computer == "vm" else { return }
+        do {
+            let capture = try await client.localVmScreenshot(botId: bot.id)
+            guard !Task.isCancelled else { return }
+            if let frame = ScreenFrame.fromCapture(capture.image) {
+                state.screens[bot.id] = frame
+            }
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            localVmAccess = false
+            localVmStatuses.removeAll()
+        } catch let error as APIError {
+            if case let .status(code, _) = error, code == 403 || code == 404 {
+                localVmAccess = false
+            }
+        } catch {
+            return
+        }
+    }
+
     func localVmStatus(for bot: Bot) -> LocalVmStatus? {
         localVmStatuses[bot.id]
     }
@@ -998,6 +1045,7 @@ final class Session: ObservableObject {
             guard !Task.isCancelled else { return nil }
             localVmAccess = true
             localVmStatuses[bot.id] = next
+            await refreshLocalVmPreview(for: bot)
             return next
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
@@ -1031,7 +1079,9 @@ final class Session: ObservableObject {
             let page = try await client.messages(threadId: threadId, before: oldest.id, limit: 50)
             state.prepend(page, toThread: threadId)
         } catch {
-            actionError = error.localizedDescription
+            if !error.isCancellation {
+                actionError = error.localizedDescription
+            }
         }
     }
 
@@ -1148,6 +1198,13 @@ final class Session: ObservableObject {
         var override = state.appearanceOverrides.value(for: "bot:\(botID)") ?? BotAppearanceOverride()
         if fields.contains("color"), let color = patch.color { override.color = color }
         if fields.contains("mascotShape"), let shape = patch.mascotShape { override.mascotShape = shape }
+        if fields.contains("avatarCrop"), let crop = patch.avatarCrop { override.avatarCrop = crop }
+        if fields.contains("avatarUrl") {
+            switch patch.avatarUrl {
+            case let .set(url): override.avatarUrl = url
+            case .clear, nil: override.avatarUrl = nil
+            }
+        }
         state.setLocalAppearance(override, for: "bot:\(botID)")
         persistAppearanceOverrides()
     }
@@ -1327,6 +1384,22 @@ final class Session: ObservableObject {
         }
     }
 
+    func updateComputerDestination(_ patch: BotComputerDestinationPatch, for bot: Bot) async -> Bot? {
+        guard let client else { return nil }
+        do {
+            let updated = try await client.updateComputerDestination(botId: bot.id, patch: patch)
+            guard !Task.isCancelled else { return nil }
+            state.apply(.bot(updated))
+            if updated.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "vm" {
+                await refreshLocalVm(for: updated)
+            }
+            return updated
+        } catch {
+            if !Task.isCancelled { actionError = error.localizedDescription }
+            return nil
+        }
+    }
+
     func uploadAvatar(_ data: Data, mime: String, for bot: Bot, crop: AvatarCrop) async -> Bot? {
         guard let client else { return nil }
         do {
@@ -1377,6 +1450,29 @@ final class Session: ObservableObject {
         guard !Task.isCancelled, generation == avatarCacheGeneration, let data else { return nil }
         avatarCache.setObject(data as NSData, forKey: key, cost: data.count)
         return data
+    }
+
+    /// Circular PNG of the bot's photo, or a still of its mascot. Local
+    /// banners otherwise stamp the app icon — the old OpenMaus droplet —
+    /// over every agent.
+    func notificationAvatarPNG(for bot: Bot?) async -> Data? {
+        guard let bot else { return nil }
+        if bot.displayedAvatarCrop != .mascot, let data = await avatarData(for: bot), let image = UIImage(data: data) {
+            return NotificationAvatar.circularPNG(from: image)
+        }
+        let renderer = ImageRenderer(
+            content: MausAvatar(
+                color: bot.color,
+                size: 96,
+                state: .idle,
+                shape: bot.mascotShape?.rawValue ?? "droplet",
+                animated: false
+            )
+            .frame(width: 96, height: 96)
+        )
+        renderer.scale = 3
+        guard let image = renderer.uiImage else { return nil }
+        return NotificationAvatar.circularPNG(from: image)
     }
 
     private func resetAvatarCache() {
@@ -1505,8 +1601,10 @@ final class Session: ObservableObject {
             SoundEffects.playTapback()
             Haptics.selection()
         } catch {
-            actionError = error.localizedDescription
-            Haptics.error()
+            if !error.isCancellation {
+                actionError = error.localizedDescription
+                Haptics.error()
+            }
         }
     }
 
@@ -1662,7 +1760,7 @@ final class Session: ObservableObject {
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
         } catch {
-            if !quietly { actionError = error.localizedDescription }
+            if !quietly, !error.isCancellation { actionError = error.localizedDescription }
         }
     }
 
@@ -1708,7 +1806,7 @@ final class Session: ObservableObject {
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
         } catch {
-            if !quietly { actionError = error.localizedDescription }
+            if !quietly, !error.isCancellation { actionError = error.localizedDescription }
         }
     }
 }

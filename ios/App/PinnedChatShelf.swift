@@ -2,49 +2,60 @@ import SwiftUI
 import CompanionCore
 
 /// The small, always-at-hand set of conversations the user chose to keep
-/// close. It follows the Grok Bot reference: large left-aligned faces,
-/// one-line names, and a horizontal overflow only when the row cannot fit.
+/// close. Grok Bot sizes this as three cells across the pane: the face
+/// fills the cell minus a little padding, and extra pins scroll.
 struct PinnedChatShelf: View {
     let summaries: [ChatSummary]
     let open: (Chat) -> Void
 
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var pinPrompt: PendingPinChange?
+
+    private static let columns = 3
+    private static let gutter: CGFloat = 10
+    private static let coverAvatar: CGFloat = 80
+    private static let cellPadding: CGFloat = 8
+    private static let nameBlock: CGFloat = 36
 
     var body: some View {
         GeometryReader { proxy in
-            let tileWidth: CGFloat = 88
-            let spacing: CGFloat = 16
-            let capacity = max(1, Int((proxy.size.width - 32 + spacing) / (tileWidth + spacing)))
-
+            let metrics = Self.metrics(for: proxy.size.width)
             Group {
-                if summaries.count > capacity {
+                if summaries.count > Self.columns {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        tileRow(spacing: spacing)
+                        tileRow(metrics: metrics)
                             .padding(.horizontal, 16)
                     }
                 } else {
-                    tileRow(spacing: spacing)
+                    tileRow(metrics: metrics)
+                        .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.horizontal, 16)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(height: 132)
+        .frame(height: Self.coverAvatar + Self.nameBlock)
         .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: summaries.map(\.id))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Pinned conversations")
-        .pinConfirmationDialog($pinPrompt, session: session)
     }
 
-    private func tileRow(spacing: CGFloat) -> some View {
-        HStack(alignment: .top, spacing: spacing) {
+    private static func metrics(for paneWidth: CGFloat) -> (avatar: CGFloat, tile: CGFloat, spacing: CGFloat) {
+        let inner = max(paneWidth - 32, 1)
+        let cell = max(0, inner / CGFloat(columns) - gutter * 2)
+        let avatar = min(coverAvatar, max(64, cell - cellPadding * 2))
+        let tile = max(avatar, cell)
+        return (avatar, tile, gutter * 2)
+    }
+
+    private func tileRow(metrics: (avatar: CGFloat, tile: CGFloat, spacing: CGFloat)) -> some View {
+        HStack(alignment: .top, spacing: metrics.spacing) {
             ForEach(summaries) { summary in
                 Button { open(summary.chat) } label: {
                     PinnedChatTile(
                         chat: summary.chat,
+                        avatarSize: metrics.avatar,
+                        tileWidth: metrics.tile,
                         animated: !reduceMotion && MausState.forChat(summary.chat, in: session.state).showsActivity
                     )
                 }
@@ -60,7 +71,7 @@ struct PinnedChatShelf: View {
     @ViewBuilder
     private func pinButton(for summary: ChatSummary) -> some View {
         Button {
-            pinPrompt = PendingPinChange(chat: summary.chat, pinned: summary.pinned)
+            session.togglePinned(summary.chat)
         } label: {
             Label(summary.pinned ? "Unpin" : "Pin", systemImage: summary.pinned ? "pin.slash" : "pin")
         }
@@ -70,12 +81,14 @@ struct PinnedChatShelf: View {
 
 private struct PinnedChatTile: View {
     let chat: Chat
+    let avatarSize: CGFloat
+    let tileWidth: CGFloat
     let animated: Bool
 
     var body: some View {
         VStack(spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
-                PinnedChatAvatar(chat: chat, size: 74, animated: animated)
+                PinnedChatAvatar(chat: chat, size: avatarSize, animated: animated)
 
                 if chat.busy {
                     ProgressView()
@@ -86,7 +99,7 @@ private struct PinnedChatTile: View {
                         .overlay(Circle().stroke(VBotSurface.background, lineWidth: 2))
                 }
             }
-            .frame(width: 76, height: 76)
+            .frame(width: avatarSize, height: avatarSize)
 
             HStack(spacing: 4) {
                 Text(chat.name)
@@ -102,8 +115,9 @@ private struct PinnedChatTile: View {
                         .accessibilityHidden(true)
                 }
             }
-            .frame(width: 88)
+            .frame(width: tileWidth)
         }
+        .frame(width: tileWidth)
         .contentShape(Rectangle())
         .accessibilityLabel(chat.name)
         .accessibilityValue(accessibilityStatus)

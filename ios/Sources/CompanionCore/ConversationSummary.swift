@@ -50,13 +50,24 @@ public struct ConversationPinOverrides: Codable, Equatable, Sendable {
 public struct BotAppearanceOverride: Codable, Equatable, Sendable {
     public var color: String?
     public var mascotShape: MascotShape?
+    public var avatarUrl: String?
+    public var avatarCrop: AvatarCrop?
 
-    public init(color: String? = nil, mascotShape: MascotShape? = nil) {
+    public init(
+        color: String? = nil,
+        mascotShape: MascotShape? = nil,
+        avatarUrl: String? = nil,
+        avatarCrop: AvatarCrop? = nil
+    ) {
         self.color = color
         self.mascotShape = mascotShape
+        self.avatarUrl = avatarUrl
+        self.avatarCrop = avatarCrop
     }
 
-    public var isEmpty: Bool { color == nil && mascotShape == nil }
+    public var isEmpty: Bool {
+        color == nil && mascotShape == nil && avatarUrl == nil && avatarCrop == nil
+    }
 }
 
 /// Bounded device-local appearance overrides. These are a compatibility

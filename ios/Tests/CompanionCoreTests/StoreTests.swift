@@ -350,6 +350,41 @@ final class StoreTests: XCTestCase {
         XCTAssertNil(state.appearanceOverrides.value(for: "bot:\(bot.id)"))
     }
 
+    func testLocalAvatarOverrideSurvivesHydrationWhenServerOmitsCrop() throws {
+        let source = try hydrated()
+        var bot = try XCTUnwrap(source.bots.first)
+        bot.avatarUrl = nil
+        bot.avatarCrop = .mascot
+
+        var state = CompanionState()
+        state.appearanceOverrides.set(
+            BotAppearanceOverride(
+                avatarUrl: "/api/attachments/123e4567-e89b-12d3-a456-426614174000.webp",
+                avatarCrop: .circle
+            ),
+            for: "bot:\(bot.id)"
+        )
+        state.hydrate(Fleet(bots: [bot], groups: []))
+
+        XCTAssertEqual(
+            state.bot(bot.id)?.avatarUrl,
+            "/api/attachments/123e4567-e89b-12d3-a456-426614174000.webp"
+        )
+        XCTAssertEqual(state.bot(bot.id)?.avatarCrop, .circle)
+        XCTAssertEqual(state.bot(bot.id)?.displayedAvatarCrop, .circle)
+    }
+
+    func testOmittedAvatarCropStillDisplaysAStoredPhoto() throws {
+        var bot = try XCTUnwrap(hydrated().bots.first)
+        bot.avatarUrl = nil
+        bot.avatarCrop = nil
+        XCTAssertEqual(bot.displayedAvatarCrop, .mascot)
+        bot.avatarUrl = "/api/attachments/123e4567-e89b-12d3-a456-426614174000.webp"
+        XCTAssertEqual(bot.displayedAvatarCrop, .circle)
+        bot.avatarCrop = .mascot
+        XCTAssertEqual(bot.displayedAvatarCrop, .mascot)
+    }
+
     func testLocalAppearanceOverridesStayBoundedAndEncode() throws {
         var overrides = BotAppearanceOverrides()
         for index in 0...BotAppearanceOverrides.maxEntries {
@@ -597,5 +632,14 @@ final class ScreenTests: XCTestCase {
         XCTAssertEqual(good.data.flatMap { String(bytes: $0, encoding: .utf8) }, "hello")
         // the view treats nil as "no frame yet", which is the right fallback
         XCTAssertNil(ScreenFrame(png: "not base64 at all!!", mime: "image/png").data)
+    }
+
+    func testScreenFrameFromCaptureAcceptsDataUrlAndRawBase64() {
+        let fromDataURL = ScreenFrame.fromCapture("data:image/png;base64,aGVsbG8=")
+        XCTAssertEqual(fromDataURL?.png, "aGVsbG8=")
+        XCTAssertEqual(fromDataURL?.mime, "image/png")
+        XCTAssertEqual(ScreenFrame.fromCapture("aGVsbG8=")?.png, "aGVsbG8=")
+        XCTAssertNil(ScreenFrame.fromCapture("data:image/png;base64,"))
+        XCTAssertNil(ScreenFrame.fromCapture("   "))
     }
 }
