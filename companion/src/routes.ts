@@ -74,12 +74,53 @@ export const LOCAL_VM_SCREENSHOT_ROUTE = {
   path: /^\/api\/bots\/[\w-]+\/local-computer\/screenshot$/,
 } as const;
 
+/** Mint a proxied noVNC viewer path for this bot's ready Local VM. */
+export const LOCAL_VM_JOIN_ROUTE = {
+  method: "POST",
+  path: /^\/api\/bots\/[\w-]+\/local-computer\/join$/,
+} as const;
+
+/** Send bounded click/scroll/type/key input to a ready Local VM desktop. */
+export const LOCAL_VM_INPUT_ROUTE = {
+  method: "POST",
+  path: /^\/api\/bots\/[\w-]+\/local-computer\/input$/,
+} as const;
+
+/** Read-only noVNC assets for the proxied Local VM viewer. */
+export const LOCAL_VM_VIEWER_ROUTE = {
+  method: "GET",
+  path: /^\/api\/bots\/[\w-]+\/local-computer\/viewer(\/|$)/,
+} as const;
+
 export function isLocalVmScreenshot(method: string, path: string): boolean {
   return method === LOCAL_VM_SCREENSHOT_ROUTE.method && LOCAL_VM_SCREENSHOT_ROUTE.path.test(path);
 }
 
+export function isLocalVmJoin(method: string, path: string): boolean {
+  return method === LOCAL_VM_JOIN_ROUTE.method && LOCAL_VM_JOIN_ROUTE.path.test(path);
+}
+
+export function isLocalVmInput(method: string, path: string): boolean {
+  return method === LOCAL_VM_INPUT_ROUTE.method && LOCAL_VM_INPUT_ROUTE.path.test(path);
+}
+
+export function isLocalVmViewer(method: string, path: string): boolean {
+  return method === LOCAL_VM_VIEWER_ROUTE.method && LOCAL_VM_VIEWER_ROUTE.path.test(path);
+}
+
+export function isLocalVmViewerUpgrade(path: string): boolean {
+  return LOCAL_VM_VIEWER_ROUTE.path.test(path.split("?")[0] ?? "");
+}
+
 export function isLocalVmPhoneSurface(method: string, path: string): boolean {
-  return isLocalVmStatus(method, path) || isLocalVmAction(method, path) || isLocalVmScreenshot(method, path);
+  return (
+    isLocalVmStatus(method, path)
+    || isLocalVmAction(method, path)
+    || isLocalVmScreenshot(method, path)
+    || isLocalVmJoin(method, path)
+    || isLocalVmInput(method, path)
+    || isLocalVmViewer(method, path)
+  );
 }
 
 /** Paired-safe computer destination. The broad bot PATCH stays closed; this
@@ -334,7 +375,9 @@ export function validateLocalVmActionBody(
   path: string,
   body: unknown,
 ): Denial | null {
-  if (!isLocalVmAction(method, path) && !isLocalVmScreenshot(method, path)) return null;
+  if (!isLocalVmAction(method, path) && !isLocalVmScreenshot(method, path) && !isLocalVmJoin(method, path)) {
+    return null;
+  }
   if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 0) {
     return { status: 400, error: "Local VM actions accept an empty JSON object only" };
   }
@@ -458,6 +501,9 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   LOCAL_VM_STATUS_ROUTE,
   LOCAL_VM_ACTION_ROUTE,
   LOCAL_VM_SCREENSHOT_ROUTE,
+  LOCAL_VM_JOIN_ROUTE,
+  LOCAL_VM_INPUT_ROUTE,
+  LOCAL_VM_VIEWER_ROUTE,
 
   // rooms — making one, and talking in one
   { method: "POST", path: /^\/api\/groups$/ },

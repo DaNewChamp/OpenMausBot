@@ -19,7 +19,7 @@
 // Running this process *is* the opt-in. There is no toggle, because a toggle
 // inside a process you chose to start would be ceremony: stopping it is the
 // off switch, and it is a more honest one than a flag in a file.
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 
 import { createAddressWatcher } from "./advertise-watch.ts";
 import { createControlServer, hostCandidates } from "./control.ts";
@@ -37,6 +37,8 @@ import {
 } from "./mdns.ts";
 import { createProxyHandler } from "./proxy.ts";
 import { companionOriginSocket, listenCompanionOrigin } from "./origin.ts";
+import { bearerToken } from "./devices.ts";
+import { isLocalVmViewerUpgrade } from "./routes.ts";
 
 /** A port from the environment, or the default. Anything that is not a whole
  * number in range is the default — a typo'd port must not become port 0. */
@@ -149,6 +151,48 @@ const proxy = createProxyHandler({
     grantLocalVmAccess: (id) => devices.setLocalVmAccess(id, true),
   });
 const companion = createServer(proxy);
+companion.on("upgrade", (req, socket, head) => {
+  const path = (req.url ?? "/").split("?")[0];
+  if (!isLocalVmViewerUpgrade(path)) {
+    socket.destroy();
+    return;
+  }
+  const device = devices.authenticate(bearerToken(req.headers.authorization));
+  if (!device?.localVmAccess) {
+    socket.destroy();
+    return;
+  }
+  const upstream = httpRequest({
+    hostname: "127.0.0.1",
+    port: HARNESS_PORT,
+    path: req.url,
+    method: req.method,
+    headers: {
+      ...req.headers,
+      host: `127.0.0.1:${HARNESS_PORT}`,
+      "x-openmausbot-companion": "1",
+    },
+  });
+  upstream.on("upgrade", (response, upstreamSocket, upstreamHead) => {
+    let raw = `HTTP/1.1 ${response.statusCode ?? 101} ${response.statusMessage ?? "Switching Protocols"}\r\n`;
+    for (const [name, values] of Object.entries(response.headers)) {
+      if (values === undefined) continue;
+      raw += `${name}: ${Array.isArray(values) ? values.join(", ") : values}\r\n`;
+    }
+    raw += "\r\n";
+    socket.write(raw);
+    if (upstreamHead.length) socket.write(upstreamHead);
+    if (head.length) upstreamSocket.write(head);
+    upstreamSocket.pipe(socket);
+    socket.pipe(upstreamSocket);
+  });
+  upstream.on("response", (response) => {
+    if (response.statusCode === 101) return;
+    socket.destroy();
+  });
+  upstream.on("error", () => socket.destroy());
+  upstream.end();
+});
 const managedOrigin = PRIVATE_ORIGIN ? createServer(proxy) : null;
 
 const control = createControlServer({

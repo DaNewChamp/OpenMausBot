@@ -141,8 +141,21 @@ describe("Local VM invoke MCP", () => {
 
   it("refuses host-terminal tools instead of forwarding them", async () => {
     const before = createCalls;
-    const res = await rpc("tools/call", { name: "computer_exec", arguments: { command: "id" } });
+    const res = await rpc("tools/call", { name: "bash", arguments: { command: "id" } });
     expect(res.error.message).toMatch(/Unknown tool/);
     expect(createCalls).toBe(before);
+  });
+
+  it("forwards computer_exec once the VM is ready", async () => {
+    invokeResponse = {
+      state: "ready",
+      result: { text: "exit 0\nuid=1000", isError: false },
+    };
+    const res = await callTool("computer_exec", { command: "id" });
+    expect(lastInvoke).toMatchObject({
+      tool: "computer_exec",
+      arguments: { command: "id" },
+    });
+    expect(res.result.isError).toBe(false);
   });
 });

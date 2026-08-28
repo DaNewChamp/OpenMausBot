@@ -120,6 +120,16 @@ export const LOCAL_VM_INVOKE_TOOLS = [
       required: ["url"],
     },
   },
+  {
+    name: "computer_exec",
+    description:
+      "Run a shell command on this bot's Local VM (Linux desktop container). Returns stdout/stderr/exit code. This is not the user's Mac.",
+    inputSchema: {
+      type: "object",
+      properties: { command: { type: "string" } },
+      required: ["command"],
+    },
+  },
 ] as const;
 
 export const LOCAL_VM_INVOKE_TOOL_NAMES = LOCAL_VM_INVOKE_TOOLS.map((tool) => tool.name);
@@ -411,6 +421,23 @@ export async function executeLocalVmInvokeTool(
       if (!app) return { text: "launch_app needs an app name.", isError: true };
       const out = await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "launch_app", { app });
       return { text: sanitizeLocalVmInvokeText(out || `Launched ${app} on this bot's Local VM.`), isError: false };
+    }
+    if (name === "computer_exec") {
+      const commandRaw = field(args, "command");
+      const command = typeof commandRaw === "string" ? commandRaw.trim() : "";
+      if (!command) return { text: "computer_exec needs a command.", isError: true };
+      const trimmed = command.slice(0, 4000);
+      try {
+        const { stdout } = await ctx.runner(
+          ctx.runtime,
+          ["exec", ctx.containerName, "bash", "-lc", trimmed],
+          120_000,
+        );
+        return { text: sanitizeLocalVmInvokeText(stdout || "Command finished on this bot's Local VM."), isError: false };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { text: sanitizeLocalVmInvokeText(message), isError: true };
+      }
     }
     return { text: "That computer tool is not available on this bot's Local VM.", isError: true };
   } catch (error) {

@@ -78,9 +78,9 @@ describe("Local VM self-invoke capability gate", () => {
       "press_key",
       "launch_app",
       "open_url",
+      "computer_exec",
     ]);
-    expect(LOCAL_VM_INVOKE_TOOL_NAMES).not.toContain("computer_exec");
-    expect(isLocalVmInvokeTool("computer_exec")).toBe(false);
+    expect(isLocalVmInvokeTool("computer_exec")).toBe(true);
   });
 
   it("exposes the exact same stable tool contract when the VM is already ready and never allows host fallback", () => {
@@ -522,7 +522,7 @@ describe("Local VM execute coverage and contract drift prevention", () => {
     }
 
     // Any unadvertised tool must be rejected by isLocalVmInvokeTool and executeLocalVmInvokeTool
-    const unadvertised = ["computer_exec", "bash", "write_file", "eval", "terminal"];
+    const unadvertised = ["bash", "write_file", "eval", "terminal"];
     for (const name of unadvertised) {
       expect(isLocalVmInvokeTool(name)).toBe(false);
       const res = await executeLocalVmInvokeTool(name, {}, ctx(runner));

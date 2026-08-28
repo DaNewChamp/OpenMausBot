@@ -82,6 +82,9 @@ describe("what the app may do", () => {
     ["POST", "/api/bots/bot_123/local-computer/run"],
     ["POST", "/api/bots/bot_123/local-computer/stop"],
     ["POST", "/api/bots/bot_123/local-computer/recreate"],
+    ["POST", "/api/bots/bot_123/local-computer/join"],
+    ["POST", "/api/bots/bot_123/local-computer/input"],
+    ["GET", "/api/bots/bot_123/local-computer/viewer/vnc.html"],
     ["POST", "/api/groups/room-1/messages"],
     ["POST", "/api/groups/room-1/interrupt"],
     ["POST", "/api/groups/room-1/read"],
@@ -204,12 +207,15 @@ describe("what it may not", () => {
     expect(allowed("POST", "/api/bots/bot_123/computer/screenshot")).toBe(false);
   });
 
-  it("opens only per-bot Local VM status, capture, and guarded actions", () => {
+  it("opens only per-bot Local VM status, capture, viewer, input, and guarded actions", () => {
     expect(allowed("GET", "/api/bots/bot_123/local-computer")).toBe(true);
     expect(allowed("POST", "/api/bots/bot_123/local-computer/run")).toBe(true);
     expect(allowed("POST", "/api/bots/bot_123/local-computer/stop")).toBe(true);
     expect(allowed("POST", "/api/bots/bot_123/local-computer/recreate")).toBe(true);
     expect(allowed("POST", "/api/bots/bot_123/local-computer/screenshot")).toBe(true);
+    expect(allowed("POST", "/api/bots/bot_123/local-computer/join")).toBe(true);
+    expect(allowed("POST", "/api/bots/bot_123/local-computer/input")).toBe(true);
+    expect(allowed("GET", "/api/bots/bot_123/local-computer/viewer/vnc.html")).toBe(true);
     expect(allowed("POST", "/api/local-computer/run")).toBe(false);
     expect(allowed("POST", "/api/local-computer/screenshot")).toBe(false);
     expect(allowed("POST", "/api/bots/bot_123/local-computer/start")).toBe(false);

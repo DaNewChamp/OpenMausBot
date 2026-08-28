@@ -168,6 +168,14 @@ import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
 import { projectLocalVmStatus } from "./local-vm-phone.ts";
+import { executeLocalVmPhoneInput, validateLocalVmPhoneInput } from "./local-vm-phone-input.ts";
+import {
+  localVmViewerJoinPath,
+  localVmViewerTarget,
+  parseLocalVmViewerRoute,
+  proxyLocalVmViewerHttp,
+  proxyLocalVmViewerUpgrade,
+} from "./local-vm-viewer-proxy.ts";
 import {
   LOCAL_VM_STARTING_MESSAGE,
   ensureLocalVm,
@@ -6000,6 +6008,76 @@ const server = createServer(async (req, res) => {
         image: await containerComputerScreenshot(undefined, undefined, target),
       });
     }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer\/join$/);
+    if (m && method === "POST") {
+      if (req.headers["x-openmausbot-companion"] !== "1") {
+        return json(res, 403, { error: "Local VM viewer join is available only through the paired companion" });
+      }
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const body = await readBody(req);
+      if (body && (typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 0)) {
+        return json(res, 400, { error: "join accepts an empty JSON object only" });
+      }
+      const target = localVmTargetForBot(bot.id);
+      localVmIdleFor(target).touch();
+      const status = await containerComputerStatus(undefined, undefined, target);
+      const viewer = localVmViewerTarget(status);
+      if (!viewer) {
+        return json(res, 409, { error: status.problem ?? "The Local VM desktop is not ready for viewing." });
+      }
+      return json(res, 200, localVmViewerJoinPath(bot.id, viewer));
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer\/input$/);
+    if (m && method === "POST") {
+      if (req.headers["x-openmausbot-companion"] !== "1") {
+        return json(res, 403, { error: "Local VM input is available only through the paired companion" });
+      }
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const target = localVmTargetForBot(bot.id);
+      const vmOwner = localVmLeaseFor(target).current(localVmOwnerBusy);
+      if (vmOwner) {
+        return json(res, 409, { error: "this bot is using its Local VM — wait for the turn to finish before sending input" });
+      }
+      const status = await containerComputerStatus(undefined, undefined, target);
+      if (!status.ready || !status.runtime) {
+        return json(res, 409, { error: status.problem ?? "The Local VM desktop is not ready." });
+      }
+      const parsed = validateLocalVmPhoneInput(await readBody(req));
+      if ("error" in parsed) return json(res, 400, { error: parsed.error });
+      localVmIdleFor(target).touch();
+      const result = await executeLocalVmPhoneInput(parsed.input, {
+        runtime: status.runtime,
+        containerName: target.containerName,
+        runner: localVmCommandRunner,
+      });
+      return json(res, result.isError ? 502 : 200, result);
+    }
+    {
+      const viewerRoute = parseLocalVmViewerRoute(path);
+      if (viewerRoute && req.headers["x-openmausbot-companion"] === "1") {
+        const bot = store.bot(viewerRoute.botId);
+        if (!bot) return json(res, 404, { error: "no such bot" });
+        const target = localVmTargetForBot(bot.id);
+        localVmIdleFor(target).touch();
+        const status = await containerComputerStatus(undefined, undefined, target);
+        const viewer = localVmViewerTarget(status);
+        if (!viewer) {
+          return json(res, 409, { error: status.problem ?? "The Local VM viewer is not ready." });
+        }
+        if (method === "GET" || method === "HEAD") {
+          return proxyLocalVmViewerHttp(req, res, viewer, viewerRoute.subpath);
+        }
+        return json(res, 405, { error: "method not allowed" });
+      }
+    }
 
     // identity handshake for the packaged app's port fallback: the forked
     // child proves it is OURS by echoing its pid (a stray dev server has
@@ -6633,6 +6711,39 @@ const server = createServer(async (req, res) => {
     const status = (e as any)?.status ?? 500;
     return json(res, status, { error: e instanceof Error ? e.message : String(e) });
   }
+});
+
+server.on("upgrade", (req, socket, head) => {
+  const path = (req.url ?? "/").split("?")[0];
+  if (req.headers["x-openmausbot-companion"] !== "1") {
+    socket.destroy();
+    return;
+  }
+  const viewerRoute = parseLocalVmViewerRoute(path);
+  if (!viewerRoute) {
+    socket.destroy();
+    return;
+  }
+  void (async () => {
+    try {
+      const bot = store.bot(viewerRoute.botId);
+      if (!bot) {
+        socket.destroy();
+        return;
+      }
+      const target = localVmTargetForBot(bot.id);
+      localVmIdleFor(target).touch();
+      const status = await containerComputerStatus(undefined, undefined, target);
+      const viewer = localVmViewerTarget(status);
+      if (!viewer) {
+        socket.destroy();
+        return;
+      }
+      proxyLocalVmViewerUpgrade(req, socket, head, viewer, viewerRoute.subpath);
+    } catch {
+      socket.destroy();
+    }
+  })();
 });
 
 server.listen(PORT, "127.0.0.1", () => {

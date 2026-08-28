@@ -32,6 +32,9 @@ import {
   isGroupUnread,
   isLocalVmAction,
   isLocalVmScreenshot,
+  isLocalVmJoin,
+  isLocalVmInput,
+  isLocalVmViewer,
   isLocalVmPhoneSurface,
   validateBotModelBody,
   validateBotVisibilityBody,
@@ -388,7 +391,7 @@ export function createProxyHandler(options: ProxyOptions) {
     // caller-controlled fields. Buffer the tiny body here, validate the
     // exact empty object, then replay that object to the harness. Status is
     // read-only and can pass through normally.
-    if (isLocalVmAction(method, path) || isLocalVmScreenshot(method, path)) {
+    if (isLocalVmAction(method, path) || isLocalVmScreenshot(method, path) || isLocalVmJoin(method, path)) {
       const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
       if (!contentType.startsWith("application/json")) {
         return sendJson(res, 415, { error: "Local VM actions require application/json" });
@@ -401,6 +404,28 @@ export function createProxyHandler(options: ProxyOptions) {
         },
         (error: Error) => sendJson(res, 400, { error: error.message }),
       );
+      return;
+    }
+
+    if (isLocalVmInput(method, path)) {
+      const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+      if (!contentType.startsWith("application/json")) {
+        return sendJson(res, 415, { error: "Local VM input requires application/json" });
+      }
+      readJson(req, 64 * 1024, true).then(
+        (body) => {
+          if (!body || typeof body !== "object" || Array.isArray(body)) {
+            return sendJson(res, 400, { error: "input requires a JSON object" });
+          }
+          forward(Buffer.from(JSON.stringify(body), "utf8"));
+        },
+        (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
+      return;
+    }
+
+    if (isLocalVmViewer(method, path)) {
+      forward();
       return;
     }
 

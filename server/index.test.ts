@@ -3057,7 +3057,7 @@ describe("Local VM startTurn and internal invoke API", () => {
       body: JSON.stringify({
         botId: vmBotId,
         threadId: vmThreadId,
-        tool: "computer_exec",
+        tool: "bash",
       }),
     });
     expect(badTool.status).toBe(400);
