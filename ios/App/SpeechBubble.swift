@@ -88,14 +88,11 @@ struct SpeechBubble: Shape {
 /// The two bubble fills. Solid rather than translucent on purpose: the tail
 /// is part of the same fill, and a see-through bubble shows the seam.
 enum BubbleColor {
-    /// What you said. The mascot palette's blue, not the system's.
-    static let mine = MausPalette.color("blue")
+    /// What you said. Grok's lifted gray, not a brand blue.
+    static let mine = VBotSurface.userBubble
     static let mineText = Color.white
 
-    /// What a bot said. Near-black on dark, a soft grey on light.
-    static let theirs = Color(uiColor: UIColor { trait in
-        trait.userInterfaceStyle == .dark
-            ? UIColor(red: 0.149, green: 0.149, blue: 0.161, alpha: 1)   // #262629
-            : UIColor(red: 0.914, green: 0.914, blue: 0.922, alpha: 1)   // #E9E9EB
-    })
+    /// What a bot said, when a fill is needed. Assistant turns on the Grok
+    /// canvas usually sit on the black itself; this is the fallback gray.
+    static let theirs = VBotSurface.assistantBubble
 }

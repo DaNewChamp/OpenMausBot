@@ -106,7 +106,7 @@ struct ChatView: View {
                     // height exact and the anchor land on the newest message.
                     // A thread holds 50 messages until you ask for more, so
                     // there is nothing here worth being lazy about.
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 14) {
                         if session.state.hasMore[threadId] == true {
                             Button("Load earlier messages") {
                                 // keep the reader where they were: after older
@@ -211,8 +211,8 @@ struct ChatView: View {
                                 .accessibilityLabel("\(current.name) is working")
                         }
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 // A real safe-area inset keeps the transcript below the
@@ -405,8 +405,9 @@ struct ChatView: View {
 
     // MARK: - Header
 
-    /// Back and the agent pill sit together on the leading edge so the face
-    /// never covers the transcript. The pill compresses before chrome does.
+    /// Back and the agent sit on the leading edge so the face never covers
+    /// the transcript. Chrome is liquid glass; the name is the title, not a
+    /// second pill competing with the face.
     private var headerBar: some View {
         HStack(spacing: 8) {
             Button {
@@ -424,15 +425,15 @@ struct ChatView: View {
                             .foregroundStyle(Color(uiColor: .systemBackground))
                             .padding(.horizontal, 4)
                             .frame(minWidth: 17, minHeight: 17)
-                            .background(Capsule().fill(Color.primary))
+                            .background(Capsule().fill(VBotSurface.unread))
                             .offset(x: 4, y: -4)
                     }
                 }
                 .foregroundStyle(Color.primary)
-                .background(Circle().fill(VBotSurface.controlSurface))
                 .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .glassCircle()
             .fixedSize()
             .accessibilityLabel("Back")
             .accessibilityValue(unreadElsewhere > 0 ? "\(unreadElsewhere) unread elsewhere" : "")
@@ -442,25 +443,22 @@ struct ChatView: View {
                 if current.isBot { showingProfile = true }
                 else if case let .room(room) = current { groupProfileRoom = room }
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     ChatAvatarView(
                         chat: current,
-                        size: 22,
+                        size: 28,
                         state: MausState.forChat(current, in: session.state),
                         animated: !reduceMotion && MausState.forChat(current, in: session.state).showsActivity
                     )
                     Text(current.name)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.headline)
                         .foregroundStyle(Color.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
                         .truncationMode(.tail)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
                 .frame(minWidth: 0, minHeight: 44, alignment: .leading)
-                .background(Capsule().fill(VBotSurface.controlSurface))
-                .contentShape(Capsule())
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .layoutPriority(0)
@@ -481,8 +479,8 @@ struct ChatView: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .glassCircle()
                 .fixedSize()
-                .background(Circle().fill(VBotSurface.controlSurface))
                 .accessibilityLabel("Watch \(current.name)'s computer")
             } else {
                 Button {
@@ -496,30 +494,15 @@ struct ChatView: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .glassCircle()
                 .fixedSize()
-                .background(Circle().fill(VBotSurface.controlSurface))
                 .accessibilityLabel("Open \(current.name) chat options")
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 6)
+        .padding(.horizontal, 12)
+        .padding(.top, 4)
         .padding(.bottom, 8)
-        .background {
-            ZStack(alignment: .bottom) {
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                    .opacity(0.62)
-                LinearGradient(
-                    colors: [VBotSurface.background.opacity(0.66), VBotSurface.background.opacity(0.18), .clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 28)
-                .offset(y: 20)
-            }
-            .ignoresSafeArea(edges: .top)
-            .allowsHitTesting(false)
-        }
+        .background(VBotSurface.background.ignoresSafeArea(edges: .top))
     }
 
     // MARK: - The + sheet
@@ -1139,32 +1122,34 @@ struct ChatView: View {
                     setShowingPlus(!showingPlus)
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 21, weight: .medium))
-                        .foregroundStyle(showingPlus ? Color.primary : Color.primary)
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(Color.primary)
                         .rotationEffect(.degrees(showingPlus ? 45 : 0))
-                        .frame(width: 48, height: 48)
-                        .background(Circle().fill(VBotSurface.controlSurface))
+                        .frame(width: 44, height: 44)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .glassCircle()
                 .accessibilityLabel(showingPlus ? "Close" : "More")
 
-                HStack(alignment: .bottom, spacing: 3) {
-                    Button {
-                        dictation.stop()
-                        updateState(.spring(response: 0.3, dampingFraction: 0.75)) {
-                            showCommandHUD.toggle()
+                HStack(alignment: .bottom, spacing: 2) {
+                    if showCommandHUD || draft.hasPrefix("/") {
+                        Button {
+                            dictation.stop()
+                            updateState(.spring(response: 0.3, dampingFraction: 0.75)) {
+                                showCommandHUD.toggle()
+                            }
+                            Haptics.selection()
+                        } label: {
+                            Image(systemName: "command")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(showCommandHUD ? Color.primary : Color.secondary.opacity(0.72))
+                                .frame(width: 27, height: 34)
                         }
-                        Haptics.selection()
-                    } label: {
-                        Image(systemName: "command")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(showCommandHUD ? Color.primary : Color.secondary.opacity(0.72))
-                            .frame(width: 27, height: 34)
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Slash commands")
+                        .padding(.leading, 5)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Slash commands")
-                    .padding(.leading, 5)
 
                     TextField(
                         dictation.isListening ? "Listening…" : "Ask \(current.name)",
@@ -1172,8 +1157,9 @@ struct ChatView: View {
                         axis: .vertical
                     )
                         .lineLimit(1...5)
-                        .font(chatTypography.body)
-                        .padding(.vertical, 11)
+                        .font(chatTypography.composer)
+                        .padding(.leading, showCommandHUD || draft.hasPrefix("/") ? 0 : 16)
+                        .padding(.vertical, 12)
                         .focused($composerFocused)
                         .submitLabel(.send)
                         // Partial transcripts rebuild from a frozen base;
@@ -1191,41 +1177,33 @@ struct ChatView: View {
                         }
                         .onSubmit { activatePrimaryAction() }
 
-                    Button {
-                        composerFocused = false
-                        dictation.toggle(capturing: draft)
-                    } label: {
-                        Image(systemName: dictation.isListening ? "mic.fill" : "mic")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(dictation.isListening ? Color.red : Color.primary)
-                            .frame(width: 32, height: 32)
-                            .background(
-                                Circle().fill(
-                                    dictation.isListening
-                                        ? Color.red.opacity(0.2)
-                                        : Color.secondary.opacity(0.12)
-                                )
-                            )
-                            .symbolEffect(.pulse, isActive: dictation.isListening && !reduceMotion)
+                    if primaryAction == .none || dictation.isListening {
+                        Button {
+                            composerFocused = false
+                            dictation.toggle(capturing: draft)
+                        } label: {
+                            Image(systemName: dictation.isListening ? "mic.fill" : "mic")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(dictation.isListening ? Color.red : Color.primary)
+                                .frame(width: 36, height: 36)
+                                .symbolEffect(.pulse, isActive: dictation.isListening && !reduceMotion)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 8)
+                        .padding(.bottom, 4)
+                        .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
+                    } else {
+                        primaryActionButton
                     }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 7)
-                    .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
-
-                    primaryActionButton
                 }
-                .padding(.trailing, 3)
                 .frame(minHeight: 48)
-                .background(
-                    RoundedRectangle(cornerRadius: 25, style: .continuous)
-                        .fill(VBotSurface.composerSurface)
-                )
+                .glassCapsule()
             }
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
-        .background(VBotSurface.background.opacity(0.98).ignoresSafeArea(edges: .bottom))
+        .background(VBotSurface.background.ignoresSafeArea(edges: .bottom))
     }
 
     @ViewBuilder
@@ -1310,9 +1288,9 @@ struct ChatView: View {
             Button { submit(mode: mode) } label: {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(Color(uiColor: .systemBackground))
                     .frame(width: 32, height: 32)
-                    .background(Circle().fill(BubbleColor.mine))
+                    .background(Circle().fill(Color.primary))
             }
             .buttonStyle(.plain)
             .disabled(composerRequestGate.isInFlight)
@@ -1677,7 +1655,7 @@ struct TextBubble: View {
         // No face beside the bubble: the bot's face is in the header, and in
         // a room the name line says who spoke. The bubble sits at the edge.
         HStack(alignment: .bottom, spacing: 0) {
-            if mine { Spacer(minLength: 56) }
+            if mine { Spacer(minLength: 64) }
 
             VStack(alignment: .leading, spacing: 4) {
                 if let speaker, !mine {
@@ -1716,18 +1694,17 @@ struct TextBubble: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(.horizontal, customCard ? 0 : 18)
-            .padding(.vertical, customCard ? 0 : 14)
-            .background(
-                Group {
-                    if !customCard {
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .fill(mine ? BubbleColor.mine : VBotSurface.assistantBubble)
-                    }
+            .padding(.horizontal, customCard ? 0 : (mine ? 16 : 4))
+            .padding(.vertical, customCard ? 0 : (mine ? 12 : 2))
+            .background {
+                if mine && !customCard {
+                    SpeechBubble(tail: tailed ? .trailing : .none, cornerRadius: 20)
+                        .fill(BubbleColor.mine)
                 }
-            )
+            }
+            .padding(.bottom, mine && tailed && !customCard ? SpeechBubble.tailDrop(cornerRadius: 20) : 0)
 
-            if !mine { Spacer(minLength: 18) }
+            if !mine { Spacer(minLength: 12) }
         }
     }
 }
@@ -2507,13 +2484,9 @@ struct StreamingBubble: View {
                         .foregroundStyle(Color.primary)
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 14)
-            .background(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(VBotSurface.assistantBubble)
-            )
-            Spacer(minLength: 18)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            Spacer(minLength: 12)
         }
         // No `.textSelection` on purpose: selecting text that is still growing
         // fights the reader, and the settled bubble a frame later is

@@ -21,14 +21,18 @@ struct ConversationTypography: Equatable {
         self.init(scale: size.scale, dynamicTypeSize: dynamicTypeSize)
     }
 
+    /// Grok Bot chat body: SF at 17pt, scaled by the conversation-size preference.
     var body: Font { font(size: 17, relativeTo: .body) }
-    var heading1: Font { font(size: 21, relativeTo: .title2, weight: .semibold) }
+    var heading1: Font { font(size: 22, relativeTo: .title2, weight: .semibold) }
     var heading2: Font { font(size: 19, relativeTo: .headline, weight: .semibold) }
     var heading3: Font { font(size: 17, relativeTo: .headline, weight: .semibold) }
     var code: Font { font(size: 14, relativeTo: .footnote, design: .monospaced) }
     var codeLabel: Font { font(size: 11, relativeTo: .caption2, weight: .medium, design: .monospaced) }
     var detail: Font { font(size: 13, relativeTo: .footnote) }
     var compact: Font { font(size: 12, relativeTo: .caption1, weight: .medium) }
+    var composer: Font { font(size: 17, relativeTo: .body) }
+    var rosterName: Font { font(size: 17, relativeTo: .body, weight: .semibold) }
+    var rosterPreview: Font { font(size: 15, relativeTo: .subheadline) }
 
     /// Returns a chat-content font that combines the user's conversation-size
     /// preference with the current Dynamic Type category. Keep this helper
