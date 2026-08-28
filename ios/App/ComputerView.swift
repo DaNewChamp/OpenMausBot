@@ -75,8 +75,8 @@ struct ComputerView: View {
         isLocalVm && localVmStatus?.ready == true && session.localVmAccess
     }
 
-    /// Clipboard + keyboard chrome stays pinned for every Local VM session,
-    /// including while the desktop is still starting — not behind a toggle.
+    /// Clipboard toggle + keyboard chrome for every Local VM session,
+    /// including while the desktop is still starting.
     private var showsLocalVmBottomChrome: Bool {
         isLocalVm && session.localVmAccess
     }
@@ -344,7 +344,7 @@ struct ComputerView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             ChromeCircleButton(systemImage: "chevron.left") {
                 Haptics.selection()
                 dismiss()
@@ -354,7 +354,7 @@ struct ComputerView: View {
             HStack(spacing: 8) {
                 BotAvatarView(
                     bot: current,
-                    size: 22,
+                    size: 28,
                     state: MausState.forBot(current, last: nil),
                     animated: !reduceMotion && current.isWorking
                 )
