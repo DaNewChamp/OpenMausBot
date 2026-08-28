@@ -37,7 +37,8 @@ import {
   withoutManagedCompanionTunnelAccess,
 } from "./managed-companion-tunnel.mjs";
 import { createSecureCredentialState } from "./secure-credential-state.mjs";
-import { readSecureCredentials } from "./secure-credentials.mjs";
+import { readSecureCredentials, withCredentialStoreTimeout } from "./secure-credentials.mjs";
+import { probeOwnedPackagedServer } from "./packaged-server.mjs";
 import { createControlPlaneClient } from "./control-plane-client.mjs";
 import {
   companionAccountCleanupPending,
@@ -203,6 +204,7 @@ const CREDENTIALS_FILE = path.join(app.getPath("userData"), "credentials.bin");
 let credentialStoreUnavailable = false;
 
 async function loadSecureCredentials() {
+  slog("reading credential store");
   const result = await readSecureCredentials({
     exists: () => fs.existsSync(CREDENTIALS_FILE),
     isAvailable: () => safeStorage.isAsyncEncryptionAvailable(),
@@ -215,6 +217,8 @@ async function loadSecureCredentials() {
     // Deliberately loud. A silent {} here is what made a keychain hiccup
     // look like "your connected apps are gone".
     slog(`credential store unreadable after retries (${result.error}); saved keys are not loaded this launch`);
+  } else {
+    slog(`credential store ${result.status}`);
   }
   return result.credentials;
 }
@@ -226,11 +230,13 @@ async function saveSecureCredentials(credentials) {
   if (credentialStoreUnavailable) {
     throw new Error("The operating-system credential store could not be read this launch");
   }
-  if (!(await safeStorage.isAsyncEncryptionAvailable())) {
+  if (!(await withCredentialStoreTimeout(() => safeStorage.isAsyncEncryptionAvailable()))) {
     throw new Error("The operating-system credential store is unavailable");
   }
   fs.mkdirSync(path.dirname(CREDENTIALS_FILE), { recursive: true });
-  const encrypted = await safeStorage.encryptStringAsync(JSON.stringify(credentials));
+  const encrypted = await withCredentialStoreTimeout(() =>
+    safeStorage.encryptStringAsync(JSON.stringify(credentials)),
+  );
   const temporary = `${CREDENTIALS_FILE}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, encrypted, { mode: 0o600 });
   fs.renameSync(temporary, CREDENTIALS_FILE);
@@ -686,19 +692,13 @@ async function startServerOn(port) {
   // wait for the port to answer (fresh machine: first boot writes data dirs).
   // Identity check is by PID: a dev harness server has the same API shape,
   // so only the child we actually forked (matching pid + static serving)
-  // counts as ours.
+  // counts as ours. Each probe is bounded: a listener that accepts TCP and
+  // never replies must not stall window creation.
   for (let i = 0; i < 40; i++) {
     if (exited) return null;
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/api/health`);
-      if (res.ok) {
-        const body = await res.json().catch(() => null);
-        if (body?.app === "openmausbot" && body.pid === proc.pid && body.static) return proc;
-        break; // someone else owns this port — try the next one
-      }
-    } catch {
-      /* not up yet */
-    }
+    const probe = await probeOwnedPackagedServer({ port, pid: proc.pid });
+    if (probe.status === "owned") return proc;
+    if (probe.status === "foreign") break; // someone else owns this port — try the next one
     await new Promise((r) => setTimeout(r, 500));
   }
   try {
@@ -741,6 +741,22 @@ const ERROR_PAGE =
   encodeURIComponent(
     `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen OpenMausBot — if it keeps happening, restart your computer.</p></div></body>`,
   );
+
+const STARTING_PAGE =
+  "data:text/html;charset=utf-8," +
+  encodeURIComponent(
+    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Starting OpenMausBot</h2><p style="color:#fcfcfc99;line-height:1.5">Getting the bot server ready…</p></div></body>`,
+  );
+
+function appWindowUrl() {
+  if (!app.isPackaged) return DEV_URL;
+  return serverReady ? `http://127.0.0.1:${SERVER_PORT}` : ERROR_PAGE;
+}
+
+function loadMainWindow(win, { waitingForServer = false } = {}) {
+  if (!win || win.isDestroyed()) return;
+  win.loadURL(app.isPackaged && waitingForServer ? STARTING_PAGE : appWindowUrl());
+}
 
 let cuaReady = Promise.resolve({ mode: "unavailable", reason: "not-started" });
 const androidDevice = createAndroidDeviceController({ resourcesPath: process.resourcesPath });
@@ -901,7 +917,7 @@ ipcMain.on("desktop:unread-count", (event, value) => {
   applyUnreadBadge(sender);
 });
 
-function createWindow() {
+function createWindow({ waitingForServer = false } = {}) {
   const isMac = process.platform === "darwin";
   const primary = screen.getPrimaryDisplay();
   const displays = [primary, ...screen.getAllDisplays().filter((display) => display.id !== primary.id)];
@@ -1085,11 +1101,10 @@ function createWindow() {
     });
   }
 
-  if (app.isPackaged) {
-    win.loadURL(serverReady ? `http://127.0.0.1:${SERVER_PORT}` : ERROR_PAGE);
-  } else {
-    win.loadURL(DEV_URL);
-  }
+  loadMainWindow(win, { waitingForServer });
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
   return win;
 }
 
@@ -1428,6 +1443,12 @@ setCuaStateListener((connection) => {
 app.whenReady().then(async () => {
   if (app.isPackaged) app.setAsDefaultProtocolClient("openmausbot");
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
+  // Show a window before keychain/server work. A Developer ID → Apple
+  // Development signing swap makes safeStorage wait on an ACL prompt; if
+  // that wait ran first, the prompt had no window and the main PID sat
+  // alive with nothing on 8799/8810.
+  if (app.isPackaged) serverReady = false;
+  const win = createWindow({ waitingForServer: app.isPackaged });
   secureCredentials = await loadSecureCredentials();
   if (app.isPackaged) {
     await secureComposioConfig();
@@ -1495,9 +1516,9 @@ app.whenReady().then(async () => {
   registerCuaIpc();
   androidDevice.registerIpc(ipcMain);
   registerUpdaterIpc();
-  // Start the CUA daemon before the window so the harness can pick up the
-  // connection descriptor on first render. Never blocks window creation on
-  // failure — computer use degrades to "unavailable", the rest still works.
+  // Start the CUA daemon before the real UI loads so the harness can pick
+  // up the connection descriptor on first render. Never blocks window
+  // creation on failure — computer use degrades to "unavailable".
   cuaReady =
     process.platform === "darwin" || process.platform === "linux"
       ? startCua().catch((e) => {
@@ -1514,7 +1535,7 @@ app.whenReady().then(async () => {
   if (serverReady && companionEnabledAtRest()) {
     void startDesktopCompanion({ waitForHosted: false, remember: false });
   }
-  const win = createWindow();
+  loadMainWindow(mainWindow ?? win);
   // Reconcile incomplete setup and resume interrupted sign-out only after the
   // local app is usable. This background network work never gates LAN pairing
   // or the first window.
@@ -1543,9 +1564,11 @@ app.whenReady().then(async () => {
   }
   // in-app auto-update (packaged only) — checks GitHub releases, downloads on
   // the user's click, installs on "Restart to update"
-  startUpdater(win);
+  startUpdater(mainWindow ?? win);
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow({ waitingForServer: app.isPackaged && !serverReady });
+    }
   });
 });
 

@@ -71,4 +71,41 @@ describe("readSecureCredentials", () => {
     expect(result.status).toBe("unavailable");
     expect(decrypt).toHaveBeenCalledTimes(1);
   });
+
+  it("says UNAVAILABLE when the keychain never answers, rather than stalling boot", async () => {
+    const abortNow = () => {
+      const controller = new AbortController();
+      queueMicrotask(() => controller.abort());
+      return controller.signal;
+    };
+    const isAvailable = vi.fn(() => new Promise(() => {}));
+    const decrypt = vi.fn(() => new Promise(() => {}));
+    const result = await readSecureCredentials(
+      deps({
+        isAvailable,
+        decrypt,
+        timeoutSignal: abortNow,
+        delays: [0, 0],
+      }),
+    );
+    expect(result.status).toBe("unavailable");
+    expect(result.credentials).toEqual({});
+    expect(result.error).toMatch(/did not respond in time/);
+    expect(isAvailable.mock.calls.length).toBeGreaterThan(1);
+    expect(decrypt).not.toHaveBeenCalled();
+  });
+
+  it("times out a hung decrypt after the store claims it is available", async () => {
+    const decrypt = vi.fn(() => new Promise(() => {}));
+    const result = await readSecureCredentials(
+      deps({
+        decrypt,
+        timeoutMs: 20,
+        delays: [0],
+      }),
+    );
+    expect(result.status).toBe("unavailable");
+    expect(result.error).toMatch(/did not respond in time/);
+    expect(decrypt.mock.calls.length).toBeGreaterThan(1);
+  });
 });

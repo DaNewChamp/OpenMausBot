@@ -16,8 +16,41 @@
 // asks a few hundred milliseconds too early. So we try again, briefly, before
 // admitting ignorance.
 export const CREDENTIAL_READ_DELAYS_MS = [100, 200, 400, 800];
+// Keychain ACL prompts (and a busy login keychain) can sit forever. Bound
+// each attempt so a signing-identity change cannot stall the first window.
+export const CREDENTIAL_ATTEMPT_TIMEOUT_MS = 20_000;
 
 const message = (error) => (error instanceof Error ? error.message : String(error));
+
+function storeTimeoutError() {
+  return new Error("the operating-system credential store did not respond in time");
+}
+
+/** Resolve `work` unless the store/keychain never answers. The underlying
+ * Electron call is not aborted — we only stop waiting on it. */
+export async function withCredentialStoreTimeout(work, {
+  timeoutMs = CREDENTIAL_ATTEMPT_TIMEOUT_MS,
+  timeoutSignal,
+} = {}) {
+  const external = timeoutSignal?.(timeoutMs);
+  const controller = external ? null : new AbortController();
+  const signal = external ?? controller.signal;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  timer?.unref?.();
+  try {
+    if (signal.aborted) throw storeTimeoutError();
+    return await new Promise((resolve, reject) => {
+      const onAbort = () => reject(storeTimeoutError());
+      signal.addEventListener("abort", onAbort, { once: true });
+      Promise.resolve()
+        .then(work)
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener("abort", onAbort));
+    });
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export async function readSecureCredentials({
   exists,
@@ -26,19 +59,22 @@ export async function readSecureCredentials({
   decrypt,
   sleep,
   delays = CREDENTIAL_READ_DELAYS_MS,
+  timeoutMs = CREDENTIAL_ATTEMPT_TIMEOUT_MS,
+  timeoutSignal,
 }) {
   if (!exists()) return { status: "empty", credentials: {} };
 
   let lastError = "the operating-system credential store is unavailable";
+  const settle = (work) => withCredentialStoreTimeout(work, { timeoutMs, timeoutSignal });
   // delays.length retries AFTER the first attempt
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     if (attempt > 0) await sleep(delays[attempt - 1]);
     try {
-      if (!(await isAvailable())) {
+      if (!(await settle(() => isAvailable()))) {
         lastError = "the operating-system credential store is unavailable";
         continue;
       }
-      const decrypted = await decrypt(readFile());
+      const decrypted = await settle(() => decrypt(readFile()));
       const text = typeof decrypted === "string" ? decrypted : decrypted?.result;
       try {
         const parsed = JSON.parse(text);
