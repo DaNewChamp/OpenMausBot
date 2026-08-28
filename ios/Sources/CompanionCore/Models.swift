@@ -1650,6 +1650,28 @@ public struct LocalVmScreenshot: Codable, Equatable, Sendable {
     }
 }
 
+/// A proxied noVNC viewer path minted for this bot's ready Local VM.
+public struct LocalVmViewerSession: Decodable, Sendable {
+    public var viewerPath: String
+    public var ready: Bool
+
+    public init(viewerPath: String, ready: Bool) {
+        self.viewerPath = viewerPath
+        self.ready = ready
+    }
+}
+
+/// Result of a bounded phone input action on a Local VM desktop.
+public struct LocalVmInputResult: Decodable, Equatable, Sendable {
+    public var text: String
+    public var isError: Bool
+
+    public init(text: String, isError: Bool) {
+        self.text = text
+        self.isError = isError
+    }
+}
+
 /// `POST /api/bots` — the harness answers with the bot it made.
 public struct CreatedBot: Codable, Sendable {
     public var bot: Bot

@@ -109,3 +109,26 @@ struct GlassButton: View {
         .glassCircle()
     }
 }
+
+/// A soft material fade for chrome that floats over a scrolling transcript.
+struct ScrollEdgeChrome<Content: View>: View {
+    var edge: Edge = .top
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content()
+            .background {
+                LinearGradient(
+                    colors: [
+                        Color(uiColor: .systemBackground).opacity(edge == .top ? 0.92 : 0.96),
+                        Color(uiColor: .systemBackground).opacity(0.72),
+                        Color(uiColor: .systemBackground).opacity(0),
+                    ],
+                    startPoint: edge == .top ? .top : .bottom,
+                    endPoint: edge == .top ? .bottom : .top
+                )
+                .background(.ultraThinMaterial)
+                .ignoresSafeArea(.container, edges: edge == .top ? .top : .bottom)
+            }
+    }
+}

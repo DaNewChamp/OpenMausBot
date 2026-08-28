@@ -1593,6 +1593,26 @@ public struct CompanionClient: Sendable {
         )
     }
 
+    /// Mint a proxied noVNC viewer for this bot's ready Local VM.
+    public func localVmJoin(botId: String) async throws -> LocalVmViewerSession {
+        try await send(
+            try makeRequest(
+                "POST",
+                "/api/bots/\(botId)/local-computer/join",
+                body: [String: Any](),
+            ),
+            as: LocalVmViewerSession.self
+        )
+    }
+
+    /// Send bounded click/scroll/type/key input to a ready Local VM desktop.
+    public func localVmInput(botId: String, body: [String: Any]) async throws -> LocalVmInputResult {
+        try await send(
+            try makeRequest("POST", "/api/bots/\(botId)/local-computer/input", body: body),
+            as: LocalVmInputResult.self
+        )
+    }
+
     private func localVmAction(botId: String, action: String) async throws -> LocalVmStatus {
         try await send(
             try makeRequest(

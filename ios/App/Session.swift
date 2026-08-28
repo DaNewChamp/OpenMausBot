@@ -1035,6 +1035,40 @@ final class Session: ObservableObject {
         localVmStatuses[bot.id]
     }
 
+    func localVmViewerURL(for bot: Bot) async -> URL? {
+        guard localVmAccess, let client else { return nil }
+        guard let base = client.connection.baseURL else { return nil }
+        do {
+            let join = try await client.localVmJoin(botId: bot.id)
+            guard join.ready else { return nil }
+            return URL(string: join.viewerPath, relativeTo: base)?.absoluteURL
+        } catch {
+            return nil
+        }
+    }
+
+    @discardableResult
+    func sendLocalVmInput(for bot: Bot, body: [String: Any]) async -> Bool {
+        guard localVmAccess, let client else { return false }
+        do {
+            let result = try await client.localVmInput(botId: bot.id, body: body)
+            if result.isError {
+                actionError = result.text
+                return false
+            }
+            await refreshLocalVmPreview(for: bot)
+            return true
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            localVmAccess = false
+            localVmStatuses.removeAll()
+            return false
+        } catch {
+            if !Task.isCancelled { actionError = error.localizedDescription }
+            return false
+        }
+    }
+
     /// Run one of the three guarded per-bot Local VM operations. The server
     /// owns all image, lease, idle and capacity decisions; this method merely
     /// projects its safe response back into the Computer panel.

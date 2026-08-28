@@ -35,7 +35,6 @@ struct ChatView: View {
     @State private var pendingQueueNotices: [String: PendingQueueNotice] = [:]
     @State private var showingTasks = false
     @State private var showingComputer = false
-    @State private var showingPlus = false
     @State private var showingProfile = false
     @State private var showCommandHUD = false
     @State private var shareFile: ShareFile?
@@ -239,11 +238,9 @@ struct ChatView: View {
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                // A real safe-area inset keeps the transcript below the
-                // compact bar. Nothing is overlaid on the first bubble, so
-                // navigation transitions cannot leave a floating avatar
-                // behind.
-                .safeAreaInset(edge: .top, spacing: 0) { headerBar }
+                // The transcript scrolls beneath the floating header chrome.
+                .contentMargins(.top, 56, for: .scrollContent)
+                .scrollClipDisabled()
                 .scrollDismissesKeyboard(.interactively)
                 // A conversation grows from the bottom: a transcript shorter
                 // than the screen rests at the bottom, and opening a chat
@@ -293,8 +290,8 @@ struct ChatView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .top) { chatTopChrome }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
-        .overlay(alignment: .bottom) { plusSheet }
         .onChange(of: session.stagedComposerText) { _, text in
             guard let text, !text.isEmpty else { return }
             if draft.isEmpty {
@@ -339,8 +336,6 @@ struct ChatView: View {
             }
             if current.unread { await session.markRead(current) }
 #if DEBUG
-            // `-open-plus`: the + sheet up, for the screenshot harness
-            if ProcessInfo.processInfo.arguments.contains("-open-plus") { showingPlus = true }
             // Profile parity screenshots without automating a tap through the
             // animated island/header transition.
             if ProcessInfo.processInfo.arguments.contains("-open-profile") { showingProfile = true }
@@ -386,9 +381,6 @@ struct ChatView: View {
         }
         .onChange(of: groupProfileRoom) { _, room in
             if room != nil { dictation.stop() }
-        }
-        .onChange(of: showingPlus) { _, shown in
-            if shown { dictation.stop() }
         }
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { note in
             let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey]
@@ -438,7 +430,6 @@ struct ChatView: View {
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
             photoItems = []
-            setShowingPlus(false)
             Task { await importPhotos(items) }
         }
     }
@@ -452,6 +443,12 @@ struct ChatView: View {
     }
 
     // MARK: - Header
+
+    private var chatTopChrome: some View {
+        ScrollEdgeChrome {
+            headerBar
+        }
+    }
 
     /// Back and the agent sit on the leading edge so the face never covers
     /// the transcript. Chrome is liquid glass; the name is the title, not a
@@ -545,171 +542,63 @@ struct ChatView: View {
                 .fixedSize()
                 .accessibilityLabel("Watch \(current.name)'s computer")
             } else {
-                Button {
-                    Haptics.selection()
-                    setShowingPlus(true)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(Color.primary)
-                        .frame(width: 40, height: 40)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .glassCircle()
-                .fixedSize()
-                .accessibilityLabel("Open \(current.name) chat options")
+                chatOverflowMenu
             }
         }
         .padding(.horizontal, 12)
         .padding(.top, 4)
         .padding(.bottom, 8)
-        .background(VBotSurface.background.ignoresSafeArea(.container, edges: .top))
     }
 
-    // MARK: - The + sheet
-
-    /// What the composer's + opens: a glass sheet of the things you can do
-    /// here, each with a line saying what it does. Rises above the composer;
-    /// tapping anywhere else, or the × the + became, puts it away.
     @ViewBuilder
-    private var plusSheet: some View {
-        if showingPlus {
-            ZStack(alignment: .bottom) {
-                Color.black.opacity(0.35)
-                    .ignoresSafeArea()
-                    .onTapGesture { setShowingPlus(false) }
-
-                VStack(spacing: 0) {
-                    attachmentPickerActions
-                    Divider()
-                        .padding(.horizontal, 18)
-                    ForEach(plusActions) { action in
-                        Button {
-                            setShowingPlus(false)
-                            action.run()
-                        } label: {
-                            HStack(spacing: 16) {
-                                Image(systemName: action.systemImage)
-                                    .font(.system(size: 20, weight: .medium))
-                                    .foregroundStyle(action.destructive ? Color.red : Color.primary)
-                                    .frame(width: 44, height: 44)
-                                    .background(Circle().fill(Color.primary.opacity(0.10)))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(action.title)
-                                        .font(.system(size: 19, weight: .medium))
-                                        .foregroundStyle(action.destructive ? Color.red : Color.primary)
-                                    Text(action.subtitle)
-                                        .font(.system(size: 13))
-                                        .foregroundStyle(Color.secondary)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 18)
-                            .frame(height: 64)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(action.disabled)
-                        .opacity(action.disabled ? 0.45 : 1)
-                    }
+    private var chatOverflowMenu: some View {
+        Menu {
+            ForEach(plusActions) { action in
+                Button(role: action.destructive ? .destructive : nil) {
+                    action.run()
+                } label: {
+                    Label(action.title, systemImage: action.systemImage)
                 }
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .glassSheet(cornerRadius: 30)
-                .padding(.leading, 12)
-                .padding(.trailing, 44)
-                .padding(.bottom, 70)
-                .transition(reduceMotion ? .identity : .move(edge: .bottom).combined(with: .opacity))
+                .disabled(action.disabled)
             }
-            .transition(reduceMotion ? .identity : .opacity)
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Color.primary)
+                .frame(width: 40, height: 40)
+                .contentShape(Circle())
         }
+        .buttonStyle(.plain)
+        .glassCircle()
+        .fixedSize()
+        .accessibilityLabel("Open \(current.name) chat options")
     }
 
     @ViewBuilder
-    private var attachmentPickerActions: some View {
+    private var attachmentPickerMenuItems: some View {
         PhotosPicker(
             selection: $photoItems,
             maxSelectionCount: max(1, Self.maxAttachmentCount - selectedAttachments.count),
             matching: .images
         ) {
-            HStack(spacing: 16) {
-                Image(systemName: "photo.on.rectangle")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(Color.primary)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(Color.primary.opacity(0.10)))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Photo library")
-                        .font(.system(size: 19, weight: .medium))
-                        .foregroundStyle(Color.primary)
-                    Text("Choose images from Photos")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.secondary)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 18)
-            .frame(height: 64)
-            .contentShape(Rectangle())
+            Label("Photo library", systemImage: "photo.on.rectangle")
         }
-        .buttonStyle(.plain)
         .disabled(selectedAttachments.count >= Self.maxAttachmentCount)
 
         if UIImagePickerController.isSourceTypeAvailable(.camera) {
             Button {
-                setShowingPlus(false)
                 showingCamera = true
             } label: {
-                HStack(spacing: 16) {
-                    Image(systemName: "camera")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(Color.primary)
-                        .frame(width: 44, height: 44)
-                        .background(Circle().fill(Color.primary.opacity(0.10)))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Take photo")
-                            .font(.system(size: 19, weight: .medium))
-                            .foregroundStyle(Color.primary)
-                        Text("Use the camera")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Color.secondary)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 18)
-                .frame(height: 64)
-                .contentShape(Rectangle())
+                Label("Take photo", systemImage: "camera")
             }
-            .buttonStyle(.plain)
             .disabled(selectedAttachments.count >= Self.maxAttachmentCount)
         }
 
         Button {
-            setShowingPlus(false)
             showingFileImporter = true
         } label: {
-            HStack(spacing: 16) {
-                Image(systemName: "folder")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(Color.primary)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(Color.primary.opacity(0.10)))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Choose file")
-                        .font(.system(size: 19, weight: .medium))
-                        .foregroundStyle(Color.primary)
-                    Text("PNG, JPEG, GIF, or WebP up to 10 MB")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.secondary)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 18)
-            .frame(height: 64)
-            .contentShape(Rectangle())
+            Label("Choose file", systemImage: "folder")
         }
-        .buttonStyle(.plain)
         .disabled(selectedAttachments.count >= Self.maxAttachmentCount)
     }
 
@@ -817,10 +706,6 @@ struct ChatView: View {
                 openedToolRuns.insert(run.id)
             }
         }
-    }
-
-    private func setShowingPlus(_ value: Bool) {
-        updateState(.snappy(duration: 0.28)) { showingPlus = value }
     }
 
     private func updateState(_ animation: Animation, _ updates: () -> Void) {
@@ -1304,21 +1189,27 @@ struct ChatView: View {
             }
 
             HStack(alignment: .bottom, spacing: 10) {
-                Button {
-                    dictation.stop()
-                    composerFocused = false
-                    setShowingPlus(!showingPlus)
+                Menu {
+                    attachmentPickerMenuItems
+                    Divider()
+                    ForEach(plusActions) { action in
+                        Button(role: action.destructive ? .destructive : nil) {
+                            action.run()
+                        } label: {
+                            Label(action.title, systemImage: action.systemImage)
+                        }
+                        .disabled(action.disabled)
+                    }
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 22, weight: .medium))
                         .foregroundStyle(Color.primary)
-                        .rotationEffect(.degrees(showingPlus ? 45 : 0))
                         .frame(width: 44, height: 44)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .glassCircle()
-                .accessibilityLabel(showingPlus ? "Close" : "More")
+                .accessibilityLabel("More")
 
                 HStack(alignment: .bottom, spacing: 2) {
                     if showCommandHUD || draft.hasPrefix("/") {

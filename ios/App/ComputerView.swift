@@ -65,6 +65,9 @@ struct ComputerView: View {
     @State private var savingDestination = false
     @State private var savingPhoto = false
     @State private var photoSaveMessage: String?
+    @State private var localVmViewerURL: URL?
+    @State private var showingKeyboard = false
+    @State private var keyboardDraft = ""
 
     private static let firstFrameTimeout = ComputerWatchLifecycle.firstFrameTimeout
 
@@ -290,6 +293,16 @@ struct ComputerView: View {
                 try? await Task.sleep(for: .seconds(2))
             }
         }
+        .task(id: "local-vm-viewer-\(current.id)-\(localVmStatus?.ready == true)") {
+            guard isLocalVm, localVmStatus?.ready == true, session.localVmAccess else {
+                localVmViewerURL = nil
+                return
+            }
+            localVmViewerURL = await session.localVmViewerURL(for: current)
+        }
+        .sheet(isPresented: $showingKeyboard) {
+            localVmKeyboardSheet
+        }
         .task(id: "instances-\(current.id)") {
             if case let .loaded(loaded) = await session.loadInstances() {
                 instances = loaded
@@ -410,12 +423,45 @@ struct ComputerView: View {
 
     @ViewBuilder
     private var content: some View {
-        if case .watching = presentationState, let image {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
+        if let localVmViewerURL, isLocalVm, localVmStatus?.ready == true {
+            VMViewerWebView(url: localVmViewerURL)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityLabel("\(current.name)'s Local VM")
+        } else if case .watching = presentationState, let image {
+            if isLocalVm, localVmStatus?.ready == true, session.localVmAccess {
+                RemoteDesktopCanvas(
+                    image: image,
+                    onClick: { x, y, button in
+                        Task {
+                            _ = await session.sendLocalVmInput(
+                                for: current,
+                                body: ["action": "click", "x": x, "y": y, "button": button]
+                            )
+                        }
+                    },
+                    onScroll: { direction, clicks, x, y in
+                        Task {
+                            _ = await session.sendLocalVmInput(
+                                for: current,
+                                body: [
+                                    "action": "scroll",
+                                    "direction": direction,
+                                    "clicks": clicks,
+                                    "x": x,
+                                    "y": y,
+                                ]
+                            )
+                        }
+                    }
+                )
                 .accessibilityLabel("\(current.name)'s computer")
+            } else {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityLabel("\(current.name)'s computer")
+            }
         } else {
             stateCard
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -535,14 +581,25 @@ struct ComputerView: View {
                 Text("Copy to composer")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(Color.primary)
-                Text("Paste iPhone clipboard into the active chat. VM paste needs a future route.")
+                Text("Paste iPhone clipboard into the active chat or the Local VM.")
                     .font(.caption2)
                     .foregroundStyle(Color.secondary)
                     .lineLimit(2)
             }
             Spacer(minLength: 8)
             Button("Paste") {
-                pasteClipboardToComposer()
+                if isLocalVm, localVmStatus?.ready == true, session.localVmAccess,
+                   let text = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !text.isEmpty {
+                    Task {
+                        _ = await session.sendLocalVmInput(
+                            for: current,
+                            body: ["action": "type", "text": text]
+                        )
+                    }
+                } else {
+                    pasteClipboardToComposer()
+                }
             }
             .font(.footnote.weight(.semibold))
             .disabled(UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
@@ -554,6 +611,13 @@ struct ComputerView: View {
 
     private var watchingControls: some View {
         HStack(spacing: 12) {
+            ChromeCircleButton(systemImage: "keyboard", weight: .medium) {
+                Haptics.selection()
+                showingKeyboard = true
+            }
+            .disabled(!isLocalVm || localVmStatus?.ready != true || !session.localVmAccess)
+            .accessibilityLabel("Type on Local VM")
+
             ChromeCircleButton(systemImage: "square.and.arrow.down", weight: .medium) {
                 saveScreenToPhotos()
             }
@@ -584,6 +648,38 @@ struct ComputerView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
         .background(Color.black)
+    }
+
+    private var localVmKeyboardSheet: some View {
+        NavigationStack {
+            VStack(spacing: 12) {
+                TextField("Type on the Local VM", text: $keyboardDraft, axis: .vertical)
+                    .lineLimit(2...6)
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.horizontal, 16)
+                Button("Send text") {
+                    let text = keyboardDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !text.isEmpty else { return }
+                    Task {
+                        if await session.sendLocalVmInput(for: current, body: ["action": "type", "text": text]) {
+                            keyboardDraft = ""
+                            showingKeyboard = false
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(keyboardDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .padding(.vertical, 16)
+            .navigationTitle("Local VM keyboard")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { showingKeyboard = false }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 
     private var computerHelpSheet: some View {
