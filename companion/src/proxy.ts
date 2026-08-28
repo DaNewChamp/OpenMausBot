@@ -36,6 +36,9 @@ import {
   isLocalVmInput,
   isLocalVmViewer,
   isLocalVmPhoneSurface,
+  isLocalVmViewerUpgrade,
+  localVmViewerBotId,
+  localVmViewerBotId,
   validateBotModelBody,
   validateBotVisibilityBody,
   validateComputerDestinationBody,
@@ -50,6 +53,11 @@ import {
   groupSetupRoomId,
   groupUnreadRoomId,
 } from "./routes.ts";
+import {
+  appendViewerAccessQuery,
+  mintViewerAccessToken,
+  verifyViewerAccessToken,
+} from "./viewer-access.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
 /** What the forwarding handler needs from the process around it. */
@@ -89,6 +97,12 @@ export interface ProxyOptions {
   /** Persist Local VM access for this paired device. Choosing Local VM on
    * the phone is the consent; the Mac Companion toggle remains the revoke. */
   grantLocalVmAccess?: (deviceId: string) => boolean;
+  /** Resolve a paired device by id for scoped viewer tickets. */
+  deviceById?: (deviceId: string) => {
+    id?: string;
+    cloudDesktopAccess: boolean;
+    localVmAccess?: boolean;
+  } | null;
 }
 
 export interface CompanionEndpointSnapshot {
@@ -265,7 +279,8 @@ const forwardHeaders = (req: IncomingMessage): Record<string, string> => {
  * what comes back. Pairing is the one route that stops here. */
 export function createProxyHandler(options: ProxyOptions) {
   return function handle(req: IncomingMessage, res: ServerResponse): void {
-    const path = (req.url ?? "/").split("?")[0];
+    const fullUrl = req.url ?? "/";
+    const path = fullUrl.split("?")[0];
     const method = req.method ?? "GET";
 
     // A native app sends no Origin. Anything that does is a browser that has
@@ -276,7 +291,17 @@ export function createProxyHandler(options: ProxyOptions) {
     }
 
     const token = bearerToken(req.headers.authorization);
-    const device = options.authenticate(token);
+    let device = options.authenticate(token);
+    if (!device) {
+      const botId = localVmViewerBotId(path);
+      if (botId && (isLocalVmViewer(method, path) || isLocalVmViewerUpgrade(path))) {
+        const viewerTicket = new URL(fullUrl, "http://localhost").searchParams.get("omb_viewer");
+        if (viewerTicket) {
+          const deviceId = verifyViewerAccessToken(viewerTicket, botId);
+          if (deviceId) device = options.deviceById?.(deviceId) ?? null;
+        }
+      }
+    }
     const denial = denyReason({
       path,
       method,
@@ -762,6 +787,19 @@ export function createProxyHandler(options: ProxyOptions) {
           // JSON.parse handles it fine.
           let text: string;
           try {
+            if (
+              isLocalVmJoin(method, path)
+              && device?.id
+              && parsed
+              && typeof parsed === "object"
+            ) {
+              const record = parsed as Record<string, unknown>;
+              const botId = /^\/api\/bots\/([\w-]+)\/local-computer\/join$/.exec(path)?.[1];
+              if (botId && typeof record.viewerPath === "string") {
+                const viewerTicket = mintViewerAccessToken(device.id, botId);
+                record.viewerPath = appendViewerAccessQuery(record.viewerPath, viewerTicket);
+              }
+            }
             text = JSON.stringify(scrub(parsed));
           } catch {
             sendJson(res, 502, { error: "the response could not be prepared for this device" });

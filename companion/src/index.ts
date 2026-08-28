@@ -38,7 +38,8 @@ import {
 import { createProxyHandler } from "./proxy.ts";
 import { companionOriginSocket, listenCompanionOrigin } from "./origin.ts";
 import { bearerToken } from "./devices.ts";
-import { isLocalVmViewerUpgrade } from "./routes.ts";
+import { isLocalVmViewerUpgrade, localVmViewerBotId } from "./routes.ts";
+import { verifyViewerAccessToken } from "./viewer-access.ts";
 
 /** A port from the environment, or the default. Anything that is not a whole
  * number in range is the default — a typo'd port must not become port 0. */
@@ -149,15 +150,25 @@ const proxy = createProxyHandler({
     endpoints: () => companionEndpointCandidates(COMPANION_PORT, undefined, undefined, hostedUrl),
     connected: connectedDevices.open,
     grantLocalVmAccess: (id) => devices.setLocalVmAccess(id, true),
+    deviceById: (id) => devices.find(id),
   });
 const companion = createServer(proxy);
 companion.on("upgrade", (req, socket, head) => {
-  const path = (req.url ?? "/").split("?")[0];
+  const fullUrl = req.url ?? "/";
+  const path = fullUrl.split("?")[0];
   if (!isLocalVmViewerUpgrade(path)) {
     socket.destroy();
     return;
   }
-  const device = devices.authenticate(bearerToken(req.headers.authorization));
+  let device = devices.authenticate(bearerToken(req.headers.authorization));
+  if (!device) {
+    const botId = localVmViewerBotId(path);
+    const viewerTicket = new URL(fullUrl, "http://localhost").searchParams.get("omb_viewer");
+    if (botId && viewerTicket) {
+      const deviceId = verifyViewerAccessToken(viewerTicket, botId);
+      if (deviceId) device = devices.find(deviceId);
+    }
+  }
   if (!device?.localVmAccess) {
     socket.destroy();
     return;

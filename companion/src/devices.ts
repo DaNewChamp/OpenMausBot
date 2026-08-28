@@ -309,6 +309,11 @@ export class DeviceRegistry {
     return result;
   }
 
+  /** Look up one paired device by id without a bearer token. */
+  find(id: string): DeviceRecord | null {
+    return this.devices.find((candidate) => candidate.id === id) ?? null;
+  }
+
   /** Resolve a bearer token to its device, or null. */
   authenticate(token: string | undefined): DeviceRecord | null {
     if (!token) return null;

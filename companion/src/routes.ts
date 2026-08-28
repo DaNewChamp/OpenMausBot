@@ -112,6 +112,11 @@ export function isLocalVmViewerUpgrade(path: string): boolean {
   return LOCAL_VM_VIEWER_ROUTE.path.test(path.split("?")[0] ?? "");
 }
 
+export function localVmViewerBotId(path: string): string | null {
+  const match = /^\/api\/bots\/([\w-]+)\/local-computer\/viewer/.exec(path.split("?")[0] ?? "");
+  return match?.[1] ?? null;
+}
+
 export function isLocalVmPhoneSurface(method: string, path: string): boolean {
   return (
     isLocalVmStatus(method, path)

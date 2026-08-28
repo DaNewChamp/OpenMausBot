@@ -449,7 +449,14 @@ struct ComputerView: View {
     private var content: some View {
         ZStack {
             if usingLiveViewer, let localVmViewerURL {
-                VMViewerWebView(url: localVmViewerURL, keyboardTrigger: vmKeyboardTrigger)
+                VMViewerWebView(
+                    url: localVmViewerURL,
+                    keyboardTrigger: vmKeyboardTrigger,
+                    onLoadFailed: { message in
+                        localVmSurfaceError = message
+                        self.localVmViewerURL = nil
+                    }
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityLabel("\(current.name)'s Local VM")
             } else if case .watching = presentationState, let image, localVmInteractive {
