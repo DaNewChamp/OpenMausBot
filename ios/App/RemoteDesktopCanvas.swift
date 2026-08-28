@@ -2,7 +2,8 @@ import SwiftUI
 import UIKit
 
 /// Screenshot-based Local VM input: pinch/pan the preview, tap to click,
-/// long-press for right click, two-finger drag to scroll.
+/// long-press for right click, vertical drag to scroll. Shows a desktop
+/// cursor where the VM will be clicked.
 struct RemoteDesktopCanvas: View {
     let image: UIImage
     let onClick: (_ x: Int, _ y: Int, _ button: String) -> Void
@@ -10,20 +11,32 @@ struct RemoteDesktopCanvas: View {
 
     @State private var scale: CGFloat = 1
     @State private var offset: CGSize = .zero
+    @State private var cursorPoint: CGPoint?
     @GestureState private var dragOffset: CGSize = .zero
     @GestureState private var pinchScale: CGFloat = 1
 
     var body: some View {
         GeometryReader { proxy in
             let fitted = fittedSize(for: image.size, in: proxy.size)
-            Image(uiImage: image)
-                .resizable()
-                .interpolation(.medium)
-                .frame(width: fitted.width * scale * pinchScale, height: fitted.height * scale * pinchScale)
-                .offset(x: offset.width + dragOffset.width, y: offset.height + dragOffset.height)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .gesture(combinedGesture(fitted: fitted, container: proxy.size))
+            ZStack {
+                Image(uiImage: image)
+                    .resizable()
+                    .interpolation(.medium)
+                    .frame(width: fitted.width * scale * pinchScale, height: fitted.height * scale * pinchScale)
+                    .offset(x: offset.width + dragOffset.width, y: offset.height + dragOffset.height)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .gesture(combinedGesture(fitted: fitted, container: proxy.size))
+
+                if let cursorPoint {
+                    Image(systemName: "cursorarrow")
+                        .font(.system(size: 22, weight: .regular))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 1)
+                        .position(cursorPoint)
+                        .allowsHitTesting(false)
+                }
+            }
         }
         .clipped()
     }
@@ -41,16 +54,18 @@ struct RemoteDesktopCanvas: View {
             .updating($pinchScale) { value, state, _ in state = value }
             .onEnded { value in scale = min(max(scale * value, 1), 4) }
 
-        let pan = DragGesture(minimumDistance: 8)
+        let pan = DragGesture(minimumDistance: 12)
             .updating($dragOffset) { value, state, _ in state = value.translation }
             .onEnded { value in
                 if value.translation.height < -24, abs(value.translation.width) < 40 {
                     let point = desktopPoint(from: value.startLocation, fitted: fitted, container: container)
+                    cursorPoint = value.startLocation
                     onScroll("up", 3, point.x, point.y)
                     return
                 }
                 if value.translation.height > 24, abs(value.translation.width) < 40 {
                     let point = desktopPoint(from: value.startLocation, fitted: fitted, container: container)
+                    cursorPoint = value.startLocation
                     onScroll("down", 3, point.x, point.y)
                     return
                 }
@@ -60,6 +75,7 @@ struct RemoteDesktopCanvas: View {
 
         let tap = SpatialTapGesture()
             .onEnded { value in
+                cursorPoint = value.location
                 let point = desktopPoint(from: value.location, fitted: fitted, container: container)
                 onClick(point.x, point.y, "left")
             }
@@ -68,6 +84,7 @@ struct RemoteDesktopCanvas: View {
             .sequenced(before: DragGesture(minimumDistance: 0))
             .onEnded { value in
                 guard case .second(true, let drag?) = value else { return }
+                cursorPoint = drag.startLocation
                 let point = desktopPoint(from: drag.startLocation, fitted: fitted, container: container)
                 onClick(point.x, point.y, "right")
             }
@@ -78,7 +95,7 @@ struct RemoteDesktopCanvas: View {
     }
 
     private func desktopPoint(from location: CGPoint, fitted: CGSize, container: CGSize) -> (x: Int, y: Int) {
-        let rendered = CGSize(width: fitted.width * scale, height: fitted.height * scale)
+        let rendered = CGSize(width: fitted.width * scale * pinchScale, height: fitted.height * scale * pinchScale)
         let origin = CGPoint(
             x: (container.width - rendered.width) / 2 + offset.width,
             y: (container.height - rendered.height) / 2 + offset.height

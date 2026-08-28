@@ -1035,38 +1035,53 @@ final class Session: ObservableObject {
         localVmStatuses[bot.id]
     }
 
-    func localVmViewerURL(for bot: Bot) async -> URL? {
-        guard localVmAccess, let client else { return nil }
-        guard let base = client.connection.baseURL else { return nil }
+    func localVmViewerURL(for bot: Bot) async -> (url: URL?, error: String?) {
+        guard localVmAccess, let client else {
+            return (nil, "Enable Local VM access for this phone in OpenMausBot → Settings → Companion.")
+        }
+        guard let base = client.connection.baseURL else { return (nil, nil) }
         do {
             let join = try await client.localVmJoin(botId: bot.id)
-            guard join.ready else { return nil }
-            return URL(string: join.viewerPath, relativeTo: base)?.absoluteURL
+            guard join.ready else { return (nil, "The Local VM desktop is not ready yet.") }
+            let url = URL(string: join.viewerPath, relativeTo: base)?.absoluteURL
+            return (url, url == nil ? "The Local VM viewer address was invalid." : nil)
+        } catch let error as APIError {
+            return (nil, Self.localVmSurfaceError(error))
         } catch {
-            return nil
+            return (nil, error.localizedDescription)
         }
     }
 
     @discardableResult
-    func sendLocalVmInput(for bot: Bot, body: [String: Any]) async -> Bool {
-        guard localVmAccess, let client else { return false }
+    func sendLocalVmInput(for bot: Bot, body: [String: Any]) async -> String? {
+        guard localVmAccess, let client else {
+            return "Enable Local VM access for this phone in OpenMausBot → Settings → Companion."
+        }
         do {
             let result = try await client.localVmInput(botId: bot.id, body: body)
-            if result.isError {
-                actionError = result.text
-                return false
-            }
+            if result.isError { return result.text }
             await refreshLocalVmPreview(for: bot)
-            return true
+            return nil
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
             localVmAccess = false
             localVmStatuses.removeAll()
-            return false
+            return error.localizedDescription
+        } catch let error as APIError {
+            return Self.localVmSurfaceError(error)
         } catch {
-            if !Task.isCancelled { actionError = error.localizedDescription }
-            return false
+            return Task.isCancelled ? nil : error.localizedDescription
         }
+    }
+
+    private static func localVmSurfaceError(_ error: APIError) -> String {
+        guard case let .status(code, message) = error else { return error.localizedDescription }
+        if code == 403,
+           let message,
+           message.contains("Local VM access is managed per phone") {
+            return "This phone needs an updated companion on your Mac. Open OpenMausBot on the computer, then restart the sidecar or redeploy the hosted runtime."
+        }
+        return error.localizedDescription
     }
 
     /// Run one of the three guarded per-bot Local VM operations. The server
