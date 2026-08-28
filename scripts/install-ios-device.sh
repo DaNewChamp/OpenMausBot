@@ -11,6 +11,10 @@ TEAM_ID="LT58RNRW7E"
 DEVICE_UDID="${DEVICE_UDID:-C8EA9F61-6E1A-5C41-A4DE-B3454CC89528}"
 BRANCH="${BRANCH:-cursor/build-36-local-vm-phone-a27c}"
 DERIVED="$IOS/build/DerivedData-device"
+AUTH_KEY="${AUTH_KEY:-$HOME/.appstoreconnect/private_keys/AuthKey_2RY648NNC3.p8}"
+AUTH_KEY_ID="${AUTH_KEY_ID:-2RY648NNC3}"
+AUTH_ISSUER_ID="${AUTH_ISSUER_ID:-e2e0f91b-e7f8-4585-9b12-700e801bae4d}"
+export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 
 echo "==> OpenMausBot iOS device install"
 echo "    branch: $BRANCH"
@@ -46,6 +50,10 @@ xcodebuild \
   -derivedDataPath "$DERIVED" \
   DEVELOPMENT_TEAM="$TEAM_ID" \
   CODE_SIGN_STYLE=Automatic \
+  -authenticationKeyPath "$AUTH_KEY" \
+  -authenticationKeyID "$AUTH_KEY_ID" \
+  -authenticationKeyIssuerID "$AUTH_ISSUER_ID" \
+  -allowProvisioningUpdates \
   build
 
 APP="$(find "$DERIVED" -path '*/Build/Products/Debug-iphoneos/OpenMausCompanion.app' -print -quit)"
