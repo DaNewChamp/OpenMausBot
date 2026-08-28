@@ -11,6 +11,7 @@ MACBOOK_HOST_FALLBACK="${MACBOOK_HOST_FALLBACK:-192.168.112.99}"
 REPO="${MACBOOK_REPO:-~/Github/OpenMausBot}"
 BRANCH="${BRANCH:-cursor/build-36-local-vm-phone-a27c}"
 DEVICE_UDID="${DEVICE_UDID:-C8EA9F61-6E1A-5C41-A4DE-B3454CC89528}"
+XCODE_DEVICE_ID="${XCODE_DEVICE_ID:-00008150-001428C00247801C}"
 
 REMOTE_ENV='export PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin'
 REMOTE_ENV+=' DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer'

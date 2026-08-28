@@ -8,6 +8,8 @@ IOS="$ROOT/ios"
 SCHEME="OpenMausCompanion"
 BUNDLE_ID="com.posival.openmausmobile"
 TEAM_ID="LT58RNRW7E"
+# xcodebuild wants the USB/WiFi device id; devicectl wants the CoreDevice UUID.
+XCODE_DEVICE_ID="${XCODE_DEVICE_ID:-00008150-001428C00247801C}"
 DEVICE_UDID="${DEVICE_UDID:-C8EA9F61-6E1A-5C41-A4DE-B3454CC89528}"
 BRANCH="${BRANCH:-cursor/build-36-local-vm-phone-a27c}"
 DERIVED="$IOS/build/DerivedData-device"
@@ -18,7 +20,8 @@ export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Develope
 
 echo "==> OpenMausBot iOS device install"
 echo "    branch: $BRANCH"
-echo "    device: $DEVICE_UDID"
+echo "    xcode device: $XCODE_DEVICE_ID"
+echo "    devicectl device: $DEVICE_UDID"
 
 cd "$ROOT"
 if [[ -d .git ]]; then
@@ -46,7 +49,7 @@ xcodebuild \
   -project OpenMausCompanion.xcodeproj \
   -scheme "$SCHEME" \
   -configuration Debug \
-  -destination "id=$DEVICE_UDID" \
+  -destination "id=$XCODE_DEVICE_ID" \
   -derivedDataPath "$DERIVED" \
   DEVELOPMENT_TEAM="$TEAM_ID" \
   CODE_SIGN_STYLE=Automatic \
