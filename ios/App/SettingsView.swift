@@ -562,7 +562,12 @@ struct EngineSelectionView: View {
                         set: { newEngine in Task { await save(engine: newEngine) } }
                     )) {
                         ForEach(VBotPrimaryEngine.allCases) { engine in
-                            Text(engine.displayName).tag(engine)
+                            Label {
+                                Text(engine.displayName)
+                            } icon: {
+                                ProviderMarks.mark(for: engine == .openmaus ? "openmaus" : "grok", size: 16)
+                            }
+                            .tag(engine)
                         }
                     }
                     .disabled(saving)
@@ -578,18 +583,23 @@ struct EngineSelectionView: View {
 
                 Section("Engine status") {
                     ForEach(sync.engines, id: \.id) { engine in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
+                        HStack(spacing: 12) {
+                            ProviderMarks.mark(
+                                for: engine.id == "grokReconstructed" ? "grok" : "openmaus",
+                                size: 18
+                            )
+                            VStack(alignment: .leading, spacing: 4) {
                                 Text(engine.displayName)
-                                Spacer()
-                                Text(engine.isAvailable ? "Available" : "Unavailable")
-                                    .foregroundStyle(engine.isAvailable ? .green : .secondary)
+                                if let reason = engine.reason, !engine.isAvailable {
+                                    Text(reason)
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
-                            if let reason = engine.reason, !engine.isAvailable {
-                                Text(reason)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
+                            Spacer()
+                            Text(engine.isAvailable ? "Available" : "Unavailable")
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(engine.isAvailable ? .green : .secondary)
                         }
                     }
                 }
@@ -627,29 +637,23 @@ struct EngineSelectionView: View {
 
                 if let router = sync.router, sync.reconstructedMutationsReady {
                     Section {
-                        Picker("Provider", selection: Binding(
-                            get: { router.selected.provider },
-                            set: { provider in Task { await saveRouter(provider: provider, modelId: nil) } }
-                        )) {
-                            ForEach(router.providers.filter(\.selectable)) { provider in
-                                Text(provider.label).tag(provider.id)
+                        ReconstructedProviderPicker(
+                            providers: router.providers,
+                            selectedProvider: router.selected.provider,
+                            selectedModelId: router.selected.modelId,
+                            models: selectableCursorModels(for: router),
+                            disabled: saving,
+                            onProviderChange: { provider in
+                                Task { await saveRouter(provider: provider, modelId: nil) }
+                            },
+                            onModelChange: { modelId in
+                                Task { await saveRouter(provider: "cursor", modelId: modelId) }
                             }
-                            if router.providers.contains(where: { $0.id == router.selected.provider && $0.selectable }) == false {
-                                Text(router.selected.provider).tag(router.selected.provider)
-                            }
-                        }
-                        .disabled(saving)
-                        if router.selected.provider == "cursor" {
-                            cursorModelPicker(router: router)
-                        } else {
-                            Text("Only Cursor models can be changed here. Other providers keep their local model.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
+                        )
                     } header: {
                         Text("Host provider")
                     } footer: {
-                        Text("This selection is host-wide on Grok Reconstructed, not per agent.")
+                        Text("This selection is host-wide on Grok Reconstructed, not per agent. Cursor can run Auto, Composer, or Grok models available on your Cursor subscription.")
                     }
                 }
             }
@@ -706,18 +710,5 @@ struct EngineSelectionView: View {
     private func selectableCursorModels(for router: VBotRouterState) -> [VBotProviderModel] {
         guard let cursor = router.providers.first(where: { $0.id == "cursor" }) else { return [] }
         return cursor.models.filter { $0.selectable || $0.id == router.selected.modelId }
-    }
-
-    private func cursorModelPicker(router: VBotRouterState) -> some View {
-        let models = selectableCursorModels(for: router)
-        return Picker("Cursor model", selection: Binding(
-            get: { router.selected.modelId },
-            set: { modelId in Task { await saveRouter(provider: "cursor", modelId: modelId) } }
-        )) {
-            ForEach(models, id: \.id) { model in
-                Text(model.id).tag(model.id)
-            }
-        }
-        .disabled(saving)
     }
 }

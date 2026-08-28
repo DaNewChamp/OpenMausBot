@@ -91,6 +91,10 @@ struct AgentProfileView: View {
     private var modelSwitchBlocked: Bool { busy || savingModel || current.busy == true || instancesLoading }
     private var currentProviderTitle: String { pickedInstance?.pickerTitle ?? pickedInstanceId }
     private var currentModelTitle: String { pickedInstance?.modelLabel(for: pickedModel) ?? pickedModel }
+    private var providerMarkKey: String {
+        if let kind = pickedInstance?.driverKind, !kind.isEmpty { return kind }
+        return pickedInstanceId
+    }
     private var reconstructedHostHint: String {
         session.engineSync?.usesReconstructedMutations == true
             ? "Grok Reconstructed uses a host-wide provider and Cursor model"
@@ -122,6 +126,7 @@ struct AgentProfileView: View {
                         instructionsRow
                         routinesSection
                         notificationsRow
+                        modelSelectionRow
                         secondaryControls
                     }
                     .padding(.horizontal, 20)
@@ -547,6 +552,43 @@ struct AgentProfileView: View {
         .padding(.top, 18)
     }
 
+    private var modelSelectionRow: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            profileSectionLabel("Model")
+            VStack(spacing: 0) {
+                Button {
+                    showingModelAndVoice.toggle()
+                } label: {
+                    ModelSelectionSummaryRow(
+                        instanceTitle: currentProviderTitle,
+                        modelTitle: currentModelTitle,
+                        providerKey: providerMarkKey,
+                        subtitle: instancesLoading ? "Loading models…" : nil,
+                        disabled: modelSwitchBlocked && !showingModelAndVoice
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(instancesLoading)
+
+                if showingModelAndVoice {
+                    Divider().overlay(AgentProfileStyle.divider).padding(.leading, 18)
+                    modelPickerBody
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 14)
+                }
+            }
+            .profileCard()
+
+            if current.busy == true {
+                Label("Interrupt this agent before switching models.", systemImage: "info.circle")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 18)
+            }
+        }
+        .padding(.top, 18)
+    }
+
     @ViewBuilder
     private var secondaryControls: some View {
         if showingMedia {
@@ -554,8 +596,8 @@ struct AgentProfileView: View {
                 .padding(.top, 30)
         }
         if showingModelAndVoice {
-            modelAndVoiceControls
-                .padding(.top, 30)
+            voiceOnlyControls
+                .padding(.top, 18)
         }
     }
 
@@ -613,21 +655,8 @@ struct AgentProfileView: View {
         }
     }
 
-    private var modelAndVoiceControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            profileSectionLabel("Model & voice")
-            VStack(alignment: .leading, spacing: 14) {
-                modelControls
-                Divider().overlay(AgentProfileStyle.divider)
-                voiceControls
-            }
-            .padding(18)
-            .profileCard()
-        }
-    }
-
     @ViewBuilder
-    private var modelControls: some View {
+    private var modelPickerBody: some View {
         if instancesLoading {
             ProgressView("Loading models")
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -640,31 +669,20 @@ struct AgentProfileView: View {
             Button("Try again") { Task { await loadInstances() } }
                 .disabled(busy || savingModel)
         } else {
-            Picker("Provider", selection: providerSelection) {
-                ForEach(advertisedInstances) { instance in
-                    Text(instance.pickerTitle).tag(instance.instanceId)
+            ModelPickerView(
+                instances: instances,
+                selectedInstanceId: $pickedInstanceId,
+                selectedModelId: $pickedModel,
+                disabled: modelSwitchBlocked || advertisedInstances.isEmpty,
+                modelsDisabled: reconstructedModelDisabled,
+                footerHint: reconstructedHostHint
+            ) {
+                let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances)?.capabilities?.effortLevels ?? []
+                if let effort = pickedEffort, !levels.contains(effort) {
+                    pickedEffort = nil
                 }
-                if advertisedInstances.contains(where: { $0.instanceId == pickedInstanceId }) == false {
-                    Text(currentProviderTitle).tag(pickedInstanceId)
-                }
+                scheduleModelSave()
             }
-            .disabled(modelSwitchBlocked || advertisedInstances.isEmpty)
-            .accessibilityLabel("Provider")
-            .accessibilityValue(currentProviderTitle)
-            .accessibilityHint(current.busy == true ? "Interrupt this agent before switching models" : reconstructedHostHint)
-
-            Picker("Model", selection: modelSelection) {
-                ForEach(modelsForPickedInstance) { option in
-                    Text(option.label).tag(option.id)
-                }
-                if modelsForPickedInstance.contains(where: { $0.id == pickedModel }) == false {
-                    Text(currentModelTitle).tag(pickedModel)
-                }
-            }
-            .disabled(modelSwitchBlocked || modelsForPickedInstance.isEmpty || reconstructedModelDisabled)
-            .accessibilityLabel("Model")
-            .accessibilityValue(currentModelTitle)
-            .accessibilityHint(current.busy == true ? "Interrupt this agent before switching models" : "Choose the model this agent uses")
 
             if showsEffortPicker {
                 Picker("Reasoning", selection: effortSelection) {
@@ -683,11 +701,18 @@ struct AgentProfileView: View {
                 Label("Saving model…", systemImage: "arrow.triangle.2.circlepath")
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Saving model")
-            } else if current.busy == true {
-                Label("Interrupt this agent before switching models.", systemImage: "info.circle")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var voiceOnlyControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            profileSectionLabel("Voice")
+            VStack(alignment: .leading, spacing: 14) {
+                voiceControls
+            }
+            .padding(18)
+            .profileCard()
         }
     }
 
@@ -776,35 +801,6 @@ struct AgentProfileView: View {
             }
         }
         .presentationDragIndicator(.visible)
-    }
-
-    private var providerSelection: Binding<String> {
-        Binding(
-            get: { pickedInstanceId },
-            set: { newId in
-                pickedInstanceId = newId
-                pickedModel = AdvertisedModelCatalog.alignedModel(
-                    instanceId: newId,
-                    currentModel: pickedModel,
-                    in: instances
-                )
-                let levels = AdvertisedModelCatalog.instance(id: newId, in: instances)?.capabilities?.effortLevels ?? []
-                if let effort = pickedEffort, !levels.contains(effort) {
-                    pickedEffort = nil
-                }
-                scheduleModelSave()
-            }
-        )
-    }
-
-    private var modelSelection: Binding<String> {
-        Binding(
-            get: { pickedModel },
-            set: { newModel in
-                pickedModel = newModel
-                scheduleModelSave()
-            }
-        )
     }
 
     private var effortSelection: Binding<String?> {
