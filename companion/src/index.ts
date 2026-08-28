@@ -39,7 +39,7 @@ import { createProxyHandler } from "./proxy.ts";
 import { companionOriginSocket, listenCompanionOrigin } from "./origin.ts";
 import { bearerToken } from "./devices.ts";
 import { isLocalVmViewerUpgrade, localVmViewerBotId } from "./routes.ts";
-import { verifyViewerAccessToken } from "./viewer-access.ts";
+import { resolveViewerAccessDeviceId, stripViewerAccessQuery } from "./viewer-access.ts";
 
 /** A port from the environment, or the default. Anything that is not a whole
  * number in range is the default — a typo'd port must not become port 0. */
@@ -163,9 +163,8 @@ companion.on("upgrade", (req, socket, head) => {
   let device = devices.authenticate(bearerToken(req.headers.authorization));
   if (!device) {
     const botId = localVmViewerBotId(path);
-    const viewerTicket = new URL(fullUrl, "http://localhost").searchParams.get("omb_viewer");
-    if (botId && viewerTicket) {
-      const deviceId = verifyViewerAccessToken(viewerTicket, botId);
+    if (botId) {
+      const deviceId = resolveViewerAccessDeviceId(fullUrl, req.headers.cookie, botId);
       if (deviceId) device = devices.find(deviceId);
     }
   }
@@ -176,7 +175,7 @@ companion.on("upgrade", (req, socket, head) => {
   const upstream = httpRequest({
     hostname: "127.0.0.1",
     port: HARNESS_PORT,
-    path: req.url,
+    path: stripViewerAccessQuery(fullUrl),
     method: req.method,
     headers: {
       ...req.headers,

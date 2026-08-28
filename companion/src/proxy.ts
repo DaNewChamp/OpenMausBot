@@ -55,7 +55,9 @@ import {
 import {
   appendViewerAccessQuery,
   mintViewerAccessToken,
-  verifyViewerAccessToken,
+  resolveViewerAccessDeviceId,
+  stripViewerAccessQuery,
+  viewerAccessSetCookieForRequest,
 } from "./viewer-access.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
@@ -294,11 +296,8 @@ export function createProxyHandler(options: ProxyOptions) {
     if (!device) {
       const botId = localVmViewerBotId(path);
       if (botId && (isLocalVmViewer(method, path) || isLocalVmViewerUpgrade(path))) {
-        const viewerTicket = new URL(fullUrl, "http://localhost").searchParams.get("omb_viewer");
-        if (viewerTicket) {
-          const deviceId = verifyViewerAccessToken(viewerTicket, botId);
-          if (deviceId) device = options.deviceById?.(deviceId) ?? null;
-        }
+        const deviceId = resolveViewerAccessDeviceId(fullUrl, req.headers.cookie, botId);
+        if (deviceId) device = options.deviceById?.(deviceId) ?? null;
       }
     }
     const denial = denyReason({
@@ -449,7 +448,7 @@ export function createProxyHandler(options: ProxyOptions) {
     }
 
     if (isLocalVmViewer(method, path)) {
-      forward();
+      forward(undefined, { path: stripViewerAccessQuery(fullUrl) });
       return;
     }
 
@@ -735,7 +734,19 @@ export function createProxyHandler(options: ProxyOptions) {
           // never sends accept-encoding, so this is a guard rather than a
           // path: if it ever fires, the body passes through unscrubbed and
           // intact rather than scrubbed and broken.
-          res.writeHead(harness.statusCode ?? 200, privateHeaders(harness.headers));
+          const passthroughHeaders = privateHeaders(harness.headers);
+          const viewerBotId = localVmViewerBotId(path);
+          const viewerCookie = viewerBotId
+            ? viewerAccessSetCookieForRequest(
+              fullUrl,
+              method,
+              path,
+              viewerBotId,
+              harness.statusCode ?? 200,
+            )
+            : null;
+          if (viewerCookie) passthroughHeaders["set-cookie"] = viewerCookie;
+          res.writeHead(harness.statusCode ?? 200, passthroughHeaders);
           // `pipe` does not carry a failure from source to destination. An
           // upstream that dies part-way through an image would otherwise
           // leave the phone holding an open connection and a content-length
