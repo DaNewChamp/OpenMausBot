@@ -144,9 +144,42 @@ function printAuthRunbook() {
   console.log("  Verify:     curl -s http://127.0.0.1:8799/api/instances | jq '.instances[] | {id:.instanceId, state:.snapshot.state, auth:.snapshot.authenticated}'");
 }
 
+function fixMacWorkspaceCwds() {
+  const botsPath = join(userData, "bots.json");
+  if (!existsSync(botsPath)) return;
+  const bots = JSON.parse(readFileSync(botsPath, "utf8"));
+  let fixed = 0;
+  for (const bot of bots) {
+    for (const task of bot.tasks ?? []) {
+      const cwd = task.cwd;
+      if (typeof cwd !== "string" || !cwd.startsWith("/Users/")) continue;
+      const local = join(userData, "workspaces", bot.id);
+      console.log(`migrate cwd: ${bot.name ?? bot.id} → ${local}`);
+      task.cwd = local;
+      fixed++;
+    }
+  }
+  if (fixed) writeFileSync(botsPath, `${JSON.stringify(bots, null, 2)}\n`);
+}
+
+function ensureHarnessDataDir() {
+  const rootData = join(home, ".openmausbot");
+  if (rootData === userData) return;
+  try {
+    rmSync(rootData, { recursive: true, force: true });
+  } catch {
+    /* busy mount or foreign tree */
+  }
+  mkdirSync(dirname(rootData), { recursive: true });
+  execFileSync("ln", ["-sfn", userData, rootData]);
+  console.log(`data dir: ${rootData} → ${userData}`);
+}
+
 mkdirSync("/var/log/openmausbot", { recursive: true });
 mkdirSync(userData, { recursive: true });
 mkdirSync(runtimeRoot, { recursive: true });
+ensureHarnessDataDir();
+fixMacWorkspaceCwds();
 
 if (!skipBuild) {
   runPackageScript("build:server");
