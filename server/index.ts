@@ -3723,6 +3723,9 @@ const server = createServer(async (req, res) => {
     if (origin && !isAllowedOrigin(origin)) {
       return json(res, 403, { error: "forbidden: cross-origin request" });
     }
+    // Companion proxies over loopback TCP, so remoteAddress is always
+    // 127.0.0.1. Admin bridge routes (pairing, job audit/cancel, shell)
+    // must also refuse the sidecar's identifying header.
     if (await handleBridgeRoutes(req, res, method, path, json, bridges, { loopback: isDirectLoopback(req) })) {
       return;
     }

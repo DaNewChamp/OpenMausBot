@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
-import type { BridgeJobResult, BridgeRegistry } from "./bridge-registry.ts";
+import { STALE_RUNNING_MS, type BridgeJobResult, type BridgeRegistry } from "./bridge-registry.ts";
 
 export async function waitForBridgeJobResult(
   registry: BridgeRegistry,
@@ -8,17 +8,17 @@ export async function waitForBridgeJobResult(
   timeoutMs: number,
   bridgeName: string,
 ): Promise<BridgeJobResult> {
-  const deadline = Date.now() + timeoutMs + 20_000;
+  const deadline = Date.now() + timeoutMs + STALE_RUNNING_MS;
   while (Date.now() < deadline) {
     registry.reconcile();
     const status = registry.jobStatus(jobId);
     if (status === "cancelled") throw new Error(`bridge job cancelled waiting for ${bridgeName}`);
+    const result = registry.result(jobId);
+    if (result) return result;
     if (status === "failed") {
       const record = registry.getJob(jobId);
       throw new Error(record?.error ?? `bridge job failed waiting for ${bridgeName}`);
     }
-    const result = registry.result(jobId);
-    if (result) return result;
     await sleep(400);
   }
   registry.reconcile(Date.now());

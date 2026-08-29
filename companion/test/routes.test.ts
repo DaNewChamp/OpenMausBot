@@ -36,6 +36,24 @@ describe("credentials", () => {
     expect(ask("POST", "/api/health", false)?.status).toBe(401);
     expect(ask("GET", "/api/healthz", false)?.status).toBe(401);
   });
+
+  it("lets only the three bridge daemon verbs through unauthenticated", () => {
+    expect(ask("POST", "/api/bridge/register", false)).toBeNull();
+    expect(ask("POST", "/api/bridge/heartbeat", false)).toBeNull();
+    expect(ask("POST", "/api/bridge/result", false)).toBeNull();
+    expect(ask("POST", "/api/bridge/pairing", false)?.status).toBe(401);
+    expect(ask("GET", "/api/bridge/jobs", false)?.status).toBe(401);
+    expect(ask("GET", "/api/bridge/jobs/job-1", false)?.status).toBe(401);
+    expect(ask("POST", "/api/bridge/jobs/job-1", false)?.status).toBe(401);
+    expect(ask("GET", "/api/bridges", false)?.status).toBe(401);
+  });
+
+  it("does not forward bridge job audit even with a paired token", () => {
+    expect(ask("GET", "/api/bridge/jobs", true)?.status).toBe(404);
+    expect(ask("GET", "/api/bridge/jobs/job-1", true)?.status).toBe(404);
+    expect(ask("POST", "/api/bridge/jobs/job-1", true)?.status).toBe(404);
+    expect(ask("POST", "/api/bridge/pairing", true)?.status).toBe(404);
+  });
 });
 
 describe("what the app may do", () => {

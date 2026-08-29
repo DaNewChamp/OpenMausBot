@@ -18,6 +18,12 @@ export function asCapabilities(value: unknown): BridgeCapability[] {
   return value.filter((entry): entry is BridgeCapability => typeof entry === "string" && allowed.has(entry as BridgeCapability));
 }
 
+/** Direct harness-host loopback, not the companion sidecar's loopback hop.
+ * Companion sets `x-openmausbot-companion: 1` on every forwarded request. */
+export function isBridgeAdminLoopback(req: IncomingMessage, opts: { loopback: boolean }): boolean {
+  return opts.loopback && String(req.headers["x-openmausbot-companion"] ?? "") !== "1";
+}
+
 /** Bridge HTTP surface. Returns true when the request was handled. */
 export async function handleBridgeRoutes(
   req: IncomingMessage,
@@ -29,19 +35,21 @@ export async function handleBridgeRoutes(
   opts: { loopback: boolean },
 ): Promise<boolean> {
   if (!path.startsWith("/api/bridge")) return false;
+  const admin = isBridgeAdminLoopback(req, opts);
 
   if (method === "POST" && path === "/api/bridge/pairing") {
-    if (!opts.loopback) return json(res, 403, { error: "pair bridges from the harness host" }), true;
+    if (!admin) return json(res, 403, { error: "pair bridges from the harness host" }), true;
     return json(res, 200, bridges.startPairing()), true;
   }
 
   if (method === "GET" && path === "/api/bridges") {
-    if (!opts.loopback) return json(res, 403, { error: "bridge list is loopback-only" }), true;
+    if (!admin) return json(res, 403, { error: "bridge list is loopback-only" }), true;
     return json(res, 200, { bridges: bridges.list() }), true;
   }
 
   const jobMatch = path.match(/^\/api\/bridge\/jobs\/([\w-]+)$/);
-  if (jobMatch && opts.loopback) {
+  if (jobMatch) {
+    if (!admin) return json(res, 403, { error: "job audit is loopback-only" }), true;
     const jobId = jobMatch[1]!;
     if (method === "GET") {
       const record = bridges.getJob(jobId);
@@ -57,14 +65,15 @@ export async function handleBridgeRoutes(
     }
   }
 
-  if (method === "GET" && path === "/api/bridge/jobs" && opts.loopback) {
+  if (method === "GET" && path === "/api/bridge/jobs") {
+    if (!admin) return json(res, 403, { error: "job audit is loopback-only" }), true;
     const url = new URL(req.url ?? "/", "http://localhost");
     const bridgeId = url.searchParams.get("bridgeId") ?? undefined;
     return json(res, 200, { jobs: bridges.listJobs(bridgeId) }), true;
   }
 
   const shellMatch = path.match(/^\/api\/bridges\/([\w-]+)\/shell$/);
-  if (method === "POST" && shellMatch && opts.loopback) {
+  if (method === "POST" && shellMatch && admin) {
     try {
       const body = await readJson(req);
       const result = await runShellOnBridge(bridges, {
@@ -115,7 +124,7 @@ export async function handleBridgeRoutes(
     const body = await readJson(req);
     const jobId = String(body.jobId ?? "");
     if (!jobId) return json(res, 400, { error: "jobId required" }), true;
-    bridges.storeResult({
+    const stored = bridges.storeResult({
       jobId,
       bridgeId: bridge.id,
       exitCode: body.exitCode == null ? null : Number(body.exitCode),
@@ -124,7 +133,9 @@ export async function handleBridgeRoutes(
       truncated: body.truncated === true,
       finishedAt: Date.now(),
     });
-    return json(res, 200, { ok: true }), true;
+    if (stored === "missing") return json(res, 404, { error: "job not found" }), true;
+    if (stored === "foreign") return json(res, 403, { error: "job belongs to another bridge" }), true;
+    return json(res, 200, { ok: true, ignored: stored === "duplicate" }), true;
   }
 
   return json(res, 404, { error: `no route: ${method} ${path}` }), true;

@@ -91,11 +91,16 @@ Loopback harness route: `POST /api/internal/bridge/ssh` with `{ target, command,
 
 | Route | Auth | Purpose |
 |---|---|---|
-| `POST /api/bridge/pairing` | loopback TCP | Start 6-digit pairing window |
-| `POST /api/bridge/register` | pairing code | Mint bridge bearer token |
-| `POST /api/bridge/heartbeat` | bridge bearer | Poll jobs |
-| `POST /api/bridge/result` | bridge bearer | Submit job output |
-| `GET /api/bridges` | loopback TCP | List registered bridges |
+| `POST /api/bridge/pairing` | harness-host loopback TCP (not companion) | Start 6-digit pairing window |
+| `POST /api/bridge/register` | pairing code (public tunnel) | Mint bridge bearer token |
+| `POST /api/bridge/heartbeat` | bridge bearer (public tunnel) | Poll jobs |
+| `POST /api/bridge/result` | bridge bearer (public tunnel) | Submit job output |
+| `GET /api/bridges` | harness-host loopback TCP (not companion) | List registered bridges |
+| `GET /api/bridge/jobs` | harness-host loopback TCP (not companion) | Audit durable job records |
+| `GET /api/bridge/jobs/:id` | harness-host loopback TCP (not companion) | Inspect one job |
+| `POST /api/bridge/jobs/:id` `{ "action": "cancel" }` | harness-host loopback TCP (not companion) | Cancel a queued/running job |
+
+Companion's public allowlist is exactly register / heartbeat / result. Job audit, cancel, pairing, and loopback shell are refused even when the sidecar's loopback hop would otherwise look local.
 
 ## Desktop viewer (Phase C)
 

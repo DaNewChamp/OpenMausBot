@@ -52,12 +52,16 @@ async function runDaemon(credentials = loadCredentials()) {
               ? `ssh ${job.alias} ${job.command}`
               : `${job.kind} ${job.payload.botId}`;
         console.log(`job ${job.id}: ${label}`);
-        try {
-          const result = await handleJob(job);
-          await submitResult(credentials, job.id, result);
-        } finally {
-          inFlight.delete(job.id);
-        }
+        void (async () => {
+          try {
+            const result = await handleJob(job);
+            await submitResult(credentials, job.id, result);
+          } catch (error) {
+            console.warn(`job ${job.id}: ${error instanceof Error ? error.message : String(error)}`);
+          } finally {
+            inFlight.delete(job.id);
+          }
+        })();
       }
     } catch (error) {
       console.warn(`bridge heartbeat: ${error instanceof Error ? error.message : String(error)}`);

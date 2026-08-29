@@ -31,9 +31,17 @@ describe("bridge job lifecycle", () => {
   it("deduplicates enqueue by idempotency key while job is active", () => {
     const { registry, bridgeId } = pairedShellBridge();
     const first = registry.enqueueShell(bridgeId, "echo one", undefined, 60_000, { idempotencyKey: "run-1" });
-    const second = registry.enqueueShell(bridgeId, "echo two", undefined, 60_000, { idempotencyKey: "run-1" });
+    const second = registry.enqueueShell(bridgeId, "echo one", undefined, 60_000, { idempotencyKey: "run-1" });
     expect(second.id).toBe(first.id);
     expect(registry.listJobs(bridgeId)).toHaveLength(1);
+  });
+
+  it("rejects an idempotency key reused with a different command", () => {
+    const { registry, bridgeId } = pairedShellBridge();
+    registry.enqueueShell(bridgeId, "echo one", undefined, 60_000, { idempotencyKey: "run-1" });
+    expect(() => registry.enqueueShell(bridgeId, "echo two", undefined, 60_000, { idempotencyKey: "run-1" })).toThrow(
+      /idempotency key conflict/,
+    );
   });
 
   it("redelivers a stale running job after bridge reconnect", () => {
@@ -50,6 +58,20 @@ describe("bridge job lifecycle", () => {
     expect(redelivered).toHaveLength(1);
     expect(redelivered[0]?.id).toBe(job.id);
     expect(registry.getJob(job.id)?.attempt).toBe(2);
+    vi.useRealTimers();
+  });
+
+  it("does not redeliver a running job while the bridge is still heartbeating", () => {
+    vi.useFakeTimers();
+    const { registry, bridgeId } = pairedShellBridge();
+    const job = registry.enqueueShell(bridgeId, "echo long");
+    expect(registry.pollJobs(bridgeId)).toHaveLength(1);
+
+    vi.advanceTimersByTime(31_000);
+    registry.touch(bridgeId);
+    expect(registry.pollJobs(bridgeId)).toEqual([]);
+    expect(registry.getJob(job.id)?.status).toBe("running");
+    expect(registry.getJob(job.id)?.attempt).toBe(1);
     vi.useRealTimers();
   });
 
@@ -159,8 +181,80 @@ describe("bridge job lifecycle", () => {
       truncated: false,
       finishedAt: Date.now(),
     };
-    expect(registry.storeResult(result)).toBe(true);
-    expect(registry.storeResult({ ...result, stdout: "mutated\n" })).toBe(false);
+    expect(registry.storeResult(result)).toBe("accepted");
+    expect(registry.storeResult({ ...result, stdout: "mutated\n" })).toBe("duplicate");
     expect(registry.result(job.id)?.stdout).toBe("once\n");
+  });
+
+  it("refuses results for unknown jobs and foreign bridges", () => {
+    const { registry, bridgeId } = pairedShellBridge();
+    const job = registry.enqueueShell(bridgeId, "echo once");
+    registry.pollJobs(bridgeId);
+    expect(
+      registry.storeResult({
+        jobId: "missing-job",
+        bridgeId,
+        exitCode: 0,
+        stdout: "nope\n",
+        stderr: "",
+        truncated: false,
+        finishedAt: Date.now(),
+      }),
+    ).toBe("missing");
+    expect(
+      registry.storeResult({
+        jobId: job.id,
+        bridgeId: "other-bridge",
+        exitCode: 0,
+        stdout: "stolen\n",
+        stderr: "",
+        truncated: false,
+        finishedAt: Date.now(),
+      }),
+    ).toBe("foreign");
+    expect(registry.getJob(job.id)?.status).toBe("running");
+  });
+
+  it("returns nonzero exit results to waiters instead of throwing", async () => {
+    vi.useFakeTimers();
+    try {
+      const { registry, bridgeId } = pairedShellBridge();
+      const job = registry.enqueueShell(bridgeId, "false", undefined, 5_000);
+      registry.pollJobs(bridgeId);
+      const waitPromise = waitForBridgeJobResult(registry, job.id, 5_000, "mini");
+      registry.storeResult({
+        jobId: job.id,
+        bridgeId,
+        exitCode: 1,
+        stdout: "partial",
+        stderr: "nope",
+        truncated: false,
+        finishedAt: Date.now(),
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(waitPromise).resolves.toMatchObject({ exitCode: 1, stdout: "partial", stderr: "nope" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("backs off before a second redelivery", () => {
+    vi.useFakeTimers();
+    const { registry, bridgeId } = pairedShellBridge();
+    const job = registry.enqueueShell(bridgeId, "echo mid", undefined, 60_000, { maxAttempts: 3 });
+    registry.pollJobs(bridgeId);
+
+    vi.advanceTimersByTime(31_000);
+    registry.reconcile(Date.now());
+    expect(registry.pollJobs(bridgeId)).toHaveLength(1);
+    expect(registry.getJob(job.id)?.attempt).toBe(2);
+
+    vi.advanceTimersByTime(31_000);
+    registry.reconcile(Date.now());
+    expect(registry.pollJobs(bridgeId)).toEqual([]);
+    vi.advanceTimersByTime(1_000);
+    expect(registry.pollJobs(bridgeId)).toHaveLength(1);
+    expect(registry.getJob(job.id)?.attempt).toBe(3);
+    vi.useRealTimers();
   });
 });

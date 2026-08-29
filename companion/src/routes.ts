@@ -590,6 +590,19 @@ const EXPLAINED: ReadonlyArray<{ path: RegExp; error: string }> = [
   { path: /^\/api\/teams(\/|$)/, error: "teams are imported and exported on your computer" },
 ];
 
+/** Bridge daemon routes that must cross the public tunnel. Pairing, job
+ * audit, cancel, and loopback shell stay harness-host-only — a prefix
+ * allow would otherwise publish every new `/api/bridge/*` route. */
+const BRIDGE_DAEMON_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
+  { method: "POST", path: "/api/bridge/register" },
+  { method: "POST", path: "/api/bridge/heartbeat" },
+  { method: "POST", path: "/api/bridge/result" },
+];
+
+export function isBridgeDaemonRoute(method: string, path: string): boolean {
+  return BRIDGE_DAEMON_ROUTES.some((route) => route.method === method && route.path === path);
+}
+
 /** Why this request may not go through, or null when it may.
  *
  * Default deny: the answer for anything not on the list is "no route", which
@@ -604,7 +617,7 @@ export function denyReason({ path, method, authenticated }: RouteRequest): Denia
   // exactly the person it was for — which reads as "broken" rather than
   // "unpaired". It discloses nothing a port scan would not.
   if (method === "GET" && path === "/api/health") return null;
-  if (path.startsWith("/api/bridge/")) return null;
+  if (isBridgeDaemonRoute(method, path)) return null;
 
   if (!authenticated) {
     return { status: 401, error: "pair this device from Phone settings in OpenMausBot on your computer" };
