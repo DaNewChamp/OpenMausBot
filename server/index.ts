@@ -5899,28 +5899,29 @@ const server = createServer(async (req, res) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       const action = m[2] as "run" | "stop" | "recreate";
       const target = localVmTargetForBot(bot.id);
-      if (target.key === SHARED_LOCAL_VM_TARGET.key) {
-        return json(res, 409, { error: "Shared mode manages this desktop in App Settings → Local VM" });
-      }
+      const sharedTarget = target.key === SHARED_LOCAL_VM_TARGET.key;
       if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(target.key)) {
-        return json(res, 409, { error: "this bot's Local VM setup action is still running" });
+        return json(res, 409, { error: sharedTarget ? "the shared Local VM setup action is still running" : "this bot's Local VM setup action is still running" });
       }
-      if (action === "run" && localVmProvisionBusy) {
+      if (!sharedTarget && action === "run" && localVmProvisionBusy) {
         return json(res, 409, { error: "another per-bot Local VM is being created — retry after it finishes" });
       }
       const vmOwner = localVmLeaseFor(target).current(localVmOwnerBusy);
-      if (vmOwner || bot.busy) {
-        return json(res, 409, { error: "this bot is using its Local VM — stop the turn first" });
+      if (vmOwner && (action === "stop" || action === "recreate" || action === "run")) {
+        return json(res, 409, { error: sharedTarget ? "the shared Local VM is being used by a bot — stop that turn first" : "this bot is using its Local VM — stop the turn first" });
+      }
+      if (bot.busy && (action === "stop" || action === "recreate")) {
+        return json(res, 409, { error: sharedTarget ? "this bot is using the shared Local VM — stop the turn first" : "this bot is using its Local VM — stop the turn first" });
       }
       // Fence this target, and the cross-target capacity decision for creates,
       // before the first await so two phone requests cannot both pass the limit.
       localVmLifecycleBusy.add(target.key);
-      if (action === "run" || action === "recreate") localVmProvisionBusy = true;
+      if (!sharedTarget && (action === "run" || action === "recreate")) localVmProvisionBusy = true;
       try {
         if (action === "run" || action === "recreate") {
           const before = await containerComputerStatus(undefined, undefined, target);
           if (!before.runtime) return json(res, 409, { error: before.problem ?? "No container runtime is installed" });
-          if (action === "run" && !(await containerComputerExists(before.runtime, target))) {
+          if (!sharedTarget && action === "run" && !(await containerComputerExists(before.runtime, target))) {
             const count = await existingPerBotLocalVmCount(before.runtime);
             if (count >= localVmMaxInstances(cfg)) {
               return json(res, 409, {
@@ -5928,8 +5929,11 @@ const server = createServer(async (req, res) => {
               });
             }
           }
+          if (action === "run" && before.container === "stopped") {
+            return json(res, 409, { error: "This desktop image cannot safely resume; recreate the Local VM" });
+          }
           if (action === "recreate" && before.container === "missing") {
-            return json(res, 409, { error: "this bot has no Local VM to recreate — use Create instead" });
+            return json(res, 409, { error: sharedTarget ? "there is no Local VM to recreate — use Create instead" : "this bot has no Local VM to recreate — use Create instead" });
           }
           if (action === "recreate") await containerComputerAction("remove", undefined, undefined, target);
         }
@@ -5942,7 +5946,7 @@ const server = createServer(async (req, res) => {
           busy: false,
         }));
       } finally {
-        if (action === "run" || action === "recreate") localVmProvisionBusy = false;
+        if (!sharedTarget && (action === "run" || action === "recreate")) localVmProvisionBusy = false;
         localVmLifecycleBusy.delete(target.key);
       }
     }

@@ -52,6 +52,10 @@ export function projectLocalVmStatus(
       ? status.ready ? "ready" : "running"
       : status.container;
 
+  const sharedMode = options.mode === "shared";
+  const recreateLabel = sharedMode ? "Recreate the Local VM." : "Recreate this bot's Local VM.";
+  const createLabel = sharedMode ? "Create the Local VM." : "Create this bot's Local VM.";
+
   const problem = status.desktop_error
     ? "The Local VM desktop is unavailable."
     : !status.runtime
@@ -61,21 +65,19 @@ export function projectLocalVmStatus(
         : !status.image
           ? "Prepare the Local VM image on the computer."
           : status.container === "missing"
-            ? "Create this bot's Local VM."
+            ? createLabel
             : !status.imageMatches || !status.managed || status.network !== "loopback" || status.security !== "hardened" || status.persistence !== "durable"
-              ? "Recreate this bot's Local VM."
+              ? recreateLabel
               : status.container === "stopped"
-                ? "Recreate this bot's Local VM."
+                ? recreateLabel
                 : !status.desktopReady
                   ? "The Local VM desktop is still starting."
                   : null;
 
-  // Shared mode is intentionally watch/status-only for a bot. Its lifecycle
-  // is managed from the computer's Local VM settings, never by a phone.
-  const perBotActions = options.mode === "per-bot";
-  const canCreate = perBotActions && status.container === "missing" && imageReady && status.create_supported && !busy;
-  const canStop = perBotActions && status.container === "running" && !busy;
-  const canRecreate = perBotActions && status.container !== "missing" && imageReady && !busy;
+  const lifecycleActions = options.mode === "per-bot" || sharedMode;
+  const canCreate = lifecycleActions && status.container === "missing" && imageReady && status.create_supported && !busy;
+  const canStop = lifecycleActions && status.container === "running" && !busy;
+  const canRecreate = lifecycleActions && status.container !== "missing" && imageReady && !busy;
 
   return {
     mode: options.mode,

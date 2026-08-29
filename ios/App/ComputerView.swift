@@ -590,6 +590,13 @@ struct ComputerView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(pendingLocalVmAction || savingDestination)
                 }
+                if localVmDestinationEnabled, canShowLocalVmControls, localVmStatus?.canRecreate == true {
+                    Button("Recreate Local VM") {
+                        confirmingLocalVmAction = .recreate
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(pendingLocalVmAction || savingDestination)
+                }
                 if canRetryScreen {
                     Button("Try again", action: retryScreen)
                         .buttonStyle(.borderedProminent)
@@ -623,6 +630,9 @@ struct ComputerView: View {
             }
             if canShowLocalVmControls, localVmStatus?.canCreate == true {
                 return "Local VM is not created yet. Create it below, then open this screen again."
+            }
+            if canShowLocalVmControls, localVmStatus?.canRecreate == true {
+                return localVmStatus?.problem ?? "Recreate the Local VM below to start a fresh desktop."
             }
             return "Running on Local VM. The desktop updates while this screen is open."
         case "cloud":
