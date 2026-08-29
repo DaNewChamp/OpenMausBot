@@ -8,6 +8,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IOS="$ROOT/ios"
+BRANCH="${BRANCH:-cursor/build-36-local-vm-phone-a27c}"
 ARCHIVE="${ARCHIVE:-$ROOT/build/OpenMausCompanion-wifi.xcarchive}"
 EXPORT="${EXPORT:-$ROOT/build/export-wifi}"
 AUTH_KEY="${AUTH_KEY:-$HOME/.appstoreconnect/private_keys/AuthKey_2RY648NNC3.p8}"
@@ -15,11 +16,18 @@ AUTH_KEY_ID="${AUTH_KEY_ID:-2RY648NNC3}"
 AUTH_ISSUER_ID="${AUTH_ISSUER_ID:-e2e0f91b-e7f8-4585-9b12-700e801bae4d}"
 MACBOOK_USER="${MACBOOK_USER:-vincent}"
 MACBOOK_HOST="${MACBOOK_HOST:-vincents.macbook.pro.lan}"
+MACBOOK_HOST_FALLBACK="${MACBOOK_HOST_FALLBACK:-192.168.112.99}"
 DEVICE_UDID="${DEVICE_UDID:-C8EA9F61-6E1A-5C41-A4DE-B3454CC89528}"
 BUNDLE_ID="com.posival.openmausmobile"
 STAGING="/tmp/OpenMausCompanion.app"
 
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+
+if [[ -d "$ROOT/.git" ]] && git remote | grep -qx personal; then
+  git -C "$ROOT" fetch personal "$BRANCH"
+  git -C "$ROOT" checkout "$BRANCH" 2>/dev/null || git -C "$ROOT" checkout -B "$BRANCH" "personal/$BRANCH"
+  git -C "$ROOT" reset --hard "personal/$BRANCH"
+fi
 
 rm -rf "$EXPORT" "$ARCHIVE"
 cd "$IOS" && xcodegen generate
@@ -58,9 +66,19 @@ APP="$UNZIP/Payload/OpenMausCompanion.app"
   "$APP/PlugIns/OpenMausCompanionShare.appex/Info.plist" >/dev/null
 
 echo "==> Copy to MacBook and install over WiFi..."
-rsync -az "$APP/" "${MACBOOK_USER}@${MACBOOK_HOST}:${STAGING}/"
-ssh -o BatchMode=yes "${MACBOOK_USER}@${MACBOOK_HOST}" \
-  "xcrun devicectl device install app --device '$DEVICE_UDID' '$STAGING' && \
-   xcrun devicectl device process launch --device '$DEVICE_UDID' '$BUNDLE_ID'"
+install_via_macbook() {
+  local host="$1"
+  rsync -az "$APP/" "${MACBOOK_USER}@${host}:${STAGING}/"
+  ssh -o BatchMode=yes -o ConnectTimeout=15 "${MACBOOK_USER}@${host}" \
+    "xcrun devicectl device install app --device '$DEVICE_UDID' '$STAGING' && \
+     xcrun devicectl device process launch --device '$DEVICE_UDID' '$BUNDLE_ID'"
+}
 
+if install_via_macbook "$MACBOOK_HOST"; then
+  echo "==> Done — V Bot build $VERSION installed on $DEVICE_UDID"
+  exit 0
+fi
+
+echo "==> Primary MacBook host failed ($MACBOOK_HOST), trying ${MACBOOK_HOST_FALLBACK}..." >&2
+install_via_macbook "$MACBOOK_HOST_FALLBACK"
 echo "==> Done — V Bot build $VERSION installed on $DEVICE_UDID"

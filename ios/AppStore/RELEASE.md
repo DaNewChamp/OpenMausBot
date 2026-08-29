@@ -52,6 +52,16 @@ Use this when App Store Connect rejects upload (**error 90382** — daily upload
 
 Export `XCODE_DEVICE_ID` and `DEVICE_UDID` if Vincent's phone is not the default in `scripts/install-ios-device.sh`.
 
+### One command (MacBook or Mac mini)
+
+```sh
+cd ~/Github/OpenMausBot
+./scripts/install-ios-now.sh
+```
+
+- **MacBook** (phone paired here): Debug build + install locally in Terminal.
+- **Mac mini** (phone on MacBook Wi‑Fi): Release archive/sign on mini, copy to MacBook, `devicectl` install. Avoids SSH `xcodebuild` codesign failures.
+
 ### Path A — MacBook only (Debug, fastest loop)
 
 Run **locally in Terminal.app on the MacBook**, not over SSH — remote `xcodebuild` codesign often fails with `errSecInternalComponent` even with the ASC API key.
@@ -79,6 +89,8 @@ From the Mac mini when you only need to trigger the MacBook Debug path:
 ```sh
 ./scripts/install-ios-via-macbook-hop.sh
 ```
+
+(Same as `./scripts/install-ios-now.sh` on the mini — archives here, installs via MacBook. Does **not** SSH `xcodebuild` to the MacBook.)
 
 ### Path C — TestFlight archive without upload
 
