@@ -16,5 +16,6 @@ export PATH="${HOME_DIR}/.local/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
 SOCK="$ORIGIN_DIR/origin.sock"
 mkdir -p "$ORIGIN_DIR"
 rm -f "$SOCK"
+export OMB_COMPANION_INTERNAL_ORIGIN="$SOCK"
 
 exec /usr/bin/node "$RUNTIME_ROOT/companion/index.js"
