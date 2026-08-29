@@ -16,6 +16,8 @@
 //   configure_bot(bot_id, …)             → Chiefs can retarget a teammate's
 //                                          engine, model, or reasoning
 //   run_on_bridge(command, bridge?, …)   → run a shell command on a paired home bridge
+//   list_rooms / create_room / update_room  → multi-bot channels (Chief manages)
+//   list_routines / create_routine / run_routine → scheduled tasks
 //   request_credential(id, reason?)       → show a secure, allowlisted key card
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
@@ -122,6 +124,91 @@ const TOOLS = [
         timeout_ms: { type: "number", description: "Optional timeout in milliseconds (default 60000)." },
       },
       required: ["command"],
+    },
+  },
+  {
+    name: "list_rooms",
+    description:
+      "List multi-bot rooms/channels in this V Bot workspace that you belong to. Each room has an id, member bots, and optional bulletin.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "create_room",
+    description:
+      "Create a multi-bot room/channel for selected bots in your section. Only a section's Chief of Staff may use this. Members must be in the same section.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Display name for the room (optional; defaults from members)." },
+        member_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Bot ids to include (from list_bots).",
+        },
+        bulletin: { type: "string", description: "Optional pinned note shown at the top of the room." },
+      },
+      required: ["member_ids"],
+    },
+  },
+  {
+    name: "update_room",
+    description:
+      "Rename a room, change its bulletin, or adjust membership. Only a section's Chief of Staff may use this.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        room_id: { type: "string", description: "Room id from list_rooms." },
+        name: { type: "string", description: "New display name." },
+        bulletin: { type: "string", description: "New bulletin text (empty string clears it)." },
+        member_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Replacement member list.",
+        },
+      },
+      required: ["room_id"],
+    },
+  },
+  {
+    name: "list_routines",
+    description:
+      "List scheduled and recurring tasks (routines) in your section — yours and teammates' when you are Chief.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "create_routine",
+    description:
+      "Schedule a recurring or one-shot task for a bot. Chiefs may schedule for teammates; other bots may schedule only for themselves. Use schedule_type once (at unix ms) or daily (HH:MM + optional weekdays 0=Sun..6=Sat).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Short routine title." },
+        prompt: { type: "string", description: "What the bot should do each run." },
+        bot_id: { type: "string", description: "Bot to run it (defaults to you)." },
+        run_on: { type: "string", enum: ["maus", "cloud"], description: "Where to run: maus uses the bot's engine; cloud uses its box VM." },
+        schedule_type: { type: "string", enum: ["once", "daily"], description: "once = single run; daily = repeating." },
+        at: { type: "number", description: "For once: unix timestamp in milliseconds." },
+        time: { type: "string", description: "For daily: local time HH:MM (24h)." },
+        weekdays: {
+          type: "array",
+          items: { type: "number" },
+          description: "For daily: which weekdays (0=Sun..6=Sat). Omit for every day.",
+        },
+        duration_minutes: { type: "number", description: "Optional max runtime per run." },
+        enabled: { type: "boolean", description: "Whether the routine starts enabled (default true)." },
+      },
+      required: ["name", "prompt", "schedule_type"],
+    },
+  },
+  {
+    name: "run_routine",
+    description: "Run a routine immediately (manual trigger). You may run your own routines; Chiefs may run any routine in the section.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        routine_id: { type: "string", description: "Routine id from list_routines." },
+      },
+      required: ["routine_id"],
     },
   },
   {
@@ -280,6 +367,117 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     if (stdout) parts.push(`stdout:\n${stdout}`);
     if (stderr) parts.push(`stderr:\n${stderr}`);
     return { text: parts.join("\n\n"), isError: Number(r.exitCode) !== 0 };
+  }
+  if (name === "list_rooms") {
+    const r = await api(`/api/internal/rooms?self=${encodeURIComponent(BOT_ID)}`);
+    const rooms = (r.rooms as Array<Json>) ?? [];
+    if (!rooms.length) return { text: "No multi-bot rooms in your section yet." };
+    const lines = rooms.map((room) => {
+      const members = Array.isArray(room.memberNames) ? (room.memberNames as string[]).join(", ") : "";
+      const bulletin = room.bulletin ? ` — bulletin: ${String(room.bulletin).slice(0, 120)}` : "";
+      return `- ${room.name} [id: ${room.id}, section: ${room.section ?? "General"}, members: ${members}]${bulletin}`;
+    });
+    return { text: `Rooms you belong to:\n${lines.join("\n")}` };
+  }
+  if (name === "create_room") {
+    const memberIds = Array.isArray(args.member_ids) ? args.member_ids.map(String).filter(Boolean) : [];
+    if (!memberIds.length) return { text: "create_room needs at least one member_id.", isError: true };
+    const body: Record<string, unknown> = {
+      fromBotId: BOT_ID,
+      fromThreadId: THREAD_ID,
+      memberIds,
+    };
+    if (args.name) body.name = String(args.name);
+    if (args.bulletin) body.bulletin = String(args.bulletin);
+    const r = await api("/api/internal/create-room", { method: "POST", body: JSON.stringify(body) });
+    return {
+      text: `Created room "${r.name ?? "room"}" [id: ${r.id}, thread: ${r.threadId}] with ${Array.isArray(r.memberIds) ? (r.memberIds as string[]).length : memberIds.length} bot(s).`,
+    };
+  }
+  if (name === "update_room") {
+    const roomId = String(args.room_id ?? "").trim();
+    if (!roomId) return { text: "update_room needs room_id.", isError: true };
+    const body: Record<string, unknown> = {
+      fromBotId: BOT_ID,
+      fromThreadId: THREAD_ID,
+    };
+    if (args.name !== undefined) body.name = String(args.name);
+    if (args.bulletin !== undefined) body.bulletin = String(args.bulletin);
+    if (args.member_ids !== undefined) {
+      body.memberIds = Array.isArray(args.member_ids) ? args.member_ids.map(String).filter(Boolean) : [];
+    }
+    const r = await api(`/api/internal/rooms/${encodeURIComponent(roomId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+    return { text: `Updated room "${r.name ?? roomId}" [id: ${r.id}].` };
+  }
+  if (name === "list_routines") {
+    const r = await api(`/api/internal/routines?self=${encodeURIComponent(BOT_ID)}`);
+    const routines = (r.routines as Array<Json>) ?? [];
+    if (!routines.length) return { text: "No routines in your section yet." };
+    const lines = routines.map((routine) => {
+      const schedule = routine.schedule as Json | undefined;
+      const sched =
+        schedule?.type === "once"
+          ? `once @ ${new Date(Number(schedule.at)).toISOString()}`
+          : schedule?.type === "daily"
+            ? `daily ${schedule.time}${Array.isArray(schedule.weekdays) ? ` days ${(schedule.weekdays as number[]).join(",")}` : ""}`
+            : "unknown";
+      const bot = String(routine.botId ?? "unknown");
+      return `- ${routine.name} [id: ${routine.id}, bot: ${bot}, ${sched}${routine.enabled === false ? ", paused" : ""}]`;
+    });
+    return { text: `Routines in your section:\n${lines.join("\n")}` };
+  }
+  if (name === "create_routine") {
+    const routineName = String(args.name ?? "").trim();
+    const prompt = String(args.prompt ?? "").trim();
+    const scheduleType = String(args.schedule_type ?? "").trim();
+    if (!routineName || !prompt || !scheduleType) {
+      return { text: "create_routine needs name, prompt, and schedule_type.", isError: true };
+    }
+    let schedule: Json;
+    if (scheduleType === "once") {
+      const at = Number(args.at);
+      if (!Number.isFinite(at)) return { text: "create_routine with schedule_type once needs at (unix ms).", isError: true };
+      schedule = { type: "once", at };
+    } else if (scheduleType === "daily") {
+      const time = String(args.time ?? "").trim();
+      if (!/^\d{2}:\d{2}$/.test(time)) {
+        return { text: "create_routine with schedule_type daily needs time as HH:MM.", isError: true };
+      }
+      schedule = {
+        type: "daily",
+        time,
+        weekdays: Array.isArray(args.weekdays) ? args.weekdays.map(Number) : [0, 1, 2, 3, 4, 5, 6],
+      };
+    } else {
+      return { text: "schedule_type must be once or daily.", isError: true };
+    }
+    const body: Record<string, unknown> = {
+      fromBotId: BOT_ID,
+      fromThreadId: THREAD_ID,
+      name: routineName,
+      prompt,
+      schedule,
+      enabled: args.enabled !== false,
+    };
+    if (args.bot_id) body.botId = String(args.bot_id);
+    if (args.run_on === "cloud" || args.run_on === "maus") body.runOn = args.run_on;
+    if (args.duration_minutes != null) body.durationMinutes = Number(args.duration_minutes);
+    const r = await api("/api/internal/create-routine", { method: "POST", body: JSON.stringify(body) });
+    const routine = (r.routine ?? r) as Json;
+    return { text: `Created routine "${routine.name ?? routineName}" [id: ${routine.id}, bot id: ${routine.botId ?? BOT_ID}].` };
+  }
+  if (name === "run_routine") {
+    const routineId = String(args.routine_id ?? "").trim();
+    if (!routineId) return { text: "run_routine needs routine_id.", isError: true };
+    const r = await api(`/api/internal/run-routine/${encodeURIComponent(routineId)}`, {
+      method: "POST",
+      body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID }),
+    });
+    const run = (r.run ?? r) as Json;
+    return { text: `Routine run queued [run id: ${run.id}, status: ${run.status ?? "queued"}].` };
   }
   if (name === "request_credential") {
     const credentialId = args.credential_id;

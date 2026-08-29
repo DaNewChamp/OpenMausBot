@@ -56,6 +56,7 @@ export function chiefOfStaffSystemPrompt(
         "Use list_bots to confirm the live roster and IDs. Use ask_bot only for a short question whose answer you need before continuing.",
         "Use delegate_bot to assign real work or a long-running task so you are not stuck waiting; the teammate's result appears in the conversation when they finish.",
         "When the user asks you to assemble a team, use create_bot for each genuinely useful specialist. Give each one a clear role and instructions, pick a suitable engine/model/reasoning level when the job calls for it, then use delegate_bot to assign its work. Use configure_bot to retarget an idle teammate's engine or reasoning before delegating. Do not create duplicate or unnecessary bots.",
+        "Use create_room when the user wants a standing multi-bot channel; list_rooms shows existing ones. Use create_routine / list_routines / run_routine for scheduled or recurring work the app should run without the user asking each time.",
         "Delegate with a clear, self-contained brief. After delegate_bot, tell the user the teammate is working; never invent a result or claim the work is complete until it actually is.",
         "You may consult more than one teammate when the request genuinely benefits, then combine their results into one coherent answer.",
       ].join(" ")

@@ -55,6 +55,15 @@ import * as box from "./box.ts";
 import { cloudBackendChangeError, vpsAliasChangeError } from "./cloud-backend.ts";
 import * as composio from "./composio.ts";
 import { chiefOfStaffSystemPrompt, sectionPeerCoordinationPrompt, taggedPeerNudge } from "./chief-of-staff.ts";
+import { botSelfAwarenessCatalog, botSelfAwarenessPersona } from "./bot-self-awareness.ts";
+import {
+  createRoomForChief,
+  createRoutineForBot,
+  listRoomsForBot,
+  listRoutinesForBot,
+  canManageRoutine,
+  updateRoomForChief,
+} from "./internal-team-ops.ts";
 import {
   askBotFailedChip,
   askBotFinishedChip,
@@ -1879,13 +1888,14 @@ async function startTurn(
     replaysNatively: instance.driverKind === "grok",
   });
 
-  const persona = [
-    `You are ${bot.name}, a personal bot in OpenMausBot.`,
-    bot.title && `Role: ${bot.title}.`,
-    bot.description && `About: ${bot.description}`,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const persona = botSelfAwarenessPersona({
+    id: bot.id,
+    name: bot.name,
+    title: bot.title,
+    description: bot.description,
+    section: bot.section,
+    chiefOfStaff: bot.chiefOfStaff,
+  });
 
   // busy flips immediately so the composer locks; the dispatch itself runs
   // in the background — box provisioning can take ~90s and must never
@@ -2164,6 +2174,7 @@ async function startTurn(
         transcript,
         system:
           persona +
+          `\n${botSelfAwarenessCatalog(bot, integrations, { hasSectionPeers: sectionPeers.length > 0 }).trim()}` +
           (computerKind === "vm"
             ? localVmSelfInvokePrompt(localVmMode(cfg))
             : computerKind === "box" && instance.driverKind !== "boxAgent"
@@ -2550,16 +2561,28 @@ async function runGroupMemberTurn(
     });
   }
 
-  const roster = group.memberIds
-    .map((id) => store.bot(id))
-    .filter((b): b is NonNullable<typeof b> => Boolean(b))
-    .map((b) => `@${b.name}${b.title ? ` (${b.title})` : ""}`)
-    .join(", ");
+  const sectionPeers = store.bots.filter(
+    (b) => b.id !== bot.id && !b.hidden && sectionKey(b.section) === sectionKey(bot.section),
+  );
   const system = [
-    `You are ${bot.name}, a bot in the room "${group.name}" in OpenMausBot.`,
-    bot.title && `Role: ${bot.title}.`,
-    bot.description && `About: ${bot.description}`,
-    `Room members: ${roster}, and ${userName} (the human).`,
+    botSelfAwarenessPersona(
+      {
+        id: bot.id,
+        name: bot.name,
+        title: bot.title,
+        description: bot.description,
+        section: bot.section,
+        chiefOfStaff: bot.chiefOfStaff,
+      },
+      {
+        name: group.name,
+        memberNames: group.memberIds
+          .map((id) => store.bot(id))
+          .filter(Boolean)
+          .map((b) => `@${b!.name}${b!.title ? ` (${b!.title})` : ""}`),
+        userName,
+      },
+    ),
     group.bulletin.trim() && `Room bulletin (shared instructions for everyone):\n${group.bulletin.trim()}`,
     `Reply as yourself, briefly and conversationally. To bring a teammate in, mention them like @Name — they'll see the conversation and respond.`,
     integrations.agents &&
@@ -2585,6 +2608,7 @@ async function runGroupMemberTurn(
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id));
   const roomSystem =
     system +
+    `\n${botSelfAwarenessCatalog(bot, integrations, { hasSectionPeers: sectionPeers.length > 0 }).trim()}` +
     sectionContextSystemPrompt(bot.section) +
     (workspace ? `\n${memorySystemPrompt(bot.id).trim()}${skillsSystemPrompt(bot.id)}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace) }) +
@@ -4221,6 +4245,114 @@ const server = createServer(async (req, res) => {
           return json(res, 200, result);
         } catch (error) {
           return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      if (method === "GET" && path === "/api/internal/rooms") {
+        const self = url.searchParams.get("self");
+        const sender = self ? store.bot(self) : null;
+        if (!sender) return json(res, 403, { error: "unknown sender" });
+        return json(res, 200, { rooms: listRoomsForBot(store, sender.id) });
+      }
+      if (method === "POST" && path === "/api/internal/create-room") {
+        const body = await readBody(req);
+        const fromBotId = String(body.fromBotId ?? "");
+        const chief = store.bot(fromBotId);
+        if (!chief) return json(res, 403, { error: "unknown sender" });
+        const fromThreadId = String(body.fromThreadId ?? chief.threadId);
+        if (!store.taskByThread(chief.id, fromThreadId)) {
+          return json(res, 403, { error: "source thread does not belong to sender" });
+        }
+        try {
+          const group = createRoomForChief(store, fromBotId, {
+            name: body.name == null ? undefined : String(body.name),
+            memberIds: Array.isArray(body.memberIds) ? body.memberIds.map(String) : [],
+            bulletin: body.bulletin == null ? undefined : String(body.bulletin),
+            section: body.section == null ? undefined : String(body.section),
+          });
+          return json(res, 201, {
+            id: group.id,
+            name: group.name,
+            section: group.section,
+            memberIds: group.memberIds,
+            threadId: group.threadId,
+          });
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      {
+        const roomMatch = path.match(/^\/api\/internal\/rooms\/([\w-]+)$/);
+        if (roomMatch && method === "PATCH") {
+          const body = await readBody(req);
+          const fromBotId = String(body.fromBotId ?? "");
+          const chief = store.bot(fromBotId);
+          if (!chief) return json(res, 403, { error: "unknown sender" });
+          const fromThreadId = String(body.fromThreadId ?? chief.threadId);
+          if (!store.taskByThread(chief.id, fromThreadId)) {
+            return json(res, 403, { error: "source thread does not belong to sender" });
+          }
+          try {
+            const group = updateRoomForChief(store, fromBotId, roomMatch[1], {
+              name: body.name == null ? undefined : String(body.name),
+              bulletin: body.bulletin == null ? undefined : String(body.bulletin),
+              memberIds: body.memberIds == null ? undefined : Array.isArray(body.memberIds) ? body.memberIds.map(String) : undefined,
+            });
+            return json(res, 200, {
+              id: group.id,
+              name: group.name,
+              section: group.section,
+              memberIds: group.memberIds,
+              bulletin: group.bulletin,
+              threadId: group.threadId,
+            });
+          } catch (error) {
+            return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          }
+        }
+      }
+      if (method === "GET" && path === "/api/internal/routines") {
+        const self = url.searchParams.get("self");
+        const sender = self ? store.bot(self) : null;
+        if (!sender) return json(res, 403, { error: "unknown sender" });
+        if (!routines) return json(res, 503, { error: "routines unavailable" });
+        return json(res, 200, { routines: listRoutinesForBot(store, sender.id, routines) });
+      }
+      if (method === "POST" && path === "/api/internal/create-routine") {
+        const body = await readBody(req);
+        const fromBotId = String(body.fromBotId ?? "");
+        const sender = store.bot(fromBotId);
+        if (!sender) return json(res, 403, { error: "unknown sender" });
+        const fromThreadId = String(body.fromThreadId ?? sender.threadId);
+        if (!store.taskByThread(sender.id, fromThreadId)) {
+          return json(res, 403, { error: "source thread does not belong to sender" });
+        }
+        if (!routines) return json(res, 503, { error: "routines unavailable" });
+        try {
+          const routine = createRoutineForBot(store, fromBotId, routines, body);
+          return json(res, 201, { routine });
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      {
+        const routineRunMatch = path.match(/^\/api\/internal\/run-routine\/([\w-]+)$/);
+        if (routineRunMatch && method === "POST") {
+          const body = await readBody(req);
+          const fromBotId = String(body.fromBotId ?? "");
+          const sender = store.bot(fromBotId);
+          if (!sender) return json(res, 403, { error: "unknown sender" });
+          const fromThreadId = String(body.fromThreadId ?? sender.threadId);
+          if (!store.taskByThread(sender.id, fromThreadId)) {
+            return json(res, 403, { error: "source thread does not belong to sender" });
+          }
+          if (!routines) return json(res, 503, { error: "routines unavailable" });
+          const routine = routines.listRoutines().find((candidate) => candidate.id === routineRunMatch[1]);
+          if (!routine) return json(res, 404, { error: "no such routine" });
+          if (!canManageRoutine(store, fromBotId, routine.botId)) {
+            return json(res, 403, { error: "you may only run routines you own unless you are the section Chief" });
+          }
+          const run = routines.runNow(routineRunMatch[1]);
+          return run ? json(res, 201, { run }) : json(res, 404, { error: "no such routine" });
         }
       }
       return json(res, 404, { error: "unknown internal endpoint" });
