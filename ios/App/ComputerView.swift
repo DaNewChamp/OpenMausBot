@@ -142,12 +142,14 @@ struct ComputerView: View {
     }
 
     private var localVmDestinationEnabled: Bool {
-        selectedInstance?.supportsLocalVmDestination == true
+        // Unknown instance matches the server: missing capabilities allow the
+        // destination patch until we know this engine cannot mount Local VM.
+        selectedInstance?.supportsLocalVmDestination ?? true
     }
 
     private var localVmDestinationDisabledReason: String {
-        let engine = selectedInstance?.pickerTitle ?? "This engine"
-        return "\(engine) cannot use Local VM. Switch to Claude, Codex, or ACP on the profile."
+        selectedInstance?.localVmDestinationDisabledReason
+            ?? "Checking engine capabilities…"
     }
 
     private var destination: String {
@@ -663,7 +665,7 @@ struct ComputerView: View {
         switch destination {
         case "vm":
             if !localVmDestinationEnabled {
-                return "This engine cannot use Local VM. Grok’s computer tools still hit this Mac. Switch to Claude, Codex, or ACP on the profile, then pick Local and Create."
+                return "\(localVmDestinationDisabledReason) Then pick Local and Create."
             }
             if canShowLocalVmControls, localVmStatus?.canCreate == true {
                 return "Local VM is not created yet. Create it below, then open this screen again."

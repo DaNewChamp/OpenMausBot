@@ -634,6 +634,20 @@ public struct Instance: Codable, Hashable, Identifiable, Sendable {
         return capabilities.computerMcp == true
     }
 
+    /// Why the profile/computer picker greys out Local VM for this engine.
+    public var localVmDestinationDisabledReason: String {
+        if driverKind == "boxAgent" {
+            return "Cloud Box runs on ascii.dev, not a Local VM on your Mac."
+        }
+        if driverKind == "grokReconstructed" {
+            return "Grok Reconstructed cannot use Local VM. Its Mac tools still run on the paired computer. Switch to Claude, Codex, or ACP on the profile."
+        }
+        if snapshot.state != "available" {
+            return "\(pickerTitle) is unavailable right now. Check the engine on your Mac, then try again."
+        }
+        return "\(pickerTitle) cannot use Local VM. Switch to Claude, Codex, or ACP on the profile."
+    }
+
     public func modelLabel(for modelId: String) -> String {
         models.options.first(where: { $0.id == modelId })?.label ?? modelId
     }

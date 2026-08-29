@@ -164,6 +164,32 @@ final class ModelClientTests: XCTestCase {
             capabilities: InstanceCapabilities(computerMcp: false, localComputerMcp: false)
         )
         XCTAssertFalse(grok.supportsLocalVmDestination)
+        XCTAssertTrue(grok.localVmDestinationDisabledReason.contains("Grok Reconstructed"))
+    }
+
+    func testUnknownInstanceCapabilitiesAllowLocalVmDestination() {
+        let cursor = Instance(
+            instanceId: "cursor",
+            driverKind: "cursorAgent",
+            displayName: "Cursor",
+            snapshot: ProviderSnapshot(state: "available", reason: nil, authenticated: true, version: nil),
+            models: ModelCatalog(default: "auto", options: [ModelOption(id: "auto", label: "Auto")]),
+            capabilities: nil
+        )
+        XCTAssertTrue(cursor.supportsLocalVmDestination)
+    }
+
+    func testBoxAgentDoesNotSupportLocalVmDestination() {
+        let box = Instance(
+            instanceId: "box",
+            driverKind: "boxAgent",
+            displayName: "Computer",
+            snapshot: ProviderSnapshot(state: "available", reason: nil, authenticated: true, version: nil),
+            models: ModelCatalog(default: "claude-fable-5", options: [ModelOption(id: "claude-fable-5", label: "Claude Fable 5")]),
+            capabilities: InstanceCapabilities(computerMcp: true)
+        )
+        XCTAssertFalse(box.supportsLocalVmDestination)
+        XCTAssertTrue(box.localVmDestinationDisabledReason.contains("Cloud Box"))
     }
 
     func testLocalVmStatusUsesTheSafePerBotRoute() async throws {
