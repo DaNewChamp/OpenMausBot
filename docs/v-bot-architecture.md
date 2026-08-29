@@ -47,7 +47,7 @@ Every capability is explicit. Unsupported or unstable reconstructed behavior is 
 5. Finish V Bot branding, motion, haptics, pinned chats, compact activity, and settings parity.
 6. Verify both engines, remote pairing, reconnects, backgrounding, and TestFlight installation.
 
-OpenMaus remains a fallback engine until Grok Reconstructed reaches equivalent verified coverage.
+**Native Codex / Cursor / Claude drivers are the primary engines.** Grok Reconstructed is frozen as an optional local adapter (`docs/grok-reconstructed.md`). Do not treat reconstructed coverage as a ship blocker.
 
 ## Verified in this slice
 

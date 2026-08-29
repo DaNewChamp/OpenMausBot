@@ -2,13 +2,13 @@
 
 **Handoff document for implementing agent (Codex)**  
 Repo: `~/Github/OpenMausBot` · Fork of upstream OpenMausBot, iOS/hosted-focused · Apache-2.0  
-**Last updated:** 2026-08-29 (Fable review + Cursor session)
+**Last updated:** 2026-08-29 (all in-repo phases implemented on `cursor/bridge-job-lifecycle-08ea`; live Servarica/phone/MacBook gates remain human-only)
 
 ---
 
 ## 1. Executive summary
 
-V Bot already has the skeleton of the target architecture: a headless harness that owns all bot state, a scrubbing companion sidecar as the only client-facing surface, a native iOS thin client, a paired bridge daemon for home machines, and deploy scripts for both hub hosts (Mac mini launchd, Servarica VPS systemd). The two largest gaps are **trust** and **portability**: bridge shell execution today runs arbitrary commands with no user consent and `shell` capability granted by default, and hub migration is a collection of rsync scripts with hardcoded per-bot patches rather than a first-class export/import. This plan closes those two gaps first (Phases 1–2), then unifies the model switcher (3), grows the desktop viewer into a full companion client (4), completes bridge Local VM relay (5), adds closed-app push (6), and closes out Grok Bot interaction parity (7). Every phase has a live-verification gate against the deployed Servarica hub — a green build is never the exit criterion.
+V Bot already has the skeleton of the target architecture: a headless harness that owns all bot state, a scrubbing companion sidecar as the only client-facing surface, a native iOS thin client, a paired bridge daemon for home machines, and deploy scripts for both hub hosts (Mac mini launchd, Servarica VPS systemd). **In-repo**, Phases 1–7 are implemented on `cursor/bridge-job-lifecycle-08ea`: bridge capabilities are opt-in and owner-thread-bound, hub export/import is first-class, the native switcher queues busy switches, the desktop viewer can send/steer/approve/manage bridges, Local VM create pulls the image on the bridge, APNs token registration is scaffolded, and Grok Reconstructed is frozen as a legacy optional engine. Every phase still has a **live-verification gate** against the deployed Servarica hub and the physical iPhone — a green Linux build is never the production exit criterion. Do not claim those live gates from this Cloud Agent environment.
 
 ---
 
@@ -30,7 +30,7 @@ V Bot already has the skeleton of the target architecture: a headless harness th
    Keychain pairing ──┼─► cloudflared ─► companion sidecar ──loopback──► harness :8799              │
                       │      (tunnel)     (allowlist, scrub,             │  bots.json  messages.db  │
  Electron viewer ─────┼─►                  pairing auth)                 │  workspaces  config.json │
-  (read-only)         │                                                  │  bridges.json            │
+  (paired peer)       │                                                  │  bridges.json            │
                       │                                                  ▼                          │
                       │                              engine CLIs (codex / cursor-agent / claude)    │
                       │                              docker -H ssh://openmaus-docker (VPS-local)    │
@@ -38,7 +38,7 @@ V Bot already has the skeleton of the target architecture: a headless harness th
                                                          │  HTTPS /api/bridge/*
                                                          ▼
                                      Bridge daemon (Mac mini) — bridge/src/
-                                     shell · ssh-forward · local-vm relay
+                                     shell · ssh-forward · local-vm · peekaboo (opt-in)
 ```
 
 ### Key subsystems
@@ -48,8 +48,9 @@ V Bot already has the skeleton of the target architecture: a headless harness th
 | Harness core | `server/index.ts`, `server/store.ts`, `server/message-db.ts`, `server/config.ts` |
 | Engine drivers | `server/drivers/` |
 | Model switcher | `server/bot-model.ts`, `ios/App/ChatModelPickerSheet.swift` |
-| Approvals | `server/auto-approve.ts`, `server/peer-approval.ts`, `server/permission-proxy.ts`, `server/decision-log.ts` |
+| Approvals | `server/auto-approve.ts`, `server/peer-approval.ts`, `server/bridge-approval.ts`, `server/permission-proxy.ts`, `server/decision-log.ts` |
 | Bridge (harness) | `server/bridge-registry.ts`, `server/bridge-exec.ts`, `server/bridge-routes.ts`, `server/bridge-local-vm.ts` |
+| Hub archive | `server/hub-archive.ts`, `scripts/hub-archive.mjs`, `scripts/host-profiles.json` |
 | Bridge (daemon) | `bridge/src/` |
 | Agent tools | `server/drivers/agents-proxy.ts` |
 | Companion | `companion/src/` |
@@ -245,8 +246,8 @@ Phase 7 last
 4. Tests + `node scripts/test-floor.mjs`.
 5. Deploy Servarica; re-pair mini with `OMB_BRIDGE_SHELL=1 OMB_BRIDGE_LOCAL_VM=1`.
 
-Session 2: approval broker + grants (items 2–4).  
-Session 3: rotation/revoke + companion routes + iOS Bridges list (items 5–7).
+Session 2 (this branch): durable job lifecycle **plus** owner-thread-bound approvals, scoped always-allow (`scope: "bridge"`), Peekaboo observation, token rotation / companion list-revoke-rotate, iOS Bridges UI, worker leases, cancel-request of running jobs (process abort, not ledger-only), corrupt-ledger quarantine, and capability pin at pair time. Approvals do **not** inherit Auto mode.  
+Session 3: rotation/revoke + companion routes + iOS Bridges list — landed with Session 2 on this branch.
 
 ---
 
@@ -272,7 +273,7 @@ Session 3: rotation/revoke + companion routes + iOS Bridges list (items 5–7).
 - Branch: `cursor/vps-turn-ready-cache-08ea` (deployed to Servarica)
 - Phase 1 Session 1 landed in `9f1b410`, `67eef04`, and `010bcdc`: bridge capabilities are opt-in, 1 MB output truncation is reported end-to-end, and bridge build debris is ignored.
 - Live verified: a no-flag bridge paired with `capabilities: []`; the retained Mac mini bridge advertises `shell` + `local-vm`; `run_on_bridge hostname` returned `Vincents-Mac-mini.local`; oversized output returned `truncated: true`.
-- Phase 1 Session 2 (branch `cursor/bridge-job-lifecycle-08ea`): durable bridge job lifecycle in `bridge-jobs.json` with states `queued/running/succeeded/failed/cancelled`, idempotency keys (payload-matched), bounded retries with backoff, stale-running redelivery only when the bridge is offline, loopback audit/cancel routes that refuse the companion hop, and bridge daemon in-flight dedup with overlapping heartbeats. Focused bridge suite + companion allowlist tests.
+- Phase 1 Session 2 (branch `cursor/bridge-job-lifecycle-08ea`): durable job lifecycle **and** the rest of the in-repo phase plan. Job states remain `queued/running/succeeded/failed/cancelled`. Cancel of a **running** job is a cancel-request: the ledger stays `running` until the daemon aborts and posts a result (or the worker lease expires). Heartbeats cannot widen `grantedCapabilities`. Two daemons sharing a token cannot both exec the same job (`claimedBy` / `workerId`). A corrupt `bridge-jobs.json` is quarantined, not fail-open. Companion may list/revoke/rotate bridges; job audit stays loopback-not-companion. Owner-thread-bound approval cards for `run_on_bridge` / `run_on_ssh_target` / `observe_bridge_screen`. Peekaboo is opt-in (`OMB_BRIDGE_PEEKABOO=1`), observe-only. Hub archive: `pnpm hub:export` / `hub:import` with `scripts/host-profiles.json`. Desktop viewer sends, interrupts, rooms, model switch, Local VM actions, and bridge mgmt. APNs: token store only. Grok Reconstructed: freeze as optional/legacy. **Not deployed.** Live mini re-pair, Servarica round-trip, TestFlight, and locked-phone push remain MacBook/iPhone/human.
 - Chief Keef + Investments desk section fix applied on VPS
 - Turn-ready VPS cache shipped (`server/vps-computer.ts`)
 - iOS build 54 (model picker backdrop fix)

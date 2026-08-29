@@ -79,3 +79,13 @@ Phone pairs via hosted HTTPS (`OMB_COMPANION_HOSTED_URL`, default `https://openm
 > `cursor-agent` isn't installed, or isn't on this app's PATH
 
 The deploy script sets this in systemd and in `start-harness.sh`. Do not remove it.
+
+## Hub export / import
+
+```sh
+pnpm hub:export -- --dest /tmp/hub-export --host-profile servarica
+pnpm hub:import -- --archive /tmp/hub-export --host-profile servarica
+```
+
+Stop the harness during import. Then `scripts/audit-vps-bots.mjs` as the post-import gate. Do not treat a Linux CI green as a completed Servarica migration.
+

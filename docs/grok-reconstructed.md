@@ -85,3 +85,10 @@ include ports, tokens, or paths:
 - Treating official Grok Bot as reconstructed
 - Queueing on Grok Reconstructed
 - Silently sending, steering, or stopping on OpenMaus while Grok Reconstructed is the selected engine
+
+## Freeze (2026-08-29)
+
+**Grok Reconstructed is frozen as an optional legacy adapter.** Invest in native Codex / Cursor / Claude drivers and the iOS companion. Do not expand reconstructed `/events`, queueing, attachments, MCP, or computer-use. Do not claim live-phone verification of reconstructed turns from a Linux Cloud Agent.
+
+Wave 35 Grok **interaction** parity (share, hidden chats, unread, haptics, group setup) is native V Bot work — see `docs/ios-grok-parity-wave35.md`. That checklist is shipped-or-waived in-repo; `swift test` / xcodegen / TestFlight remain the MacBook lane.
+

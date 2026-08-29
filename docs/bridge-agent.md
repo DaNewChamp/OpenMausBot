@@ -45,6 +45,11 @@ OMB_BRIDGE_LOCAL_VM=1 bun run deploy:bridge -- --pair
 | `OMB_BRIDGE_SHELL=1` | `shell` | `run_on_bridge`, loopback `/api/bridges/:id/shell` |
 | `OMB_BRIDGE_LOCAL_VM=1` | `local-vm` | Relay `GET/POST /api/bots/:id/local-computer*` when harness has no local docker |
 | `OMB_BRIDGE_SSH_FORWARD=1` | `ssh-forward` | `run_on_ssh_target`, `/api/internal/bridge/ssh` |
+| `OMB_BRIDGE_PEEKABOO=1` | `peekaboo` | `observe_bridge_screen` (CLI `see` / `image` only — never click or type) |
+
+Capabilities advertised at **pair** time become `grantedCapabilities`. Later heartbeats may drop a cap (daemon flag off) but **cannot widen** the grant. Re-pair to add Peekaboo, shell, Local VM, or SSH forward.
+
+Shell, SSH, and Peekaboo agent tools wait on an **owner-thread-bound** approval card (`server/bridge-approval.ts`). Auto mode does not inherit. Always-allow uses `scope: "bridge"` keys such as `bridge:run_on_bridge:<program>`.
 
 On the **harness**, set `OMB_LOCAL_VM_RELAY=1` to always relay Local VM API calls
 through a bridge (even when the VPS itself has docker). Otherwise relay activates
@@ -61,8 +66,10 @@ of local docker on the harness host:
 - `POST …/local-computer/screenshot` → `local-vm-screenshot`
 
 The bridge uses the same per-bot container naming as the harness
-(`openmausbot-computer-<digest>`). Create/recreate still requires the image on
-the bridge host today — status/stop/screenshot are the first-class relay paths.
+(`openmausbot-computer-<digest>`). Create/recreate **pulls** `OMB_BRIDGE_VM_BASE_IMAGE`
+(or `OMB_BRIDGE_VM_IMAGE`) when the image is absent. Jobs honor `AbortSignal` so a
+cancel-request stops an in-flight pull/create. Live “phone creates VM on mini when
+the image is missing” still needs the Mac mini Docker/Podman host.
 
 Chief can also use the existing bot local-computer API from agents; no separate
 `run_on_bridge` VM tool is required when those routes are relayed.
@@ -95,18 +102,20 @@ Loopback harness route: `POST /api/internal/bridge/ssh` with `{ target, command,
 | `POST /api/bridge/register` | pairing code (public tunnel) | Mint bridge bearer token |
 | `POST /api/bridge/heartbeat` | bridge bearer (public tunnel) | Poll jobs |
 | `POST /api/bridge/result` | bridge bearer (public tunnel) | Submit job output |
-| `GET /api/bridges` | harness-host loopback TCP (not companion) | List registered bridges |
+| `GET /api/bridges` | harness-host loopback **or** paired companion | Scrubbed roster (no token hashes) |
+| `DELETE /api/bridges/:id` | harness-host loopback **or** paired companion | Revoke; in-flight jobs are cancel-requested |
+| `POST /api/bridges/:id/rotate` | harness-host loopback **or** paired companion | Heartbeat carries `nextToken` during overlap |
 | `GET /api/bridge/jobs` | harness-host loopback TCP (not companion) | Audit durable job records |
 | `GET /api/bridge/jobs/:id` | harness-host loopback TCP (not companion) | Inspect one job |
-| `POST /api/bridge/jobs/:id` `{ "action": "cancel" }` | harness-host loopback TCP (not companion) | Cancel a queued/running job |
+| `POST /api/bridge/jobs/:id` `{ "action": "cancel" }` | harness-host loopback TCP (not companion) | Cancel queued immediately; **running** stays `running` until abort/result |
 
-Companion's public allowlist is exactly register / heartbeat / result. Job audit, cancel, pairing, and loopback shell are refused even when the sidecar's loopback hop would otherwise look local.
+Companion daemon allowlist remains exactly register / heartbeat / result. Paired phones may list, revoke, and rotate. Job audit, pairing, and loopback shell stay harness-host-only even when the sidecar hop would otherwise look local.
 
-## Desktop viewer (Phase C)
+Cancel of a **running** job is not ledger-only: the heartbeat returns `cancelJobIds` and the daemon aborts the child (`AbortSignal`). A corrupt `bridge-jobs.json` is copied to `bridge-jobs.json.corrupt-*` and `.quarantined` rather than parsed as an empty map. Each worker presents a `workerId`; a second daemon cannot steal a leased running job until that worker goes stale (~30s).
 
-Optional Electron/Tauri fork: pair to the cloud URL, show bot roster + transcripts +
-Computer view — same role Grok Reconstructed plays locally today, but remote-first.
-No SQLite on desktop; harness on VPS remains source of truth.
+## Desktop viewer (Phase 4)
+
+Paired Electron viewer (`viewer/`): roster, rooms, composer, interrupt, approval cards, model switch, Local VM actions, and bridge list/revoke/rotate. No SQLite on desktop; the hub remains source of truth. Live daily-driver verification against Servarica is still a human gate.
 
 Chief can run shell on a registered bridge via `run_on_bridge` (agents tool) or loopback:
 
