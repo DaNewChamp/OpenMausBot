@@ -258,7 +258,7 @@ const endpointSnapshot = (options: ProxyOptions): CompanionEndpointSnapshot => {
  * blocklist: `host` and `origin` must not travel (see above), `authorization`
  * is the sidecar's credential and means nothing to the harness, and hop-by-hop
  * headers are by definition not ours to relay. */
-const forwardHeaders = (req: IncomingMessage): Record<string, string> => {
+const forwardHeaders = (req: IncomingMessage, opts?: { passAuthorization?: boolean }): Record<string, string> => {
   const out: Record<string, string> = {
     accept: String(req.headers.accept ?? "*/*"),
     // Lets a response whose URL is intentionally loopback-only (the VPS SSH
@@ -268,6 +268,11 @@ const forwardHeaders = (req: IncomingMessage): Record<string, string> => {
   };
   const contentType = req.headers["content-type"];
   if (contentType) out["content-type"] = String(contentType);
+  // Bridge daemons authenticate to the harness with their own bearer token.
+  // Device pairing tokens must not be substituted — forward only for /api/bridge/*.
+  if (opts?.passAuthorization && req.headers.authorization) {
+    out.authorization = String(req.headers.authorization);
+  }
   // Last-Event-ID is how a reconnecting client asks for the gap. Dropping it
   // would turn every resume into a full re-hydration, silently.
   const lastEventId = req.headers["last-event-id"];
@@ -577,7 +582,7 @@ export function createProxyHandler(options: ProxyOptions) {
         port: options.harnessPort,
         path: rewrite?.path ?? req.url,
         method: rewrite?.method ?? method,
-        headers: forwardHeaders(req),
+        headers: forwardHeaders(req, { passAuthorization: path.startsWith("/api/bridge/") }),
       },
       (harness) => {
         clearTimeout(headersDeadline);
