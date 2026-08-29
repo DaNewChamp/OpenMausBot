@@ -46,6 +46,17 @@ add a ProxyJump SSH alias on the VPS and set `vps.sshAlias` accordingly (see `do
 Local VM on the phone requires a home **bridge** (Phase B); the cloud harness does not run the Mac Local VM.
 See [`docs/bridge-agent.md`](bridge-agent.md).
 
+Phone pairing and bridges survive if companion data is copied. Prefer the first-class archive:
+
+```sh
+# On the source hub (harness stopped or idle)
+pnpm hub:export -- --dest /tmp/hub-export --host-profile servarica
+# On the destination
+pnpm hub:import -- --archive /tmp/hub-export --host-profile mac-mini
+```
+
+Host-relative bot `cwd` values use `${DATA_DIR}/...`. Always-allow grants live in `bots.json` and travel with the archive. `scripts/sync-openmausbot-data.mjs` reads `scripts/host-profiles.json` instead of hardcoded Chief Keef patches. `scripts/backup-openmausbot-cloud.mjs` remains the rclone/daily backup; use hub-archive for a portable round trip. Live Servarica ↔ mini verification is still a human gate.
+
 ## Cutover from Mac mini
 
 1. `bun run deploy:cloud-vps --cutover` — migrates data, starts VPS services, stops mini sidecar/tunnel.

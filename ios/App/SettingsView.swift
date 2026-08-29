@@ -62,7 +62,7 @@ struct SettingsView: View {
                     .accessibilityHint(notificationAccessibilityHint)
                 }
             } footer: {
-                Text("Alerts arrive while V Bot is open or was recently in the background. Closed-app delivery is not available yet.")
+                Text("Alerts arrive while V Bot is open or was recently in the background. Closed-app APNs is scaffolded in-repo (device token registration) but still needs Apple signing on the MacBook/iPhone release lane.")
             }
 
             Section {
@@ -95,6 +95,16 @@ struct SettingsView: View {
                             Text("Hidden chats")
                         } icon: {
                             SettingsIcon(symbol: "eye.slash", color: .gray)
+                        }
+                    }
+
+                    NavigationLink {
+                        BridgesView()
+                    } label: {
+                        Label {
+                            Text("Bridges")
+                        } icon: {
+                            SettingsIcon(symbol: "laptopcomputer", color: .teal)
                         }
                     }
 

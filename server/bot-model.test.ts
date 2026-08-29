@@ -210,4 +210,53 @@ describe("guardedBotModelSwitch", () => {
 
     expect(result).toEqual({ kind: "noop", bot });
   });
+
+  it("queues a valid switch when a queue callback is provided for a busy bot", async () => {
+    interface BusySwitchBot {
+      id: string;
+      busy: boolean;
+      modelSelection: { instanceId: string; model: string };
+      pendingModelSelection?: { instanceId: string; model: string };
+    }
+    const bot: BusySwitchBot = {
+      id: "bot-1",
+      busy: true,
+      modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+    };
+    let patched = false;
+
+    const result = await guardedBotModelSwitch({
+      requested: { instanceId: "claude", model: "claude-haiku-4-5" },
+      describe: async () => catalogs,
+      current: () => bot,
+      patch: () => {
+        patched = true;
+        return bot;
+      },
+      queue: (id, selection) => {
+        expect(id).toBe("bot-1");
+        bot.pendingModelSelection = selection;
+        return bot;
+      },
+    });
+
+    expect(result.kind).toBe("queued");
+    expect(patched).toBe(false);
+    expect(bot.pendingModelSelection).toEqual({ instanceId: "claude", model: "claude-haiku-4-5" });
+  });
+
+  it("still reports busy when no queue callback is provided", async () => {
+    const bot = {
+      id: "bot-1",
+      busy: true,
+      modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+    };
+    const result = await guardedBotModelSwitch({
+      requested: { instanceId: "claude", model: "claude-haiku-4-5" },
+      describe: async () => catalogs,
+      current: () => bot,
+      patch: () => bot,
+    });
+    expect(result).toEqual({ kind: "busy" });
+  });
 });

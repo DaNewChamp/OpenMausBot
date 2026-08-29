@@ -1,0 +1,20 @@
+{
+  "servarica": {
+    "dataDir": "/var/lib/openmausbot",
+    "companionDir": "/var/lib/openmausbot-companion",
+    "config": { "vps": { "sshAlias": "openmaus-docker" } },
+    "botPatches": [
+      {
+        "id": "94a201dd-537d-40be-8da3-e723532c982b",
+        "computer": "cloud",
+        "cloudBackend": "vps"
+      }
+    ]
+  },
+  "mac-mini": {
+    "dataDir": "~/.openmausbot",
+    "companionDir": "~/.openmausbot-companion",
+    "config": {},
+    "botPatches": []
+  }
+}

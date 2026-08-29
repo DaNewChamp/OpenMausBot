@@ -309,6 +309,8 @@ export interface BotRecord {
   avatarCrop?: BotAvatarCrop;
   unread: boolean;
   modelSelection: ModelSelection;
+  /** Applied when the bot next becomes idle. Queued from the native picker. */
+  pendingModelSelection?: ModelSelection;
   /** provider-native continuation per instance (e.g. claude session id) */
   resumeCursors: Record<string, unknown>;
   /** which computer the bot acts on: its cloud box, this Mac (local CUA),
@@ -975,6 +977,10 @@ export class Store {
     if (bot.activity === activity && Boolean(bot.busy) === busy) return bot;
     bot.activity = activity;
     bot.busy = busy;
+    if (!busy && bot.pendingModelSelection) {
+      bot.modelSelection = bot.pendingModelSelection;
+      delete bot.pendingModelSelection;
+    }
     this.saveBots();
     this.emit({ type: "bot", botId });
     return bot;

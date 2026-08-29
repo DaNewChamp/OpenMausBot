@@ -1,9 +1,15 @@
 const botsEl = document.getElementById("bots");
+const roomsEl = document.getElementById("rooms");
+const bridgesEl = document.getElementById("bridges");
 const threadEl = document.getElementById("thread");
 const streamingEl = document.getElementById("streaming");
 const titleEl = document.getElementById("title");
 const connectionEl = document.getElementById("connection");
 const toggleComputerBtn = document.getElementById("toggle-computer");
+const interruptBtn = document.getElementById("interrupt");
+const modelPicker = document.getElementById("model-picker");
+const composer = document.getElementById("composer");
+const composerText = document.getElementById("composer-text");
 const computerPanel = document.getElementById("computer");
 const screenImg = document.getElementById("screen");
 const screenEmpty = document.getElementById("screen-empty");
@@ -12,17 +18,26 @@ const computerErrorEl = document.getElementById("computer-error");
 
 const state = {
   bots: [],
+  groups: [],
+  bridges: [],
+  instances: [],
   messages: {},
   streaming: {},
   reasoning: {},
   screens: {},
+  activeKind: "bot",
   activeBotId: null,
+  activeRoomId: null,
   computerOpen: false,
   localComputer: null,
 };
 
 function activeBot() {
   return state.bots.find((bot) => bot.id === state.activeBotId) ?? null;
+}
+
+function activeRoom() {
+  return state.groups.find((group) => group.id === state.activeRoomId) ?? null;
 }
 
 function toolLabel(tool) {
@@ -35,6 +50,9 @@ function toolLabel(tool) {
     Edit: "edit a file",
     WebFetch: "fetch a web page",
     WebSearch: "search the web",
+    run_on_bridge: "run a command on a home bridge",
+    run_on_ssh_target: "run a command over SSH",
+    observe_bridge_screen: "observe a bridge screen",
   };
   return nice[tool] ?? bare;
 }
@@ -62,13 +80,19 @@ function escapeHtml(value) {
 
 function hydrateFleet(fleet) {
   state.bots = fleet.bots ?? [];
+  state.groups = fleet.groups ?? [];
   state.messages = {};
   for (const bot of state.bots) {
     state.messages[bot.threadId] = bot.messages ?? [];
   }
+  for (const group of state.groups) {
+    state.messages[group.threadId] = group.messages ?? [];
+  }
   renderBots();
+  renderRooms();
   const bot = activeBot() ?? state.bots[0];
   if (bot) selectBot(bot, { skipFetch: true });
+  else if (state.groups[0]) selectRoom(state.groups[0], { skipFetch: true });
 }
 
 function renderBots() {
@@ -81,24 +105,103 @@ function renderBots() {
   botsEl.classList.remove("empty");
   for (const bot of state.bots) {
     const button = document.createElement("button");
-    button.className = `bot${bot.id === state.activeBotId ? " active" : ""}`;
+    button.className = `bot${state.activeKind === "bot" && bot.id === state.activeBotId ? " active" : ""}`;
     button.textContent = `${bot.busy ? "● " : ""}${bot.name}${bot.title ? ` — ${bot.title}` : ""}`;
     button.onclick = () => selectBot(bot);
     botsEl.appendChild(button);
   }
 }
 
+function renderRooms() {
+  roomsEl.innerHTML = "";
+  if (!state.groups.length) {
+    roomsEl.textContent = "No rooms.";
+    roomsEl.classList.add("empty");
+    return;
+  }
+  roomsEl.classList.remove("empty");
+  for (const group of state.groups) {
+    const button = document.createElement("button");
+    button.className = `bot${state.activeKind === "room" && group.id === state.activeRoomId ? " active" : ""}`;
+    button.textContent = `${group.busyBotId ? "● " : ""}${group.name}`;
+    button.onclick = () => selectRoom(group);
+    roomsEl.appendChild(button);
+  }
+}
+
+function renderBridges() {
+  bridgesEl.innerHTML = "";
+  if (!state.bridges.length) {
+    bridgesEl.textContent = "No paired bridges.";
+    bridgesEl.classList.add("empty");
+    return;
+  }
+  bridgesEl.classList.remove("empty");
+  for (const bridge of state.bridges) {
+    const wrap = document.createElement("div");
+    wrap.className = "bridge";
+    const caps = (bridge.capabilities ?? []).join(", ") || "no capabilities";
+    wrap.innerHTML = `<strong>${escapeHtml(bridge.name)}</strong>
+      <div class="meta">${bridge.online ? "Online" : "Offline"} · ${escapeHtml(caps)}</div>`;
+    const row = document.createElement("div");
+    row.className = "row";
+    const rotate = document.createElement("button");
+    rotate.textContent = "Rotate";
+    rotate.onclick = () => mutateBridge("rotate", bridge.id);
+    const revoke = document.createElement("button");
+    revoke.textContent = "Revoke";
+    revoke.onclick = () => {
+      if (confirm(`Revoke ${bridge.name}? The daemon must re-pair.`)) mutateBridge("revoke", bridge.id);
+    };
+    row.append(rotate, revoke);
+    wrap.appendChild(row);
+    bridgesEl.appendChild(wrap);
+  }
+}
+
+function renderModelPicker() {
+  const bot = state.activeKind === "bot" ? activeBot() : null;
+  if (!bot || !state.instances.length) {
+    modelPicker.hidden = true;
+    return;
+  }
+  modelPicker.hidden = false;
+  modelPicker.innerHTML = "";
+  for (const instance of state.instances) {
+    for (const option of instance.models?.options ?? []) {
+      const opt = document.createElement("option");
+      opt.value = `${instance.instanceId}::${option.id}`;
+      opt.textContent = `${instance.instanceId} / ${option.id}`;
+      if (bot.modelSelection?.instanceId === instance.instanceId && bot.modelSelection?.model === option.id) {
+        opt.selected = true;
+      }
+      modelPicker.appendChild(opt);
+    }
+  }
+}
+
+function renderToolbar() {
+  const bot = activeBot();
+  const room = activeRoom();
+  interruptBtn.hidden = !(state.activeKind === "bot" ? bot?.busy : room?.busyBotId);
+  composer.hidden = !(bot || room);
+  renderModelPicker();
+}
+
 function renderThread() {
   const bot = activeBot();
-  if (!bot) {
+  const room = activeRoom();
+  const owner = state.activeKind === "room" ? room : bot;
+  if (!owner) {
     titleEl.textContent = "Select a bot";
     threadEl.innerHTML = "";
     streamingEl.hidden = true;
+    renderToolbar();
     return;
   }
 
-  titleEl.textContent = bot.name;
-  const messages = state.messages[bot.threadId] ?? [];
+  titleEl.textContent = owner.name;
+  const messages = state.messages[owner.threadId] ?? [];
   threadEl.innerHTML = "";
 
   if (!messages.length) {
@@ -106,7 +209,7 @@ function renderThread() {
   } else {
     for (const message of messages) {
       if (message.kind === "options" && message.card) {
-        threadEl.appendChild(renderApprovalCard(bot, message));
+        threadEl.appendChild(renderApprovalCard(bot ?? { name: owner.name, id: "", threadId: owner.threadId }, message));
         continue;
       }
       const block = document.createElement("div");
@@ -117,8 +220,8 @@ function renderThread() {
     }
   }
 
-  const tail = state.streaming[bot.threadId];
-  const think = state.reasoning[bot.threadId];
+  const tail = state.streaming[owner.threadId];
+  const think = state.reasoning[owner.threadId];
   if (tail || think) {
     streamingEl.hidden = false;
     streamingEl.innerHTML = "";
@@ -139,6 +242,7 @@ function renderThread() {
     streamingEl.hidden = true;
     streamingEl.innerHTML = "";
   }
+  renderToolbar();
 }
 
 function renderApprovalCard(bot, message) {
@@ -182,7 +286,7 @@ async function answerApproval(bot, message, choice) {
   const card = message.card;
   if (!card?.requestId) return;
   try {
-    if (shouldRememberPermission(card, choice)) {
+    if (shouldRememberPermission(card, choice) && bot.id) {
       await window.viewer.alwaysAllow(bot.id, card.allowKey);
     }
     const behavior = responseBehavior(choice, Boolean(card.tool));
@@ -259,13 +363,21 @@ async function setComputerOpen(open) {
   }
 }
 
-async function selectBot(bot, { skipFetch = false } = {}) {
-  state.activeBotId = bot.id;
+async function selectConversation(kind, owner, { skipFetch = false } = {}) {
+  state.activeKind = kind;
+  if (kind === "bot") {
+    state.activeBotId = owner.id;
+    state.activeRoomId = null;
+  } else {
+    state.activeRoomId = owner.id;
+    state.activeBotId = null;
+  }
   renderBots();
-  if (!skipFetch && !state.messages[bot.threadId]?.length) {
+  renderRooms();
+  if (!skipFetch && !state.messages[owner.threadId]?.length) {
     try {
-      const page = await window.viewer.messages(bot.threadId);
-      state.messages[bot.threadId] = page.messages ?? [];
+      const page = await window.viewer.messages(owner.threadId);
+      state.messages[owner.threadId] = page.messages ?? [];
     } catch (error) {
       connectionEl.textContent = error.message;
       connectionEl.classList.remove("live");
@@ -276,6 +388,14 @@ async function selectBot(bot, { skipFetch = false } = {}) {
     await refreshLocalComputer();
     renderComputer();
   }
+}
+
+function selectBot(bot, opts) {
+  return selectConversation("bot", bot, opts);
+}
+
+function selectRoom(room, opts) {
+  return selectConversation("room", room, opts);
 }
 
 function upsertMessage(threadId, message) {
@@ -336,6 +456,21 @@ function applyEvent(frame) {
       break;
     }
 
+    case "group": {
+      const group = frame.group;
+      if (!group) break;
+      const index = state.groups.findIndex((g) => g.id === group.id);
+      if (index >= 0) {
+        const prev = state.groups[index];
+        state.groups[index] = { ...prev, ...group, messages: group.messages ?? prev.messages };
+        if (group.messages) state.messages[group.threadId] = group.messages;
+      } else {
+        state.groups.push(group);
+        state.messages[group.threadId] = group.messages ?? [];
+      }
+      break;
+    }
+
     case "bot.deleted": {
       const botId = frame.botId;
       const index = state.bots.findIndex((b) => b.id === botId);
@@ -345,7 +480,11 @@ function applyEvent(frame) {
         delete state.messages[threadId];
         clearStream(threadId);
         delete state.screens[botId];
-        if (state.activeBotId === botId) state.activeBotId = state.bots[0]?.id ?? null;
+        if (state.activeBotId === botId) {
+          state.activeBotId = state.bots[0]?.id ?? null;
+          state.activeKind = state.activeBotId ? "bot" : state.groups[0] ? "room" : "bot";
+          state.activeRoomId = state.activeBotId ? null : state.groups[0]?.id ?? null;
+        }
       }
       break;
     }
@@ -376,13 +515,104 @@ function applyEvent(frame) {
   }
 
   renderBots();
+  renderRooms();
   renderThread();
   if (state.computerOpen) renderComputer();
+}
+
+async function refreshBridges() {
+  try {
+    const payload = await window.viewer.bridges();
+    state.bridges = payload.bridges ?? [];
+    renderBridges();
+  } catch (error) {
+    bridgesEl.textContent = error.message;
+    bridgesEl.classList.add("empty");
+  }
+}
+
+async function mutateBridge(action, id) {
+  try {
+    if (action === "revoke") await window.viewer.revokeBridge(id);
+    else await window.viewer.rotateBridge(id);
+    await refreshBridges();
+  } catch (error) {
+    connectionEl.textContent = error.message;
+    connectionEl.classList.remove("live");
+  }
+}
+
+async function refreshInstances() {
+  try {
+    const payload = await window.viewer.instances();
+    state.instances = payload.instances ?? [];
+    renderModelPicker();
+  } catch {
+    /* catalog is optional for a read-only reconnect */
+  }
 }
 
 toggleComputerBtn.addEventListener("click", () => {
   void setComputerOpen(!state.computerOpen);
 });
+
+interruptBtn.addEventListener("click", async () => {
+  try {
+    if (state.activeKind === "room" && state.activeRoomId) await window.viewer.interruptRoom(state.activeRoomId);
+    else if (state.activeBotId) await window.viewer.interruptBot(state.activeBotId);
+  } catch (error) {
+    connectionEl.textContent = error.message;
+    connectionEl.classList.remove("live");
+  }
+});
+
+composer.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const text = composerText.value.trim();
+  if (!text) return;
+  try {
+    if (state.activeKind === "room" && state.activeRoomId) {
+      await window.viewer.sendRoom(state.activeRoomId, text);
+    } else if (state.activeBotId) {
+      await window.viewer.sendBot(state.activeBotId, text);
+    }
+    composerText.value = "";
+  } catch (error) {
+    connectionEl.textContent = error.message;
+    connectionEl.classList.remove("live");
+  }
+});
+
+modelPicker.addEventListener("change", async () => {
+  const bot = activeBot();
+  if (!bot) return;
+  const [instanceId, model] = modelPicker.value.split("::");
+  try {
+    await window.viewer.patchModel(bot.id, { instanceId, model });
+  } catch (error) {
+    connectionEl.textContent = error.message;
+    connectionEl.classList.remove("live");
+  }
+});
+
+for (const [id, action] of [
+  ["vm-run", "run"],
+  ["vm-stop", "stop"],
+  ["vm-recreate", "recreate"],
+]) {
+  document.getElementById(id).addEventListener("click", async () => {
+    const bot = activeBot();
+    if (!bot) return;
+    computerErrorEl.hidden = true;
+    try {
+      state.localComputer = await window.viewer.localVmAction(bot.id, action);
+      renderComputer();
+    } catch (error) {
+      computerErrorEl.textContent = error.message;
+      computerErrorEl.hidden = false;
+    }
+  });
+}
 
 async function boot() {
   window.viewer.onEvent((frame) => applyEvent(frame));
@@ -398,6 +628,7 @@ async function boot() {
   } catch (error) {
     botsEl.textContent = error.message;
   }
+  await Promise.all([refreshBridges(), refreshInstances()]);
 }
 
 boot();

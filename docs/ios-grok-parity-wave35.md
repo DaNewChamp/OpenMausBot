@@ -129,3 +129,26 @@ xcodegen generate  # if project.yml changed
 ## E. Out of scope
 
 Grok branding, CursorIcons font, IAP/SuperGrok, Face ID lock, Trackpad/noVNC remote desktop, marketplace plugin artwork, sand-mobile URL schemes.
+
+---
+
+## Shipped or waived (2026-08-29)
+
+| Item | In-repo | External leftover |
+|---|---|---|
+| A1–A3 companion routes | Shipped (group setup, visibility, unread) | Live hub deploy |
+| B1 Share extension | Shipped (`ios/Share`, app group) | Device QA |
+| B2 Group instructions | Shipped | Phone QA |
+| B3 Hidden chats | Shipped | Phone QA |
+| B4 Mark unread | Shipped | Phone QA |
+| B5–B6 Haptics/sounds | Shipped | Phone QA |
+| B7 Save screenshot | Shipped | Photos permission on device |
+| B8 Video attachments | `mp4`/`mov` GET allowlist + server MIME | Large-upload QA |
+| B9 Live Activity linger | Shipped; copy is honest | — |
+| B10 Clipboard bar | Scaffold as documented | Full VM paste is out of scope |
+| B11 APNs | Token registration + `ios/Push` checklist | Apple signing, NSE, TestFlight, locked-phone |
+| C Version bump | `CURRENT_PROJECT_VERSION` is **54** (not 35). Do not reset it. | Next TF notes on MacBook |
+| D `swift test` / xcodegen | Not runnable on this Linux agent | MacBook |
+
+Do not claim TestFlight 35 or live Grok parity from this branch. Bundle id stays `com.posival.openmausmobile`.
+

@@ -7,6 +7,16 @@ contextBridge.exposeInMainWorld("viewer", {
     ipcRenderer.invoke("viewer:respond", { threadId, requestId, behavior, message }),
   alwaysAllow: (botId, allowKey) => ipcRenderer.invoke("viewer:alwaysAllow", { botId, allowKey }),
   localComputer: (botId) => ipcRenderer.invoke("viewer:localComputer", botId),
+  localVmAction: (botId, action) => ipcRenderer.invoke("viewer:localVmAction", { botId, action }),
+  sendBot: (botId, text) => ipcRenderer.invoke("viewer:sendBot", { botId, text }),
+  sendRoom: (roomId, text) => ipcRenderer.invoke("viewer:sendRoom", { roomId, text }),
+  interruptBot: (botId) => ipcRenderer.invoke("viewer:interruptBot", botId),
+  interruptRoom: (roomId) => ipcRenderer.invoke("viewer:interruptRoom", roomId),
+  bridges: () => ipcRenderer.invoke("viewer:bridges"),
+  revokeBridge: (bridgeId) => ipcRenderer.invoke("viewer:revokeBridge", bridgeId),
+  rotateBridge: (bridgeId) => ipcRenderer.invoke("viewer:rotateBridge", bridgeId),
+  instances: () => ipcRenderer.invoke("viewer:instances"),
+  patchModel: (botId, patch) => ipcRenderer.invoke("viewer:patchModel", { botId, patch }),
   setScreens: (enabled) => ipcRenderer.invoke("viewer:setScreens", enabled),
   onEvent: (handler) => {
     const listener = (_event, frame) => handler(frame);

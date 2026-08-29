@@ -46,10 +46,12 @@ export async function guardedBotModelSwitch<Bot extends {
   describe: () => Promise<readonly AdvertisedInstanceCatalog[]>;
   current: () => Bot | null;
   patch: (id: string, selection: ModelSelection) => Bot | null;
+  queue?: (id: string, selection: ModelSelection) => Bot | null;
 }): Promise<
   | { kind: "missing" }
   | { kind: "noop"; bot: Bot }
   | { kind: "busy" }
+  | { kind: "queued"; bot: Bot }
   | { kind: "invalid"; error: string }
   | { kind: "patched"; bot: Bot }
  > {
@@ -66,7 +68,19 @@ export async function guardedBotModelSwitch<Bot extends {
   ) {
     return { kind: "noop", bot: current };
   }
-  if (current.busy) return { kind: "busy" };
+  if (current.busy) {
+    const resolved = resolveBotModelSelection({
+      instanceId: input.requested.instanceId,
+      model: input.requested.model,
+      currentEffort: current.modelSelection.effort,
+      requestedEffort: input.requested.effort,
+      catalogs,
+    });
+    if (!resolved.ok) return { kind: "invalid", error: resolved.error };
+    const queued = input.queue?.(current.id, resolved.selection) ?? null;
+    if (queued) return { kind: "queued", bot: queued };
+    return { kind: "busy" };
+  }
 
   const resolved = resolveBotModelSelection({
     instanceId: input.requested.instanceId,

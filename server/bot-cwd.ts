@@ -24,3 +24,26 @@ export function validateBotCwd(input: unknown): CwdValidation {
   if (!stat.isDirectory()) return { ok: false, error: `that path is not a folder: ${cwd}` };
   return { ok: true, cwd };
 }
+
+const DATA_DIR_TOKEN = "${DATA_DIR}";
+
+/** Store workspace paths relative to the hub data dir so archives survive host moves. */
+export function relativizeCwd(cwd: string | null | undefined, dataDir: string): string | null {
+  if (!cwd) return cwd ?? null;
+  const resolvedData = resolve(dataDir);
+  const resolvedCwd = resolve(cwd);
+  if (resolvedCwd === resolvedData || resolvedCwd.startsWith(resolvedData + "/") || resolvedCwd.startsWith(resolvedData + "\\")) {
+    const rest = resolvedCwd.slice(resolvedData.length).replace(/^[/\\]/, "");
+    return rest ? `${DATA_DIR_TOKEN}/${rest.replaceAll("\\", "/")}` : DATA_DIR_TOKEN;
+  }
+  return cwd;
+}
+
+export function resolvePortableCwd(cwd: string | null | undefined, dataDir: string): string | null {
+  if (!cwd) return cwd ?? null;
+  if (cwd === DATA_DIR_TOKEN) return resolve(dataDir);
+  if (cwd.startsWith(`${DATA_DIR_TOKEN}/`) || cwd.startsWith(`${DATA_DIR_TOKEN}\\`)) {
+    return resolve(dataDir, cwd.slice(DATA_DIR_TOKEN.length).replace(/^[/\\]/, ""));
+  }
+  return cwd;
+}

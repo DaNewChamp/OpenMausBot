@@ -23,17 +23,21 @@ The first version includes:
 - Approvals and questions, including narrow “always allow” grants.
 - Resumable SSE, streamed reply text, reconnect hydration, and an opt-in live
   Box computer view. The loopback-only VPS SSH viewer remains desktop-only.
+  Idle Cloud VPS uses the same “Waiting for agent” card as other idle
+  watch-only destinations (`idleWaitingMessage`); the destination help line
+  explains that the phone can only watch.
 - A phone-safe Local VM status and lifecycle surface for explicitly enabled
   devices. The phone can create, stop, or recreate an idle bot VM on the Mac
   while the durable workspace remains on that Mac.
 - Markdown rendering and Keychain storage for the phone's pairing trust.
 
 Alerts work while the app is open or for the short period it remains connected
-after moving to the background. Once iOS suspends or closes the app, new alerts
-cannot arrive. Closed-app push delivery, voice, and App Store release
-automation are not part of this version. The optional hosted transport connects
-to the user's own computer; it is not a cloud transcript store and cannot wake
-a terminated iOS app.
+after moving to the background. Closed-app APNs is scaffolded (device token
+registration on the sidecar) but is **not** live until Apple signing on the
+MacBook/iPhone lane. Voice and App Store release automation are not part of
+this version. The optional hosted transport connects to the user's own
+computer; it is not a cloud transcript store and cannot wake a terminated iOS
+app.
 
 Optional Grok Bot 0.18 Reconstructed compatibility is desktop-local. The
 Mac detects that app and talks to its loopback gateway itself. The phone
@@ -101,7 +105,7 @@ harness API:
   If an API payload changes, regenerate the fixtures with
   `node scripts/capture-companion-fixtures.mjs` and review the diff.
 
-The sidecar keeps its device registry in `~/.openmausbot/devices.json`. That is
+The sidecar keeps its device registry in `~/.openmausbot-companion/devices.json` (override with `OMB_COMPANION_DIR`). That is
 security state owned by the network boundary, not transcript data, so it does
 not belong in the message database.
 

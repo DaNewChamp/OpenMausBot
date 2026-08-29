@@ -56,9 +56,19 @@ export function looksDestructive(text: string): boolean {
  * `Bash:git`, `Bash:npm` — so the grant is as narrow as the thing you
  * actually looked at. Computed once, server-side, and echoed back by the
  * client so the two sides can never disagree about what was granted. */
-const COMMAND_TOOLS = new Set(["bash", "shell", "execute", "run_command", "computer_exec", "terminal"]);
+const COMMAND_TOOLS = new Set([
+  "bash",
+  "shell",
+  "execute",
+  "run_command",
+  "computer_exec",
+  "terminal",
+  "run_on_bridge",
+  "run_on_ssh_target",
+  "observe_bridge_screen",
+]);
 
-export function approvalKey(tool: string, summary: string, scope?: "local-computer"): string {
+export function approvalKey(tool: string, summary: string, scope?: "local-computer" | "bridge"): string {
   const bare = tool.replace(/^mcp__[^_]+__/, "").toLowerCase();
   if (!COMMAND_TOOLS.has(bare)) return scope ? `${scope}:${tool}` : tool;
   // first bare word of the command, skipping env assignments and sudo
@@ -110,8 +120,8 @@ export function autoVerdict(
   context?: {
     /** the turn was started by an outside event, with nobody at the keyboard */
     unattended?: boolean;
-    /** the request controls the user's active desktop */
-    scope?: "local-computer";
+    /** the request controls the user's active desktop or a home bridge */
+    scope?: "local-computer" | "bridge";
   },
 ): AutoVerdict {
   // the guards outrank the grants, so an "always allow" can never widen
@@ -144,6 +154,16 @@ export function autoVerdict(
     if (sensitive) return { approve: null, source: "sensitive-guard", rule: sensitive };
     return { approve: null, source: "no-grant" };
   }
+  if (context?.scope === "bridge") {
+    // Home-bridge execution is a trust boundary. Auto mode does not inherit;
+    // only an explicit always-allow grant (or a later human card) may run.
+    if (destructive) return { approve: null, source: "destructive-guard", rule: destructive };
+    if (sensitive) return { approve: null, source: "sensitive-guard", rule: sensitive };
+    if (bot.alwaysAllow?.includes(key)) {
+      return { approve: `auto-approved ${key} (always allowed)`, source: "always-allow" as const, rule: key };
+    }
+    return { approve: null, source: "no-grant" };
+  }
   if (context?.scope === "local-computer" && !bot.autoApprove) {
     // Host control is not covered by a remembered always-allow grant.
     // After the Auto-on-this-computer warning, unclassified GUI actions
@@ -167,8 +187,8 @@ export function autoDecision(
   context?: {
     /** the turn was started by an outside event, with nobody at the keyboard */
     unattended?: boolean;
-    /** the request controls the user's active desktop */
-    scope?: "local-computer";
+    /** the request controls the user's active desktop or a home bridge */
+    scope?: "local-computer" | "bridge";
   },
 ): string | null {
   return autoVerdict(bot, tool, summary, context).approve;

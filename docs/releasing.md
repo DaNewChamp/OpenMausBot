@@ -1,5 +1,24 @@
 # Releasing
 
+This repository is Vincent's **V Bot / OpenMausBot fork** (`DaNewChamp/OpenMausBot`). Two release lanes exist and must not be conflated:
+
+| Lane | What it ships | Where |
+|---|---|---|
+| **iOS / V Bot** | TestFlight `com.posival.openmausmobile` | MacBook + Xcode + `./scripts/install-ios-now.sh` on the mini. Current tree is build **54**. |
+| **Desktop OpenMausBot** | GitHub Actions macOS/Windows/Linux packages | Upstream workflow described below. This fork does **not** automatically publish those artifacts, and a green Linux `pnpm typecheck` is not a desktop or iOS production release. |
+
+Do not claim a Cloud Agent push is live on Servarica, TestFlight, or the Mac mini bridge.
+
+The Linux Cloud Agent cannot run `swift test`. Before an iOS/TestFlight cut, the MacBook lane must rerun:
+
+```sh
+cd ios && swift test
+```
+
+If the Xcode project is stale, regenerate with `cd ios && xcodegen generate` first, then `swift test`. Idle Cloud VPS must stay on the “Waiting for agent” card (`ComputerPresentationState.idleWaitingMessage`), not a VPS-only unavailable string.
+
+---
+
 One workflow builds everything: **Actions → Release → Run workflow**. It
 builds macOS (arm64 + x64, signed, notarized, stapled), Windows, and Ubuntu
 from a single pinned commit, verifies every artifact the way a user would

@@ -80,6 +80,12 @@ function getTurnReady(key: string): VpsComputerStatus | null {
 function invalidateTurnReady(key: string): void {
   turnReadyCache.delete(key);
 }
+
+/** Test-only: module caches share one BOT_ID across cases. */
+export function resetVpsComputerCachesForTests(): void {
+  statusCache.clear();
+  turnReadyCache.clear();
+}
 const viewerConnections = new Map<string, { privateIp: string; password: string }>();
 const desktopTunnels = new Map<
   string,

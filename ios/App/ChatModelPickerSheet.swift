@@ -29,7 +29,7 @@ struct ChatModelPickerSheet: View {
     private var showsEffortPicker: Bool {
         !effortLevels.isEmpty && session.engineSync?.usesReconstructedMutations != true
     }
-    private var modelSwitchBlocked: Bool { savingModel || current.busy == true || instancesLoading }
+    private var modelSwitchBlocked: Bool { savingModel || instancesLoading }
     private var reconstructedModelDisabled: Bool {
         session.engineSync?.usesReconstructedMutations == true && pickedInstanceId != "cursor"
     }
@@ -53,7 +53,7 @@ struct ChatModelPickerSheet: View {
                             disabled: modelSwitchBlocked || advertisedInstances.isEmpty,
                             modelsDisabled: reconstructedModelDisabled,
                             footerHint: current.busy == true
-                                ? "Interrupt this agent before switching models."
+                                ? "This switch is queued and applies when the agent finishes."
                                 : "Changes apply to the next message."
                         ) {
                             alignEffort()
@@ -202,7 +202,7 @@ struct ChatModelPickerButton: View {
         .accessibilityLabel("Model, \(instanceTitle), \(modelTitle)")
         .accessibilityHint(
             current.busy == true
-                ? "Opens model picker; interrupt this agent before switching models"
+                ? "Opens model picker; a switch while this agent is working is queued until it finishes"
                 : "Opens model picker"
         )
     }

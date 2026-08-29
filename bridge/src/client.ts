@@ -1,4 +1,13 @@
+import { randomUUID } from "node:crypto";
+
 import type { BridgeCredentials, BridgeJob, BridgeJobResult } from "./types.ts";
+
+interface HeartbeatResponse {
+  jobs?: BridgeJob[];
+  cancelJobIds?: string[];
+  nextToken?: string;
+  error?: string;
+}
 
 function normalizeUrl(url: string): string {
   const parsed = new URL(url);
@@ -31,6 +40,7 @@ export async function registerBridge(input: {
     bridgeId: body.bridgeId,
     bridgeToken: body.bridgeToken,
     name: input.name,
+    workerId: randomUUID(),
   };
 }
 
@@ -38,24 +48,33 @@ export async function heartbeat(
   credentials: BridgeCredentials,
   hostInfo?: string,
   capabilities?: string[],
-): Promise<BridgeJob[]> {
+  inFlight?: string[],
+): Promise<{ jobs: BridgeJob[]; cancelJobIds: string[]; nextToken?: string }> {
   const res = await fetch(`${credentials.url}/api/bridge/heartbeat`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${credentials.bridgeToken}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ bridgeId: credentials.bridgeId, hostInfo, capabilities }),
+    body: JSON.stringify({
+      bridgeId: credentials.bridgeId,
+      hostInfo,
+      capabilities,
+      workerId: credentials.workerId,
+      inFlight,
+    }),
   });
-  const body = (await res.json()) as { jobs?: BridgeJob[]; error?: string };
+  // SAFETY: /api/bridge/heartbeat JSON is jobs, cancelJobIds, optional nextToken, and error.
+  const body = (await res.json()) as HeartbeatResponse;
   if (!res.ok) throw new Error(body.error ?? `heartbeat failed (${res.status})`);
-  return body.jobs ?? [];
+  return { jobs: body.jobs ?? [], cancelJobIds: body.cancelJobIds ?? [], nextToken: body.nextToken };
 }
 
 export async function submitResult(
   credentials: BridgeCredentials,
   jobId: string,
   result: BridgeJobResult,
+  generation?: number,
 ): Promise<void> {
   const res = await fetch(`${credentials.url}/api/bridge/result`, {
     method: "POST",
@@ -63,7 +82,7 @@ export async function submitResult(
       authorization: `Bearer ${credentials.bridgeToken}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ jobId, ...result }),
+    body: JSON.stringify({ jobId, generation, ...result }),
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };

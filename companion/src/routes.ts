@@ -469,6 +469,7 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // Sidecar-owned, authenticated endpoint metadata. The proxy terminates it
   // locally; it never becomes a newly exposed harness route.
   { method: "GET", path: /^\/api\/companion\/endpoints$/ },
+  { method: "POST", path: /^\/api\/companion\/push-token$/ },
 
   // the fleet, and making a bot
   { method: "GET", path: /^\/api\/bots$/ },
@@ -545,6 +546,12 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "DELETE", path: /^\/api\/routines\/[\w-]+$/ },
   { method: "POST", path: /^\/api\/routines\/[\w-]+\/run$/ },
 
+  // Scrubbed bridge roster, revoke, and heartbeat-carried token rotation.
+  // Job audit/cancel/pairing stay off this list.
+  { method: "GET", path: /^\/api\/bridges$/ },
+  { method: "DELETE", path: /^\/api\/bridges\/[\w-]+$/ },
+  { method: "POST", path: /^\/api\/bridges\/[\w-]+\/rotate$/ },
+
   // Multi-account Composio management exposes opaque ids and aliases only.
   // Revocation stays on the Mac: the account DELETE route is deliberately
   // absent — a paired phone can see and add accounts, never remove one.
@@ -590,6 +597,19 @@ const EXPLAINED: ReadonlyArray<{ path: RegExp; error: string }> = [
   { path: /^\/api\/teams(\/|$)/, error: "teams are imported and exported on your computer" },
 ];
 
+/** Bridge daemon routes that must cross the public tunnel. Pairing, job
+ * audit, cancel, and loopback shell stay harness-host-only — a prefix
+ * allow would otherwise publish every new `/api/bridge/*` route. */
+const BRIDGE_DAEMON_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
+  { method: "POST", path: "/api/bridge/register" },
+  { method: "POST", path: "/api/bridge/heartbeat" },
+  { method: "POST", path: "/api/bridge/result" },
+];
+
+export function isBridgeDaemonRoute(method: string, path: string): boolean {
+  return BRIDGE_DAEMON_ROUTES.some((route) => route.method === method && route.path === path);
+}
+
 /** Why this request may not go through, or null when it may.
  *
  * Default deny: the answer for anything not on the list is "no route", which
@@ -604,7 +624,7 @@ export function denyReason({ path, method, authenticated }: RouteRequest): Denia
   // exactly the person it was for — which reads as "broken" rather than
   // "unpaired". It discloses nothing a port scan would not.
   if (method === "GET" && path === "/api/health") return null;
-  if (path.startsWith("/api/bridge/")) return null;
+  if (isBridgeDaemonRoute(method, path)) return null;
 
   if (!authenticated) {
     return { status: 401, error: "pair this device from Phone settings in OpenMausBot on your computer" };

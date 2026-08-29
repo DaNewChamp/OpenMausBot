@@ -30,9 +30,10 @@ public enum ComputerPresentationState: Equatable, Sendable {
                 self = frame != nil ? .watching : .starting
             } else if Self.supportsCloudViewer(bot) {
                 self = .cloudViewerAvailable
-            } else if bot.computer == "cloud" && bot.cloudBackend == "vps" {
-                self = .unavailable(message: "Cloud runs on your VPS. Send a message to start a turn, then watch the desktop here.")
             } else {
+                // Idle VPS (and other watch-only destinations) share the waiting
+                // card. Destination-specific copy lives in ComputerView's help
+                // text so `isIdleWaiting` still matches idleWaitingMessage.
                 self = .unavailable(message: Self.idleWaitingMessage)
             }
         } else if frame != nil {

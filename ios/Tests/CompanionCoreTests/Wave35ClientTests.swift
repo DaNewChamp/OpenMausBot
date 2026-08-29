@@ -126,4 +126,50 @@ final class Wave35ClientTests: XCTestCase {
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(Wave35RequestStub.capturedBody)) as? [String: Any])
         XCTAssertTrue(body.isEmpty)
     }
+
+    func testListBridgesUsesScrubbedRosterRoute() async throws {
+        Wave35RequestStub.responseBody = Data(
+            #"{"bridges":[{"id":"br-1","name":"Mac mini","capabilities":["shell"],"createdAt":1,"lastSeenAt":2,"online":true}]}"#.utf8
+        )
+
+        let bridges = try await client.listBridges()
+
+        XCTAssertEqual(bridges.first?.id, "br-1")
+        XCTAssertEqual(bridges.first?.online, true)
+        let request = try XCTUnwrap(Wave35RequestStub.capturedRequest)
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.url?.path, "/api/bridges")
+    }
+
+    func testRevokeBridgeDeletesById() async throws {
+        Wave35RequestStub.responseBody = Data(#"{"ok":true,"bridgeId":"br-1"}"#.utf8)
+
+        try await client.revokeBridge(id: "br-1")
+
+        let request = try XCTUnwrap(Wave35RequestStub.capturedRequest)
+        XCTAssertEqual(request.httpMethod, "DELETE")
+        XCTAssertEqual(request.url?.path, "/api/bridges/br-1")
+    }
+
+    func testRotateBridgeTokenPostsById() async throws {
+        Wave35RequestStub.responseBody = Data(#"{"ok":true,"bridgeId":"br-1"}"#.utf8)
+
+        try await client.rotateBridgeToken(id: "br-1")
+
+        let request = try XCTUnwrap(Wave35RequestStub.capturedRequest)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.path, "/api/bridges/br-1/rotate")
+    }
+
+    func testRegisterPushTokenPostsDeviceToken() async throws {
+        Wave35RequestStub.responseBody = Data(#"{"ok":true,"apns":false}"#.utf8)
+
+        try await client.registerPushToken("deadbeef")
+
+        let request = try XCTUnwrap(Wave35RequestStub.capturedRequest)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.path, "/api/companion/push-token")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(Wave35RequestStub.capturedBody)) as? [String: Any])
+        XCTAssertEqual(body["deviceToken"] as? String, "deadbeef")
+    }
 }

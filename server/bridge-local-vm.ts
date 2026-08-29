@@ -1,6 +1,5 @@
-import { setTimeout as sleep } from "node:timers/promises";
-
 import type { BridgeJobResult, BridgeRegistry, LocalVmBridgeJobKind } from "./bridge-registry.ts";
+import { waitForBridgeJobResult } from "./bridge-job-wait.ts";
 import { resolveBridge } from "./bridge-exec.ts";
 import { containerRuntimeStatus } from "./container-computer.ts";
 
@@ -22,21 +21,6 @@ function parseBridgeJson(result: BridgeJobResult): unknown {
   } catch {
     throw new Error("bridge local-vm job returned invalid JSON");
   }
-}
-
-async function waitForBridgeJob(
-  registry: BridgeRegistry,
-  bridgeName: string,
-  jobId: string,
-  timeoutMs: number,
-): Promise<BridgeJobResult> {
-  const deadline = Date.now() + timeoutMs + 20_000;
-  while (Date.now() < deadline) {
-    const result = registry.result(jobId);
-    if (result) return result;
-    await sleep(400);
-  }
-  throw new Error(`bridge local-vm job timed out waiting for ${bridgeName}`);
 }
 
 export async function runLocalVmOnBridge(
@@ -65,6 +49,6 @@ export async function runLocalVmOnBridge(
     { botId: opts.botId, action: opts.action },
     timeoutMs,
   );
-  const result = await waitForBridgeJob(registry, bridge.name, job.id, timeoutMs);
+  const result = await waitForBridgeJobResult(registry, job.id, timeoutMs, bridge.name);
   return { data: parseBridgeJson(result), bridgeName: bridge.name };
 }

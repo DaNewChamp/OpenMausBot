@@ -1673,6 +1673,25 @@ public struct CompanionClient: Sendable {
         ).bot
     }
 
+    public func listBridges() async throws -> [BridgeHost] {
+        try await send(try makeRequest("GET", "/api/bridges"), as: BridgesResponse.self).bridges
+    }
+
+    public func revokeBridge(id: String) async throws {
+        _ = try await send(try makeRequest("DELETE", "/api/bridges/\(id)"), as: BridgeMutationResponse.self)
+    }
+
+    public func rotateBridgeToken(id: String) async throws {
+        _ = try await send(try makeRequest("POST", "/api/bridges/\(id)/rotate"), as: BridgeMutationResponse.self)
+    }
+
+    /// Register an APNs device token with the sidecar. Delivery still requires
+    /// Apple credentials on the MacBook/iPhone release lane; this only stores
+    /// the token so a future relay has somewhere to send.
+    public func registerPushToken(_ deviceToken: String) async throws {
+        try await send(try makeRequest("POST", "/api/companion/push-token", body: ["deviceToken": deviceToken]))
+    }
+
     // MARK: - Events
 
     /// A session for a connection that is meant to stay open for hours.

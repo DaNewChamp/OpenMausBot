@@ -1,10 +1,12 @@
 #!/usr/bin/env node
+import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 
 import { heartbeat, registerBridge, submitResult } from "./client.ts";
 import { credentialsPath, loadCredentials, saveCredentials } from "./config.ts";
 import { runShellJob, runSshJob } from "./exec.ts";
 import { runLocalVmJob } from "./local-vm.ts";
+import { runPeekabooJob } from "./peekaboo.ts";
 import type { BridgeJob } from "./types.ts";
 
 const args = process.argv.slice(2);
@@ -20,34 +22,84 @@ function bridgeCapabilities(): string[] {
   if (process.env.OMB_BRIDGE_SHELL === "1") capabilities.push("shell");
   if (process.env.OMB_BRIDGE_LOCAL_VM === "1") capabilities.push("local-vm");
   if (process.env.OMB_BRIDGE_SSH_FORWARD === "1") capabilities.push("ssh-forward");
+  if (process.env.OMB_BRIDGE_PEEKABOO === "1") capabilities.push("peekaboo");
   return capabilities;
 }
 
-async function handleJob(job: BridgeJob) {
-  if (job.kind === "shell") return runShellJob(job);
-  if (job.kind === "ssh-exec") return runSshJob(job);
-  if (job.kind === "local-vm-status" || job.kind === "local-vm-action" || job.kind === "local-vm-screenshot") {
-    return runLocalVmJob(job);
+async function handleJob(job: BridgeJob, signal?: AbortSignal) {
+  switch (job.kind) {
+    case "shell":
+      return runShellJob(job, signal);
+    case "ssh-exec":
+      return runSshJob(job, signal);
+    case "peekaboo-observe":
+      return runPeekabooJob(job, signal);
+    case "local-vm-status":
+    case "local-vm-action":
+    case "local-vm-screenshot":
+      return runLocalVmJob(job, signal);
   }
-  return { exitCode: 1, stdout: "", stderr: `unsupported job kind: ${(job as BridgeJob).kind}`, truncated: false };
+}
+
+interface InFlightJob {
+  generation: number;
+  abort: AbortController;
 }
 
 async function runDaemon(credentials = loadCredentials()) {
   if (!credentials) throw new Error(`no saved credentials at ${credentialsPath()} — run: connect --url … --code …`);
+  if (!credentials.workerId) {
+    credentials.workerId = randomUUID();
+    saveCredentials(credentials);
+  }
   console.log(`bridge: ${credentials.name} → ${credentials.url}`);
+  const inFlight = new Map<string, InFlightJob>();
   for (;;) {
     try {
-      const jobs = await heartbeat(credentials, hostname(), bridgeCapabilities());
+      const { jobs, cancelJobIds, nextToken } = await heartbeat(
+        credentials,
+        hostname(),
+        bridgeCapabilities(),
+        [...inFlight.keys()],
+      );
+      if (nextToken) {
+        credentials.bridgeToken = nextToken;
+        saveCredentials(credentials);
+        console.log("bridge: adopted rotated token");
+      }
+      for (const jobId of cancelJobIds) {
+        inFlight.get(jobId)?.abort.abort();
+      }
       for (const job of jobs) {
+        const existing = inFlight.get(job.id);
+        if (existing) {
+          if (existing.generation === (job.generation ?? existing.generation)) {
+            console.log(`job ${job.id}: already in flight, skipping duplicate delivery`);
+            continue;
+          }
+          existing.abort.abort();
+          inFlight.delete(job.id);
+        }
+        const abort = new AbortController();
+        inFlight.set(job.id, { generation: job.generation ?? 0, abort });
         const label =
           job.kind === "shell"
             ? job.command
             : job.kind === "ssh-exec"
               ? `ssh ${job.alias} ${job.command}`
-              : `${job.kind} ${job.payload.botId}`;
+              : job.kind === "peekaboo-observe"
+                ? `peekaboo ${job.payload.mode}`
+                : `${job.kind} ${job.payload.botId}`;
         console.log(`job ${job.id}: ${label}`);
-        const result = await handleJob(job);
-        await submitResult(credentials, job.id, result);
+        void handleJob(job, abort.signal)
+          .then((result) => submitResult(credentials, job.id, result, job.generation))
+          .catch((error) => {
+            console.warn(`job ${job.id}: ${error instanceof Error ? error.message : String(error)}`);
+          })
+          .finally(() => {
+            const current = inFlight.get(job.id);
+            if (current?.abort === abort) inFlight.delete(job.id);
+          });
       }
     } catch (error) {
       console.warn(`bridge heartbeat: ${error instanceof Error ? error.message : String(error)}`);
@@ -98,6 +150,7 @@ async function main() {
   OMB_BRIDGE_SHELL=1        advertise shell execution capability
   OMB_BRIDGE_LOCAL_VM=1     advertise local-vm relay capability
   OMB_BRIDGE_SSH_FORWARD=1  advertise ssh-forward capability
+  OMB_BRIDGE_PEEKABOO=1     advertise opt-in host-screen observation (no click/type)
 `);
 }
 

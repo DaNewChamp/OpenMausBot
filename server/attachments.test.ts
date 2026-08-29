@@ -61,7 +61,7 @@ describe("saveImage", () => {
   });
 
   it("rejects unsupported mimes, empty bodies, and oversize bodies", () => {
-    expect(() => saveImage(Buffer.from("x"), "image/svg+xml")).toThrow(/unsupported image type/);
+    expect(() => saveImage(Buffer.from("x"), "image/svg+xml")).toThrow(/unsupported attachment type/);
     expect(() => saveImage(Buffer.alloc(0), "image/png")).toThrow(/empty/);
     expect(() => saveImage(Buffer.alloc(IMAGE_MAX_BYTES + 1), "image/png")).toThrow(/exceeds/);
   });
