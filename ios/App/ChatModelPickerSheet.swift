@@ -135,10 +135,17 @@ struct ChatModelPickerSheet: View {
         guard !modelSwitchBlocked else { return }
         savingModel = true
         defer { savingModel = false }
+        let effortPatch: BotModelPatch.EffortUpdate = {
+            if showsEffortPicker {
+                if let pickedEffort { return .set(pickedEffort) }
+                return .clear
+            }
+            return .omitted
+        }()
         let patch = BotModelPatch(
             instanceId: pickedInstanceId,
             model: pickedModel,
-            effort: pickedEffort
+            effort: effortPatch
         )
         if let updated = await session.updateModel(patch, for: current) {
             pickedInstanceId = updated.modelSelection.instanceId
