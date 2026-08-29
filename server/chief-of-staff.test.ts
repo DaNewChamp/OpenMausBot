@@ -32,7 +32,7 @@ describe("chiefOfStaffSystemPrompt roster caps", () => {
     const team = Array.from({ length: 60 }, (_, i) => ({ id: `bot${i}`, name: `Bot ${i}` }));
     const prompt = chiefOfStaffSystemPrompt("chief", [{ id: "chief", name: "Atlas" }, ...team], true);
     expect(prompt).toContain("Bot 39");
-    expect(prompt).not.toContain("Bot 40 —");
+    expect(prompt).not.toContain("Bot 59 —");
     expect(prompt).toContain("…and 20 more");
   });
 });
@@ -58,6 +58,17 @@ describe("chiefOfStaffSystemPrompt", () => {
     expect(prompt).toContain("Use ask_bot only for a short question");
     expect(prompt).toContain("Use delegate_bot to assign real work");
     expect(prompt).toContain("use create_bot");
+  });
+
+  it("indents direct reports under their manager in the roster", () => {
+    const hierarchical = [
+      { id: "chief", name: "Atlas", section: "Work" },
+      { id: "lead", name: "Inv", title: "Chief of Investments", section: "Work", reportsToBotId: "chief" },
+      { id: "ada", name: "Ada", title: "Analyst", section: "Work", reportsToBotId: "lead" },
+    ];
+    const prompt = chiefOfStaffSystemPrompt("chief", hierarchical, true);
+    expect(prompt).toContain("Inv — Chief of Investments");
+    expect(prompt).toContain("↳ Ada — Analyst");
   });
 
   it("does not promise delegation when the engine cannot mount agent tools", () => {

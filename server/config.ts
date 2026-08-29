@@ -67,6 +67,14 @@ const featureConfigSchema = z.object({
 const vbotConfigSchema = z.object({
   primaryEngine: z.enum(["openmaus", "grokReconstructed"]).optional(),
 });
+const bridgeSshTargetSchema = z.object({
+  bridge: z.string().optional(),
+  alias: z.string().refine((value) => isValidSshAlias(value), {
+    message: "must be a simple SSH config alias",
+  }),
+});
+const bridgeSshTargetsSchema = z.record(z.string(), bridgeSshTargetSchema);
+const bridgeSshTargetsConfigSchema = bridgeSshTargetsSchema;
 const instanceConfigSchema = z.object({
   driver: z.string().min(1),
   displayName: optionalText,
@@ -98,6 +106,7 @@ const appConfigSchema = z.object({
   localVm: localVmConfigSchema.optional(),
   features: featureConfigSchema.optional(),
   vbot: vbotConfigSchema.optional(),
+  bridgeSshTargets: bridgeSshTargetsConfigSchema.optional(),
   instances: instanceConfigMapSchema.optional(),
 });
 const appConfigPatchSchema = appConfigSchema.omit({ instances: true });
@@ -122,6 +131,8 @@ export interface AppConfig {
   features?: { skillRecorder?: boolean };
   /** V Bot engine selection. OpenMaus remains the default fallback. */
   vbot?: { primaryEngine?: "openmaus" | "grokReconstructed" };
+  /** Named SSH targets executed through home bridges (alias from ~/.ssh/config). */
+  bridgeSshTargets?: Record<string, { bridge?: string; alias: string }>;
   instances?: InstanceConfigMap;
 }
 export type ConfigPatch = z.output<typeof appConfigPatchSchema>;
@@ -142,6 +153,15 @@ export function parseConfigPatch(value: JsonValue): ConfigPatch {
 
 export function vpsSshAlias(cfg: AppConfig): string | null {
   return isValidSshAlias(cfg.vps?.sshAlias) ? cfg.vps.sshAlias : null;
+}
+
+export function bridgeSshTarget(
+  cfg: AppConfig,
+  target: string,
+): { bridge?: string; alias: string } | null {
+  const entry = cfg.bridgeSshTargets?.[target];
+  if (!entry || !isValidSshAlias(entry.alias)) return null;
+  return entry;
 }
 
 export function roomTurnTimeoutMinutes(cfg: AppConfig): number {
@@ -301,6 +321,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     disk[key] = merged;
   }
   if (checkedPatch.vps !== undefined) disk.vps = normalizeVpsConfig(checkedPatch.vps);
+  if (checkedPatch.bridgeSshTargets !== undefined) disk.bridgeSshTargets = checkedPatch.bridgeSshTargets;
   if (checkedPatch.instances) {
     const currentInstances = jsonObjectSchema.safeParse(disk.instances);
     const diskInstances: JsonObject = currentInstances.success ? currentInstances.data : {};

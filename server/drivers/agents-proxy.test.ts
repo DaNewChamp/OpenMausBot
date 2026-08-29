@@ -101,7 +101,7 @@ beforeAll(async () => {
       req.on("end", () => {
         lastConfigureBody = JSON.parse(data);
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ id: "bot-helper", name: "Helper", engine: "claude", model: "sonnet", effort: "medium" }));
+        res.end(JSON.stringify({ id: "bot-helper", name: "Helper", engine: "claude", model: "sonnet", effort: "medium", title: "Senior helper" }));
       });
       return;
     }
@@ -212,6 +212,7 @@ describe("agents-proxy MCP surface", () => {
       "create_bot",
       "configure_bot",
       "run_on_bridge",
+      "run_on_ssh_target",
       "list_rooms",
       "create_room",
       "update_room",
@@ -231,11 +232,12 @@ describe("agents-proxy MCP surface", () => {
     expect(lastAuth).toBe(`Bearer ${TOKEN}`);
   });
 
-  it("forwards optional engine, model, and effort when a Chief creates a specialist", async () => {
+  it("forwards optional engine, model, effort, and reports_to when creating a specialist", async () => {
     const res = await callTool("create_bot", {
       name: "Pixel",
       role: "Product designer",
       instructions: "Design and review the user experience.",
+      reports_to: "bot-lead",
       engine: "claude",
       model: "sonnet",
       effort: "high",
@@ -247,20 +249,24 @@ describe("agents-proxy MCP surface", () => {
       name: "Pixel",
       role: "Product designer",
       instructions: "Design and review the user experience.",
+      reports_to: "bot-lead",
       engine: "claude",
       model: "sonnet",
       effort: "high",
     });
   });
 
-  it("lets a Chief retarget an idle teammate's stack", async () => {
+  it("lets a Chief retarget an idle teammate's stack and role", async () => {
     const res = await callTool("configure_bot", {
       bot_id: "bot-helper",
       engine: "claude",
       model: "sonnet",
       effort: "medium",
+      role: "Senior helper",
+      instructions: "Handle escalations.",
     });
     expect(res.result.content[0].text).toContain("Updated @Helper");
+    expect(res.result.content[0].text).toContain("role: Senior helper");
     expect(lastConfigureBody).toMatchObject({
       fromBotId: "bot-asker",
       fromThreadId: "thread-asker-routine",
@@ -268,6 +274,8 @@ describe("agents-proxy MCP surface", () => {
       engine: "claude",
       model: "sonnet",
       effort: "medium",
+      role: "Senior helper",
+      instructions: "Handle escalations.",
     });
   });
 

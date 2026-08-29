@@ -35,7 +35,27 @@ describe("BridgeRegistry", () => {
     expect(bridge).toBeTruthy();
     const jobs = registry.pollJobs(bridgeId);
     expect(jobs).toHaveLength(1);
-    expect(jobs[0]?.command).toBe("echo hi");
+    expect(jobs[0]?.kind).toBe("shell");
+    expect(jobs[0] && jobs[0].kind === "shell" ? jobs[0].command : "").toBe("echo hi");
     expect(registry.pollJobs(bridgeId)).toEqual([]);
+  });
+
+  it("delivers local-vm and ssh jobs when capabilities are present", () => {
+    const registry = new BridgeRegistry();
+    const { code } = registry.startPairing();
+    const { bridgeId } = registry.register({
+      name: "worker",
+      code,
+      capabilities: ["shell", "local-vm", "ssh-forward"],
+    });
+    registry.enqueueLocalVmJob(bridgeId, "local-vm-action", { botId: "bot-1", action: "stop" });
+    registry.enqueueSshExec(bridgeId, "windows", "hostname");
+    const jobs = registry.pollJobs(bridgeId);
+    expect(jobs.map((job) => job.kind)).toEqual(["local-vm-action", "ssh-exec"]);
+    expect(jobs[0] && jobs[0].kind === "local-vm-action" ? jobs[0].payload : null).toEqual({
+      botId: "bot-1",
+      action: "stop",
+    });
+    expect(jobs[1] && jobs[1].kind === "ssh-exec" ? jobs[1].alias : "").toBe("windows");
   });
 });

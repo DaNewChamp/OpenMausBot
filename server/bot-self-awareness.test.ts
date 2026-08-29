@@ -24,4 +24,26 @@ describe("bot self-awareness", () => {
     expect(text).toContain("list_routines");
     expect(text).toContain("COMPOSIO_SEARCH_TOOLS");
   });
+
+  it("notes manager and team-lead powers in persona", () => {
+    const specialist = botSelfAwarenessPersona({
+      id: "a1",
+      name: "Ada",
+      title: "Analyst",
+      reportsToBotId: "lead",
+      reportsToName: "Inv",
+      reportsToTitle: "Chief of Investments",
+    });
+    expect(specialist).toContain("You report to Inv (Chief of Investments)");
+
+    const lead = botSelfAwarenessPersona({
+      id: "lead",
+      name: "Inv",
+      title: "Chief of Investments",
+      reportsToBotId: "chief",
+      reportsToName: "Atlas",
+      reportsToTitle: "Chief of Staff",
+    });
+    expect(lead).toContain("use create_bot to add specialists");
+  });
 });

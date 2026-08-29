@@ -1,3 +1,5 @@
+import { hierarchyRoster } from "./bot-hierarchy.ts";
+
 export interface ChiefTeamMember {
   id: string;
   name: string;
@@ -6,6 +8,7 @@ export interface ChiefTeamMember {
   busy?: boolean;
   hidden?: boolean;
   section?: string;
+  reportsToBotId?: string;
 }
 
 // The roster is interpolated into a TRUSTED bot's system prompt on every
@@ -37,16 +40,17 @@ export function chiefOfStaffSystemPrompt(
   const team = bots.filter(
     (bot) => bot.id !== chiefId && !bot.hidden && sectionKey(bot.section) === chiefSection,
   );
-  const listed = team.slice(0, ROSTER_MAX_BOTS);
+  const listed = hierarchyRoster(team, chiefId).slice(0, ROSTER_MAX_BOTS);
   const overflow = team.length - listed.length;
+  const indent = (depth: number) => (depth > 0 ? `${"  ".repeat(depth)}↳ ` : "- ");
   const roster = team.length
     ? listed
-        .map((bot) => {
+        .map(({ bot, depth }) => {
           const name = clip(bot.name, ROSTER_NAME_MAX);
           const role = clip(bot.title?.trim() || "General assistant", ROSTER_ROLE_MAX);
           const about = bot.description?.trim();
           const availability = bot.busy ? "working right now" : "available";
-          return `- ${name} — ${role}${about ? `: ${clip(about, ROSTER_ABOUT_MAX)}` : ""} (${availability})`;
+          return `${indent(depth)}${name} — ${role}${about ? `: ${clip(about, ROSTER_ABOUT_MAX)}` : ""} (${availability})`;
         })
         .join("\n") + (overflow > 0 ? `\n- …and ${overflow} more (use list_bots for the full roster).` : "")
     : "- No other visible bots are available yet.";

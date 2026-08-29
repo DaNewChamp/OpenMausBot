@@ -16,6 +16,9 @@
 //   configure_bot(bot_id, …)             → Chiefs can retarget a teammate's
 //                                          engine, model, or reasoning
 //   run_on_bridge(command, bridge?, …)   → run a shell command on a paired home bridge
+//   run_on_ssh_target(command, target, bridge?) → SSH alias via bridge (~/.ssh/config)
+//   Local VM phone/desktop routes relay to bridges when OMB_LOCAL_VM_RELAY=1 or
+//   the harness has no local docker but an online bridge advertises local-vm.
 //   list_rooms / create_room / update_room  → multi-bot channels (Chief manages)
 //   list_routines / create_routine / run_routine → scheduled tasks
 //   request_credential(id, reason?)       → show a secure, allowlisted key card
@@ -76,13 +79,14 @@ const TOOLS = [
   {
     name: "create_bot",
     description:
-      "Create a specialist bot in your section. Only a section's Chief of Staff may use this. By default the new bot inherits your engine and reasoning; optionally pass engine, model, and effort to pick a different stack. The new bot starts with connected apps and automatic approvals disabled, and can then receive work through delegate_bot. Create only the smallest useful team (maximum four per turn).",
+      "Create a specialist or sub-chief in your section. Section Chiefs and team leads (titles like Chief of Investments) may use this. Pass role for the job title and instructions for how they work. Optional reports_to sets their manager (defaults: sub-chiefs report to you; Chief-created 'Chief of …' roles report to the section Chief).",
     inputSchema: {
       type: "object",
       properties: {
         name: { type: "string", description: "Short, unique display name for the specialist." },
-        role: { type: "string", description: "The specialist's job title or role." },
+        role: { type: "string", description: "The specialist's job title or role (for example Chief of Investments)." },
         instructions: { type: "string", description: "What this specialist is responsible for and how it should work." },
+        reports_to: { type: "string", description: "Optional manager bot id (from list_bots)." },
         engine: { type: "string", description: "Optional provider instance id from list_bots / the desktop picker (defaults to your engine)." },
         model: { type: "string", description: "Optional model id for that engine (defaults to your model or the engine default)." },
         effort: {
@@ -96,11 +100,14 @@ const TOOLS = [
   {
     name: "configure_bot",
     description:
-      "Change another bot's engine, model, or reasoning level in your section. Only a section's Chief of Staff may use this. The bot must be idle. Use list_bots to read each teammate's current stack before retargeting them.",
+      "Update another bot's role (title), instructions, engine, model, or reasoning. Section Chiefs may configure anyone in the section; team leads may configure direct reports. The bot must be idle for engine changes.",
     inputSchema: {
       type: "object",
       properties: {
         bot_id: { type: "string", description: "The teammate's id (from list_bots)." },
+        role: { type: "string", description: "Optional new job title." },
+        instructions: { type: "string", description: "Optional new instructions / about text." },
+        reports_to: { type: ["string", "null"], description: "Section Chief only: change who they report to, or null to clear." },
         engine: { type: "string", description: "Optional provider instance id." },
         model: { type: "string", description: "Optional model id for that engine." },
         effort: {
@@ -114,7 +121,7 @@ const TOOLS = [
   {
     name: "run_on_bridge",
     description:
-      "Run a shell command on a registered home bridge (Mac mini, Pi, etc.) through the cloud harness. Use bridge name when you know it (for example Mac mini); omit to use the freshest online bridge. Returns stdout, stderr, and exit code.",
+      "Run a shell command on a registered home bridge (Mac mini, Pi, etc.) through the cloud harness. Use bridge name when you know it (for example Mac mini); omit to use the freshest online bridge. For Local VM status/actions, use the bot local-computer API (relayed automatically when configured). Returns stdout, stderr, and exit code.",
     inputSchema: {
       type: "object",
       properties: {
@@ -124,6 +131,22 @@ const TOOLS = [
         timeout_ms: { type: "number", description: "Optional timeout in milliseconds (default 60000)." },
       },
       required: ["command"],
+    },
+  },
+  {
+    name: "run_on_ssh_target",
+    description:
+      "Run a command on a named SSH target from harness config (bridgeSshTargets) through a home bridge. The bridge uses its own ~/.ssh/config alias. Returns stdout, stderr, and exit code.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "Remote shell command to execute." },
+        target: { type: "string", description: "Named target key from harness bridgeSshTargets config." },
+        bridge: { type: "string", description: "Optional bridge display name; defaults to the target mapping or freshest ssh-forward bridge." },
+        cwd: { type: "string", description: "Optional remote working directory." },
+        timeout_ms: { type: "number", description: "Optional timeout in milliseconds (default 60000)." },
+      },
+      required: ["command", "target"],
     },
   },
   {
@@ -263,7 +286,8 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
         `model: ${b.model}`,
         b.effort ? `reasoning: ${b.effort}` : null,
       ].filter(Boolean).join(", ");
-      return `- ${b.name}${role}${about} [id: ${b.id}, ${stack}${b.busy ? ", busy" : ""}]`;
+      const reports = b.reportsToName ? `, reports to ${b.reportsToName}` : "";
+      return `- ${b.name}${role}${about} [id: ${b.id}, ${stack}${reports}${b.busy ? ", busy" : ""}]`;
     });
     return { text: `Other bots you can message with ask_bot:\n${lines.join("\n")}` };
   }
@@ -324,6 +348,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
         name: botName,
         role,
         instructions,
+        ...(args.reports_to ? { reports_to: String(args.reports_to) } : {}),
         ...(args.engine ? { engine: String(args.engine) } : {}),
         ...(args.model ? { model: String(args.model) } : {}),
         ...(args.effort !== undefined ? { effort: args.effort } : {}),
@@ -331,8 +356,9 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     });
     createdThisTurn += 1;
     const effort = r.effort ? `, reasoning: ${r.effort}` : "";
+    const reports = r.reportsToBotId ? `, reports to id ${r.reportsToBotId}` : "";
     return {
-      text: `Created @${r.name ?? botName} in ${r.section ?? "General"} [id: ${r.id}, engine: ${r.engine ?? "unknown"}, model: ${r.model}${effort}]. Assign work with delegate_bot.`,
+      text: `Created @${r.name ?? botName} in ${r.section ?? "General"} [id: ${r.id}, engine: ${r.engine ?? "unknown"}, model: ${r.model}${effort}${reports}]. Assign work with delegate_bot.`,
     };
   }
   if (name === "configure_bot") {
@@ -346,10 +372,14 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     if (args.engine) payload.engine = String(args.engine);
     if (args.model) payload.model = String(args.model);
     if (args.effort !== undefined) payload.effort = args.effort;
+    if (args.role) payload.role = String(args.role);
+    if (args.instructions) payload.instructions = String(args.instructions);
+    if (args.reports_to !== undefined) payload.reports_to = args.reports_to;
     const r = await api(`/api/internal/configure-bot`, { method: "POST", body: JSON.stringify(payload) });
     const effort = r.effort ? `, reasoning: ${r.effort}` : "";
+    const role = r.title ? `, role: ${r.title}` : "";
     return {
-      text: `Updated @${r.name ?? "bot"} [id: ${r.id}] to engine ${r.engine ?? "unknown"}, model ${r.model}${effort}.`,
+      text: `Updated @${r.name ?? "bot"} [id: ${r.id}] to engine ${r.engine ?? "unknown"}, model ${r.model}${effort}${role}.`,
     };
   }
   if (name === "run_on_bridge") {
@@ -364,6 +394,24 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const stdout = String(r.stdout ?? "").trim();
     const stderr = String(r.stderr ?? "").trim();
     const parts = [`Bridge ${r.bridgeName ?? "unknown"} exit ${exitCode}`];
+    if (stdout) parts.push(`stdout:\n${stdout}`);
+    if (stderr) parts.push(`stderr:\n${stderr}`);
+    return { text: parts.join("\n\n"), isError: Number(r.exitCode) !== 0 };
+  }
+  if (name === "run_on_ssh_target") {
+    const command = String(args.command ?? "").trim();
+    const target = String(args.target ?? "").trim();
+    if (!command) return { text: "run_on_ssh_target needs command.", isError: true };
+    if (!target) return { text: "run_on_ssh_target needs target.", isError: true };
+    const body: Record<string, unknown> = { command, target };
+    if (args.bridge) body.bridge = String(args.bridge);
+    if (args.cwd) body.cwd = String(args.cwd);
+    if (args.timeout_ms != null) body.timeoutMs = Number(args.timeout_ms);
+    const r = await api("/api/internal/bridge/ssh", { method: "POST", body: JSON.stringify(body) });
+    const exitCode = r.exitCode ?? "?";
+    const stdout = String(r.stdout ?? "").trim();
+    const stderr = String(r.stderr ?? "").trim();
+    const parts = [`SSH target ${target} via bridge ${r.bridgeName ?? "unknown"} exit ${exitCode}`];
     if (stdout) parts.push(`stdout:\n${stdout}`);
     if (stderr) parts.push(`stderr:\n${stderr}`);
     return { text: parts.join("\n\n"), isError: Number(r.exitCode) !== 0 };

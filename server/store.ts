@@ -350,6 +350,8 @@ export interface BotRecord {
   /** The coordinator for this bot's sidebar section. The store enforces
    * at most one Chief per section (including the unsectioned area). */
   chiefOfStaff?: boolean;
+  /** Optional manager within the same section (Chief of Staff or a sub-chief). */
+  reportsToBotId?: string;
   /** Pause for human approval before this bot talks to a peer (ask_bot,
    * delegate_bot). Off by default: a chief-of-staff-style bot is most
    * useful when it can coordinate without nagging. */
@@ -880,7 +882,10 @@ export class Store {
 
   createBot(
     profile: Partial<
-      Pick<BotRecord, "name" | "title" | "description" | "color" | "mascotExpression" | "modelSelection" | "section">
+      Pick<
+        BotRecord,
+        "name" | "title" | "description" | "color" | "mascotExpression" | "modelSelection" | "section" | "reportsToBotId"
+      >
     > = {},
     opts: {
       /** false = no greeting/onboarding seed. Imported bots must not open
@@ -905,6 +910,7 @@ export class Store {
       createdAt: Date.now(),
     };
     if (section) bot.section = section;
+    if (profile.reportsToBotId) bot.reportsToBotId = profile.reportsToBotId;
     bot.tasks = [{ threadId: bot.threadId, title: UNTITLED_TASK, createdAt: bot.createdAt, resumeCursors: {} }];
     this.bots.unshift(bot);
     this.saveBots();

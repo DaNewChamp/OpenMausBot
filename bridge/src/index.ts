@@ -3,7 +3,9 @@ import { hostname } from "node:os";
 
 import { heartbeat, registerBridge, submitResult } from "./client.ts";
 import { credentialsPath, loadCredentials, saveCredentials } from "./config.ts";
-import { runShellJob } from "./exec.ts";
+import { runShellJob, runSshJob } from "./exec.ts";
+import { runLocalVmJob } from "./local-vm.ts";
+import type { BridgeJob } from "./types.ts";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -13,6 +15,22 @@ function flag(name: string): string | undefined {
   return index >= 0 ? args[index + 1] : undefined;
 }
 
+function bridgeCapabilities(): string[] {
+  const capabilities = ["shell"];
+  if (process.env.OMB_BRIDGE_LOCAL_VM === "1") capabilities.push("local-vm");
+  if (process.env.OMB_BRIDGE_SSH_FORWARD === "1") capabilities.push("ssh-forward");
+  return capabilities;
+}
+
+async function handleJob(job: BridgeJob) {
+  if (job.kind === "shell") return runShellJob(job);
+  if (job.kind === "ssh-exec") return runSshJob(job);
+  if (job.kind === "local-vm-status" || job.kind === "local-vm-action" || job.kind === "local-vm-screenshot") {
+    return runLocalVmJob(job);
+  }
+  return { exitCode: 1, stdout: "", stderr: `unsupported job kind: ${(job as BridgeJob).kind}` };
+}
+
 async function runDaemon(credentials = loadCredentials()) {
   if (!credentials) throw new Error(`no saved credentials at ${credentialsPath()} — run: connect --url … --code …`);
   console.log(`bridge: ${credentials.name} → ${credentials.url}`);
@@ -20,9 +38,14 @@ async function runDaemon(credentials = loadCredentials()) {
     try {
       const jobs = await heartbeat(credentials, hostname());
       for (const job of jobs) {
-        if (job.kind !== "shell") continue;
-        console.log(`job ${job.id}: ${job.command}`);
-        const result = await runShellJob(job);
+        const label =
+          job.kind === "shell"
+            ? job.command
+            : job.kind === "ssh-exec"
+              ? `ssh ${job.alias} ${job.command}`
+              : `${job.kind} ${job.payload.botId}`;
+        console.log(`job ${job.id}: ${label}`);
+        const result = await handleJob(job);
         await submitResult(credentials, job.id, result);
       }
     } catch (error) {
@@ -38,7 +61,13 @@ async function main() {
     const code = flag("--code");
     const name = flag("--name") ?? hostname();
     if (!url || !code) throw new Error("usage: connect --url https://openmaus.posival.com --code 123456 [--name mini]");
-    const credentials = await registerBridge({ url, name, code, hostInfo: hostname() });
+    const credentials = await registerBridge({
+      url,
+      name,
+      code,
+      capabilities: bridgeCapabilities(),
+      hostInfo: hostname(),
+    });
     saveCredentials(credentials);
     console.log(`paired ${credentials.name} (${credentials.bridgeId}) → ${credentials.url}`);
     return;
@@ -64,6 +93,9 @@ async function main() {
   connect --url <harness-url> --code <6-digit> [--name host]
   run
   status
+
+  OMB_BRIDGE_LOCAL_VM=1     advertise local-vm relay capability
+  OMB_BRIDGE_SSH_FORWARD=1  advertise ssh-forward capability
 `);
 }
 
