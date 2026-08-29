@@ -669,16 +669,12 @@ struct AgentProfileView: View {
     @ViewBuilder
     private var modelControls: some View {
         if instancesLoading {
-            ProgressView("Loading models")
+            ModelPickerLoadingView()
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityLabel("Loading models")
         } else if let instancesError {
-            Label(instancesError, systemImage: "exclamationmark.triangle")
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("Could not load models")
-                .accessibilityValue(instancesError)
-            Button("Try again") { Task { await loadInstances() } }
-                .disabled(busy || savingModel)
+            ModelPickerErrorView(message: instancesError) {
+                Task { await loadInstances() }
+            }
         } else {
             ModelPickerView(
                 instances: instances,

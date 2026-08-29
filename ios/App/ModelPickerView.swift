@@ -1,6 +1,141 @@
 import CompanionCore
 import SwiftUI
 
+/// Placeholder layout while engine/model catalogs load from the harness.
+struct ModelPickerLoadingView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(0..<5, id: \.self) { _ in
+                        RoundedRectangle(cornerRadius: 999, style: .continuous)
+                            .fill(Color.primary.opacity(0.07))
+                            .frame(width: 92, height: 34)
+                    }
+                }
+                .padding(.horizontal, 2)
+            }
+
+            VStack(spacing: 0) {
+                ForEach(0..<4, id: \.self) { index in
+                    HStack(spacing: 10) {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(Color.primary.opacity(0.08))
+                            .frame(width: CGFloat(120 + index * 14), height: 14)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44, alignment: .leading)
+
+                    if index < 3 {
+                        Divider().overlay(ModelPickerStyle.divider).padding(.leading, 14)
+                    }
+                }
+            }
+            .background(ModelPickerStyle.listSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading models")
+    }
+}
+
+struct ModelPickerErrorView: View {
+    let message: String
+    var retry: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let retry {
+                Button("Try again", action: retry)
+                    .buttonStyle(.bordered)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(ModelPickerStyle.listSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+/// Horizontal reasoning chips for model sheets and profiles.
+struct ModelEffortPicker: View {
+    let levels: [String]
+    @Binding var selection: String?
+    var disabled: Bool = false
+    var onChange: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Reasoning")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    EffortChip(
+                        title: "Default",
+                        selected: selection == nil,
+                        disabled: disabled
+                    ) {
+                        selection = nil
+                        onChange()
+                    }
+
+                    ForEach(levels, id: \.self) { level in
+                        EffortChip(
+                            title: ModelEffortPicker.effortLabel(level),
+                            selected: selection == level,
+                            disabled: disabled
+                        ) {
+                            selection = level
+                            onChange()
+                        }
+                    }
+                }
+                .padding(.horizontal, 2)
+            }
+        }
+    }
+
+    static func effortLabel(_ level: String) -> String {
+        switch level {
+        case "xhigh": return "X-High"
+        default: return level.split(separator: "-").map { $0.capitalized }.joined(separator: " ")
+        }
+    }
+}
+
+private struct EffortChip: View {
+    let title: String
+    let selected: Bool
+    var disabled: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(selected ? Color.primary : Color.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    selected ? ModelPickerStyle.chipSelected : ModelPickerStyle.chip,
+                    in: Capsule()
+                )
+                .overlay {
+                    Capsule()
+                        .strokeBorder(selected ? Color.primary.opacity(0.12) : .clear, lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
 /// Premium model picker for bot profiles and settings. Mirrors the desktop
 /// `ModelPicker` rail + list pattern with V Bot solid surfaces.
 struct ModelPickerView: View {
@@ -95,24 +230,11 @@ struct ModelPickerView: View {
     private var modelList: some View {
         if let railInstance {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    ProviderMarks.mark(for: markKey(for: railInstance), size: 16)
-                    Text(railInstance.pickerTitle)
-                        .font(.subheadline.weight(.semibold))
-                    Spacer(minLength: 0)
-                    if railInstance.snapshot.isAvailable {
-                        Text("Ready")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.green)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Color.green.opacity(0.12), in: Capsule())
-                    } else if let reason = railInstance.snapshot.reason {
-                        Text(reason)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                if !railInstance.snapshot.isAvailable, let reason = railInstance.snapshot.reason {
+                    Label(reason, systemImage: "exclamationmark.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 2)
                 }
 
                 VStack(spacing: 0) {

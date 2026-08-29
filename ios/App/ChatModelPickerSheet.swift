@@ -39,11 +39,12 @@ struct ChatModelPickerSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if instancesLoading {
-                        ProgressView("Loading models")
+                        ModelPickerLoadingView()
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     } else if let instancesError {
-                        Label(instancesError, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.secondary)
-                        Button("Try again") { Task { await loadInstances() } }
+                        ModelPickerErrorView(message: instancesError) {
+                            Task { await loadInstances() }
+                        }
                     } else {
                         ModelPickerView(
                             instances: instances,
