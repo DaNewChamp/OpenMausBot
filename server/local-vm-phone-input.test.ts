@@ -31,7 +31,7 @@ describe("Local VM phone input validation", () => {
 
 describe("Local VM phone input execution", () => {
   it("routes click and scroll through Cua", async () => {
-    const runner = vi.fn<CommandRunner>().mockResolvedValue({ stdout: "ok", stderr: "", exitCode: 0 });
+    const runner = vi.fn<CommandRunner>().mockResolvedValue({ stdout: "ok" });
     const click = await executeLocalVmPhoneInput(
       { action: "click", x: 4, y: 8, button: "right" },
       { runtime, containerName, runner },

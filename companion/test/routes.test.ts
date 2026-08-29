@@ -260,7 +260,9 @@ describe("what it may not", () => {
     expect(validateComputerDestinationBody("PATCH", path, { computer: "vm", autoApprove: true })).toMatchObject({
       denial: { status: 400 },
     });
-    expect(validateComputerDestinationBody("PATCH", path, { computer: "laptop" }).denial?.status).toBe(400);
+    expect(validateComputerDestinationBody("PATCH", path, { computer: "laptop" })).toMatchObject({
+      denial: { status: 400 },
+    });
     expect(validateComputerDestinationBody("GET", path, { computer: "vm" })).toEqual({ patch: {} });
   });
 
@@ -295,7 +297,7 @@ describe("what it may not", () => {
       instanceId: "codex",
       model: "gpt-5.6-sol",
       effort: "turbo",
-    }).denial?.status).toBe(400);
+    })).toMatchObject({ denial: { status: 400 } });
   });
 
   // The method is part of the allowance, not decoration: reading the fleet

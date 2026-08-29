@@ -216,6 +216,7 @@ export interface Bot {
   approvePeerComms?: boolean;
   /** Whether this bot may use the workspace's connected apps. Unset means
    * allowed for existing bots; imported bots start with this disabled. */
+  composio?: boolean;
   /** When on, turns route through the fastest available engine: Codex, then
    * Claude/Cursor, then Grok — using low effort / fast model ids. The stored
    * picker choice is kept for when fast mode is off. */

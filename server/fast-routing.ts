@@ -24,7 +24,7 @@ const PREFERRED_BY_KIND: Record<string, readonly string[]> = {
 export interface FastRoutingInstance {
   instanceId: string;
   driverKind: string;
-  models?: { default?: string; options?: Array<{ id?: string }> };
+  models?: { default?: string; options?: readonly { id?: string }[] };
   capabilities?: { effortLevels?: readonly string[] };
   available?: boolean;
 }
