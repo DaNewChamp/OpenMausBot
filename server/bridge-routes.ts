@@ -1,9 +1,19 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { BridgeCapability, BridgeRegistry } from "./bridge-registry.ts";
+import { IdempotencyConflictError } from "./bridge-registry.ts";
 import { runShellOnBridge } from "./bridge-exec.ts";
 
 type JsonFn = (res: ServerResponse, status: number, body: unknown) => void;
+
+export interface BridgeRouteOpts {
+  /** TCP loopback and not the companion sidecar. */
+  direct: boolean;
+  /** Request arrived via the companion sidecar. */
+  companion: boolean;
+  /** Direct loopback plus the operator admin token. */
+  operator: boolean;
+}
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
@@ -18,6 +28,10 @@ export function asCapabilities(value: unknown): BridgeCapability[] {
   return value.filter((entry): entry is BridgeCapability => typeof entry === "string" && allowed.has(entry as BridgeCapability));
 }
 
+export function isCompanionRequest(req: IncomingMessage): boolean {
+  return req.headers["x-openmausbot-companion"] === "1";
+}
+
 /** Bridge HTTP surface. Returns true when the request was handled. */
 export async function handleBridgeRoutes(
   req: IncomingMessage,
@@ -26,22 +40,60 @@ export async function handleBridgeRoutes(
   path: string,
   json: JsonFn,
   bridges: BridgeRegistry,
-  opts: { loopback: boolean },
+  opts: BridgeRouteOpts,
 ): Promise<boolean> {
   if (!path.startsWith("/api/bridge")) return false;
 
   if (method === "POST" && path === "/api/bridge/pairing") {
-    if (!opts.loopback) return json(res, 403, { error: "pair bridges from the harness host" }), true;
+    if (!opts.direct) return json(res, 403, { error: "pair bridges from the harness host" }), true;
     return json(res, 200, bridges.startPairing()), true;
   }
 
   if (method === "GET" && path === "/api/bridges") {
-    if (!opts.loopback) return json(res, 403, { error: "bridge list is loopback-only" }), true;
+    if (!opts.direct && !opts.companion) return json(res, 403, { error: "bridge list is host or paired-phone only" }), true;
     return json(res, 200, { bridges: bridges.list() }), true;
   }
 
+  const revokeMatch = path.match(/^\/api\/bridges\/([\w-]+)$/);
+  if (revokeMatch && method === "DELETE") {
+    if (!opts.direct && !opts.companion) return json(res, 403, { error: "bridge revoke is host or paired-phone only" }), true;
+    const ok = bridges.revoke(revokeMatch[1]!);
+    if (!ok) return json(res, 404, { error: "bridge not found" }), true;
+    return json(res, 200, { ok: true, bridgeId: revokeMatch[1] }), true;
+  }
+
+  const jobMatch = path.match(/^\/api\/bridge\/jobs\/([\w-]+)$/);
+  if (jobMatch) {
+    if (!opts.direct || !opts.operator) {
+      return json(res, 403, { error: "job administration requires operator authorization" }), true;
+    }
+    const jobId = jobMatch[1]!;
+    if (method === "GET") {
+      const record = bridges.getJob(jobId);
+      if (!record) return json(res, 404, { error: "job not found" }), true;
+      return json(res, 200, { job: record }), true;
+    }
+    if (method === "POST") {
+      const body = await readJson(req);
+      if (body.action !== "cancel") return json(res, 400, { error: "unsupported job action" }), true;
+      const record = bridges.cancelJob(jobId);
+      if (!record) return json(res, 404, { error: "job not found" }), true;
+      return json(res, 200, { job: record }), true;
+    }
+  }
+
+  if (method === "GET" && path === "/api/bridge/jobs") {
+    if (!opts.direct || !opts.operator) {
+      return json(res, 403, { error: "job administration requires operator authorization" }), true;
+    }
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const bridgeId = url.searchParams.get("bridgeId") ?? undefined;
+    return json(res, 200, { jobs: bridges.listJobs(bridgeId) }), true;
+  }
+
   const shellMatch = path.match(/^\/api\/bridges\/([\w-]+)\/shell$/);
-  if (method === "POST" && shellMatch && opts.loopback) {
+  if (method === "POST" && shellMatch) {
+    if (!opts.direct) return json(res, 403, { error: "bridge shell is harness-host only" }), true;
     try {
       const body = await readJson(req);
       const result = await runShellOnBridge(bridges, {
@@ -53,7 +105,8 @@ export async function handleBridgeRoutes(
       });
       return json(res, 200, result), true;
     } catch (error) {
-      return json(res, 400, { error: error instanceof Error ? error.message : String(error) }), true;
+      const status = error instanceof IdempotencyConflictError ? 409 : 400;
+      return json(res, status, { error: error instanceof Error ? error.message : String(error) }), true;
     }
   }
 
@@ -85,14 +138,15 @@ export async function handleBridgeRoutes(
       hostInfo: body.hostInfo ? String(body.hostInfo) : undefined,
       capabilities: caps,
     });
-    return json(res, 200, { jobs: bridges.pollJobs(bridgeId) }), true;
+    return json(res, 200, { jobs: bridges.pollJobs(bridgeId), cancelJobIds: bridges.cancelRequests(bridgeId) }), true;
   }
 
   if (method === "POST" && path === "/api/bridge/result") {
     const body = await readJson(req);
     const jobId = String(body.jobId ?? "");
     if (!jobId) return json(res, 400, { error: "jobId required" }), true;
-    bridges.storeResult({
+    if (!bridges.getJob(jobId)) return json(res, 404, { error: "unknown job" }), true;
+    const stored = bridges.storeResult({
       jobId,
       bridgeId: bridge.id,
       exitCode: body.exitCode == null ? null : Number(body.exitCode),
@@ -100,7 +154,9 @@ export async function handleBridgeRoutes(
       stderr: String(body.stderr ?? ""),
       truncated: body.truncated === true,
       finishedAt: Date.now(),
+      generation: body.generation == null ? undefined : Number(body.generation),
     });
+    if (!stored) return json(res, 409, { error: "result rejected" }), true;
     return json(res, 200, { ok: true }), true;
   }
 

@@ -395,7 +395,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
   if (name === "run_on_bridge") {
     const command = String(args.command ?? "").trim();
     if (!command) return { text: "run_on_bridge needs command.", isError: true };
-    const body: Record<string, unknown> = { command };
+    const body: Record<string, unknown> = { command, fromBotId: BOT_ID, fromThreadId: THREAD_ID };
     if (args.bridge) body.bridge = String(args.bridge);
     if (args.cwd) body.cwd = String(args.cwd);
     if (args.timeout_ms != null) body.timeoutMs = Number(args.timeout_ms);
@@ -414,7 +414,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const target = String(args.target ?? "").trim();
     if (!command) return { text: "run_on_ssh_target needs command.", isError: true };
     if (!target) return { text: "run_on_ssh_target needs target.", isError: true };
-    const body: Record<string, unknown> = { command, target };
+    const body: Record<string, unknown> = { command, target, fromBotId: BOT_ID, fromThreadId: THREAD_ID };
     if (args.bridge) body.bridge = String(args.bridge);
     if (args.cwd) body.cwd = String(args.cwd);
     if (args.timeout_ms != null) body.timeoutMs = Number(args.timeout_ms);

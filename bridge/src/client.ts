@@ -38,7 +38,7 @@ export async function heartbeat(
   credentials: BridgeCredentials,
   hostInfo?: string,
   capabilities?: string[],
-): Promise<BridgeJob[]> {
+): Promise<{ jobs: BridgeJob[]; cancelJobIds: string[] }> {
   const res = await fetch(`${credentials.url}/api/bridge/heartbeat`, {
     method: "POST",
     headers: {
@@ -47,15 +47,16 @@ export async function heartbeat(
     },
     body: JSON.stringify({ bridgeId: credentials.bridgeId, hostInfo, capabilities }),
   });
-  const body = (await res.json()) as { jobs?: BridgeJob[]; error?: string };
+  const body = (await res.json()) as { jobs?: BridgeJob[]; cancelJobIds?: string[]; error?: string };
   if (!res.ok) throw new Error(body.error ?? `heartbeat failed (${res.status})`);
-  return body.jobs ?? [];
+  return { jobs: body.jobs ?? [], cancelJobIds: body.cancelJobIds ?? [] };
 }
 
 export async function submitResult(
   credentials: BridgeCredentials,
   jobId: string,
   result: BridgeJobResult,
+  generation?: number,
 ): Promise<void> {
   const res = await fetch(`${credentials.url}/api/bridge/result`, {
     method: "POST",
@@ -63,7 +64,7 @@ export async function submitResult(
       authorization: `Bearer ${credentials.bridgeToken}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ jobId, ...result }),
+    body: JSON.stringify({ jobId, generation, ...result }),
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };

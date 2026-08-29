@@ -130,6 +130,20 @@ describe("autoDecision", () => {
       }),
     ).toBeNull();
   });
+
+  it("does not let auto mode run a home bridge command", () => {
+    expect(
+      autoDecision({ autoApprove: true }, "run_on_bridge", "echo hi", { scope: "bridge" }),
+    ).toBeNull();
+  });
+
+  it("allows a scoped always-allow grant for one bridge program", () => {
+    const key = approvalKey("run_on_bridge", "echo hi", "bridge");
+    expect(key).toBe("bridge:run_on_bridge:echo");
+    const bot = { alwaysAllow: [key] };
+    expect(autoDecision(bot, "run_on_bridge", "echo hi", { scope: "bridge" })).toMatch(/always allowed/);
+    expect(autoDecision(bot, "run_on_bridge", "rm -rf /tmp", { scope: "bridge" })).toBeNull();
+  });
 });
 
 describe("unattended turns", () => {

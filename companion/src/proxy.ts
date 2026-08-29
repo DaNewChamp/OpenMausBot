@@ -21,6 +21,7 @@ import {
 } from "./endpoints.ts";
 import {
   denyReason,
+  isBridgeDaemonRoute,
   isCloudDesktopJoin,
   isBotModel,
   isBotUnread,
@@ -269,7 +270,8 @@ const forwardHeaders = (req: IncomingMessage, opts?: { passAuthorization?: boole
   const contentType = req.headers["content-type"];
   if (contentType) out["content-type"] = String(contentType);
   // Bridge daemons authenticate to the harness with their own bearer token.
-  // Device pairing tokens must not be substituted — forward only for /api/bridge/*.
+  // Device pairing tokens must not be substituted — forward only the three
+  // daemon POSTs, never job audit/cancel or pairing.
   if (opts?.passAuthorization && req.headers.authorization) {
     out.authorization = String(req.headers.authorization);
   }
@@ -582,7 +584,7 @@ export function createProxyHandler(options: ProxyOptions) {
         port: options.harnessPort,
         path: rewrite?.path ?? req.url,
         method: rewrite?.method ?? method,
-        headers: forwardHeaders(req, { passAuthorization: path.startsWith("/api/bridge/") }),
+        headers: forwardHeaders(req, { passAuthorization: isBridgeDaemonRoute(method, path) }),
       },
       (harness) => {
         clearTimeout(headersDeadline);

@@ -91,11 +91,28 @@ Loopback harness route: `POST /api/internal/bridge/ssh` with `{ target, command,
 
 | Route | Auth | Purpose |
 |---|---|---|
-| `POST /api/bridge/pairing` | loopback TCP | Start 6-digit pairing window |
+| `POST /api/bridge/pairing` | direct loopback (not companion) | Start 6-digit pairing window |
 | `POST /api/bridge/register` | pairing code | Mint bridge bearer token |
-| `POST /api/bridge/heartbeat` | bridge bearer | Poll jobs |
-| `POST /api/bridge/result` | bridge bearer | Submit job output |
-| `GET /api/bridges` | loopback TCP | List registered bridges |
+| `POST /api/bridge/heartbeat` | bridge bearer | Poll jobs + cancel ids |
+| `POST /api/bridge/result` | bridge bearer | Submit job output (must echo `generation`) |
+| `GET /api/bridges` | direct loopback or paired companion | Scrubbed roster (`online`, capabilities, no tokens) |
+| `DELETE /api/bridges/:id` | direct loopback or paired companion | Revoke a bridge and cancel-request in-flight jobs |
+| `GET /api/bridge/jobs` | direct loopback + `OMB_BRIDGE_ADMIN_TOKEN` | Job audit |
+| `POST /api/bridge/jobs/:id` `{action:cancel}` | same operator token | Request cancel / interrupt |
+
+Job administration uses the bearer in `DATA_DIR/bridge-admin.token` (or `OMB_BRIDGE_ADMIN_TOKEN`). The companion sidecar never counts as direct loopback.
+
+## Agent approval (`run_on_bridge` / `run_on_ssh_target`)
+
+These tools hit localhost `POST /api/internal/bridge/shell` and `/ssh`. Auto mode never inherits. A missing scoped grant does **not** 403 with a fake `card-shown` row: the harness resolves the **exact online bridge ID** first (400 if none is eligible), then holds the request behind a real options card on the asking bot's thread.
+
+- Card `allowKey` is program-scoped: `bridge:run_on_bridge:<program>` or `bridge:run_on_ssh_target:<program>`.
+- Allow once binds that card to `{ bot, bridgeId, command, cwd, timeoutMs, ssh alias }` and expires; a newer/fresher bridge with the same display name cannot reuse it.
+- Identical in-flight requests join **one card and one job**. Disconnecting the agent aborts the waiter; a later Allow cannot run abandoned work.
+- Always allow uses the existing phone/desktop path (`POST /api/bots/:id/always-allow` while that card is still pending, then Allow). Destructive/sensitive commands never get Always allow.
+- Respond is owner-bound: another bot or thread cannot Allow someone else's card. An expired or already-consumed Allow reports `expired` / `rejected`, never `allowed-once`.
+
+Loopback `POST /api/bridges/:id/shell` remains host-only and is not the agent tool path.
 
 ## Desktop viewer (Phase C)
 

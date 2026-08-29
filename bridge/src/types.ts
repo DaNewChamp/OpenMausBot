@@ -17,34 +17,30 @@ export interface LocalVmJobPayload {
   action?: "run" | "stop" | "remove" | "recreate";
 }
 
+interface BridgeJobBase {
+  id: string;
+  bridgeId: string;
+  timeoutMs: number;
+  createdAt: number;
+  generation?: number;
+}
+
 export type BridgeJob =
-  | {
-      id: string;
-      bridgeId: string;
+  | (BridgeJobBase & {
       kind: "shell";
       command: string;
       cwd?: string;
-      timeoutMs: number;
-      createdAt: number;
-    }
-  | {
-      id: string;
-      bridgeId: string;
+    })
+  | (BridgeJobBase & {
       kind: "local-vm-status" | "local-vm-action" | "local-vm-screenshot";
       payload: LocalVmJobPayload;
-      timeoutMs: number;
-      createdAt: number;
-    }
-  | {
-      id: string;
-      bridgeId: string;
+    })
+  | (BridgeJobBase & {
       kind: "ssh-exec";
       alias: string;
       command: string;
       cwd?: string;
-      timeoutMs: number;
-      createdAt: number;
-    };
+    });
 
 export type LocalVmBridgeJob = Extract<
   BridgeJob,

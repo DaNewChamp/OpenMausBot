@@ -3,13 +3,14 @@
 // folds one SSE event stream; every provider process runs here.
 import { execFile } from "node:child_process";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { extname, join } from "node:path";
 import { promisify } from "node:util";
 
 import { z } from "zod";
+import { writeFileAtomic } from "./atomic.ts";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import {
   CREDENTIAL_TARGETS,
@@ -24,8 +25,8 @@ import { approvalKey, autoVerdict } from "./auto-approve.ts";
 import * as checkpoints from "./checkpoints.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
-import { handleBridgeRoutes } from "./bridge-routes.ts";
-import { runShellOnBridge, runSshOnBridge } from "./bridge-exec.ts";
+import { handleBridgeRoutes, isCompanionRequest } from "./bridge-routes.ts";
+import { resolveBridge, runShellOnBridge, runSshOnBridge } from "./bridge-exec.ts";
 import { runLocalVmOnBridge, shouldRelayLocalVm } from "./bridge-local-vm.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import {
@@ -126,6 +127,14 @@ import { _loadPending, discardDelegations, drainDelegations, pendingDelegationSn
 import { drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
+import {
+  abortSignalFromHttp,
+  cancelBridgeApprovalsFor,
+  cancelBridgeApprovalsForThread,
+  dismissStaleBridgeCards,
+  requestBridgeApproval,
+  resolveBridgeApproval,
+} from "./bridge-approval.ts";
 import { cancelPeerApprovalsFor, cancelPeerApprovalsForThread, dismissStalePeerCards, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import {
   mentionedBots,
@@ -272,14 +281,23 @@ bus.attach(registry.instances());
 // ── peer-agent comms wiring ────────────────────────────────────────────
 // A shared secret guards the localhost-only /api/internal endpoints the
 // agents-proxy calls; regenerated each boot (the proxy gets it via env).
-const COMMS_TOKEN = randomBytes(24).toString("hex");
+const COMMS_TOKEN = process.env.OMB_COMMS_TOKEN?.trim() || randomBytes(24).toString("hex");
 const bridges = new BridgeRegistry();
+const BRIDGE_ADMIN_TOKEN = process.env.OMB_BRIDGE_ADMIN_TOKEN?.trim() || randomBytes(24).toString("hex");
+mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+writeFileAtomic(join(DATA_DIR, "bridge-admin.token"), `${BRIDGE_ADMIN_TOKEN}\n`, { mode: 0o600 });
 
 /** Constant-time bearer check for the internal comms endpoints. The token
  * is high-entropy and loopback-only, so a timing oracle is a long shot —
  * but the compare costs nothing to make safe. */
 function authorizedComms(header: string | string[] | undefined): boolean {
   const expected = Buffer.from(`Bearer ${COMMS_TOKEN}`);
+  const got = Buffer.from(Array.isArray(header) ? "" : (header ?? ""));
+  return got.length === expected.length && timingSafeEqual(got, expected);
+}
+
+function authorizedBridgeAdmin(header: string | string[] | undefined): boolean {
+  const expected = Buffer.from(`Bearer ${BRIDGE_ADMIN_TOKEN}`);
   const got = Buffer.from(Array.isArray(header) ? "" : (header ?? ""));
   return got.length === expected.length && timingSafeEqual(got, expected);
 }
@@ -685,6 +703,7 @@ function closeOpenApprovals(threadId: string): void {
   // Peer approvals also hold an in-memory promise. Resolve those first; merely
   // patching their cards would leave the delegation queue waiting 15 minutes.
   cancelPeerApprovalsForThread(threadId);
+  cancelBridgeApprovalsForThread(threadId);
   for (const message of store.messagesFor(threadId)) {
     const card = message.card;
     if (!card?.requestId || card.answered || card.dismissed) continue;
@@ -2492,6 +2511,8 @@ const approvalBus: ApprovalBus = { store, broadcast };
 {
   const stale = dismissStalePeerCards(approvalBus);
   if (stale) console.log(`peer approvals: dismissed ${stale} card(s) left by a previous run`);
+  const staleBridge = dismissStaleBridgeCards(approvalBus);
+  if (staleBridge) console.log(`bridge approvals: dismissed ${staleBridge} card(s) left by a previous run`);
 }
 
 // Handoffs a previous process queued but never ran: the source turn is
@@ -3723,7 +3744,11 @@ const server = createServer(async (req, res) => {
     if (origin && !isAllowedOrigin(origin)) {
       return json(res, 403, { error: "forbidden: cross-origin request" });
     }
-    if (await handleBridgeRoutes(req, res, method, path, json, bridges, { loopback: isDirectLoopback(req) })) {
+    if (await handleBridgeRoutes(req, res, method, path, json, bridges, {
+      companion: isCompanionRequest(req),
+      direct: isDirectLoopback(req) && !isCompanionRequest(req),
+      operator: isDirectLoopback(req) && !isCompanionRequest(req) && authorizedBridgeAdmin(req.headers.authorization),
+    })) {
       return;
     }
     // ── internal peer-agent comms (localhost + shared token only) ──────
@@ -4349,34 +4374,95 @@ const server = createServer(async (req, res) => {
       }
       if (method === "POST" && path === "/api/internal/bridge/shell") {
         const body = await readBody(req);
+        const fromBotId = String(body.fromBotId ?? "");
+        const bot = fromBotId ? store.bot(fromBotId) : undefined;
+        if (!bot) return json(res, 403, { error: "bridge execution requires approval from a known bot" });
+        const command = String(body.command ?? "");
+        const cwd = body.cwd ? String(body.cwd) : undefined;
+        const runTimeoutMs = body.timeoutMs == null ? undefined : Number(body.timeoutMs);
+        const resolved = resolveBridge(bridges, {
+          bridgeId: body.bridgeId ? String(body.bridgeId) : undefined,
+          name: body.bridge ? String(body.bridge) : body.name ? String(body.name) : undefined,
+          capability: "shell",
+        });
+        if (!resolved) return json(res, 400, { error: "no online bridge matched" });
         try {
-          const result = await runShellOnBridge(bridges, {
-            bridgeId: body.bridgeId ? String(body.bridgeId) : undefined,
-            name: body.bridge ? String(body.bridge) : body.name ? String(body.name) : undefined,
-            command: String(body.command ?? ""),
-            cwd: body.cwd ? String(body.cwd) : undefined,
-            timeoutMs: body.timeoutMs == null ? undefined : Number(body.timeoutMs),
+          const decision = await requestBridgeApproval(approvalBus, {
+            bot,
+            tool: "run_on_bridge",
+            command,
+            bridgeId: resolved.id,
+            bridgeName: resolved.name,
+            cwd,
+            runTimeoutMs,
+            logThreadId: String(body.fromThreadId ?? bot.threadId),
+            signal: abortSignalFromHttp(res),
+            execute: () =>
+              runShellOnBridge(bridges, {
+                bridgeId: resolved.id,
+                command,
+                cwd,
+                timeoutMs: runTimeoutMs,
+              }),
           });
-          return json(res, 200, result);
+          if (decision.outcome !== "allow") {
+            return json(res, 403, {
+              error: "bridge execution requires approval",
+              allowKey: approvalKey("run_on_bridge", command, "bridge"),
+              outcome: decision.outcome === "expired" ? "expired" : "rejected",
+            });
+          }
+          return json(res, 200, decision.result);
         } catch (error) {
           return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
         }
       }
       if (method === "POST" && path === "/api/internal/bridge/ssh") {
         const body = await readBody(req);
+        const fromBotId = String(body.fromBotId ?? "");
+        const bot = fromBotId ? store.bot(fromBotId) : undefined;
+        if (!bot) return json(res, 403, { error: "bridge execution requires approval from a known bot" });
+        const command = String(body.command ?? "");
+        const targetKey = String(body.target ?? "");
+        const cwd = body.cwd ? String(body.cwd) : undefined;
+        const runTimeoutMs = body.timeoutMs == null ? undefined : Number(body.timeoutMs);
+        const mapped = bridgeSshTarget(cfg, targetKey);
+        if (!mapped) return json(res, 400, { error: `unknown ssh target: ${targetKey}` });
+        const jump = resolveBridge(bridges, {
+          bridgeId: body.bridgeId ? String(body.bridgeId) : undefined,
+          name: body.bridge ? String(body.bridge) : mapped.bridge,
+          capability: "ssh-forward",
+        });
+        if (!jump) return json(res, 400, { error: "no online bridge with ssh-forward matched" });
         try {
-          const targetKey = String(body.target ?? "");
-          const mapped = bridgeSshTarget(cfg, targetKey);
-          if (!mapped) return json(res, 400, { error: `unknown ssh target: ${targetKey}` });
-          const result = await runSshOnBridge(bridges, {
-            bridgeId: body.bridgeId ? String(body.bridgeId) : undefined,
-            name: body.bridge ? String(body.bridge) : mapped.bridge,
-            alias: mapped.alias,
-            command: String(body.command ?? ""),
-            cwd: body.cwd ? String(body.cwd) : undefined,
-            timeoutMs: body.timeoutMs == null ? undefined : Number(body.timeoutMs),
+          const decision = await requestBridgeApproval(approvalBus, {
+            bot,
+            tool: "run_on_ssh_target",
+            command,
+            bridgeId: jump.id,
+            bridgeName: jump.name,
+            sshAlias: mapped.alias,
+            cwd,
+            runTimeoutMs,
+            logThreadId: String(body.fromThreadId ?? bot.threadId),
+            signal: abortSignalFromHttp(res),
+            execute: () =>
+              runSshOnBridge(bridges, {
+                bridgeId: jump.id,
+                alias: mapped.alias,
+                command,
+                cwd,
+                timeoutMs: runTimeoutMs,
+              }),
           });
-          return json(res, 200, result);
+          if (decision.outcome !== "allow") {
+            return json(res, 403, {
+              error: "bridge execution requires approval",
+              allowKey: approvalKey("run_on_ssh_target", command, "bridge"),
+              outcome: decision.outcome === "expired" ? "expired" : "rejected",
+            });
+          }
+          return json(res, 200, decision.result);
         } catch (error) {
           return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
         }
@@ -5770,6 +5856,7 @@ const server = createServer(async (req, res) => {
       // a peer approval naming this bot can never be meaningfully answered
       // now, and its caller would otherwise wait out the 15-minute timeout
       cancelPeerApprovalsFor(bot.id);
+      cancelBridgeApprovalsFor(bot.id);
       discardDelegations(commsBus, bot.threadId);
       computerControl.forget(bot.id);
       forgetRoomCardRuns(bot.threadId);
@@ -6086,6 +6173,18 @@ const server = createServer(async (req, res) => {
       if (resolvePeerComms(approvalBus, String(body.requestId), behavior)) {
         return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
+      {
+        const resolved = resolveBridgeApproval(approvalBus, String(body.requestId), behavior, {
+          botId: bot.id,
+          threadId: bot.threadId,
+        });
+        if (resolved.handled) {
+          if (resolved.outcome === "forbidden") {
+            return json(res, 403, { error: "that approval does not belong to this bot", outcome: "rejected" });
+          }
+          return json(res, 200, { ok: true, outcome: resolved.outcome });
+        }
+      }
       const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), behavior, body.message, { id: bot.id, name: bot.name });
       return json(res, 200, { ok: true, outcome });
     }
@@ -6104,6 +6203,15 @@ const server = createServer(async (req, res) => {
       // looking for one — a room between turns has no speaker to find.
       if (resolvePeerComms(approvalBus, requestId, behavior)) {
         return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
+      }
+      {
+        const resolved = resolveBridgeApproval(approvalBus, requestId, behavior, { threadId });
+        if (resolved.handled) {
+          if (resolved.outcome === "forbidden") {
+            return json(res, 403, { error: "that approval does not belong to this conversation", outcome: "rejected" });
+          }
+          return json(res, 200, { ok: true, outcome: resolved.outcome });
+        }
       }
       const group = store.groupByThread(threadId);
       // busyBotId is in-memory only, so an approval that outlives its turn — or

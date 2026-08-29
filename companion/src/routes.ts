@@ -545,6 +545,10 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "DELETE", path: /^\/api\/routines\/[\w-]+$/ },
   { method: "POST", path: /^\/api\/routines\/[\w-]+\/run$/ },
 
+  // Scrubbed bridge roster + revoke. Job audit/cancel stay off this list.
+  { method: "GET", path: /^\/api\/bridges$/ },
+  { method: "DELETE", path: /^\/api\/bridges\/[\w-]+$/ },
+
   // Multi-account Composio management exposes opaque ids and aliases only.
   // Revocation stays on the Mac: the account DELETE route is deliberately
   // absent — a paired phone can see and add accounts, never remove one.
@@ -590,6 +594,17 @@ const EXPLAINED: ReadonlyArray<{ path: RegExp; error: string }> = [
   { path: /^\/api\/teams(\/|$)/, error: "teams are imported and exported on your computer" },
 ];
 
+/** Bridge daemon routes that must reach the harness over the public URL.
+ *
+ * Exact paths, not a `/api/bridge/` prefix: job audit, cancel, and pairing
+ * are harness-loopback operator surfaces and must not traverse the sidecar. */
+export function isBridgeDaemonRoute(method: string, path: string): boolean {
+  return (
+    method === "POST" &&
+    (path === "/api/bridge/register" || path === "/api/bridge/heartbeat" || path === "/api/bridge/result")
+  );
+}
+
 /** Why this request may not go through, or null when it may.
  *
  * Default deny: the answer for anything not on the list is "no route", which
@@ -604,7 +619,7 @@ export function denyReason({ path, method, authenticated }: RouteRequest): Denia
   // exactly the person it was for — which reads as "broken" rather than
   // "unpaired". It discloses nothing a port scan would not.
   if (method === "GET" && path === "/api/health") return null;
-  if (path.startsWith("/api/bridge/")) return null;
+  if (isBridgeDaemonRoute(method, path)) return null;
 
   if (!authenticated) {
     return { status: 401, error: "pair this device from Phone settings in OpenMausBot on your computer" };

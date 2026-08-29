@@ -12,10 +12,13 @@ export interface BridgeRecord {
   name: string;
   tokenHash: string;
   capabilities: BridgeCapability[];
+  grantedCapabilities: BridgeCapability[];
   createdAt: number;
   lastSeenAt: number;
   hostInfo?: string;
 }
+
+export type BridgeJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 export type LocalVmBridgeJobKind = "local-vm-status" | "local-vm-action" | "local-vm-screenshot";
 
@@ -29,6 +32,7 @@ interface BridgeJobBase {
   bridgeId: string;
   timeoutMs: number;
   createdAt: number;
+  generation?: number;
 }
 
 export interface ShellBridgeJob extends BridgeJobBase {
@@ -59,6 +63,27 @@ export interface BridgeJobResult {
   stderr: string;
   truncated: boolean;
   finishedAt: number;
+  generation?: number;
+}
+
+export interface BridgeJobRecord {
+  id: string;
+  idempotencyKey?: string;
+  bridgeId: string;
+  status: BridgeJobStatus;
+  job: BridgeJob;
+  createdAt: number;
+  updatedAt: number;
+  startedAt?: number;
+  finishedAt?: number;
+  attempt: number;
+  maxAttempts: number;
+  deliveryCount: number;
+  lastDeliveredAt?: number;
+  generation: number;
+  cancelRequestedAt?: number;
+  result?: BridgeJobResult;
+  error?: string;
 }
 
 interface PairingWindow {
@@ -72,12 +97,30 @@ interface BridgeStoreFile {
   bridges: BridgeRecord[];
 }
 
+interface BridgeJobsFile {
+  jobs: BridgeJobRecord[];
+}
+
+export interface EnqueueBridgeJobOpts {
+  idempotencyKey?: string;
+  maxAttempts?: number;
+}
+
 const PAIRING_TTL_MS = 120_000;
 const MAX_PAIRING_ATTEMPTS = 5;
-const JOB_TTL_MS = 5 * 60_000;
+const QUEUED_JOB_TTL_MS = 30 * 60_000;
+const TERMINAL_JOB_RETENTION_MS = 24 * 60 * 60_000;
+const STALE_RUNNING_MS = 30_000;
+const JOB_STORE_MAX = 500;
+const DEFAULT_MAX_ATTEMPTS = 3;
+const IDEMPOTENCY_WINDOW_MS = 5 * 60_000;
 
 function bridgesPath(): string {
   return join(DATA_DIR, "bridges.json");
+}
+
+function bridgeJobsPath(): string {
+  return join(DATA_DIR, "bridge-jobs.json");
 }
 
 function hashToken(token: string): string {
@@ -91,9 +134,18 @@ function writeStore(store: BridgeStoreFile): void {
 
 function readStore(): BridgeStoreFile {
   try {
-    return JSON.parse(readFileSync(bridgesPath(), "utf8")) as BridgeStoreFile;
+    const parsed = JSON.parse(readFileSync(bridgesPath(), "utf8")) as BridgeStoreFile;
+    return { bridges: (parsed.bridges ?? []).map(normalizeBridge) };
   } catch {
     return { bridges: [] };
+  }
+}
+
+function readJobsFile(): BridgeJobsFile {
+  try {
+    return JSON.parse(readFileSync(bridgeJobsPath(), "utf8")) as BridgeJobsFile;
+  } catch {
+    return { jobs: [] };
   }
 }
 
@@ -115,13 +167,162 @@ function requireCapability(bridgeId: string, capability: BridgeCapability): Brid
   return bridge;
 }
 
+function isTerminal(status: BridgeJobStatus): boolean {
+  return status === "succeeded" || status === "failed" || status === "cancelled";
+}
+
+export class IdempotencyConflictError extends Error {
+  readonly status = 409;
+  constructor() {
+    super("idempotency key conflict");
+    this.name = "IdempotencyConflictError";
+  }
+}
+
+export function jobFingerprint(job: BridgeJob): string {
+  if (job.kind === "shell") return `shell\0${job.command}\0${job.cwd ?? ""}`;
+  if (job.kind === "ssh-exec") return `ssh-exec\0${job.alias}\0${job.command}\0${job.cwd ?? ""}`;
+  return `${job.kind}\0${job.payload.botId}\0${job.payload.action ?? ""}`;
+}
+
+function normalizeBridge(bridge: BridgeRecord): BridgeRecord {
+  return {
+    ...bridge,
+    grantedCapabilities: Array.isArray(bridge.grantedCapabilities)
+      ? bridge.grantedCapabilities
+      : [...(bridge.capabilities ?? [])],
+  };
+}
+
 export class BridgeRegistry {
   private pairing: PairingWindow | null = null;
-  private pendingJobs = new Map<string, BridgeJob>();
-  private results = new Map<string, BridgeJobResult>();
+  private jobs = new Map<string, BridgeJobRecord>();
 
-  list(): Omit<BridgeRecord, "tokenHash">[] {
-    return readStore().bridges.map(({ tokenHash: _tokenHash, ...rest }) => rest);
+  constructor() {
+    for (const record of readJobsFile().jobs) {
+      this.jobs.set(record.id, { ...record, generation: record.generation ?? record.deliveryCount ?? 0 });
+    }
+    this.pruneJobs(Date.now());
+  }
+
+  private persistJobs(): void {
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    writeFileAtomic(bridgeJobsPath(), `${JSON.stringify({ jobs: [...this.jobs.values()] }, null, 2)}\n`, {
+      mode: 0o600,
+    });
+  }
+
+  private touchRecord(record: BridgeJobRecord, now = Date.now()): void {
+    record.updatedAt = now;
+    this.jobs.set(record.id, record);
+    this.persistJobs();
+  }
+
+  private pruneJobs(now: number): void {
+    let changed = false;
+    for (const [id, record] of this.jobs) {
+      if (isTerminal(record.status) && record.finishedAt && now - record.finishedAt > TERMINAL_JOB_RETENTION_MS) {
+        this.jobs.delete(id);
+        changed = true;
+      }
+    }
+    if (this.jobs.size > JOB_STORE_MAX) {
+      const terminal = [...this.jobs.entries()]
+        .filter(([, record]) => isTerminal(record.status))
+        .sort((a, b) => (a[1].finishedAt ?? 0) - (b[1].finishedAt ?? 0));
+      for (const [id] of terminal.slice(0, this.jobs.size - JOB_STORE_MAX)) {
+        this.jobs.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) this.persistJobs();
+  }
+
+  private findByIdempotencyKey(bridgeId: string, idempotencyKey: string, now: number): BridgeJobRecord | null {
+    for (const record of this.jobs.values()) {
+      if (record.bridgeId !== bridgeId || record.idempotencyKey !== idempotencyKey) continue;
+      if (isTerminal(record.status)) {
+        if (record.finishedAt && now - record.finishedAt <= IDEMPOTENCY_WINDOW_MS) return record;
+        continue;
+      }
+      return record;
+    }
+    return null;
+  }
+
+  reconcile(now = Date.now()): void {
+    this.pruneJobs(now);
+    let changed = false;
+    for (const record of this.jobs.values()) {
+      if (record.status === "cancelled" || record.status === "succeeded" || record.status === "failed") continue;
+
+      if (record.cancelRequestedAt) {
+        if (record.status === "queued") {
+          record.status = "cancelled";
+          record.finishedAt = now;
+          record.error = "cancelled";
+          changed = true;
+          continue;
+        }
+        const bridge = bridgeRecord(record.bridgeId);
+        const bridgeOffline = !bridge || now - bridge.lastSeenAt > STALE_RUNNING_MS;
+        const started = record.startedAt ?? record.createdAt;
+        const pastDeadline = now > started + record.job.timeoutMs + STALE_RUNNING_MS;
+        if (bridgeOffline || pastDeadline) {
+          record.status = "cancelled";
+          record.finishedAt = now;
+          record.error = "cancelled";
+          changed = true;
+        }
+        continue;
+      }
+
+      if (record.status === "queued" && now - record.createdAt > QUEUED_JOB_TTL_MS) {
+        record.status = "failed";
+        record.finishedAt = now;
+        record.error = "queued job expired";
+        changed = true;
+        continue;
+      }
+
+      if (record.status === "running") {
+        const started = record.startedAt ?? record.createdAt;
+        const deadline = started + record.job.timeoutMs + STALE_RUNNING_MS;
+        if (now > deadline) {
+          record.status = "failed";
+          record.finishedAt = now;
+          record.error = "job timed out";
+          changed = true;
+          continue;
+        }
+
+        const bridge = bridgeRecord(record.bridgeId);
+        const bridgeOffline = !bridge || now - bridge.lastSeenAt > STALE_RUNNING_MS;
+        const staleDelivery =
+          record.lastDeliveredAt != null && now - record.lastDeliveredAt > STALE_RUNNING_MS;
+        if (bridgeOffline && staleDelivery) {
+          if (record.attempt >= record.maxAttempts) {
+            record.status = "failed";
+            record.finishedAt = now;
+            record.error = "bridge offline; retry attempts exhausted";
+          } else {
+            record.status = "queued";
+            record.startedAt = undefined;
+            record.lastDeliveredAt = undefined;
+          }
+          changed = true;
+        }
+      }
+    }
+    if (changed) this.persistJobs();
+  }
+
+  list(): Array<Omit<BridgeRecord, "tokenHash"> & { online: boolean }> {
+    const now = Date.now();
+    return readStore().bridges.map(({ tokenHash: _tokenHash, ...rest }) => ({
+      ...rest,
+      online: now - rest.lastSeenAt <= 20_000,
+    }));
   }
 
   startPairing(): { code: string; expiresIn: number } {
@@ -159,6 +360,7 @@ export class BridgeRegistry {
       name: input.name.trim() || "bridge",
       tokenHash: hashToken(bridgeToken),
       capabilities: input.capabilities ?? [],
+      grantedCapabilities: input.capabilities ?? [],
       createdAt: Date.now(),
       lastSeenAt: Date.now(),
       hostInfo: input.hostInfo,
@@ -184,7 +386,10 @@ export class BridgeRegistry {
     if (!bridge) return null;
     bridge.lastSeenAt = Date.now();
     if (patch?.hostInfo) bridge.hostInfo = patch.hostInfo;
-    if (patch?.capabilities) bridge.capabilities = patch.capabilities;
+    if (patch?.capabilities) {
+      const granted = new Set(bridge.grantedCapabilities ?? bridge.capabilities);
+      bridge.capabilities = patch.capabilities.filter((capability) => granted.has(capability));
+    }
     writeStore(store);
     return bridge;
   }
@@ -194,10 +399,79 @@ export class BridgeRegistry {
     const next = store.bridges.filter((b) => b.id !== bridgeId);
     if (next.length === store.bridges.length) return false;
     writeStore({ bridges: next });
+    const now = Date.now();
+    let changed = false;
+    for (const record of this.jobs.values()) {
+      if (record.bridgeId !== bridgeId || isTerminal(record.status)) continue;
+      record.cancelRequestedAt = now;
+      if (record.status === "queued") {
+        record.status = "cancelled";
+        record.finishedAt = now;
+        record.error = "cancelled";
+      }
+      record.updatedAt = now;
+      changed = true;
+    }
+    if (changed) this.persistJobs();
     return true;
   }
 
-  enqueueShell(bridgeId: string, command: string, cwd?: string, timeoutMs = 60_000): ShellBridgeJob {
+  getJob(jobId: string): BridgeJobRecord | null {
+    return this.jobs.get(jobId) ?? null;
+  }
+
+  listJobs(bridgeId?: string): BridgeJobRecord[] {
+    const jobs = [...this.jobs.values()];
+    return bridgeId ? jobs.filter((job) => job.bridgeId === bridgeId) : jobs;
+  }
+
+  private existingIdempotent(
+    bridgeId: string,
+    idempotencyKey: string,
+    fingerprint: string,
+    now: number,
+  ): BridgeJobRecord | null {
+    const existing = this.findByIdempotencyKey(bridgeId, idempotencyKey, now);
+    if (!existing) return null;
+    if (jobFingerprint(existing.job) !== fingerprint) throw new IdempotencyConflictError();
+    return existing;
+  }
+
+  private enqueueRecord(
+    bridgeId: string,
+    job: BridgeJob,
+    opts: EnqueueBridgeJobOpts = {},
+  ): BridgeJobRecord {
+    const now = Date.now();
+    if (opts.idempotencyKey) {
+      const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), now);
+      if (existing) return existing;
+    }
+    const record: BridgeJobRecord = {
+      id: job.id,
+      idempotencyKey: opts.idempotencyKey,
+      bridgeId,
+      status: "queued",
+      job,
+      createdAt: now,
+      updatedAt: now,
+      attempt: 0,
+      maxAttempts: opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+      deliveryCount: 0,
+      generation: 0,
+    };
+    this.jobs.set(record.id, record);
+    this.persistJobs();
+    return record;
+  }
+
+  enqueueShell(
+    bridgeId: string,
+    command: string,
+    cwd?: string,
+    timeoutMs = 60_000,
+    opts: EnqueueBridgeJobOpts = {},
+  ): ShellBridgeJob {
     requireCapability(bridgeId, "shell");
     const job: ShellBridgeJob = {
       id: randomUUID(),
@@ -208,7 +482,11 @@ export class BridgeRegistry {
       timeoutMs,
       createdAt: Date.now(),
     };
-    this.pendingJobs.set(job.id, job);
+    if (opts.idempotencyKey) {
+      const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
+      if (existing) return existing.job as ShellBridgeJob;
+    }
+    this.enqueueRecord(bridgeId, job, opts);
     return job;
   }
 
@@ -217,6 +495,7 @@ export class BridgeRegistry {
     kind: LocalVmBridgeJobKind,
     payload: LocalVmJobPayload,
     timeoutMs = 120_000,
+    opts: EnqueueBridgeJobOpts = {},
   ): LocalVmBridgeJob {
     requireCapability(bridgeId, "local-vm");
     const job: LocalVmBridgeJob = {
@@ -227,7 +506,11 @@ export class BridgeRegistry {
       timeoutMs,
       createdAt: Date.now(),
     };
-    this.pendingJobs.set(job.id, job);
+    if (opts.idempotencyKey) {
+      const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
+      if (existing) return existing.job as LocalVmBridgeJob;
+    }
+    this.enqueueRecord(bridgeId, job, opts);
     return job;
   }
 
@@ -237,6 +520,7 @@ export class BridgeRegistry {
     command: string,
     cwd?: string,
     timeoutMs = 60_000,
+    opts: EnqueueBridgeJobOpts = {},
   ): SshBridgeJob {
     requireCapability(bridgeId, "ssh-forward");
     const job: SshBridgeJob = {
@@ -249,34 +533,90 @@ export class BridgeRegistry {
       timeoutMs,
       createdAt: Date.now(),
     };
-    this.pendingJobs.set(job.id, job);
+    if (opts.idempotencyKey) {
+      const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
+      if (existing) return existing.job as SshBridgeJob;
+    }
+    this.enqueueRecord(bridgeId, job, opts);
     return job;
   }
 
   pollJobs(bridgeId: string): BridgeJob[] {
     const now = Date.now();
-    const jobs: BridgeJob[] = [];
-    for (const [id, job] of this.pendingJobs) {
-      if (job.bridgeId !== bridgeId) continue;
-      if (now - job.createdAt > JOB_TTL_MS) {
-        this.pendingJobs.delete(id);
-        continue;
+    this.reconcile(now);
+    const deliver: BridgeJob[] = [];
+
+    for (const record of this.jobs.values()) {
+      if (record.bridgeId !== bridgeId) continue;
+      if (record.cancelRequestedAt) continue;
+      if (record.status === "cancelled" || record.status === "succeeded" || record.status === "failed") continue;
+
+      if (record.status === "queued") {
+        record.status = "running";
+        record.startedAt = now;
+        record.attempt += 1;
+        record.deliveryCount += 1;
+        record.lastDeliveredAt = now;
+        record.generation = (record.generation ?? 0) + 1;
+        record.updatedAt = now;
+        deliver.push({ ...record.job, generation: record.generation });
       }
-      jobs.push(job);
-      this.pendingJobs.delete(id);
     }
-    return jobs;
+
+    if (deliver.length) this.persistJobs();
+    return deliver;
   }
 
-  storeResult(result: BridgeJobResult): void {
-    this.results.set(result.jobId, result);
-    if (this.results.size > 200) {
-      const oldest = [...this.results.keys()].slice(0, 50);
-      for (const id of oldest) this.results.delete(id);
+  cancelRequests(bridgeId: string): string[] {
+    return [...this.jobs.values()]
+      .filter((record) => record.bridgeId === bridgeId && record.cancelRequestedAt && !isTerminal(record.status))
+      .map((record) => record.id);
+  }
+
+  cancelJob(jobId: string): BridgeJobRecord | null {
+    const record = this.jobs.get(jobId);
+    if (!record) return null;
+    if (isTerminal(record.status)) return record;
+    const now = Date.now();
+    record.cancelRequestedAt = now;
+    if (record.status === "queued") {
+      record.status = "cancelled";
+      record.finishedAt = now;
+      record.error = "cancelled";
     }
+    this.touchRecord(record, now);
+    return record;
+  }
+
+  storeResult(result: BridgeJobResult): boolean {
+    const record = this.jobs.get(result.jobId);
+    if (!record) return false;
+    if (record.bridgeId !== result.bridgeId) return false;
+    if (isTerminal(record.status)) return false;
+    if (result.generation == null || result.generation !== record.generation) return false;
+
+    const now = Date.now();
+    record.result = result;
+    record.finishedAt = now;
+    if (record.cancelRequestedAt) {
+      record.status = "cancelled";
+      record.error = "cancelled";
+    } else {
+      record.status = result.exitCode === 0 ? "succeeded" : "failed";
+      if (record.status === "failed") {
+        record.error = result.stderr.trim() || result.stdout.trim() || "bridge job failed";
+      }
+    }
+    this.touchRecord(record, now);
+    return true;
   }
 
   result(jobId: string): BridgeJobResult | null {
-    return this.results.get(jobId) ?? null;
+    const record = this.jobs.get(jobId);
+    return record?.result ?? null;
+  }
+
+  jobStatus(jobId: string): BridgeJobStatus | null {
+    return this.jobs.get(jobId)?.status ?? null;
   }
 }

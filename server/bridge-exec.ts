@@ -1,6 +1,5 @@
-import { setTimeout as sleep } from "node:timers/promises";
-
 import type { BridgeCapability, BridgeJobResult, BridgeRegistry } from "./bridge-registry.ts";
+import { waitForBridgeJobResult } from "./bridge-job-wait.ts";
 
 const ONLINE_MS = 20_000;
 
@@ -37,6 +36,7 @@ export async function runShellOnBridge(
     command: string;
     cwd?: string;
     timeoutMs?: number;
+    idempotencyKey?: string;
   },
 ): Promise<BridgeJobResult & { bridgeName: string }> {
   const command = opts.command.trim();
@@ -44,14 +44,11 @@ export async function runShellOnBridge(
   const bridge = resolveBridge(registry, { ...opts, capability: "shell" });
   if (!bridge) throw new Error("no online bridge matched");
   const timeoutMs = opts.timeoutMs ?? 60_000;
-  const job = registry.enqueueShell(bridge.id, command, opts.cwd, timeoutMs);
-  const deadline = Date.now() + timeoutMs + 20_000;
-  while (Date.now() < deadline) {
-    const result = registry.result(job.id);
-    if (result) return { ...result, bridgeName: bridge.name };
-    await sleep(400);
-  }
-  throw new Error(`bridge job timed out waiting for ${bridge.name}`);
+  const job = registry.enqueueShell(bridge.id, command, opts.cwd, timeoutMs, {
+    idempotencyKey: opts.idempotencyKey,
+  });
+  const result = await waitForBridgeJobResult(registry, job.id, timeoutMs, bridge.name);
+  return { ...result, bridgeName: bridge.name };
 }
 
 export async function runSshOnBridge(
@@ -72,11 +69,6 @@ export async function runSshOnBridge(
   if (!bridge) throw new Error("no online bridge with ssh-forward matched");
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const job = registry.enqueueSshExec(bridge.id, opts.alias.trim(), command, opts.cwd, timeoutMs);
-  const deadline = Date.now() + timeoutMs + 20_000;
-  while (Date.now() < deadline) {
-    const result = registry.result(job.id);
-    if (result) return { ...result, bridgeName: bridge.name };
-    await sleep(400);
-  }
-  throw new Error(`bridge ssh job timed out waiting for ${bridge.name}`);
+  const result = await waitForBridgeJobResult(registry, job.id, timeoutMs, bridge.name);
+  return { ...result, bridgeName: bridge.name };
 }
