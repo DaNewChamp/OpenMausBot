@@ -252,9 +252,9 @@ function verifyPublic() {
   const health = runCapture("curl", ["-sf", "-o", "/dev/null", "-w", "%{http_code}", `${HOSTED_URL}/api/health`]);
   console.log(`public ${HOSTED_URL}/api/health → HTTP ${health}`);
   if (health !== "200") throw new Error("public health check failed");
-  const unauth = runCapture("curl", ["-sf", "-o", "/dev/null", "-w", "%{http_code}", `${HOSTED_URL}/api/bots`]);
+  const unauth = runCapture("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", `${HOSTED_URL}/api/bots`]);
   console.log(`public ${HOSTED_URL}/api/bots (no token) → HTTP ${unauth}`);
-  if (unauth !== "401") throw new Error("expected 401 without bearer token");
+  if (unauth !== "401") throw new Error(`expected 401 without bearer token, got ${unauth}`);
 }
 
 // ── main ────────────────────────────────────────────────────────────────────
