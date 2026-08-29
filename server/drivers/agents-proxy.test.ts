@@ -21,6 +21,7 @@ let askResponse: unknown = { botName: "Helper", text: "hi from helper" };
 let lastDelegateBody: any = null;
 let delegateResponse: unknown = { queued: true, message: "Delegation queued." };
 let lastCreateBody: any = null;
+let lastConfigureBody: any = null;
 let lastCredentialBody: any = null;
 
 let child: ChildProcess;
@@ -50,7 +51,7 @@ beforeAll(async () => {
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(
         JSON.stringify({
-          bots: [{ id: "bot-helper", name: "Helper", model: "fake-model", busy: false }],
+          bots: [{ id: "bot-helper", name: "Helper", model: "fake-model", engine: "grok", effort: "high", busy: false }],
         }),
       );
     }
@@ -79,8 +80,26 @@ beforeAll(async () => {
       req.on("data", (c) => (data += c));
       req.on("end", () => {
         lastCreateBody = JSON.parse(data);
+        const body = lastCreateBody as Record<string, unknown>;
         res.writeHead(201, { "content-type": "application/json" });
-        res.end(JSON.stringify({ id: "bot-designer", name: "Pixel", section: "Work" }));
+        res.end(JSON.stringify({
+          id: "bot-designer",
+          name: body.name ?? "Pixel",
+          section: "Work",
+          engine: body.engine ?? "cursor",
+          model: body.model ?? "auto",
+          effort: body.effort ?? null,
+        }));
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/internal/configure-bot") {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        lastConfigureBody = JSON.parse(data);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ id: "bot-helper", name: "Helper", engine: "claude", model: "sonnet", effort: "medium" }));
       });
       return;
     }
@@ -132,7 +151,7 @@ afterAll(async () => {
 });
 
 describe("agents-proxy MCP surface", () => {
-  it("answers the MCP handshake and lists all five tools", async () => {
+  it("answers the MCP handshake and lists all six tools", async () => {
     const init = await rpc("initialize", { protocolVersion: "2024-11-05" });
     expect(init.result.serverInfo.name).toContain("agents");
     const list = await rpc("tools/list");
@@ -141,6 +160,7 @@ describe("agents-proxy MCP surface", () => {
       "ask_bot",
       "delegate_bot",
       "create_bot",
+      "configure_bot",
       "request_credential",
     ]);
   });
@@ -150,7 +170,48 @@ describe("agents-proxy MCP surface", () => {
     const text = res.result.content[0].text;
     expect(text).toContain("Helper");
     expect(text).toContain("bot-helper");
+    expect(text).toContain("reasoning: high");
     expect(lastAuth).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("forwards optional engine, model, and effort when a Chief creates a specialist", async () => {
+    const res = await callTool("create_bot", {
+      name: "Pixel",
+      role: "Product designer",
+      instructions: "Design and review the user experience.",
+      engine: "claude",
+      model: "sonnet",
+      effort: "high",
+    });
+    expect(res.result.content[0].text).toContain("engine: claude");
+    expect(lastCreateBody).toMatchObject({
+      fromBotId: "bot-asker",
+      fromThreadId: "thread-asker-routine",
+      name: "Pixel",
+      role: "Product designer",
+      instructions: "Design and review the user experience.",
+      engine: "claude",
+      model: "sonnet",
+      effort: "high",
+    });
+  });
+
+  it("lets a Chief retarget an idle teammate's stack", async () => {
+    const res = await callTool("configure_bot", {
+      bot_id: "bot-helper",
+      engine: "claude",
+      model: "sonnet",
+      effort: "medium",
+    });
+    expect(res.result.content[0].text).toContain("Updated @Helper");
+    expect(lastConfigureBody).toMatchObject({
+      fromBotId: "bot-asker",
+      fromThreadId: "thread-asker-routine",
+      botId: "bot-helper",
+      engine: "claude",
+      model: "sonnet",
+      effort: "medium",
+    });
   });
 
   it("ask_bot forwards sender + depth and returns the reply", async () => {

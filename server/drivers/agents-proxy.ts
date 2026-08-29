@@ -11,8 +11,10 @@
 //                                          immediately, the peer runs after your
 //                                          current turn finishes, the user sees
 //                                          the peer's reply as its own turn
-//   create_bot(name, role, instructions) → Chiefs can add a specialist to
+//   create_bot(name, role, instructions, …) → Chiefs can add a specialist to
 //                                          their own section
+//   configure_bot(bot_id, …)             → Chiefs can retarget a teammate's
+//                                          engine, model, or reasoning
 //   request_credential(id, reason?)       → show a secure, allowlisted key card
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
@@ -71,15 +73,39 @@ const TOOLS = [
   {
     name: "create_bot",
     description:
-      "Create a specialist bot in your section. Only a section's Chief of Staff may use this. The new bot inherits the Chief's engine, starts with connected apps and automatic approvals disabled, and can then receive work through delegate_bot. Create only the smallest useful team (maximum four per turn).",
+      "Create a specialist bot in your section. Only a section's Chief of Staff may use this. By default the new bot inherits your engine and reasoning; optionally pass engine, model, and effort to pick a different stack. The new bot starts with connected apps and automatic approvals disabled, and can then receive work through delegate_bot. Create only the smallest useful team (maximum four per turn).",
     inputSchema: {
       type: "object",
       properties: {
         name: { type: "string", description: "Short, unique display name for the specialist." },
         role: { type: "string", description: "The specialist's job title or role." },
         instructions: { type: "string", description: "What this specialist is responsible for and how it should work." },
+        engine: { type: "string", description: "Optional provider instance id from list_bots / the desktop picker (defaults to your engine)." },
+        model: { type: "string", description: "Optional model id for that engine (defaults to your model or the engine default)." },
+        effort: {
+          type: "string",
+          description: "Optional reasoning level offered by that engine (for example low, medium, high, xhigh). Omit to inherit yours when compatible.",
+        },
       },
       required: ["name", "role", "instructions"],
+    },
+  },
+  {
+    name: "configure_bot",
+    description:
+      "Change another bot's engine, model, or reasoning level in your section. Only a section's Chief of Staff may use this. The bot must be idle. Use list_bots to read each teammate's current stack before retargeting them.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        bot_id: { type: "string", description: "The teammate's id (from list_bots)." },
+        engine: { type: "string", description: "Optional provider instance id." },
+        model: { type: "string", description: "Optional model id for that engine." },
+        effort: {
+          type: ["string", "null"],
+          description: "Optional reasoning level, or null to clear it.",
+        },
+      },
+      required: ["bot_id"],
     },
   },
   {
@@ -129,7 +155,12 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const lines = bots.map((b) => {
       const role = b.title ? ` — ${b.title}` : "";
       const about = b.description ? ` (${String(b.description).slice(0, 120)})` : "";
-      return `- ${b.name}${role}${about} [id: ${b.id}, model: ${b.model}${b.busy ? ", busy" : ""}]`;
+      const stack = [
+        `engine: ${b.engine ?? "unknown"}`,
+        `model: ${b.model}`,
+        b.effort ? `reasoning: ${b.effort}` : null,
+      ].filter(Boolean).join(", ");
+      return `- ${b.name}${role}${about} [id: ${b.id}, ${stack}${b.busy ? ", busy" : ""}]`;
     });
     return { text: `Other bots you can message with ask_bot:\n${lines.join("\n")}` };
   }
@@ -190,11 +221,32 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
         name: botName,
         role,
         instructions,
+        ...(args.engine ? { engine: String(args.engine) } : {}),
+        ...(args.model ? { model: String(args.model) } : {}),
+        ...(args.effort !== undefined ? { effort: args.effort } : {}),
       }),
     });
     createdThisTurn += 1;
+    const effort = r.effort ? `, reasoning: ${r.effort}` : "";
     return {
-      text: `Created @${r.name ?? botName} in ${r.section ?? "General"} [id: ${r.id}]. Assign work with delegate_bot.`,
+      text: `Created @${r.name ?? botName} in ${r.section ?? "General"} [id: ${r.id}, engine: ${r.engine ?? "unknown"}, model: ${r.model}${effort}]. Assign work with delegate_bot.`,
+    };
+  }
+  if (name === "configure_bot") {
+    const botId = String(args.bot_id ?? "").trim();
+    if (!botId) return { text: "configure_bot needs bot_id.", isError: true };
+    const payload: Record<string, unknown> = {
+      fromBotId: BOT_ID,
+      fromThreadId: THREAD_ID,
+      botId,
+    };
+    if (args.engine) payload.engine = String(args.engine);
+    if (args.model) payload.model = String(args.model);
+    if (args.effort !== undefined) payload.effort = args.effort;
+    const r = await api(`/api/internal/configure-bot`, { method: "POST", body: JSON.stringify(payload) });
+    const effort = r.effort ? `, reasoning: ${r.effort}` : "";
+    return {
+      text: `Updated @${r.name ?? "bot"} [id: ${r.id}] to engine ${r.engine ?? "unknown"}, model ${r.model}${effort}.`,
     };
   }
   if (name === "request_credential") {

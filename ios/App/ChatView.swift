@@ -535,6 +535,10 @@ struct ChatView: View {
 
             Spacer(minLength: 8)
 
+            if case let .bot(activeBot) = current {
+                ChatModelMenu(bot: activeBot)
+            }
+
             if case .bot = current {
                 Button {
                     Haptics.selection()

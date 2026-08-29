@@ -36,7 +36,7 @@ import {
   generateAvatarImage,
   snapshotAvatarGenerationState,
 } from "./avatar-image.ts";
-import { guardedBotModelSwitch, parseBotModelPatch } from "./bot-model.ts";
+import { guardedBotModelSwitch, parseBotModelPatch, resolveBotModelSelection } from "./bot-model.ts";
 import { parseChatPin } from "./chat-pin.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
@@ -93,7 +93,7 @@ import { ComputerControl } from "./computer-control.ts";
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
 import { buildNotification, type Notification } from "./notify.ts";
-import { isEffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
+import { isEffortLevel, type EffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
 import { RETRY_MAX_ATTEMPTS } from "./drivers/retry.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
@@ -3666,6 +3666,8 @@ const server = createServer(async (req, res) => {
             id: b.id,
             name: b.name,
             model: b.modelSelection.model,
+            engine: b.modelSelection.instanceId,
+            effort: b.modelSelection.effort ?? null,
             busy: !!b.busy,
             title: b.title || undefined,
             description: b.description || undefined,
@@ -3877,12 +3879,40 @@ const server = createServer(async (req, res) => {
         if (duplicate) {
           return json(res, 409, { error: `@${duplicate.name} already exists in this section; use list_bots` });
         }
+        let modelSelection = { ...chief.modelSelection };
+        const wantsCustom =
+          body.instanceId !== undefined ||
+          body.engine !== undefined ||
+          body.model !== undefined ||
+          body.effort !== undefined;
+        if (wantsCustom) {
+          resetPathCache();
+          const instanceId = String(body.instanceId ?? body.engine ?? chief.modelSelection.instanceId);
+          const model = String(body.model ?? chief.modelSelection.model);
+          let requestedEffort: EffortLevel | null | undefined;
+          if (body.effort === null) requestedEffort = null;
+          else if (body.effort !== undefined) {
+            if (!isEffortLevel(body.effort)) {
+              return json(res, 400, { error: `effort "${String(body.effort)}" is not recognized` });
+            }
+            requestedEffort = body.effort;
+          }
+          const resolved = resolveBotModelSelection({
+            instanceId,
+            model,
+            currentEffort: chief.modelSelection.effort,
+            requestedEffort,
+            catalogs: await registry.describe(),
+          });
+          if (!resolved.ok) return json(res, 400, { error: resolved.error });
+          modelSelection = resolved.selection;
+        }
         const created = store.createBot(
           {
             name,
             title: role,
             description: instructions,
-            modelSelection: { ...chief.modelSelection },
+            modelSelection,
             section: chief.section,
           },
           { seedMessages: false },
@@ -3897,7 +3927,59 @@ const server = createServer(async (req, res) => {
           name: safeBot.name,
           title: safeBot.title,
           section: safeBot.section || "General",
+          engine: safeBot.modelSelection.instanceId,
           model: safeBot.modelSelection.model,
+          effort: safeBot.modelSelection.effort ?? null,
+        });
+      }
+      if (method === "POST" && path === "/api/internal/configure-bot") {
+        const body = await readBody(req);
+        const fromBotId = String(body.fromBotId ?? "");
+        const chief = store.bot(fromBotId);
+        if (!chief) return json(res, 403, { error: "unknown sender" });
+        if (!chief.chiefOfStaff) {
+          return json(res, 403, { error: "only a section's Chief of Staff can configure operator bots" });
+        }
+        const fromThreadId = String(body.fromThreadId ?? chief.threadId);
+        if (!store.taskByThread(chief.id, fromThreadId)) {
+          return json(res, 403, { error: "source thread does not belong to sender" });
+        }
+        const targetId = String(body.botId ?? body.bot_id ?? "");
+        const target = store.bot(targetId);
+        if (!target) return json(res, 404, { error: "no such bot" });
+        if (sectionKey(target.section) !== sectionKey(chief.section)) {
+          return json(res, 403, { error: "that bot belongs to a different section" });
+        }
+        if (target.id === chief.id) {
+          return json(res, 400, { error: "use the profile or chat model picker to change your own engine" });
+        }
+        const requested = parseBotModelPatch({
+          instanceId: String(body.instanceId ?? body.engine ?? target.modelSelection.instanceId),
+          model: String(body.model ?? target.modelSelection.model),
+          ...(body.effort === null ? { effort: null } : body.effort !== undefined ? { effort: String(body.effort) } : {}),
+        });
+        if (!requested.ok) return json(res, 400, { error: requested.error });
+        resetPathCache();
+        const switched = await guardedBotModelSwitch({
+          requested: requested.patch,
+          describe: () => registry.describe(),
+          current: () => store.bot(target.id),
+          patch: (id, selection) => store.patchBot(id, { modelSelection: selection }),
+        });
+        if (switched.kind === "missing") return json(res, 404, { error: "no such bot" });
+        if (switched.kind === "busy") {
+          return json(res, 409, { error: "that bot is working — interrupt it before changing its model" });
+        }
+        if (switched.kind === "invalid") return json(res, 400, { error: switched.error });
+        const bot = switched.kind === "patched" ? switched.bot : switched.bot;
+        const visible = wireBot(bot);
+        broadcast({ kind: "bot", bot: visible });
+        return json(res, 200, {
+          id: bot.id,
+          name: bot.name,
+          engine: bot.modelSelection.instanceId,
+          model: bot.modelSelection.model,
+          effort: bot.modelSelection.effort ?? null,
         });
       }
       if (method === "POST" && path === "/api/internal/request-credential") {
