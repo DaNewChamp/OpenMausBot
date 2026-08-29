@@ -99,15 +99,20 @@ struct ComputerView: View {
 
     private var presentationState: ComputerPresentationState {
         let decodeFailure = ComputerPresentationState.hasKnownComputer(current)
-            && (current.busy == true || isLocalVm)
+            && wantsScreenPreview
             && frame != nil
             && image == nil
             ? "The latest screen frame could not be decoded."
             : nil
+        let loadFailure = ComputerPresentationState.streamLoadFailure(
+            streamFailure: streamFailure,
+            watchFailure: screenWatch.failureMessage,
+            wantsScreenPreview: wantsScreenPreview
+        )
         return ComputerPresentationState.resolve(
             bot: current,
             frame: image == nil ? nil : frame,
-            loadFailure: streamFailure ?? screenWatch.failureMessage ?? decodeFailure
+            loadFailure: loadFailure ?? decodeFailure
         )
     }
 
@@ -140,6 +145,11 @@ struct ComputerView: View {
         selectedInstance?.supportsLocalVmDestination == true
     }
 
+    private var localVmDestinationDisabledReason: String {
+        let engine = selectedInstance?.pickerTitle ?? "This engine"
+        return "\(engine) cannot use Local VM. Switch to Claude, Codex, or ACP on the profile."
+    }
+
     private var destination: String {
         current.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
     }
@@ -161,6 +171,7 @@ struct ComputerView: View {
 
     private var canRetryScreen: Bool {
         ComputerPresentationState.hasKnownComputer(current)
+            && wantsScreenPreview
             && (screenWatch.failureMessage != nil || streamFailure != nil)
     }
 
@@ -289,9 +300,11 @@ struct ComputerView: View {
                 }
             case .live:
                 guard ComputerPresentationState.hasKnownComputer(current) else { return }
-                if screenWatch.failureMessage != nil {
+                if wantsScreenPreview, screenWatch.failureMessage != nil {
                     session.clearScreen(of: bot.id)
                     screenWatch.retry()
+                } else if !wantsScreenPreview, screenWatch.phase != .idle {
+                    screenWatch.reset()
                 }
             }
         }
@@ -374,6 +387,9 @@ struct ComputerView: View {
             .accessibilityLabel("Desktop help")
 
             Menu {
+                if !localVmDestinationEnabled {
+                    Text(localVmDestinationDisabledReason)
+                }
                 Button {
                     selectDestination("vm")
                 } label: {
@@ -572,6 +588,27 @@ struct ComputerView: View {
             }
             .foregroundStyle(Color.white)
 
+        case let .unavailable(message) where message == ComputerPresentationState.idleWaitingMessage:
+            VStack(spacing: 14) {
+                Image(systemName: "clock")
+                    .font(.system(size: 28, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.85))
+                Text("Waiting for agent")
+                    .font(.system(size: 17, weight: .semibold))
+                Text(message)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color.white.opacity(0.65))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                Text(destinationHelp)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color.white.opacity(0.55))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                    .padding(.top, 4)
+            }
+            .foregroundStyle(Color.white)
+
         case let .unavailable(message):
             VStack(spacing: 14) {
                 Image(systemName: "exclamationmark.triangle")
@@ -759,7 +796,7 @@ struct ComputerView: View {
                     if localVmDestinationEnabled {
                         Text("Local is an isolated Linux desktop on the paired Mac. Cloud is the hosted box.")
                     } else {
-                        Text("This engine cannot use Local VM. Switch to Claude, Codex, or ACP on the profile, or pick Cloud.")
+                        Text(localVmDestinationDisabledReason)
                     }
                 }
                 if canOpenCloudViewer {
@@ -977,6 +1014,8 @@ struct ComputerView: View {
             }
         } else if wantsScreenPreview, screenWatch.phase == .idle {
             screenWatch.begin()
+        } else if !wantsScreenPreview, screenWatch.phase != .idle {
+            screenWatch.reset()
         }
     }
 

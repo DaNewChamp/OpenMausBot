@@ -224,6 +224,58 @@ final class ComputerPresentationStateTests: XCTestCase {
         )
     }
 
+    func testIdleVpsShowsWaitingMessageWithoutSecureViewer() {
+        let idleVps = bot(computer: "cloud", cloudBackend: "vps", busy: false)
+        XCTAssertEqual(
+            ComputerPresentationState(bot: idleVps),
+            .unavailable(message: ComputerPresentationState.idleWaitingMessage)
+        )
+        XCTAssertTrue(ComputerPresentationState(bot: idleVps).isIdleWaiting)
+    }
+
+    func testStreamLoadFailureIgnoresWatchTimeoutWhenIdle() {
+        let idleVps = bot(computer: "cloud", cloudBackend: "vps", busy: false)
+        let timeout = "No screen frame arrived. The computer may be asleep or unavailable."
+        XCTAssertNil(
+            ComputerPresentationState.streamLoadFailure(
+                streamFailure: nil,
+                watchFailure: timeout,
+                wantsScreenPreview: false
+            )
+        )
+        XCTAssertEqual(
+            ComputerPresentationState(
+                bot: idleVps,
+                loadFailure: ComputerPresentationState.streamLoadFailure(
+                    streamFailure: nil,
+                    watchFailure: timeout,
+                    wantsScreenPreview: false
+                )
+            ),
+            .unavailable(message: ComputerPresentationState.idleWaitingMessage)
+        )
+    }
+
+    func testStreamLoadFailureKeepsWatchTimeoutWhileWorking() {
+        let busyVps = bot(computer: "cloud", cloudBackend: "vps", busy: true)
+        let timeout = "No screen frame arrived. The computer may be asleep or unavailable."
+        XCTAssertEqual(
+            ComputerPresentationState.streamLoadFailure(
+                streamFailure: nil,
+                watchFailure: timeout,
+                wantsScreenPreview: true
+            ),
+            timeout
+        )
+        XCTAssertEqual(
+            ComputerPresentationState(
+                bot: busyVps,
+                loadFailure: timeout
+            ),
+            .unavailable(message: timeout)
+        )
+    }
+
     func testWatchLifecycleResetsFailuresOnRetryAndFrame() {
         var lifecycle = ComputerWatchLifecycle()
         lifecycle.begin()

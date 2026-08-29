@@ -31,7 +31,7 @@ public enum ComputerPresentationState: Equatable, Sendable {
             } else if Self.supportsCloudViewer(bot) {
                 self = .cloudViewerAvailable
             } else {
-                self = .unavailable(message: "No live screen is available until this agent is working.")
+                self = .unavailable(message: Self.idleWaitingMessage)
             }
         } else if frame != nil {
             self = .watching
@@ -92,14 +92,36 @@ public enum ComputerPresentationState: Equatable, Sendable {
         }
     }
 
+    public static let idleWaitingMessage = "No live screen is available until this agent is working."
+
     public static func unavailableMessage(for bot: Bot) -> String {
         guard let computer = bot.computer?.trimmingCharacters(in: .whitespacesAndNewlines), !computer.isEmpty else {
-            return "No live screen is available until this agent is working."
+            return idleWaitingMessage
         }
         if computer.lowercased() == "off" {
             return "Computer access is turned off for this agent."
         }
         return "This computer type isn't supported on this phone."
+    }
+
+    /// Watch timeouts and decode failures apply only while the bot is working
+    /// or the destination is Local VM. An idle VPS must keep the waiting card
+    /// instead of inheriting a stale "No screen frame arrived" error.
+    public static func streamLoadFailure(
+        streamFailure: String?,
+        watchFailure: String?,
+        wantsScreenPreview: Bool
+    ) -> String? {
+        if let streamFailure { return streamFailure }
+        guard wantsScreenPreview else { return nil }
+        return watchFailure
+    }
+
+    public var isIdleWaiting: Bool {
+        if case let .unavailable(message) = self {
+            return message == Self.idleWaitingMessage
+        }
+        return false
     }
 
     public var canOpenCloudViewer: Bool {
