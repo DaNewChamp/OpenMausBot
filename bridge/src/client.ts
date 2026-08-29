@@ -64,7 +64,8 @@ export async function heartbeat(
       inFlight,
     }),
   });
-  const body: HeartbeatResponse = await res.json();
+  // SAFETY: /api/bridge/heartbeat JSON is jobs, cancelJobIds, optional nextToken, and error.
+  const body = (await res.json()) as HeartbeatResponse;
   if (!res.ok) throw new Error(body.error ?? `heartbeat failed (${res.status})`);
   return { jobs: body.jobs ?? [], cancelJobIds: body.cancelJobIds ?? [], nextToken: body.nextToken };
 }
