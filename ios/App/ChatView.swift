@@ -60,6 +60,12 @@ struct ChatView: View {
     /// Captured when this chat opened with unread lines, so the Grok-style
     /// NEW divider survives `markRead`.
     @State private var newAfterMessageId: String?
+    /// Follow the latest line only while the reader is already near the
+    /// bottom. Scrolling up to copy a citation must not yank the transcript.
+    @State private var followingLatest = true
+    @State private var lastDistanceFromBottom: CGFloat = 0
+    @State private var viewportHeight: CGFloat = 0
+    @State private var streamA11yPhase: StreamAccessibilityPhase = .idle
 
     /// The live bubble's scroll target. A constant because there is at most
     /// one per chat and it has no message id to borrow.
@@ -202,18 +208,21 @@ struct ChatView: View {
                             }
                         }
 
-                        // The reply as it is typed. It sits after the last
-                        // settled message and disappears the moment the real
-                        // one arrives — the store clears it on the same frame
-                        // that appends the message, so there is never a beat
-                        // where both are on screen.
-                        if let live = session.state.streaming[threadId], !live.isEmpty {
+                        // The reply as it is typed. Coalesced deltas and a
+                        // stable markdown prefix keep the bubble from
+                        // jittering token-by-token; an empty prefix while
+                        // busy is the working indicator, not a malformed
+                        // one-character bubble.
+                        if let live = presentedLiveText, !live.isEmpty {
                             StreamingBubble(
                                 text: live,
                                 color: streamingTintColor,
-                                speaker: streamingSpeaker
+                                speaker: streamingSpeaker,
+                                reduceMotion: reduceMotion
                             )
                                 .id(Self.liveBubbleId)
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel(streamingAccessibilityLabel)
                         } else if current.busy
                                     || !(session.state.reasoning[threadId] ?? "").isEmpty {
                             WorkingTypingIndicatorView(
@@ -221,11 +230,12 @@ struct ChatView: View {
                                 speakerBotId: workingBotId
                             )
                                 .id(Self.liveBubbleId)
-                                .accessibilityLabel(
-                                    streamingSpeaker.map { "\($0.name) is working" }
-                                        ?? "\(current.name) is working"
-                                )
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel(streamingAccessibilityLabel)
                         }
+                    }
+                    .background(alignment: .bottom) {
+                        ChatScrollOffsetReader()
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
@@ -239,6 +249,28 @@ struct ChatView: View {
                 // than the screen rests at the bottom, and opening a chat
                 // starts on the newest message rather than the oldest.
                 .defaultScrollAnchor(.bottom)
+                .coordinateSpace(name: "chat-scroll")
+                .background {
+                    GeometryReader { viewport in
+                        Color.clear.preference(
+                            key: ChatViewportHeightKey.self,
+                            value: viewport.size.height
+                        )
+                    }
+                }
+                .onPreferenceChange(ChatViewportHeightKey.self) { height in
+                    viewportHeight = height
+                }
+                .onPreferenceChange(ChatContentMaxYKey.self) { maxY in
+                    guard viewportHeight > 1 else { return }
+                    let distance = max(0, maxY - viewportHeight)
+                    followingLatest = ChatFollow.updatedFollowing(
+                        following: followingLatest,
+                        previousDistanceFromBottom: lastDistanceFromBottom,
+                        distanceFromBottom: distance
+                    )
+                    lastDistanceFromBottom = distance
+                }
                 .onChange(of: transcript.last?.id) { _, _ in
                     reconcilePendingQueue(in: messages)
                     guard let last = transcript.last else { return }
@@ -251,22 +283,28 @@ struct ChatView: View {
                 .onChange(of: transcript.last?.text) { _, _ in
                     scrollToLatest(proxy, animated: false)
                 }
+                .onChange(of: presentedLiveText?.count ?? 0) { _, length in
+                    guard length > 0 else { return }
+                    scrollToLatest(proxy, animated: false)
+                }
                 .onChange(of: current.busy) { _, _ in
+                    announceStreamPhase()
                     scrollToLatest(proxy)
+                }
+                .onChange(of: threadId) { _, _ in
+                    followingLatest = true
+                    lastDistanceFromBottom = 0
+                    streamA11yPhase = .idle
+                }
+                .onAppear { announceStreamPhase() }
+                .onChange(of: presentedLiveText) { _, _ in
+                    announceStreamPhase()
                 }
                 .onChange(of: composerFocused) { _, _ in
                     scrollToLatest(proxy)
                 }
                 .onChange(of: draft.isEmpty) { _, _ in
                     scrollToLatest(proxy)
-                }
-                // Follow the text as it arrives. Keyed on length rather than
-                // the string so this fires once per delta batch, and without
-                // animation — animating every token turns a smooth stream
-                // into a stutter, because each scroll interrupts the last.
-                .onChange(of: session.state.streaming[threadId]?.count ?? 0) { _, length in
-                    guard length > 0 else { return }
-                    scrollToLatest(proxy, animated: false)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { _ in
                     scrollToLatest(proxy, animated: false)
@@ -943,6 +981,33 @@ struct ChatView: View {
         return (bot.name, bot.color)
     }
 
+    private var presentedLiveText: String? {
+        MarkdownReveal.visiblePrefix(session.state.streaming[threadId] ?? "")
+    }
+
+    private var streamingAccessibilityLabel: String {
+        let name = streamingSpeaker?.name ?? current.name
+        if presentedLiveText?.isEmpty == false {
+            return "\(name) is writing"
+        }
+        return "\(name) is working"
+    }
+
+    private func announceStreamPhase() {
+        let next = StreamAccessibility.phase(
+            isBusy: current.busy || !(session.state.reasoning[threadId] ?? "").isEmpty,
+            hasVisibleText: presentedLiveText?.isEmpty == false
+        )
+        let announcement = StreamAccessibility.announcement(
+            from: streamA11yPhase,
+            to: next,
+            speaker: streamingSpeaker?.name ?? current.name
+        )
+        streamA11yPhase = next
+        guard let announcement else { return }
+        UIAccessibility.post(notification: .announcement, argument: announcement)
+    }
+
     private var streamingTintColor: String {
         streamingSpeaker?.color ?? current.color
     }
@@ -1019,7 +1084,8 @@ struct ChatView: View {
     }
 
     private func scrollToLatest(_ proxy: ScrollViewProxy, animated: Bool = true) {
-        let streaming = session.state.streaming[threadId] ?? ""
+        guard ChatFollow.shouldScrollToLatest(following: followingLatest) else { return }
+        let streaming = presentedLiveText ?? ""
         let thinking = session.state.reasoning[threadId] ?? ""
         let target: String
         if current.busy || !streaming.isEmpty || !thinking.isEmpty {
@@ -1038,7 +1104,6 @@ struct ChatView: View {
         }
         Task { @MainActor in
             scroll(proxy)
-            // Keyboard, chips, and safe-area inset settle after the first pass.
             try? await Task.sleep(nanoseconds: 50_000_000)
             scroll(proxy)
             try? await Task.sleep(nanoseconds: 120_000_000)
@@ -2732,6 +2797,7 @@ struct StreamingBubble: View {
     let text: String?
     var color: String = "blue"
     var speaker: (name: String, color: String)?
+    var reduceMotion: Bool = false
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 0) {
@@ -2742,14 +2808,7 @@ struct StreamingBubble: View {
                         .foregroundStyle(Color.primary)
                 }
                 if let text, !text.isEmpty {
-                    // Same renderer as the settled bubble, for the same
-                    // reason as the padding: a live reply showing `**bold**`
-                    // that snaps to bold on arrival is the message jumping,
-                    // just in a different dimension. The parser tolerates the
-                    // half-finished markdown this is always holding — an
-                    // unclosed fence renders as code, an unclosed link as the
-                    // characters typed so far.
-                    MarkdownText(source: text, caret: true)
+                    MarkdownText(source: text, caret: !reduceMotion)
                         .foregroundStyle(Color.primary)
                 }
             }
@@ -2764,6 +2823,33 @@ struct StreamingBubble: View {
         // No `.textSelection` on purpose: selecting text that is still growing
         // fights the reader, and the settled bubble a frame later is
         // selectable anyway.
+    }
+}
+
+private struct ChatContentMaxYKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct ChatViewportHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct ChatScrollOffsetReader: View {
+    var body: some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: ChatContentMaxYKey.self,
+                value: geo.frame(in: .named("chat-scroll")).maxY
+            )
+        }
+        .frame(height: 0)
+        .accessibilityHidden(true)
     }
 }
 

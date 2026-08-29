@@ -100,6 +100,14 @@ final class Session: ObservableObject {
     /// can finish after its replacement starts; its cleanup must not clear
     /// the replacement's handle.
     private var streamGeneration = 0
+    /// Token bursts land here and publish on a frame cadence, so SwiftUI does
+    /// not rebuild the chat on every provider delta.
+    private var streamCoalescer = StreamCoalescer()
+    private var streamFlushTask: Task<Void, Never>?
+    private var streamFlushDeadlineMs: Int?
+    /// Last seq of a buffered delta that has not yet been folded. Held back
+    /// so a reconnect can replay the burst if we disconnect mid-flush.
+    private var bufferedStreamSeq: Int?
     private var reconnectDelay: UInt64 = 0
     /// Which computer panels are open. The stream is shared, but frames are
     /// keyed by bot, so a panel for the same bot cannot clear a frame another
@@ -375,6 +383,7 @@ final class Session: ObservableObject {
         token = nil
         engineSync = nil
         rotation = CandidateRotation(hosts: [])
+        resetStreamCoalescer()
         state = CompanionState()
         localVmStatuses.removeAll()
         localVmAccess = false
@@ -482,6 +491,7 @@ final class Session: ObservableObject {
     /// anyway; dropping it deliberately means the cursor is written down at
     /// a known point instead of wherever the socket happened to die.
     func disconnect() {
+        flushStreamCoalescer()
         streamTask?.cancel()
         streamTask = nil
         endpointRefreshTask?.cancel()
@@ -533,6 +543,10 @@ final class Session: ObservableObject {
 
                     if case let .hello(cursor, resumed) = frame.frame {
                         log.info("stream live, resumed=\(resumed, privacy: .public)")
+                        // Drop unflushed deltas: if their seq was not committed,
+                        // the replay will deliver them again. A cold hydrate
+                        // replaces the transcript and must not keep a ghost tail.
+                        resetStreamCoalescer()
                         // false means the server could not replay the gap —
                         // the one case that costs a full hydrate. Commit the
                         // hello cursor only after that hydrate succeeds: if
@@ -551,27 +565,7 @@ final class Session: ObservableObject {
                         refreshConnectionMetadata(using: client)
                         continue
                     }
-                    let previousOverrides = state.pinnedOverrides
-                    let previousAppearanceOverrides = state.appearanceOverrides
-                    state.apply(frame)
-                    if state.pinnedOverrides != previousOverrides { persistPinnedOverrides() }
-                    if state.appearanceOverrides != previousAppearanceOverrides { persistAppearanceOverrides() }
-                    if case let .notify(notification) = frame.frame {
-                        guard !shouldSuppressNotification(for: notification.threadId) else { continue }
-                        let bot = state.bot(notification.botId)
-                        let seq = frame.seq
-                        Task { @MainActor in
-                            guard !shouldSuppressNotification(for: notification.threadId) else { return }
-                            let png = await notificationAvatarPNG(for: bot)
-                            NotificationCoordinator.shared.deliver(
-                                notification,
-                                sequence: seq,
-                                avatarPNG: png
-                            )
-                        }
-                    }
-                    NotificationCoordinator.shared.setBadge(state.unreadCount)
-                    state.advance(to: frame.seq)
+                    applyIncomingFrame(frame)
                 }
                 // the stream ended without an error — the harness went away
                 log.notice("stream ended without an error")
@@ -603,6 +597,7 @@ final class Session: ObservableObject {
         guard let client else { return }
         let fleet = try await client.fleet(messages: 50)
         log.info("hydrated \(fleet.bots.count, privacy: .public) bots, \(fleet.groups.count, privacy: .public) rooms")
+        resetStreamCoalescer()
         let previousAppearanceOverrides = state.appearanceOverrides
         state.hydrate(fleet)
         persistPinnedOverrides()
@@ -616,6 +611,117 @@ final class Session: ObservableObject {
 
     private func recordHydration(resumed: Bool) {
         authoritativeHydrationRevision = hydrationRevision.record(resumed: resumed)
+    }
+
+    /// Fold one SSE frame. Token deltas are buffered and published together;
+    /// everything else flushes that buffer first so a settled message cannot
+    /// race its own tail.
+    private func applyIncomingFrame(_ streamFrame: StreamFrame) {
+        if case let .runtime(event) = streamFrame.frame {
+            handleRuntime(event, seq: streamFrame.seq)
+            return
+        }
+        flushStreamCoalescer()
+        foldAndPublish(streamFrame.frame, seq: streamFrame.seq)
+    }
+
+    private func handleRuntime(_ event: RuntimeEvent, seq: Int?) {
+        let now = StreamCoalescer.nowMs()
+        switch streamCoalescer.ingest(event, nowMs: now) {
+        case .none:
+            if let seq {
+                if streamFlushDeadlineMs != nil {
+                    bufferedStreamSeq = seq
+                } else {
+                    var next = state
+                    next.advance(to: seq)
+                    state = next
+                }
+            }
+        case .scheduleFlush(let deadline):
+            bufferedStreamSeq = seq ?? bufferedStreamSeq
+            scheduleStreamFlush(at: deadline)
+        case .flushNow(let events):
+            applyRuntimeEvents(events, seq: seq)
+            cancelStreamFlush()
+            if streamCoalescer.hasPending {
+                scheduleStreamFlush(at: StreamCoalescer.nowMs() + StreamCoalescer.flushIntervalMs)
+            }
+        }
+    }
+
+    private func scheduleStreamFlush(at deadlineMs: Int) {
+        if let existing = streamFlushDeadlineMs, existing <= deadlineMs { return }
+        streamFlushDeadlineMs = deadlineMs
+        streamFlushTask?.cancel()
+        streamFlushTask = Task { @MainActor in
+            let delay = max(0, deadlineMs - StreamCoalescer.nowMs())
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
+            }
+            guard !Task.isCancelled else { return }
+            flushStreamCoalescer()
+        }
+    }
+
+    private func flushStreamCoalescer() {
+        let events = streamCoalescer.flush(nowMs: StreamCoalescer.nowMs())
+        let seq = bufferedStreamSeq
+        cancelStreamFlush()
+        guard !events.isEmpty else { return }
+        applyRuntimeEvents(events, seq: seq)
+    }
+
+    private func applyRuntimeEvents(_ events: [RuntimeEvent], seq: Int?) {
+        var next = state
+        for event in events {
+            next.apply(.runtime(event))
+        }
+        if let seq {
+            next.advance(to: seq)
+        } else if let bufferedStreamSeq {
+            next.advance(to: bufferedStreamSeq)
+        }
+        state = next
+        bufferedStreamSeq = nil
+        NotificationCoordinator.shared.setBadge(state.unreadCount)
+    }
+
+    private func foldAndPublish(_ frame: Frame, seq: Int?) {
+        let previousOverrides = state.pinnedOverrides
+        let previousAppearanceOverrides = state.appearanceOverrides
+        var next = state
+        next.apply(frame)
+        next.advance(to: seq)
+        state = next
+        if state.pinnedOverrides != previousOverrides { persistPinnedOverrides() }
+        if state.appearanceOverrides != previousAppearanceOverrides { persistAppearanceOverrides() }
+        if case let .notify(notification) = frame {
+            guard !shouldSuppressNotification(for: notification.threadId) else { return }
+            let bot = state.bot(notification.botId)
+            Task { @MainActor in
+                guard !shouldSuppressNotification(for: notification.threadId) else { return }
+                let png = await notificationAvatarPNG(for: bot)
+                NotificationCoordinator.shared.deliver(
+                    notification,
+                    sequence: seq,
+                    avatarPNG: png
+                )
+            }
+        }
+        NotificationCoordinator.shared.setBadge(state.unreadCount)
+    }
+
+    private func cancelStreamFlush() {
+        streamFlushTask?.cancel()
+        streamFlushTask = nil
+        streamFlushDeadlineMs = nil
+    }
+
+    private func resetStreamCoalescer() {
+        streamCoalescer.reset()
+        cancelStreamFlush()
+        bufferedStreamSeq = nil
     }
 
     // MARK: - Which address to dial
@@ -1727,6 +1833,7 @@ final class Session: ObservableObject {
             var bot = state.bot(target.botId)
             if bot == nil {
                 let fleet = try await client.fleet(messages: 50)
+                resetStreamCoalescer()
                 state.hydrate(fleet)
                 recordHydration(resumed: false)
                 bot = state.bot(target.botId)

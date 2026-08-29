@@ -68,7 +68,7 @@ extension CompanionState {
     }
 
     private func workingLine(threadId: String) -> String {
-        if let live = streaming[threadId], !live.isEmpty {
+        if let live = MarkdownReveal.visiblePrefix(streaming[threadId] ?? ""), !live.isEmpty {
             return String(live.suffix(120)).replacingOccurrences(of: "\n", with: " ")
         }
         if let last = visibleTranscript(forThread: threadId).last, last.kind == .activity, let tool = last.tool {
