@@ -95,25 +95,43 @@ function stageLinuxCloudflared(destDir) {
   chmodSync(join(destDir, "cloudflared"), 0o755);
 }
 
+const INVESTMENT_TEAM = new Set(["CIO", "Scout", "Crypto", "Sniper"]);
+
 function patchChiefCloud(stagingDir) {
   const botsPath = join(stagingDir, "bots.json");
   if (!existsSync(botsPath)) return;
   const bots = JSON.parse(readFileSync(botsPath, "utf8"));
   let changed = false;
   for (const bot of bots) {
-    if (bot.id !== CHIEF_BOT_ID) continue;
-    if (bot.computer !== "cloud") {
-      bot.computer = "cloud";
-      changed = true;
+    if (bot.id === CHIEF_BOT_ID) {
+      if (bot.computer !== "cloud") {
+        bot.computer = "cloud";
+        changed = true;
+      }
+      if (bot.cloudBackend !== "vps") {
+        bot.cloudBackend = "vps";
+        changed = true;
+      }
+      if (bot.section !== "Investments") {
+        bot.section = "Investments";
+        changed = true;
+      }
+      continue;
     }
-    if (bot.cloudBackend !== "vps") {
-      bot.cloudBackend = "vps";
-      changed = true;
+    if (INVESTMENT_TEAM.has(bot.name)) {
+      if (bot.section !== "Investments") {
+        bot.section = "Investments";
+        changed = true;
+      }
+      if (bot.reportsToBotId !== CHIEF_BOT_ID) {
+        bot.reportsToBotId = CHIEF_BOT_ID;
+        changed = true;
+      }
     }
   }
   if (changed) {
     writeFileSync(botsPath, `${JSON.stringify(bots, null, 2)}\n`);
-    console.log("patched Chief Keef → computer=cloud, cloudBackend=vps");
+    console.log("patched Chief Keef + Investments desk (cloud/vps, section, reportsTo)");
   }
 }
 
