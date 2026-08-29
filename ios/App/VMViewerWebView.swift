@@ -130,7 +130,10 @@ struct VMViewerWebView: UIViewRepresentable {
             healthCheckTask = Task { @MainActor in
                 try? await Task.sleep(for: .seconds(8))
                 guard !Task.isCancelled else { return }
-                webView.evaluateJavaScript(Self.healthScript) { _, _ in }
+                webView.evaluateJavaScript(Self.healthScript) { value, _ in
+                    guard let result = value as? String, result == "broken" else { return }
+                    self.onLoadFailed?("The live desktop viewer could not connect. Try Recreate from ··· or switch to Cloud while the agent works.")
+                }
             }
         }
 

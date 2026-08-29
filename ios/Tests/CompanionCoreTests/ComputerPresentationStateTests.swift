@@ -54,6 +54,13 @@ final class ComputerPresentationStateTests: XCTestCase {
         XCTAssertNotEqual(state, .cloudViewerAvailable)
     }
 
+    func testIdleVpsCloudExplainsWatchDuringTurns() {
+        XCTAssertEqual(
+            ComputerPresentationState(bot: bot(computer: "cloud", cloudBackend: "vps", busy: false)),
+            .unavailable(message: "Cloud runs on your VPS. Send a message to start a turn, then watch the desktop here.")
+        )
+    }
+
     func testLocalAndVirtualMachinesNeverClaimInteractiveViewerSupport() {
         XCTAssertNotEqual(ComputerPresentationState(bot: bot(computer: "local")), .cloudViewerAvailable)
         XCTAssertNotEqual(ComputerPresentationState(bot: bot(computer: "vm")), .cloudViewerAvailable)

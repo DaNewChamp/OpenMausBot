@@ -92,7 +92,7 @@ struct ComputerView: View {
     }
 
     private var openingLiveViewer: Bool {
-        isLocalVm && localVmInteractive && localVmViewerURL == nil && !viewerLoadFailed
+        isLocalVm && localVmInteractive && localVmViewerURL == nil && !viewerLoadFailed && image == nil
     }
 
     private static let firstFrameTimeout = ComputerWatchLifecycle.firstFrameTimeout
@@ -157,7 +157,12 @@ struct ComputerView: View {
     private var isLocalVm: Bool { destination == "vm" }
 
     private var wantsScreenPreview: Bool {
-        current.busy == true || isLocalVm
+        if current.busy == true { return true }
+        if isLocalVm {
+            // Idle Local VM uses polled screenshots and/or live noVNC — not SSE.
+            return localVmStatus?.ready != true
+        }
+        return false
     }
 
     private var streamFailure: String? {
@@ -361,8 +366,11 @@ struct ComputerView: View {
             let joined = await session.localVmViewerURL(for: current)
             guard !Task.isCancelled else { return }
             localVmViewerURL = joined.url
-            if let error = joined.error, joined.url == nil {
-                localVmSurfaceError = error
+            if joined.url == nil {
+                viewerLoadFailed = true
+                if let error = joined.error {
+                    localVmSurfaceError = error
+                }
             }
         }
         .task(id: "instances-\(current.id)") {
@@ -576,12 +584,14 @@ struct ComputerView: View {
                     .tint(.white)
                     .controlSize(.regular)
                     .accessibilityHidden(true)
-                Text("Starting desktop...")
+                Text(localVmStartingMessage)
                     .font(.body)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
             }
             .foregroundStyle(Color.white)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Starting desktop")
+            .accessibilityLabel(localVmStartingMessage)
 
         case .cloudViewerAvailable:
             VStack(spacing: 14) {
@@ -640,6 +650,19 @@ struct ComputerView: View {
         case .watching:
             EmptyView()
         }
+    }
+
+    private var localVmStartingMessage: String {
+        if isLocalVm {
+            if localVmStatus?.ready == true {
+                return openingLiveViewer ? "Opening live desktop…" : "Loading desktop preview…"
+            }
+            if let problem = localVmStatus?.problem, !(problem.isEmpty) {
+                return problem
+            }
+            return localVmStateTitle == "Checking…" ? "Checking Local VM…" : localVmStateTitle
+        }
+        return "Starting desktop..."
     }
 
     private var startingMessage: String {
