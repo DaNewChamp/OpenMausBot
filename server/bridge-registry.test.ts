@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
+import { asCapabilities } from "./bridge-routes.ts";
 
 describe("BridgeRegistry", () => {
   beforeEach(() => {
@@ -24,6 +25,28 @@ describe("BridgeRegistry", () => {
     expect(registry.list()).toEqual([
       expect.objectContaining({ id: bridgeId, name: "pi-bridge", capabilities: ["shell"] }),
     ]);
+  });
+
+  it("defaults an omitted capability list to none", () => {
+    const registry = new BridgeRegistry();
+    const { code } = registry.startPairing();
+    const { bridgeId } = registry.register({ name: "locked", code });
+    expect(registry.list().find((bridge) => bridge.id === bridgeId)).toEqual(
+      expect.objectContaining({ id: bridgeId, capabilities: [] }),
+    );
+  });
+
+  it("normalizes omitted and unknown route capabilities to none", () => {
+    expect(asCapabilities(undefined)).toEqual([]);
+    expect(asCapabilities(["unknown", "shell"])).toEqual(["shell"]);
+  });
+
+  it("allows a heartbeat to clear previously advertised capabilities", () => {
+    const registry = new BridgeRegistry();
+    const { code } = registry.startPairing();
+    const { bridgeId } = registry.register({ name: "revocable", code, capabilities: ["shell"] });
+    registry.touch(bridgeId, { capabilities: [] });
+    expect(registry.list().find((bridge) => bridge.id === bridgeId)?.capabilities).toEqual([]);
   });
 
   it("delivers shell jobs on heartbeat", () => {

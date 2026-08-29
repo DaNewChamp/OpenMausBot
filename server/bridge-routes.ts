@@ -12,8 +12,8 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
 
-function asCapabilities(value: unknown): BridgeCapability[] {
-  if (!Array.isArray(value)) return ["shell"];
+export function asCapabilities(value: unknown): BridgeCapability[] {
+  if (!Array.isArray(value)) return [];
   const allowed = new Set<BridgeCapability>(["shell", "local-vm", "ssh-forward"]);
   return value.filter((entry): entry is BridgeCapability => typeof entry === "string" && allowed.has(entry as BridgeCapability));
 }
@@ -80,10 +80,10 @@ export async function handleBridgeRoutes(
     const body = await readJson(req);
     const bridgeId = String(body.bridgeId ?? bridge.id);
     if (bridgeId !== bridge.id) return json(res, 403, { error: "bridge id mismatch" }), true;
-    const caps = asCapabilities(body.capabilities);
+    const caps = body.capabilities === undefined ? undefined : asCapabilities(body.capabilities);
     bridges.touch(bridgeId, {
       hostInfo: body.hostInfo ? String(body.hostInfo) : undefined,
-      capabilities: caps.length ? caps : undefined,
+      capabilities: caps,
     });
     return json(res, 200, { jobs: bridges.pollJobs(bridgeId) }), true;
   }
@@ -98,6 +98,7 @@ export async function handleBridgeRoutes(
       exitCode: body.exitCode == null ? null : Number(body.exitCode),
       stdout: String(body.stdout ?? ""),
       stderr: String(body.stderr ?? ""),
+      truncated: body.truncated === true,
       finishedAt: Date.now(),
     });
     return json(res, 200, { ok: true }), true;

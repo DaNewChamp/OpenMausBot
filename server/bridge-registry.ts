@@ -57,6 +57,7 @@ export interface BridgeJobResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+  truncated: boolean;
   finishedAt: number;
 }
 
@@ -137,7 +138,7 @@ export class BridgeRegistry {
     name: string;
     code?: string;
     pairingToken?: string;
-    capabilities: BridgeCapability[];
+    capabilities?: BridgeCapability[];
     hostInfo?: string;
   }): { bridgeId: string; bridgeToken: string } {
     const window = this.pairing;
@@ -157,7 +158,7 @@ export class BridgeRegistry {
       id: randomUUID(),
       name: input.name.trim() || "bridge",
       tokenHash: hashToken(bridgeToken),
-      capabilities: input.capabilities.length ? input.capabilities : ["shell"],
+      capabilities: input.capabilities ?? [],
       createdAt: Date.now(),
       lastSeenAt: Date.now(),
       hostInfo: input.hostInfo,
@@ -183,7 +184,7 @@ export class BridgeRegistry {
     if (!bridge) return null;
     bridge.lastSeenAt = Date.now();
     if (patch?.hostInfo) bridge.hostInfo = patch.hostInfo;
-    if (patch?.capabilities?.length) bridge.capabilities = patch.capabilities;
+    if (patch?.capabilities) bridge.capabilities = patch.capabilities;
     writeStore(store);
     return bridge;
   }

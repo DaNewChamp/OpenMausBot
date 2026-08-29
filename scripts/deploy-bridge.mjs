@@ -14,8 +14,9 @@ const logsDir = join(home, "Library", "Logs", "OpenMausBotBridge");
 const hostedUrl = process.env.OMB_BRIDGE_URL ?? "https://openmaus.posival.com";
 const bridgeName = process.env.OMB_BRIDGE_NAME ?? hostname();
 const bridgeEnv = [
-  ["OMB_BRIDGE_LOCAL_VM", process.env.OMB_BRIDGE_LOCAL_VM ?? "1"],
-  ["OMB_BRIDGE_SSH_FORWARD", process.env.OMB_BRIDGE_SSH_FORWARD ?? "1"],
+  ["OMB_BRIDGE_SHELL", process.env.OMB_BRIDGE_SHELL],
+  ["OMB_BRIDGE_LOCAL_VM", process.env.OMB_BRIDGE_LOCAL_VM],
+  ["OMB_BRIDGE_SSH_FORWARD", process.env.OMB_BRIDGE_SSH_FORWARD],
 ].filter(([, v]) => v === "1" || v === "true");
 
 const flags = new Set(process.argv.slice(2));

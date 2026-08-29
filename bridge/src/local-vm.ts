@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import type { LocalVmBridgeJob } from "./types.ts";
+import type { BridgeJobResult, LocalVmBridgeJob } from "./types.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -207,26 +207,27 @@ async function localVmScreenshot(botId: string): Promise<{ image: string }> {
 
 export async function runLocalVmJob(
   job: LocalVmBridgeJob,
-): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+): Promise<BridgeJobResult> {
   try {
     const { botId, action } = job.payload;
     if (!botId) throw new Error("botId required");
     if (job.kind === "local-vm-status") {
-      return { exitCode: 0, stdout: JSON.stringify(await localVmStatus(botId)), stderr: "" };
+      return { exitCode: 0, stdout: JSON.stringify(await localVmStatus(botId)), stderr: "", truncated: false };
     }
     if (job.kind === "local-vm-action") {
       if (!action) throw new Error("action required");
-      return { exitCode: 0, stdout: JSON.stringify(await localVmAction(botId, action)), stderr: "" };
+      return { exitCode: 0, stdout: JSON.stringify(await localVmAction(botId, action)), stderr: "", truncated: false };
     }
     if (job.kind === "local-vm-screenshot") {
-      return { exitCode: 0, stdout: JSON.stringify(await localVmScreenshot(botId)), stderr: "" };
+      return { exitCode: 0, stdout: JSON.stringify(await localVmScreenshot(botId)), stderr: "", truncated: false };
     }
-    return { exitCode: 1, stdout: "", stderr: `unsupported local-vm job: ${job.kind}` };
+    return { exitCode: 1, stdout: "", stderr: `unsupported local-vm job: ${job.kind}`, truncated: false };
   } catch (error) {
     return {
       exitCode: 1,
       stdout: "",
       stderr: error instanceof Error ? error.message : String(error),
+      truncated: false,
     };
   }
 }

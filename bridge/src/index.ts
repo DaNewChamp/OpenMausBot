@@ -16,7 +16,8 @@ function flag(name: string): string | undefined {
 }
 
 function bridgeCapabilities(): string[] {
-  const capabilities = ["shell"];
+  const capabilities: string[] = [];
+  if (process.env.OMB_BRIDGE_SHELL === "1") capabilities.push("shell");
   if (process.env.OMB_BRIDGE_LOCAL_VM === "1") capabilities.push("local-vm");
   if (process.env.OMB_BRIDGE_SSH_FORWARD === "1") capabilities.push("ssh-forward");
   return capabilities;
@@ -28,7 +29,7 @@ async function handleJob(job: BridgeJob) {
   if (job.kind === "local-vm-status" || job.kind === "local-vm-action" || job.kind === "local-vm-screenshot") {
     return runLocalVmJob(job);
   }
-  return { exitCode: 1, stdout: "", stderr: `unsupported job kind: ${(job as BridgeJob).kind}` };
+  return { exitCode: 1, stdout: "", stderr: `unsupported job kind: ${(job as BridgeJob).kind}`, truncated: false };
 }
 
 async function runDaemon(credentials = loadCredentials()) {

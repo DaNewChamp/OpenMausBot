@@ -404,6 +404,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const stdout = String(r.stdout ?? "").trim();
     const stderr = String(r.stderr ?? "").trim();
     const parts = [`Bridge ${r.bridgeName ?? "unknown"} exit ${exitCode}`];
+    if (r.truncated === true) parts.push("[output truncated at 1 MB]");
     if (stdout) parts.push(`stdout:\n${stdout}`);
     if (stderr) parts.push(`stderr:\n${stderr}`);
     return { text: parts.join("\n\n"), isError: Number(r.exitCode) !== 0 };
@@ -422,6 +423,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const stdout = String(r.stdout ?? "").trim();
     const stderr = String(r.stderr ?? "").trim();
     const parts = [`SSH target ${target} via bridge ${r.bridgeName ?? "unknown"} exit ${exitCode}`];
+    if (r.truncated === true) parts.push("[output truncated at 1 MB]");
     if (stdout) parts.push(`stdout:\n${stdout}`);
     if (stderr) parts.push(`stderr:\n${stderr}`);
     return { text: parts.join("\n\n"), isError: Number(r.exitCode) !== 0 };

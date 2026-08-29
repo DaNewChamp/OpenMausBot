@@ -1,4 +1,4 @@
-import type { BridgeCredentials, BridgeJob } from "./types.ts";
+import type { BridgeCredentials, BridgeJob, BridgeJobResult } from "./types.ts";
 
 function normalizeUrl(url: string): string {
   const parsed = new URL(url);
@@ -19,7 +19,7 @@ export async function registerBridge(input: {
     body: JSON.stringify({
       name: input.name,
       code: input.code,
-      capabilities: input.capabilities ?? ["shell"],
+      capabilities: input.capabilities ?? [],
       hostInfo: input.hostInfo,
     }),
   });
@@ -55,7 +55,7 @@ export async function heartbeat(
 export async function submitResult(
   credentials: BridgeCredentials,
   jobId: string,
-  result: { exitCode: number; stdout: string; stderr: string },
+  result: BridgeJobResult,
 ): Promise<void> {
   const res = await fetch(`${credentials.url}/api/bridge/result`, {
     method: "POST",

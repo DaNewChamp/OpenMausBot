@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR } from "./config.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
 import { resolveBridge, runShellOnBridge, runSshOnBridge } from "./bridge-exec.ts";
+import { runShellJob } from "../bridge/src/exec.ts";
 
 describe("bridge exec", () => {
   beforeEach(() => {
@@ -30,13 +31,14 @@ describe("bridge exec", () => {
     const runPromise = runShellOnBridge(registry, { name: "worker", command: "echo hi", timeoutMs: 5_000 });
     await vi.advanceTimersByTimeAsync(500);
     const [job] = registry.pollJobs(bridgeId);
-    expect(job?.command).toBe("echo hi");
+    expect(job).toMatchObject({ kind: "shell", command: "echo hi" });
     registry.storeResult({
       jobId: job!.id,
       bridgeId,
       exitCode: 0,
       stdout: "hi\n",
       stderr: "",
+      truncated: false,
       finishedAt: Date.now(),
     });
     await vi.advanceTimersByTimeAsync(500);
@@ -74,6 +76,7 @@ describe("bridge exec", () => {
       exitCode: 0,
       stdout: "windows\n",
       stderr: "",
+      truncated: false,
       finishedAt: Date.now(),
     });
     await vi.advanceTimersByTimeAsync(500);
@@ -83,5 +86,18 @@ describe("bridge exec", () => {
       bridgeName: "mini",
     });
     vi.useRealTimers();
+  });
+
+  it("flags shell output truncated at the 1 MB maxBuffer", async () => {
+    const result = await runShellJob({
+      id: "job-truncate",
+      bridgeId: "bridge-truncate",
+      kind: "shell",
+      command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(1024 * 1024 + 1))"`,
+      timeoutMs: 5_000,
+      createdAt: Date.now(),
+    });
+    expect(result.truncated).toBe(true);
+    expect(result.stdout.length).toBe(1024 * 1024);
   });
 });

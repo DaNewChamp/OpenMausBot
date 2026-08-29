@@ -41,7 +41,8 @@ OMB_BRIDGE_LOCAL_VM=1 bun run deploy:bridge -- --pair
 
 | Env | Bridge advertises | Used for |
 |---|---|---|
-| _(default)_ | `shell` | `run_on_bridge`, loopback `/api/bridges/:id/shell` |
+| _(default)_ | _(none)_ | Pairing only; execution capabilities are opt-in |
+| `OMB_BRIDGE_SHELL=1` | `shell` | `run_on_bridge`, loopback `/api/bridges/:id/shell` |
 | `OMB_BRIDGE_LOCAL_VM=1` | `local-vm` | Relay `GET/POST /api/bots/:id/local-computer*` when harness has no local docker |
 | `OMB_BRIDGE_SSH_FORWARD=1` | `ssh-forward` | `run_on_ssh_target`, `/api/internal/bridge/ssh` |
 

@@ -1,5 +1,9 @@
 node_modules
 .worktrees/
+build/*.xcarchive
+ios/build/
+dist-bridge/
+shared/local-vm-target.js
 dist
 dist-electron
 dist-native

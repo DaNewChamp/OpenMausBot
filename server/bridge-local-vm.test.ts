@@ -33,6 +33,7 @@ describe("bridge local-vm relay", () => {
       exitCode: 0,
       stdout: JSON.stringify({ container: "running", ready: true }),
       stderr: "",
+      truncated: false,
       finishedAt: Date.now(),
     });
     await vi.advanceTimersByTimeAsync(500);

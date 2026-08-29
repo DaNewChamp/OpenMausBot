@@ -5,6 +5,13 @@ export interface BridgeCredentials {
   name: string;
 }
 
+export interface BridgeJobResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+}
+
 export interface LocalVmJobPayload {
   botId: string;
   action?: "run" | "stop" | "remove" | "recreate";

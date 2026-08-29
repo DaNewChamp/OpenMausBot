@@ -25,6 +25,7 @@ let lastConfigureBody: any = null;
 let lastCredentialBody: any = null;
 let lastCreateRoomBody: any = null;
 let lastCreateRoutineBody: any = null;
+let bridgeResponse: unknown = { bridgeName: "Mac mini", exitCode: 0, stdout: "ok\n", stderr: "", truncated: false };
 
 let child: ChildProcess;
 const pending = new Map<number, (msg: any) => void>();
@@ -112,6 +113,15 @@ beforeAll(async () => {
         lastCredentialBody = JSON.parse(data);
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ messageId: "msg-key", label: "OpenCode API key" }));
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/internal/bridge/shell") {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(bridgeResponse));
       });
       return;
     }
@@ -375,6 +385,14 @@ describe("agents-proxy MCP surface", () => {
       reason: "The selected model needs it.",
     });
     expect(JSON.stringify(lastCredentialBody)).not.toContain("secret");
+  });
+
+  it("marks truncated bridge output in the tool text", async () => {
+    bridgeResponse = { bridgeName: "Mac mini", exitCode: 1, stdout: "partial", stderr: "", truncated: true };
+    const res = await callTool("run_on_bridge", { command: "printf x" });
+    expect(res.result.content[0].text).toContain("output truncated at 1 MB");
+    expect(res.result.isError).toBe(true);
+    bridgeResponse = { bridgeName: "Mac mini", exitCode: 0, stdout: "ok\n", stderr: "", truncated: false };
   });
 
   it("rejects credential ids outside the fixed allowlist locally", async () => {
