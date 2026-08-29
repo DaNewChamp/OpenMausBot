@@ -356,6 +356,10 @@ export interface BotRecord {
    * delegate_bot). Off by default: a chief-of-staff-style bot is most
    * useful when it can coordinate without nagging. */
   approvePeerComms?: boolean;
+  /** When on, turns route through the fastest available engine: Codex, then
+   * Claude/Cursor, then Grok — using low effort / fast model ids. The stored
+   * picker choice is kept for when fast mode is off. */
+  fastMode?: boolean;
   /** Whether this bot may use the workspace's connected apps (Composio).
    * Unset/true = allowed (the user configured the key deliberately);
    * false = this bot never receives the connection. Imported team members

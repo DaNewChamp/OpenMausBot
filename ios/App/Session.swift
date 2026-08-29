@@ -1536,6 +1536,19 @@ final class Session: ObservableObject {
         }
     }
 
+    func updateFastMode(_ enabled: Bool, for bot: Bot) async -> Bot? {
+        guard let client else { return nil }
+        do {
+            let updated = try await client.updateFastMode(botId: bot.id, patch: BotFastModePatch(fastMode: enabled))
+            guard !Task.isCancelled else { return nil }
+            state.apply(.bot(updated))
+            return updated
+        } catch {
+            if !Task.isCancelled { actionError = error.localizedDescription }
+            return nil
+        }
+    }
+
     func uploadAvatar(_ data: Data, mime: String, for bot: Bot, crop: AvatarCrop) async -> Bot? {
         guard let client else { return nil }
         do {

@@ -41,6 +41,7 @@ import {
   snapshotAvatarGenerationState,
 } from "./avatar-image.ts";
 import { guardedBotModelSwitch, parseBotModelPatch, resolveBotModelSelection } from "./bot-model.ts";
+import { resolveFastDispatch } from "./fast-routing.ts";
 import { parseChatPin } from "./chat-pin.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
@@ -1824,7 +1825,7 @@ async function startTurn(
   // a task takes its name from the first thing you asked it to do
   if (text.trim() && !opts?.cardContinuation) store.titleTaskFromFirstMessage(bot.id, text, threadId);
 
-  const instance = opts?.runOn === "cloud"
+  let instance = opts?.runOn === "cloud"
     ? registry.instances().find((candidate) => candidate.driverKind === "boxAgent") ?? null
     : registry.get(bot.modelSelection.instanceId);
   if (!instance) {
@@ -1837,11 +1838,31 @@ async function startTurn(
       { status: 409 },
     );
   }
-  const instanceId = instance.instanceId;
-  const model = opts?.runOn === "cloud" ? instance.models.default : bot.modelSelection.model;
+  let instanceId = instance.instanceId;
+  let model = opts?.runOn === "cloud" ? instance.models.default : bot.modelSelection.model;
   // a cloud routine borrows the instance default model, so it borrows no
   // per-bot effort either
-  const effort = opts?.runOn === "cloud" ? undefined : bot.modelSelection.effort;
+  let effort = opts?.runOn === "cloud" ? undefined : bot.modelSelection.effort;
+  if (opts?.runOn !== "cloud" && bot.fastMode) {
+    const fast = resolveFastDispatch({
+      stored: bot.modelSelection,
+      instances: registry.instances().map((candidate) => ({
+        instanceId: candidate.instanceId,
+        driverKind: candidate.driverKind,
+        models: candidate.models,
+        capabilities: candidate.adapter.capabilities,
+      })),
+    });
+    if (fast) {
+      const fastInstance = registry.get(fast.instanceId);
+      if (fastInstance) {
+        instance = fastInstance;
+        instanceId = fast.instanceId;
+        model = fast.model;
+        effort = fast.effort;
+      }
+    }
+  }
   // A selection can be persisted while its engine is offline. Re-check when
   // the engine returns so an old or unsupported value never reaches a CLI.
   if (effort && !instance.adapter.capabilities.effortLevels?.includes(effort)) {
@@ -4005,6 +4026,7 @@ const server = createServer(async (req, res) => {
           autoApprove: false,
           approvePeerComms: false,
           ...(reportsToBotId ? { reportsToBotId } : {}),
+          ...(body.fastMode === true || body.fast_mode === true ? { fastMode: true } : {}),
         })!;
         return json(res, 201, {
           id: safeBot.id,
@@ -4089,6 +4111,13 @@ const server = createServer(async (req, res) => {
         }
         if (Object.keys(profilePatch).length) {
           const patched = store.patchBot(bot.id, profilePatch);
+          if (!patched) return json(res, 404, { error: "no such bot" });
+          bot = patched;
+        }
+        if (body.fastMode !== undefined || body.fast_mode !== undefined) {
+          const next = body.fastMode ?? body.fast_mode;
+          if (typeof next !== "boolean") return json(res, 400, { error: "fastMode must be true or false" });
+          const patched = store.patchBot(bot.id, { fastMode: next });
           if (!patched) return json(res, 404, { error: "no such bot" });
           bot = patched;
         }
@@ -5645,6 +5674,10 @@ const server = createServer(async (req, res) => {
       if (body.autoApprove !== undefined) {
         if (typeof body.autoApprove !== "boolean") return json(res, 400, { error: "autoApprove must be true or false" });
         patch.autoApprove = body.autoApprove;
+      }
+      if (body.fastMode !== undefined) {
+        if (typeof body.fastMode !== "boolean") return json(res, 400, { error: "fastMode must be true or false" });
+        patch.fastMode = body.fastMode;
       }
       // "Auto on this Mac" hands a bot the user's real session, so the grant
       // must prove a human saw the warning. The desktop dialog is the only

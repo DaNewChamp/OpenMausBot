@@ -93,6 +93,10 @@ const TOOLS = [
           type: "string",
           description: "Optional reasoning level offered by that engine (for example low, medium, high, xhigh). Omit to inherit yours when compatible.",
         },
+        fast_mode: {
+          type: "boolean",
+          description: "When true, turns prefer the fastest available engine (Codex, then Claude/Cursor, then Grok) with low effort.",
+        },
       },
       required: ["name", "role", "instructions"],
     },
@@ -113,6 +117,10 @@ const TOOLS = [
         effort: {
           type: ["string", "null"],
           description: "Optional reasoning level, or null to clear it.",
+        },
+        fast_mode: {
+          type: "boolean",
+          description: "Enable or disable fast mode (Codex first, then Claude/Cursor, then Grok).",
         },
       },
       required: ["bot_id"],
@@ -352,6 +360,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
         ...(args.engine ? { engine: String(args.engine) } : {}),
         ...(args.model ? { model: String(args.model) } : {}),
         ...(args.effort !== undefined ? { effort: args.effort } : {}),
+        ...(args.fast_mode === true ? { fastMode: true } : {}),
       }),
     });
     createdThisTurn += 1;
@@ -375,6 +384,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     if (args.role) payload.role = String(args.role);
     if (args.instructions) payload.instructions = String(args.instructions);
     if (args.reports_to !== undefined) payload.reports_to = args.reports_to;
+    if (args.fast_mode !== undefined) payload.fastMode = Boolean(args.fast_mode);
     const r = await api(`/api/internal/configure-bot`, { method: "POST", body: JSON.stringify(payload) });
     const effort = r.effort ? `, reasoning: ${r.effort}` : "";
     const role = r.title ? `, role: ${r.title}` : "";
