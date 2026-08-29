@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { BridgeCapability, BridgeRegistry } from "./bridge-registry.ts";
+import { runShellOnBridge } from "./bridge-exec.ts";
 
 type JsonFn = (res: ServerResponse, status: number, body: unknown) => void;
 
@@ -37,6 +38,23 @@ export async function handleBridgeRoutes(
   if (method === "GET" && path === "/api/bridges") {
     if (!opts.loopback) return json(res, 403, { error: "bridge list is loopback-only" }), true;
     return json(res, 200, { bridges: bridges.list() }), true;
+  }
+
+  const shellMatch = path.match(/^\/api\/bridges\/([\w-]+)\/shell$/);
+  if (method === "POST" && shellMatch && opts.loopback) {
+    try {
+      const body = await readJson(req);
+      const result = await runShellOnBridge(bridges, {
+        bridgeId: shellMatch[1],
+        name: body.name ? String(body.name) : undefined,
+        command: String(body.command ?? ""),
+        cwd: body.cwd ? String(body.cwd) : undefined,
+        timeoutMs: body.timeoutMs == null ? undefined : Number(body.timeoutMs),
+      });
+      return json(res, 200, result), true;
+    } catch (error) {
+      return json(res, 400, { error: error instanceof Error ? error.message : String(error) }), true;
+    }
   }
 
   if (method === "POST" && path === "/api/bridge/register") {

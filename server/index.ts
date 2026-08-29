@@ -25,6 +25,7 @@ import * as checkpoints from "./checkpoints.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
 import { handleBridgeRoutes } from "./bridge-routes.ts";
+import { runShellOnBridge } from "./bridge-exec.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import {
   decideDelivery,
@@ -4206,6 +4207,21 @@ const server = createServer(async (req, res) => {
         }
         maybeResumeConnectors(botId, threadId, resumeKey, capturedRoomRun);
         return json(res, 200, { messageIds });
+      }
+      if (method === "POST" && path === "/api/internal/bridge/shell") {
+        const body = await readBody(req);
+        try {
+          const result = await runShellOnBridge(bridges, {
+            bridgeId: body.bridgeId ? String(body.bridgeId) : undefined,
+            name: body.bridge ? String(body.bridge) : body.name ? String(body.name) : undefined,
+            command: String(body.command ?? ""),
+            cwd: body.cwd ? String(body.cwd) : undefined,
+            timeoutMs: body.timeoutMs == null ? undefined : Number(body.timeoutMs),
+          });
+          return json(res, 200, result);
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
       }
       return json(res, 404, { error: "unknown internal endpoint" });
     }

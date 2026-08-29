@@ -53,7 +53,13 @@ Optional Electron/Tauri fork: pair to the cloud URL, show bot roster + transcrip
 Computer view — same role Grok Reconstructed plays locally today, but remote-first.
 No SQLite on desktop; harness on VPS remains source of truth.
 
-## vs Hermes Agent
+Chief can run shell on a registered bridge via `run_on_bridge` (agents tool) or loopback:
+
+```sh
+ssh servarica 'curl -s -X POST http://127.0.0.1:8799/api/bridges/<id>/shell \
+  -H "Content-Type: application/json" \
+  -d "{\"command\":\"hostname\"}"'
+```
 
 Similar **shape** (central agent + execution backends + messenger gateway), different **product**:
 

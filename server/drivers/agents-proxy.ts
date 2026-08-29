@@ -15,6 +15,7 @@
 //                                          their own section
 //   configure_bot(bot_id, …)             → Chiefs can retarget a teammate's
 //                                          engine, model, or reasoning
+//   run_on_bridge(command, bridge?, …)   → run a shell command on a paired home bridge
 //   request_credential(id, reason?)       → show a secure, allowlisted key card
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
@@ -106,6 +107,21 @@ const TOOLS = [
         },
       },
       required: ["bot_id"],
+    },
+  },
+  {
+    name: "run_on_bridge",
+    description:
+      "Run a shell command on a registered home bridge (Mac mini, Pi, etc.) through the cloud harness. Use bridge name when you know it (for example Mac mini); omit to use the freshest online bridge. Returns stdout, stderr, and exit code.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "Shell command to run on the bridge host." },
+        bridge: { type: "string", description: "Optional bridge display name from the harness bridge list." },
+        cwd: { type: "string", description: "Optional working directory on the bridge host." },
+        timeout_ms: { type: "number", description: "Optional timeout in milliseconds (default 60000)." },
+      },
+      required: ["command"],
     },
   },
   {
@@ -248,6 +264,22 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     return {
       text: `Updated @${r.name ?? "bot"} [id: ${r.id}] to engine ${r.engine ?? "unknown"}, model ${r.model}${effort}.`,
     };
+  }
+  if (name === "run_on_bridge") {
+    const command = String(args.command ?? "").trim();
+    if (!command) return { text: "run_on_bridge needs command.", isError: true };
+    const body: Record<string, unknown> = { command };
+    if (args.bridge) body.bridge = String(args.bridge);
+    if (args.cwd) body.cwd = String(args.cwd);
+    if (args.timeout_ms != null) body.timeoutMs = Number(args.timeout_ms);
+    const r = await api("/api/internal/bridge/shell", { method: "POST", body: JSON.stringify(body) });
+    const exitCode = r.exitCode ?? "?";
+    const stdout = String(r.stdout ?? "").trim();
+    const stderr = String(r.stderr ?? "").trim();
+    const parts = [`Bridge ${r.bridgeName ?? "unknown"} exit ${exitCode}`];
+    if (stdout) parts.push(`stdout:\n${stdout}`);
+    if (stderr) parts.push(`stderr:\n${stderr}`);
+    return { text: parts.join("\n\n"), isError: Number(r.exitCode) !== 0 };
   }
   if (name === "request_credential") {
     const credentialId = args.credential_id;
