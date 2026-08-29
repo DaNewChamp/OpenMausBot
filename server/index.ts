@@ -26,7 +26,7 @@ import * as checkpoints from "./checkpoints.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
 import { handleBridgeRoutes, isCompanionRequest } from "./bridge-routes.ts";
-import { runShellOnBridge, runSshOnBridge } from "./bridge-exec.ts";
+import { resolveBridge, runShellOnBridge, runSshOnBridge } from "./bridge-exec.ts";
 import { runLocalVmOnBridge, shouldRelayLocalVm } from "./bridge-local-vm.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import {
@@ -128,6 +128,7 @@ import { drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import {
+  abortSignalFromHttp,
   cancelBridgeApprovalsFor,
   cancelBridgeApprovalsForThread,
   dismissStaleBridgeCards,
@@ -280,7 +281,7 @@ bus.attach(registry.instances());
 // ── peer-agent comms wiring ────────────────────────────────────────────
 // A shared secret guards the localhost-only /api/internal endpoints the
 // agents-proxy calls; regenerated each boot (the proxy gets it via env).
-const COMMS_TOKEN = randomBytes(24).toString("hex");
+const COMMS_TOKEN = process.env.OMB_COMMS_TOKEN?.trim() || randomBytes(24).toString("hex");
 const bridges = new BridgeRegistry();
 const BRIDGE_ADMIN_TOKEN = process.env.OMB_BRIDGE_ADMIN_TOKEN?.trim() || randomBytes(24).toString("hex");
 mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
@@ -4377,31 +4378,41 @@ const server = createServer(async (req, res) => {
         const bot = fromBotId ? store.bot(fromBotId) : undefined;
         if (!bot) return json(res, 403, { error: "bridge execution requires approval from a known bot" });
         const command = String(body.command ?? "");
-        const target = String(body.bridgeId ?? body.bridge ?? body.name ?? "");
         const cwd = body.cwd ? String(body.cwd) : undefined;
-        const decision = await requestBridgeApproval(approvalBus, {
-          bot,
-          tool: "run_on_bridge",
-          command,
-          target,
-          cwd,
-          logThreadId: String(body.fromThreadId ?? bot.threadId),
+        const runTimeoutMs = body.timeoutMs == null ? undefined : Number(body.timeoutMs);
+        const resolved = resolveBridge(bridges, {
+          bridgeId: body.bridgeId ? String(body.bridgeId) : undefined,
+          name: body.bridge ? String(body.bridge) : body.name ? String(body.name) : undefined,
+          capability: "shell",
         });
-        if (decision !== "allow") {
-          return json(res, 403, {
-            error: "bridge execution requires approval",
-            allowKey: approvalKey("run_on_bridge", command, "bridge"),
-          });
-        }
+        if (!resolved) return json(res, 400, { error: "no online bridge matched" });
         try {
-          const result = await runShellOnBridge(bridges, {
-            bridgeId: body.bridgeId ? String(body.bridgeId) : undefined,
-            name: body.bridge ? String(body.bridge) : body.name ? String(body.name) : undefined,
+          const decision = await requestBridgeApproval(approvalBus, {
+            bot,
+            tool: "run_on_bridge",
             command,
+            bridgeId: resolved.id,
+            bridgeName: resolved.name,
             cwd,
-            timeoutMs: body.timeoutMs == null ? undefined : Number(body.timeoutMs),
+            runTimeoutMs,
+            logThreadId: String(body.fromThreadId ?? bot.threadId),
+            signal: abortSignalFromHttp(res),
+            execute: () =>
+              runShellOnBridge(bridges, {
+                bridgeId: resolved.id,
+                command,
+                cwd,
+                timeoutMs: runTimeoutMs,
+              }),
           });
-          return json(res, 200, result);
+          if (decision.outcome !== "allow") {
+            return json(res, 403, {
+              error: "bridge execution requires approval",
+              allowKey: approvalKey("run_on_bridge", command, "bridge"),
+              outcome: decision.outcome === "expired" ? "expired" : "rejected",
+            });
+          }
+          return json(res, 200, decision.result);
         } catch (error) {
           return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
         }
@@ -4414,32 +4425,44 @@ const server = createServer(async (req, res) => {
         const command = String(body.command ?? "");
         const targetKey = String(body.target ?? "");
         const cwd = body.cwd ? String(body.cwd) : undefined;
-        const decision = await requestBridgeApproval(approvalBus, {
-          bot,
-          tool: "run_on_ssh_target",
-          command,
-          target: targetKey,
-          cwd,
-          logThreadId: String(body.fromThreadId ?? bot.threadId),
+        const runTimeoutMs = body.timeoutMs == null ? undefined : Number(body.timeoutMs);
+        const mapped = bridgeSshTarget(cfg, targetKey);
+        if (!mapped) return json(res, 400, { error: `unknown ssh target: ${targetKey}` });
+        const jump = resolveBridge(bridges, {
+          bridgeId: body.bridgeId ? String(body.bridgeId) : undefined,
+          name: body.bridge ? String(body.bridge) : mapped.bridge,
+          capability: "ssh-forward",
         });
-        if (decision !== "allow") {
-          return json(res, 403, {
-            error: "bridge execution requires approval",
-            allowKey: approvalKey("run_on_ssh_target", command, "bridge"),
-          });
-        }
+        if (!jump) return json(res, 400, { error: "no online bridge with ssh-forward matched" });
         try {
-          const mapped = bridgeSshTarget(cfg, targetKey);
-          if (!mapped) return json(res, 400, { error: `unknown ssh target: ${targetKey}` });
-          const result = await runSshOnBridge(bridges, {
-            bridgeId: body.bridgeId ? String(body.bridgeId) : undefined,
-            name: body.bridge ? String(body.bridge) : mapped.bridge,
-            alias: mapped.alias,
+          const decision = await requestBridgeApproval(approvalBus, {
+            bot,
+            tool: "run_on_ssh_target",
             command,
+            bridgeId: jump.id,
+            bridgeName: jump.name,
+            sshAlias: mapped.alias,
             cwd,
-            timeoutMs: body.timeoutMs == null ? undefined : Number(body.timeoutMs),
+            runTimeoutMs,
+            logThreadId: String(body.fromThreadId ?? bot.threadId),
+            signal: abortSignalFromHttp(res),
+            execute: () =>
+              runSshOnBridge(bridges, {
+                bridgeId: jump.id,
+                alias: mapped.alias,
+                command,
+                cwd,
+                timeoutMs: runTimeoutMs,
+              }),
           });
-          return json(res, 200, result);
+          if (decision.outcome !== "allow") {
+            return json(res, 403, {
+              error: "bridge execution requires approval",
+              allowKey: approvalKey("run_on_ssh_target", command, "bridge"),
+              outcome: decision.outcome === "expired" ? "expired" : "rejected",
+            });
+          }
+          return json(res, 200, decision.result);
         } catch (error) {
           return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
         }
@@ -6150,8 +6173,17 @@ const server = createServer(async (req, res) => {
       if (resolvePeerComms(approvalBus, String(body.requestId), behavior)) {
         return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
-      if (resolveBridgeApproval(approvalBus, String(body.requestId), behavior)) {
-        return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
+      {
+        const resolved = resolveBridgeApproval(approvalBus, String(body.requestId), behavior, {
+          botId: bot.id,
+          threadId: bot.threadId,
+        });
+        if (resolved.handled) {
+          if (resolved.outcome === "forbidden") {
+            return json(res, 403, { error: "that approval does not belong to this bot", outcome: "rejected" });
+          }
+          return json(res, 200, { ok: true, outcome: resolved.outcome });
+        }
       }
       const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), behavior, body.message, { id: bot.id, name: bot.name });
       return json(res, 200, { ok: true, outcome });
@@ -6172,8 +6204,14 @@ const server = createServer(async (req, res) => {
       if (resolvePeerComms(approvalBus, requestId, behavior)) {
         return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
-      if (resolveBridgeApproval(approvalBus, requestId, behavior)) {
-        return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
+      {
+        const resolved = resolveBridgeApproval(approvalBus, requestId, behavior, { threadId });
+        if (resolved.handled) {
+          if (resolved.outcome === "forbidden") {
+            return json(res, 403, { error: "that approval does not belong to this conversation", outcome: "rejected" });
+          }
+          return json(res, 200, { ok: true, outcome: resolved.outcome });
+        }
       }
       const group = store.groupByThread(threadId);
       // busyBotId is in-memory only, so an approval that outlives its turn — or
