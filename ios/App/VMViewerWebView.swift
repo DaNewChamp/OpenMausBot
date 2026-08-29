@@ -28,7 +28,13 @@ struct VMViewerWebView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.onLoadFailed = onLoadFailed
-        if webView.url?.absoluteString != url.absoluteString {
+        let target = Self.stableURLString(url)
+        let current = webView.url.map(Self.stableURLString)
+        // WKWebView.url drops the hash noVNC reads for autoconnect. Comparing
+        // absoluteString therefore reloads on every SwiftUI pass and the viewer
+        // never stays connected.
+        if current != target, context.coordinator.loadedURL != target {
+            context.coordinator.loadedURL = target
             context.coordinator.resetHealthCheck()
             webView.load(URLRequest(url: url))
         }
@@ -38,9 +44,18 @@ struct VMViewerWebView: UIViewRepresentable {
         }
     }
 
+    private static func stableURLString(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.absoluteString
+        }
+        components.fragment = nil
+        return components.string ?? url.absoluteString
+    }
+
     final class Coordinator: NSObject, WKNavigationDelegate {
         weak var webView: WKWebView?
         var lastKeyboardTrigger = 0
+        var loadedURL: String?
         var onLoadFailed: ((String) -> Void)?
         private var healthCheckTask: Task<Void, Never>?
 
@@ -117,12 +132,21 @@ struct VMViewerWebView: UIViewRepresentable {
 
         private static let keyboardScript = """
         (function() {
-          var button = document.getElementById('noVNC_keyboard_button')
-            || document.querySelector('[id*="keyboard"]');
-          if (button) { button.click(); return true; }
           var input = document.getElementById('noVNC_keyboardinput')
             || document.getElementById('keyboardinput');
-          if (input) { input.focus(); return true; }
+          if (input) {
+            input.removeAttribute('readonly');
+            input.style.opacity = '0.01';
+            input.style.position = 'fixed';
+            input.style.left = '0';
+            input.style.bottom = '0';
+            input.style.width = '1px';
+            input.style.height = '1px';
+            input.focus();
+            return true;
+          }
+          var button = document.getElementById('noVNC_keyboard_button');
+          if (button) { button.click(); return true; }
           return false;
         })();
         """

@@ -327,7 +327,9 @@ struct ComputerView: View {
                 localVmViewerURL = nil
                 return
             }
+            guard localVmViewerURL == nil else { return }
             let joined = await session.localVmViewerURL(for: current)
+            guard !Task.isCancelled else { return }
             localVmViewerURL = joined.url
             if let error = joined.error, joined.url == nil {
                 localVmSurfaceError = error
@@ -470,7 +472,7 @@ struct ComputerView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            if localVmInteractive, !usingLiveViewer {
+            if localVmInteractive {
                 vmHiddenKeyboardField
             }
         }
@@ -506,14 +508,13 @@ struct ComputerView: View {
     @MainActor
     private func toggleVmKeyboard() {
         Haptics.selection()
-        if usingLiveViewer {
-            vmKeyboardTrigger += 1
-            return
-        }
         if vmKeyboardFocused {
             vmKeyboardFocused = false
         } else {
             vmKeyboardFocused = true
+            if usingLiveViewer {
+                vmKeyboardTrigger += 1
+            }
         }
     }
 
@@ -531,7 +532,9 @@ struct ComputerView: View {
         guard !text.isEmpty else { return }
         await sendLocalVmInput(["action": "type", "text": text])
         vmTypeDraft = ""
-        vmKeyboardFocused = false
+        if !usingLiveViewer {
+            vmKeyboardFocused = false
+        }
     }
 
     @MainActor
