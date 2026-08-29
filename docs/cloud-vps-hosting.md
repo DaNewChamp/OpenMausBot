@@ -44,6 +44,7 @@ same machine over `ssh://127.0.0.1`. To run containers on a home Windows box ins
 add a ProxyJump SSH alias on the VPS and set `vps.sshAlias` accordingly (see `docs/byo-vps.md`).
 
 Local VM on the phone requires a home **bridge** (Phase B); the cloud harness does not run the Mac Local VM.
+See [`docs/bridge-agent.md`](bridge-agent.md).
 
 ## Cutover from Mac mini
 

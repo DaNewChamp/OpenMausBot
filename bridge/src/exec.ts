@@ -1,0 +1,25 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+import type { BridgeJob } from "./types.ts";
+
+const execFileAsync = promisify(execFile);
+
+export async function runShellJob(job: BridgeJob): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  try {
+    const { stdout, stderr } = await execFileAsync("bash", ["-lc", job.command], {
+      cwd: job.cwd,
+      timeout: job.timeoutMs,
+      maxBuffer: 1024 * 1024,
+      env: process.env,
+    });
+    return { exitCode: 0, stdout, stderr };
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string; code?: number | string };
+    return {
+      exitCode: typeof err.code === "number" ? err.code : 1,
+      stdout: err.stdout ?? "",
+      stderr: err.stderr ?? (err.message ?? String(error)),
+    };
+  }
+}

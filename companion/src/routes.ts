@@ -604,6 +604,7 @@ export function denyReason({ path, method, authenticated }: RouteRequest): Denia
   // exactly the person it was for — which reads as "broken" rather than
   // "unpaired". It discloses nothing a port scan would not.
   if (method === "GET" && path === "/api/health") return null;
+  if (path.startsWith("/api/bridge/")) return null;
 
   if (!authenticated) {
     return { status: 401, error: "pair this device from Phone settings in OpenMausBot on your computer" };

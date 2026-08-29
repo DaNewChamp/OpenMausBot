@@ -23,6 +23,8 @@ import {
 import { approvalKey, autoVerdict } from "./auto-approve.ts";
 import * as checkpoints from "./checkpoints.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
+import { BridgeRegistry } from "./bridge-registry.ts";
+import { handleBridgeRoutes } from "./bridge-routes.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import {
   decideDelivery,
@@ -250,6 +252,7 @@ bus.attach(registry.instances());
 // A shared secret guards the localhost-only /api/internal endpoints the
 // agents-proxy calls; regenerated each boot (the proxy gets it via env).
 const COMMS_TOKEN = randomBytes(24).toString("hex");
+const bridges = new BridgeRegistry();
 
 /** Constant-time bearer check for the internal comms endpoints. The token
  * is high-entropy and loopback-only, so a timing oracle is a long shot —
@@ -3627,6 +3630,11 @@ function isAllowedOrigin(origin: string | undefined | null): boolean {
   }
 }
 
+function isDirectLoopback(req: IncomingMessage): boolean {
+  const addr = req.socket.remoteAddress ?? "";
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const path = url.pathname;
@@ -3641,6 +3649,9 @@ const server = createServer(async (req, res) => {
     const origin = req.headers.origin;
     if (origin && !isAllowedOrigin(origin)) {
       return json(res, 403, { error: "forbidden: cross-origin request" });
+    }
+    if (await handleBridgeRoutes(req, res, method, path, json, bridges, { loopback: isDirectLoopback(req) })) {
+      return;
     }
     // ── internal peer-agent comms (localhost + shared token only) ──────
     // The agents-proxy (spawned inside a bot's agent process) calls these to
