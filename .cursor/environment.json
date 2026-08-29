@@ -1,0 +1,23 @@
+{
+  "name": "OpenMausBot (Mac mini iOS builds)",
+  "install": "corepack pnpm install --frozen-lockfile",
+  "mcpServerAllowlist": [
+    {
+      "name": "Mac-Mini",
+      "serverUrl": "https://local.posival.com/mcp",
+      "toolAllowlist": [
+        "run_shell",
+        "ios_device_build_run",
+        "ios_device_install",
+        "ios_device_list",
+        "ios_simulator_build_run",
+        "mcp_doctor",
+        "system_info"
+      ]
+    },
+    {
+      "name": "Mac-Mini-mcp-remote",
+      "command": "npx"
+    }
+  ]
+}
