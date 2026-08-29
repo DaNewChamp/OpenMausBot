@@ -255,8 +255,16 @@ struct ChatView: View {
                     }
                     scrollToLatest(proxy)
                 }
-                .onChange(of: current.busy) { _, busy in
-                    guard busy else { return }
+                .onChange(of: transcript.last?.text) { _, _ in
+                    scrollToLatest(proxy, animated: false)
+                }
+                .onChange(of: current.busy) { _, _ in
+                    scrollToLatest(proxy)
+                }
+                .onChange(of: composerFocused) { _, _ in
+                    scrollToLatest(proxy)
+                }
+                .onChange(of: draft.isEmpty) { _, _ in
                     scrollToLatest(proxy)
                 }
                 // Follow the text as it arrives. Keyed on length rather than
@@ -265,7 +273,10 @@ struct ChatView: View {
                 // into a stutter, because each scroll interrupts the last.
                 .onChange(of: session.state.streaming[threadId]?.count ?? 0) { _, length in
                     guard length > 0 else { return }
-                    proxy.scrollTo(Self.liveBubbleId, anchor: .bottom)
+                    scrollToLatest(proxy, animated: false)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { _ in
+                    scrollToLatest(proxy, animated: false)
                 }
                 .onChange(of: session.focusedMessageId) { _, messageId in
                     guard let messageId,
@@ -331,6 +342,7 @@ struct ChatView: View {
             GroupProfileView(room: room)
         }
         .task(id: threadId) {
+            session.setForegroundThread(threadId)
             if newAfterMessageId == nil, current.unread {
                 newAfterMessageId = messages.last(where: { $0.role == .user })?.id
             }
@@ -366,7 +378,12 @@ struct ChatView: View {
             // reconnects leave this revision alone, preserving local notices.
             reconcilePendingQueue(in: messages, authoritativeRefresh: true)
         }
-        .onDisappear { dictation.stop() }
+        .onDisappear {
+            dictation.stop()
+            if NotificationCoordinator.shared.foregroundThreadId == threadId {
+                session.setForegroundThread(nil)
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { dictation.stop() }
         }
@@ -990,7 +1007,7 @@ struct ChatView: View {
         messages.contains { $0.card?.isPending == true }
     }
 
-    private func scrollToLatest(_ proxy: ScrollViewProxy) {
+    private func scrollToLatest(_ proxy: ScrollViewProxy, animated: Bool = true) {
         let streaming = session.state.streaming[threadId] ?? ""
         let thinking = session.state.reasoning[threadId] ?? ""
         let target: String
@@ -1001,12 +1018,20 @@ struct ChatView: View {
         } else {
             return
         }
-        Task { @MainActor in
-            if reduceMotion {
+        func scroll(_ proxy: ScrollViewProxy) {
+            if reduceMotion || !animated {
                 proxy.scrollTo(target, anchor: .bottom)
             } else {
                 withAnimation { proxy.scrollTo(target, anchor: .bottom) }
             }
+        }
+        Task { @MainActor in
+            scroll(proxy)
+            // Keyboard, chips, and safe-area inset settle after the first pass.
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            scroll(proxy)
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            scroll(proxy)
         }
     }
 
