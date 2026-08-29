@@ -6,6 +6,7 @@ import UIKit
 /// cursor where the VM will be clicked.
 struct RemoteDesktopCanvas: View {
     let image: UIImage
+    var pointerMode: VmPointerMode = .touch
     let onClick: (_ x: Int, _ y: Int, _ button: String) -> Void
     let onScroll: (_ direction: String, _ clicks: Int, _ x: Int, _ y: Int) -> Void
 
@@ -37,6 +38,11 @@ struct RemoteDesktopCanvas: View {
                         .allowsHitTesting(false)
                 }
             }
+            .onAppear {
+                if cursorPoint == nil {
+                    cursorPoint = CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                }
+            }
         }
         .clipped()
     }
@@ -54,9 +60,19 @@ struct RemoteDesktopCanvas: View {
             .updating($pinchScale) { value, state, _ in state = value }
             .onEnded { value in scale = min(max(scale * value, 1), 4) }
 
-        let pan = DragGesture(minimumDistance: 12)
-            .updating($dragOffset) { value, state, _ in state = value.translation }
+        let pan = DragGesture(minimumDistance: pointerMode == .trackpad ? 0 : 12)
+            .updating($dragOffset) { value, state, _ in
+                if pointerMode == .trackpad {
+                    cursorPoint = value.location
+                } else {
+                    state = value.translation
+                }
+            }
             .onEnded { value in
+                if pointerMode == .trackpad {
+                    cursorPoint = value.location
+                    return
+                }
                 if value.translation.height < -24, abs(value.translation.width) < 40 {
                     let point = desktopPoint(from: value.startLocation, fitted: fitted, container: container)
                     cursorPoint = value.startLocation
@@ -75,17 +91,23 @@ struct RemoteDesktopCanvas: View {
 
         let tap = SpatialTapGesture()
             .onEnded { value in
-                cursorPoint = value.location
-                let point = desktopPoint(from: value.location, fitted: fitted, container: container)
-                onClick(point.x, point.y, "left")
+                if pointerMode == .trackpad, let cursorPoint {
+                    let point = desktopPoint(from: cursorPoint, fitted: fitted, container: container)
+                    onClick(point.x, point.y, "left")
+                } else {
+                    cursorPoint = value.location
+                    let point = desktopPoint(from: value.location, fitted: fitted, container: container)
+                    onClick(point.x, point.y, "left")
+                }
             }
 
         let longPress = LongPressGesture(minimumDuration: 0.45)
             .sequenced(before: DragGesture(minimumDistance: 0))
             .onEnded { value in
                 guard case .second(true, let drag?) = value else { return }
-                cursorPoint = drag.startLocation
-                let point = desktopPoint(from: drag.startLocation, fitted: fitted, container: container)
+                let location = pointerMode == .trackpad ? (cursorPoint ?? drag.startLocation) : drag.startLocation
+                cursorPoint = location
+                let point = desktopPoint(from: location, fitted: fitted, container: container)
                 onClick(point.x, point.y, "right")
             }
 
