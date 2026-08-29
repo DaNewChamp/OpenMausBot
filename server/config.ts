@@ -181,7 +181,11 @@ export function skillRecorderEnabled(cfg: AppConfig): boolean {
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.
-export const DATA_DIR = process.env.OMB_DATA_DIR ?? join(homedir(), ".openmausbot");
+// OMB_USER_DATA is what hosted/cloud launch scripts set (Electron userData on Mac).
+export const DATA_DIR =
+  process.env.OMB_DATA_DIR ??
+  process.env.OMB_USER_DATA ??
+  join(homedir(), ".openmausbot");
 const LEGACY_DATA_DIR = join(homedir(), ".opengrokbot");
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
