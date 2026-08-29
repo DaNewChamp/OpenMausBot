@@ -43,6 +43,8 @@ function label(tool: string): string {
   const nice: ApprovalLabels = {
     Bash: "Command approval requested",
     shell: "Command approval requested",
+    run_on_bridge: "Bridge command approval requested",
+    run_on_ssh_target: "SSH command approval requested",
     Read: "File-read approval requested",
     Write: "File-change approval requested",
     Edit: "File-change approval requested",
