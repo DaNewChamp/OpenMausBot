@@ -35,10 +35,16 @@ async function handleJob(job: BridgeJob) {
 async function runDaemon(credentials = loadCredentials()) {
   if (!credentials) throw new Error(`no saved credentials at ${credentialsPath()} — run: connect --url … --code …`);
   console.log(`bridge: ${credentials.name} → ${credentials.url}`);
+  const inFlight = new Set<string>();
   for (;;) {
     try {
       const jobs = await heartbeat(credentials, hostname(), bridgeCapabilities());
       for (const job of jobs) {
+        if (inFlight.has(job.id)) {
+          console.log(`job ${job.id}: already in flight, skipping duplicate delivery`);
+          continue;
+        }
+        inFlight.add(job.id);
         const label =
           job.kind === "shell"
             ? job.command
@@ -46,8 +52,12 @@ async function runDaemon(credentials = loadCredentials()) {
               ? `ssh ${job.alias} ${job.command}`
               : `${job.kind} ${job.payload.botId}`;
         console.log(`job ${job.id}: ${label}`);
-        const result = await handleJob(job);
-        await submitResult(credentials, job.id, result);
+        try {
+          const result = await handleJob(job);
+          await submitResult(credentials, job.id, result);
+        } finally {
+          inFlight.delete(job.id);
+        }
       }
     } catch (error) {
       console.warn(`bridge heartbeat: ${error instanceof Error ? error.message : String(error)}`);

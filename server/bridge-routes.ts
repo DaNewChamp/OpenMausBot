@@ -40,6 +40,29 @@ export async function handleBridgeRoutes(
     return json(res, 200, { bridges: bridges.list() }), true;
   }
 
+  const jobMatch = path.match(/^\/api\/bridge\/jobs\/([\w-]+)$/);
+  if (jobMatch && opts.loopback) {
+    const jobId = jobMatch[1]!;
+    if (method === "GET") {
+      const record = bridges.getJob(jobId);
+      if (!record) return json(res, 404, { error: "job not found" }), true;
+      return json(res, 200, { job: record }), true;
+    }
+    if (method === "POST") {
+      const body = await readJson(req);
+      if (body.action !== "cancel") return json(res, 400, { error: "unsupported job action" }), true;
+      const record = bridges.cancelJob(jobId);
+      if (!record) return json(res, 404, { error: "job not found" }), true;
+      return json(res, 200, { job: record }), true;
+    }
+  }
+
+  if (method === "GET" && path === "/api/bridge/jobs" && opts.loopback) {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const bridgeId = url.searchParams.get("bridgeId") ?? undefined;
+    return json(res, 200, { jobs: bridges.listJobs(bridgeId) }), true;
+  }
+
   const shellMatch = path.match(/^\/api\/bridges\/([\w-]+)\/shell$/);
   if (method === "POST" && shellMatch && opts.loopback) {
     try {
