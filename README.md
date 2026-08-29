@@ -132,6 +132,7 @@ bun run companion          # sidecar → :8810, pair at :8811
 | `companion/` | Sidecar the phone is allowed to call |
 | `server/` | Harness API, drivers, Local VM / container image |
 | `scripts/deploy-hosted-runtime.mjs` | Headless deploy to a home Mac |
+| `scripts/deploy-cloud-vps.mjs` | Headless deploy to a Linux VPS (cloud-first phone stack) |
 | `scripts/hosted-runtime/` | launchd plist + `start-harness.sh` |
 | `electron/`, `src/` | Upstream desktop app (maintained for parity, not the focus here) |
 

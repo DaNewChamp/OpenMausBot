@@ -1,0 +1,22 @@
+[Unit]
+Description=OpenMausBot companion sidecar (cloud VPS)
+After=openmausbot-harness.service
+Requires=openmausbot-harness.service
+
+[Service]
+Type=simple
+User=root
+Environment=OMB_RUNTIME_ROOT=/opt/openmausbot/runtime
+Environment=OMB_COMPANION_DIR=/var/lib/openmausbot-companion
+Environment=OMB_COMPANION_HOSTED_URL=https://openmaus.posival.com
+Environment=OMB_COMPANION_PORT=28810
+Environment=OMB_CONTROL_PORT=28811
+Environment=OMB_ORIGIN_DIR=/var/lib/openmausbot/omb-hosted/omb-companion-origin-main
+ExecStart=/opt/openmausbot/runtime/start-sidecar.sh
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/openmausbot/sidecar.out.log
+StandardError=append:/var/log/openmausbot/sidecar.err.log
+
+[Install]
+WantedBy=multi-user.target

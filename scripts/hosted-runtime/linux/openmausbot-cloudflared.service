@@ -1,0 +1,16 @@
+[Unit]
+Description=Cloudflare tunnel for OpenMausBot companion
+After=openmausbot-sidecar.service
+Requires=openmausbot-sidecar.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/openmausbot/runtime/cloudflared tunnel --config /etc/openmausbot/cloudflared.yml --no-autoupdate run
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/openmausbot/cloudflared.out.log
+StandardError=append:/var/log/openmausbot/cloudflared.err.log
+
+[Install]
+WantedBy=multi-user.target
