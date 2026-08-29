@@ -67,9 +67,15 @@ struct ComputerView: View {
     @State private var photoSaveMessage: String?
     @State private var localVmViewerURL: URL?
     @State private var localVmSurfaceError: String?
+    @State private var viewerLoadFailed = false
     @State private var vmTypeDraft = ""
-    @State private var vmKeyboardTrigger = 0
     @FocusState private var vmKeyboardFocused: Bool
+    @AppStorage("vmPointerMode") private var vmPointerModeRaw = VmPointerMode.trackpad.rawValue
+
+    private var vmPointerMode: VmPointerMode {
+        get { VmPointerMode(rawValue: vmPointerModeRaw) ?? .trackpad }
+        nonmutating set { vmPointerModeRaw = newValue.rawValue }
+    }
 
     private var localVmInteractive: Bool {
         isLocalVm && localVmStatus?.ready == true && session.localVmAccess
@@ -82,7 +88,11 @@ struct ComputerView: View {
     }
 
     private var usingLiveViewer: Bool {
-        localVmInteractive && localVmViewerURL != nil
+        localVmInteractive && localVmViewerURL != nil && !viewerLoadFailed
+    }
+
+    private var openingLiveViewer: Bool {
+        isLocalVm && localVmInteractive && localVmViewerURL == nil && !viewerLoadFailed && image == nil
     }
 
     private static let firstFrameTimeout = ComputerWatchLifecycle.firstFrameTimeout
@@ -159,7 +169,12 @@ struct ComputerView: View {
     private var isLocalVm: Bool { destination == "vm" }
 
     private var wantsScreenPreview: Bool {
-        current.busy == true || isLocalVm
+        if current.busy == true { return true }
+        if isLocalVm {
+            // Idle Local VM uses polled screenshots and/or live noVNC — not SSE.
+            return localVmStatus?.ready != true
+        }
+        return false
     }
 
     private var streamFailure: String? {
@@ -217,7 +232,17 @@ struct ComputerView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: presentationState)
         .safeAreaInset(edge: .bottom) {
             if showsLocalVmBottomChrome {
-                localVmChrome
+                VStack(spacing: 0) {
+                    if vmKeyboardFocused && localVmInteractive {
+                        VmKeyboardBar(
+                            text: $vmTypeDraft,
+                            isFocused: $vmKeyboardFocused,
+                            onSend: { Task { await submitVmTypedText() } }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    localVmChrome
+                }
             } else if case .watching = presentationState, image != nil {
                 VStack(spacing: 0) {
                     clipboardPasteBar
@@ -310,8 +335,15 @@ struct ComputerView: View {
                 }
             }
         }
-        .onChange(of: current.computer) { _, _ in
-            syncScreenWatch(resetFrame: true)
+        .onChange(of: current.computer) { _, newValue in
+            let mode = newValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if mode == "vm" {
+                localVmViewerURL = nil
+                viewerLoadFailed = false
+            } else {
+                localVmViewerURL = nil
+            }
+            syncScreenWatch(resetFrame: mode != "vm")
         }
         .onChange(of: current.cloudBackend) { _, _ in
             syncScreenWatch(resetFrame: true)
@@ -337,15 +369,23 @@ struct ComputerView: View {
                 try? await Task.sleep(for: .seconds(2))
             }
         }
-        .task(id: "local-vm-viewer-\(current.id)-\(localVmStatus?.ready == true)-\(session.localVmAccess)") {
-            guard localVmInteractive else {
+        .task(id: "local-vm-viewer-\(current.id)-\(destination)-\(localVmStatus?.ready == true)-\(session.localVmAccess)") {
+            guard isLocalVm else {
                 localVmViewerURL = nil
+                viewerLoadFailed = false
                 return
             }
+            guard localVmInteractive else { return }
+            viewerLoadFailed = false
+            localVmViewerURL = nil
             let joined = await session.localVmViewerURL(for: current)
+            guard !Task.isCancelled else { return }
             localVmViewerURL = joined.url
-            if let error = joined.error, joined.url == nil {
-                localVmSurfaceError = error
+            if joined.url == nil {
+                viewerLoadFailed = true
+                if let error = joined.error {
+                    localVmSurfaceError = error
+                }
             }
         }
         .task(id: "instances-\(current.id)") {
@@ -450,17 +490,28 @@ struct ComputerView: View {
             if usingLiveViewer, let localVmViewerURL {
                 VMViewerWebView(
                     url: localVmViewerURL,
-                    keyboardTrigger: vmKeyboardTrigger,
+                    pointerMode: vmPointerMode,
                     onLoadFailed: { message in
+                        viewerLoadFailed = true
                         localVmSurfaceError = message
-                        self.localVmViewerURL = nil
                     }
                 )
+                    .id("local-vm-viewer-\(current.id)-\(vmPointerMode.rawValue)")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityLabel("\(current.name)'s Local VM")
+            } else if openingLiveViewer {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .tint(.white)
+                    Text("Opening live desktop…")
+                        .font(.body)
+                }
+                .foregroundStyle(Color.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if case .watching = presentationState, let image, localVmInteractive {
                 RemoteDesktopCanvas(
                     image: image,
+                    pointerMode: vmPointerMode,
                     onClick: { x, y, button in
                         Task { await sendLocalVmInput(["action": "click", "x": x, "y": y, "button": button]) }
                     },
@@ -487,26 +538,7 @@ struct ComputerView: View {
                 stateCard
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-
-            if localVmInteractive, !usingLiveViewer {
-                vmHiddenKeyboardField
-            }
         }
-    }
-
-    private var vmHiddenKeyboardField: some View {
-        TextField("Type on the Local VM", text: $vmTypeDraft, axis: .vertical)
-            .lineLimit(1...4)
-            .focused($vmKeyboardFocused)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .submitLabel(.done)
-            .opacity(0.01)
-            .frame(width: 1, height: 1)
-            .accessibilityHidden(true)
-            .onSubmit {
-                Task { await submitVmTypedText() }
-            }
     }
 
     private var localVmChrome: some View {
@@ -515,6 +547,10 @@ struct ComputerView: View {
             canCopy: image != nil,
             canType: localVmInteractive,
             keyboardActive: vmKeyboardFocused,
+            pointerMode: Binding(
+                get: { vmPointerMode },
+                set: { vmPointerMode = $0 }
+            ),
             onPasteFromPhone: { Task { await pasteFromPhoneToVm() } },
             onCopyToPhone: { copyScreen() },
             onToggleKeyboard: { toggleVmKeyboard() }
@@ -524,10 +560,6 @@ struct ComputerView: View {
     @MainActor
     private func toggleVmKeyboard() {
         Haptics.selection()
-        if usingLiveViewer {
-            vmKeyboardTrigger += 1
-            return
-        }
         if vmKeyboardFocused {
             vmKeyboardFocused = false
         } else {
@@ -549,7 +581,9 @@ struct ComputerView: View {
         guard !text.isEmpty else { return }
         await sendLocalVmInput(["action": "type", "text": text])
         vmTypeDraft = ""
-        vmKeyboardFocused = false
+        if !usingLiveViewer {
+            vmKeyboardFocused = false
+        }
     }
 
     @MainActor
@@ -568,12 +602,14 @@ struct ComputerView: View {
                     .tint(.white)
                     .controlSize(.regular)
                     .accessibilityHidden(true)
-                Text("Starting desktop...")
+                Text(localVmStartingMessage)
                     .font(.body)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
             }
             .foregroundStyle(Color.white)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Starting desktop")
+            .accessibilityLabel(localVmStartingMessage)
 
         case .cloudViewerAvailable:
             VStack(spacing: 14) {
@@ -636,6 +672,13 @@ struct ComputerView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(pendingLocalVmAction || savingDestination)
                 }
+                if localVmDestinationEnabled, canShowLocalVmControls, localVmStatus?.canRecreate == true {
+                    Button("Recreate Local VM") {
+                        confirmingLocalVmAction = .recreate
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(pendingLocalVmAction || savingDestination)
+                }
                 if canRetryScreen {
                     Button("Try again", action: retryScreen)
                         .buttonStyle(.borderedProminent)
@@ -646,6 +689,19 @@ struct ComputerView: View {
         case .watching:
             EmptyView()
         }
+    }
+
+    private var localVmStartingMessage: String {
+        if isLocalVm {
+            if localVmStatus?.ready == true {
+                return openingLiveViewer ? "Opening live desktop…" : "Loading desktop preview…"
+            }
+            if let problem = localVmStatus?.problem, !(problem.isEmpty) {
+                return problem
+            }
+            return localVmStateTitle == "Checking…" ? "Checking Local VM…" : localVmStateTitle
+        }
+        return "Starting desktop..."
     }
 
     private var startingMessage: String {
@@ -669,6 +725,9 @@ struct ComputerView: View {
             }
             if canShowLocalVmControls, localVmStatus?.canCreate == true {
                 return "Local VM is not created yet. Create it below, then open this screen again."
+            }
+            if canShowLocalVmControls, localVmStatus?.canRecreate == true {
+                return localVmStatus?.problem ?? "Recreate the Local VM below to start a fresh desktop."
             }
             return "Running on Local VM. The desktop updates while this screen is open."
         case "cloud":
@@ -925,6 +984,10 @@ struct ComputerView: View {
     private func applyDestination(_ mode: String) async {
         savingDestination = true
         defer { savingDestination = false }
+        if mode == "vm" {
+            localVmViewerURL = nil
+            viewerLoadFailed = false
+        }
         _ = await session.updateComputerDestination(
             BotComputerDestinationPatch(computer: mode),
             for: current

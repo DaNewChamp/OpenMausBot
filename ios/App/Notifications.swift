@@ -13,6 +13,10 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     /// Set by `Session`; kept as an id-only value so the notification layer
     /// does not know about SwiftUI navigation or mutable fleet state.
     var responseHandler: ((NotificationTarget) -> Void)?
+    /// The thread the user is actively reading. While the app is foreground,
+    /// matching alerts are suppressed — the chat is already on screen.
+    var foregroundThreadId: String?
+    var appIsActive = false
 
     private override init() {
         super.init()
@@ -28,6 +32,7 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     }
 
     func deliver(_ notification: NotificationFrame, sequence: Int?, avatarPNG: Data?) {
+        if shouldSuppress(threadId: notification.threadId) { return }
         var content = UNMutableNotificationContent()
         content.title = notification.botName.isEmpty ? notification.title : notification.botName
         content.body = notification.body
@@ -65,7 +70,16 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
+        let threadId = notification.request.content.userInfo["threadId"] as? String
+        if let threadId, shouldSuppress(threadId: threadId) {
+            completionHandler([])
+            return
+        }
         completionHandler([.banner, .list, .sound, .badge])
+    }
+
+    private func shouldSuppress(threadId: String) -> Bool {
+        appIsActive && foregroundThreadId == threadId
     }
 
     func userNotificationCenter(

@@ -8,6 +8,7 @@ struct LocalVmInteractionChrome: View {
     var canCopy: Bool
     var canType: Bool
     var keyboardActive: Bool
+    @Binding var pointerMode: VmPointerMode
     let onPasteFromPhone: () -> Void
     let onCopyToPhone: () -> Void
     let onToggleKeyboard: () -> Void
@@ -15,31 +16,71 @@ struct LocalVmInteractionChrome: View {
     @State private var clipboardExpanded = false
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 12) {
-            if clipboardExpanded {
-                clipboardCard
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+        VStack(spacing: 10) {
+            pointerModeToggle
+            HStack(alignment: .bottom, spacing: 12) {
+                if clipboardExpanded {
+                    clipboardCard
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                }
+
+                Spacer(minLength: 0)
+
+                chromeIconButton(
+                    systemImage: "doc.on.clipboard",
+                    accessibilityLabel: clipboardExpanded ? "Hide clipboard" : "Show clipboard",
+                    action: { clipboardExpanded.toggle() }
+                )
+
+                chromeIconButton(
+                    systemImage: keyboardActive ? "keyboard.chevron.compact.down" : "keyboard",
+                    accessibilityLabel: keyboardActive ? "Hide keyboard" : "Show keyboard",
+                    action: onToggleKeyboard
+                )
+                .disabled(!canType)
             }
-
-            Spacer(minLength: 0)
-
-            chromeIconButton(
-                systemImage: "doc.on.clipboard",
-                accessibilityLabel: clipboardExpanded ? "Hide clipboard" : "Show clipboard",
-                action: { clipboardExpanded.toggle() }
-            )
-
-            chromeIconButton(
-                systemImage: keyboardActive ? "keyboard.chevron.compact.down" : "keyboard",
-                accessibilityLabel: keyboardActive ? "Hide keyboard" : "Show keyboard",
-                action: onToggleKeyboard
-            )
-            .disabled(!canType)
         }
         .animation(.easeInOut(duration: 0.2), value: clipboardExpanded)
+        .animation(.easeInOut(duration: 0.2), value: pointerMode)
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 10)
+    }
+
+    private var pointerModeToggle: some View {
+        HStack(spacing: 8) {
+            ForEach(VmPointerMode.allCases) { mode in
+                Button {
+                    pointerMode = mode
+                    Haptics.selection()
+                } label: {
+                    Label(mode.title, systemImage: mode.systemImage)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(pointerMode == mode ? Color.primary : Color.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            pointerMode == mode
+                                ? Color.primary.opacity(0.12)
+                                : Color.primary.opacity(0.05),
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(mode.title) input mode")
+                .accessibilityHint(mode.accessibilityHint)
+                .accessibilityAddTraits(pointerMode == mode ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Pointer mode")
     }
 
     private var clipboardCard: some View {

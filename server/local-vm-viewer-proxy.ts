@@ -82,6 +82,24 @@ function endToEndHeaders(headers: IncomingMessage["headers"]): Record<string, st
   );
 }
 
+/** WebSocket upgrades must keep the handshake headers end-to-end. The generic
+ * hop-by-hop filter treats `Connection: Upgrade` as a signal to drop
+ * `upgrade`, which turns a proxied handshake into a plain GET and leaves
+ * noVNC on `noVNC_loading` forever. */
+export function upgradeHopByHopHeaders(headers: IncomingMessage["headers"]): Record<string, string | string[]> {
+  return Object.fromEntries(
+    Object.entries(headers).filter(
+      (entry): entry is [string, string | string[]] => {
+        if (entry[1] === undefined) return false;
+        const lower = entry[0].toLowerCase();
+        if (lower === "upgrade" || lower === "connection") return true;
+        if (lower.startsWith("sec-websocket-")) return true;
+        return !HOP_BY_HOP.has(lower);
+      },
+    ),
+  );
+}
+
 export function proxyLocalVmViewerHttp(
   req: IncomingMessage,
   res: import("node:http").ServerResponse,
@@ -132,12 +150,12 @@ export function proxyLocalVmViewerUpgrade(
     path: upstreamPath,
     method: req.method,
     headers: {
-      ...endToEndHeaders(req.headers),
+      ...upgradeHopByHopHeaders(req.headers),
       host: `127.0.0.1:${target.port}`,
     },
   });
   upstream.on("upgrade", (response, upstreamSocket, upstreamHead) => {
-    const headers = endToEndHeaders(response.headers);
+    const headers = upgradeHopByHopHeaders(response.headers);
     let raw = `HTTP/1.1 ${response.statusCode ?? 101} ${response.statusMessage ?? "Switching Protocols"}\r\n`;
     for (const [name, value] of Object.entries(headers)) {
       raw += `${name}: ${Array.isArray(value) ? value.join(", ") : value}\r\n`;
@@ -163,5 +181,8 @@ export function proxyLocalVmViewerUpgrade(
     response.pipe(clientSocket);
   });
   upstream.on("error", () => clientSocket.destroy());
+  clientSocket.on("error", () => {
+    upstream.destroy();
+  });
   upstream.end();
 }

@@ -23,6 +23,9 @@ import {
 import { approvalKey, autoVerdict } from "./auto-approve.ts";
 import * as checkpoints from "./checkpoints.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
+import { BridgeRegistry } from "./bridge-registry.ts";
+import { handleBridgeRoutes } from "./bridge-routes.ts";
+import { runShellOnBridge } from "./bridge-exec.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import {
   decideDelivery,
@@ -36,7 +39,7 @@ import {
   generateAvatarImage,
   snapshotAvatarGenerationState,
 } from "./avatar-image.ts";
-import { guardedBotModelSwitch, parseBotModelPatch } from "./bot-model.ts";
+import { guardedBotModelSwitch, parseBotModelPatch, resolveBotModelSelection } from "./bot-model.ts";
 import { parseChatPin } from "./chat-pin.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
@@ -52,6 +55,15 @@ import * as box from "./box.ts";
 import { cloudBackendChangeError, vpsAliasChangeError } from "./cloud-backend.ts";
 import * as composio from "./composio.ts";
 import { chiefOfStaffSystemPrompt, sectionPeerCoordinationPrompt, taggedPeerNudge } from "./chief-of-staff.ts";
+import { botSelfAwarenessCatalog, botSelfAwarenessPersona } from "./bot-self-awareness.ts";
+import {
+  createRoomForChief,
+  createRoutineForBot,
+  listRoomsForBot,
+  listRoutinesForBot,
+  canManageRoutine,
+  updateRoomForChief,
+} from "./internal-team-ops.ts";
 import {
   askBotFailedChip,
   askBotFinishedChip,
@@ -93,7 +105,7 @@ import { ComputerControl } from "./computer-control.ts";
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
 import { buildNotification, type Notification } from "./notify.ts";
-import { isEffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
+import { isEffortLevel, type EffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
 import { RETRY_MAX_ATTEMPTS } from "./drivers/retry.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
@@ -250,6 +262,7 @@ bus.attach(registry.instances());
 // A shared secret guards the localhost-only /api/internal endpoints the
 // agents-proxy calls; regenerated each boot (the proxy gets it via env).
 const COMMS_TOKEN = randomBytes(24).toString("hex");
+const bridges = new BridgeRegistry();
 
 /** Constant-time bearer check for the internal comms endpoints. The token
  * is high-entropy and loopback-only, so a timing oracle is a long shot —
@@ -1875,13 +1888,14 @@ async function startTurn(
     replaysNatively: instance.driverKind === "grok",
   });
 
-  const persona = [
-    `You are ${bot.name}, a personal bot in OpenMausBot.`,
-    bot.title && `Role: ${bot.title}.`,
-    bot.description && `About: ${bot.description}`,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const persona = botSelfAwarenessPersona({
+    id: bot.id,
+    name: bot.name,
+    title: bot.title,
+    description: bot.description,
+    section: bot.section,
+    chiefOfStaff: bot.chiefOfStaff,
+  });
 
   // busy flips immediately so the composer locks; the dispatch itself runs
   // in the background — box provisioning can take ~90s and must never
@@ -2160,6 +2174,7 @@ async function startTurn(
         transcript,
         system:
           persona +
+          `\n${botSelfAwarenessCatalog(bot, integrations, { hasSectionPeers: sectionPeers.length > 0 }).trim()}` +
           (computerKind === "vm"
             ? localVmSelfInvokePrompt(localVmMode(cfg))
             : computerKind === "box" && instance.driverKind !== "boxAgent"
@@ -2546,16 +2561,28 @@ async function runGroupMemberTurn(
     });
   }
 
-  const roster = group.memberIds
-    .map((id) => store.bot(id))
-    .filter((b): b is NonNullable<typeof b> => Boolean(b))
-    .map((b) => `@${b.name}${b.title ? ` (${b.title})` : ""}`)
-    .join(", ");
+  const sectionPeers = store.bots.filter(
+    (b) => b.id !== bot.id && !b.hidden && sectionKey(b.section) === sectionKey(bot.section),
+  );
   const system = [
-    `You are ${bot.name}, a bot in the room "${group.name}" in OpenMausBot.`,
-    bot.title && `Role: ${bot.title}.`,
-    bot.description && `About: ${bot.description}`,
-    `Room members: ${roster}, and ${userName} (the human).`,
+    botSelfAwarenessPersona(
+      {
+        id: bot.id,
+        name: bot.name,
+        title: bot.title,
+        description: bot.description,
+        section: bot.section,
+        chiefOfStaff: bot.chiefOfStaff,
+      },
+      {
+        name: group.name,
+        memberNames: group.memberIds
+          .map((id) => store.bot(id))
+          .filter(Boolean)
+          .map((b) => `@${b!.name}${b!.title ? ` (${b!.title})` : ""}`),
+        userName,
+      },
+    ),
     group.bulletin.trim() && `Room bulletin (shared instructions for everyone):\n${group.bulletin.trim()}`,
     `Reply as yourself, briefly and conversationally. To bring a teammate in, mention them like @Name — they'll see the conversation and respond.`,
     integrations.agents &&
@@ -2581,6 +2608,7 @@ async function runGroupMemberTurn(
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id));
   const roomSystem =
     system +
+    `\n${botSelfAwarenessCatalog(bot, integrations, { hasSectionPeers: sectionPeers.length > 0 }).trim()}` +
     sectionContextSystemPrompt(bot.section) +
     (workspace ? `\n${memorySystemPrompt(bot.id).trim()}${skillsSystemPrompt(bot.id)}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace) }) +
@@ -3627,6 +3655,11 @@ function isAllowedOrigin(origin: string | undefined | null): boolean {
   }
 }
 
+function isDirectLoopback(req: IncomingMessage): boolean {
+  const addr = req.socket.remoteAddress ?? "";
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const path = url.pathname;
@@ -3641,6 +3674,9 @@ const server = createServer(async (req, res) => {
     const origin = req.headers.origin;
     if (origin && !isAllowedOrigin(origin)) {
       return json(res, 403, { error: "forbidden: cross-origin request" });
+    }
+    if (await handleBridgeRoutes(req, res, method, path, json, bridges, { loopback: isDirectLoopback(req) })) {
+      return;
     }
     // ── internal peer-agent comms (localhost + shared token only) ──────
     // The agents-proxy (spawned inside a bot's agent process) calls these to
@@ -3666,6 +3702,8 @@ const server = createServer(async (req, res) => {
             id: b.id,
             name: b.name,
             model: b.modelSelection.model,
+            engine: b.modelSelection.instanceId,
+            effort: b.modelSelection.effort ?? null,
             busy: !!b.busy,
             title: b.title || undefined,
             description: b.description || undefined,
@@ -3877,12 +3915,40 @@ const server = createServer(async (req, res) => {
         if (duplicate) {
           return json(res, 409, { error: `@${duplicate.name} already exists in this section; use list_bots` });
         }
+        let modelSelection = { ...chief.modelSelection };
+        const wantsCustom =
+          body.instanceId !== undefined ||
+          body.engine !== undefined ||
+          body.model !== undefined ||
+          body.effort !== undefined;
+        if (wantsCustom) {
+          resetPathCache();
+          const instanceId = String(body.instanceId ?? body.engine ?? chief.modelSelection.instanceId);
+          const model = String(body.model ?? chief.modelSelection.model);
+          let requestedEffort: EffortLevel | null | undefined;
+          if (body.effort === null) requestedEffort = null;
+          else if (body.effort !== undefined) {
+            if (!isEffortLevel(body.effort)) {
+              return json(res, 400, { error: `effort "${String(body.effort)}" is not recognized` });
+            }
+            requestedEffort = body.effort;
+          }
+          const resolved = resolveBotModelSelection({
+            instanceId,
+            model,
+            currentEffort: chief.modelSelection.effort,
+            requestedEffort,
+            catalogs: await registry.describe(),
+          });
+          if (!resolved.ok) return json(res, 400, { error: resolved.error });
+          modelSelection = resolved.selection;
+        }
         const created = store.createBot(
           {
             name,
             title: role,
             description: instructions,
-            modelSelection: { ...chief.modelSelection },
+            modelSelection,
             section: chief.section,
           },
           { seedMessages: false },
@@ -3897,7 +3963,59 @@ const server = createServer(async (req, res) => {
           name: safeBot.name,
           title: safeBot.title,
           section: safeBot.section || "General",
+          engine: safeBot.modelSelection.instanceId,
           model: safeBot.modelSelection.model,
+          effort: safeBot.modelSelection.effort ?? null,
+        });
+      }
+      if (method === "POST" && path === "/api/internal/configure-bot") {
+        const body = await readBody(req);
+        const fromBotId = String(body.fromBotId ?? "");
+        const chief = store.bot(fromBotId);
+        if (!chief) return json(res, 403, { error: "unknown sender" });
+        if (!chief.chiefOfStaff) {
+          return json(res, 403, { error: "only a section's Chief of Staff can configure operator bots" });
+        }
+        const fromThreadId = String(body.fromThreadId ?? chief.threadId);
+        if (!store.taskByThread(chief.id, fromThreadId)) {
+          return json(res, 403, { error: "source thread does not belong to sender" });
+        }
+        const targetId = String(body.botId ?? body.bot_id ?? "");
+        const target = store.bot(targetId);
+        if (!target) return json(res, 404, { error: "no such bot" });
+        if (sectionKey(target.section) !== sectionKey(chief.section)) {
+          return json(res, 403, { error: "that bot belongs to a different section" });
+        }
+        if (target.id === chief.id) {
+          return json(res, 400, { error: "use the profile or chat model picker to change your own engine" });
+        }
+        const requested = parseBotModelPatch({
+          instanceId: String(body.instanceId ?? body.engine ?? target.modelSelection.instanceId),
+          model: String(body.model ?? target.modelSelection.model),
+          ...(body.effort === null ? { effort: null } : body.effort !== undefined ? { effort: String(body.effort) } : {}),
+        });
+        if (!requested.ok) return json(res, 400, { error: requested.error });
+        resetPathCache();
+        const switched = await guardedBotModelSwitch({
+          requested: requested.patch,
+          describe: () => registry.describe(),
+          current: () => store.bot(target.id),
+          patch: (id, selection) => store.patchBot(id, { modelSelection: selection }),
+        });
+        if (switched.kind === "missing") return json(res, 404, { error: "no such bot" });
+        if (switched.kind === "busy") {
+          return json(res, 409, { error: "that bot is working — interrupt it before changing its model" });
+        }
+        if (switched.kind === "invalid") return json(res, 400, { error: switched.error });
+        const bot = switched.kind === "patched" ? switched.bot : switched.bot;
+        const visible = wireBot(bot);
+        broadcast({ kind: "bot", bot: visible });
+        return json(res, 200, {
+          id: bot.id,
+          name: bot.name,
+          engine: bot.modelSelection.instanceId,
+          model: bot.modelSelection.model,
+          effort: bot.modelSelection.effort ?? null,
         });
       }
       if (method === "POST" && path === "/api/internal/request-credential") {
@@ -4113,6 +4231,129 @@ const server = createServer(async (req, res) => {
         }
         maybeResumeConnectors(botId, threadId, resumeKey, capturedRoomRun);
         return json(res, 200, { messageIds });
+      }
+      if (method === "POST" && path === "/api/internal/bridge/shell") {
+        const body = await readBody(req);
+        try {
+          const result = await runShellOnBridge(bridges, {
+            bridgeId: body.bridgeId ? String(body.bridgeId) : undefined,
+            name: body.bridge ? String(body.bridge) : body.name ? String(body.name) : undefined,
+            command: String(body.command ?? ""),
+            cwd: body.cwd ? String(body.cwd) : undefined,
+            timeoutMs: body.timeoutMs == null ? undefined : Number(body.timeoutMs),
+          });
+          return json(res, 200, result);
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      if (method === "GET" && path === "/api/internal/rooms") {
+        const self = url.searchParams.get("self");
+        const sender = self ? store.bot(self) : null;
+        if (!sender) return json(res, 403, { error: "unknown sender" });
+        return json(res, 200, { rooms: listRoomsForBot(store, sender.id) });
+      }
+      if (method === "POST" && path === "/api/internal/create-room") {
+        const body = await readBody(req);
+        const fromBotId = String(body.fromBotId ?? "");
+        const chief = store.bot(fromBotId);
+        if (!chief) return json(res, 403, { error: "unknown sender" });
+        const fromThreadId = String(body.fromThreadId ?? chief.threadId);
+        if (!store.taskByThread(chief.id, fromThreadId)) {
+          return json(res, 403, { error: "source thread does not belong to sender" });
+        }
+        try {
+          const group = createRoomForChief(store, fromBotId, {
+            name: body.name == null ? undefined : String(body.name),
+            memberIds: Array.isArray(body.memberIds) ? body.memberIds.map(String) : [],
+            bulletin: body.bulletin == null ? undefined : String(body.bulletin),
+            section: body.section == null ? undefined : String(body.section),
+          });
+          return json(res, 201, {
+            id: group.id,
+            name: group.name,
+            section: group.section,
+            memberIds: group.memberIds,
+            threadId: group.threadId,
+          });
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      {
+        const roomMatch = path.match(/^\/api\/internal\/rooms\/([\w-]+)$/);
+        if (roomMatch && method === "PATCH") {
+          const body = await readBody(req);
+          const fromBotId = String(body.fromBotId ?? "");
+          const chief = store.bot(fromBotId);
+          if (!chief) return json(res, 403, { error: "unknown sender" });
+          const fromThreadId = String(body.fromThreadId ?? chief.threadId);
+          if (!store.taskByThread(chief.id, fromThreadId)) {
+            return json(res, 403, { error: "source thread does not belong to sender" });
+          }
+          try {
+            const group = updateRoomForChief(store, fromBotId, roomMatch[1], {
+              name: body.name == null ? undefined : String(body.name),
+              bulletin: body.bulletin == null ? undefined : String(body.bulletin),
+              memberIds: body.memberIds == null ? undefined : Array.isArray(body.memberIds) ? body.memberIds.map(String) : undefined,
+            });
+            return json(res, 200, {
+              id: group.id,
+              name: group.name,
+              section: group.section,
+              memberIds: group.memberIds,
+              bulletin: group.bulletin,
+              threadId: group.threadId,
+            });
+          } catch (error) {
+            return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          }
+        }
+      }
+      if (method === "GET" && path === "/api/internal/routines") {
+        const self = url.searchParams.get("self");
+        const sender = self ? store.bot(self) : null;
+        if (!sender) return json(res, 403, { error: "unknown sender" });
+        if (!routines) return json(res, 503, { error: "routines unavailable" });
+        return json(res, 200, { routines: listRoutinesForBot(store, sender.id, routines) });
+      }
+      if (method === "POST" && path === "/api/internal/create-routine") {
+        const body = await readBody(req);
+        const fromBotId = String(body.fromBotId ?? "");
+        const sender = store.bot(fromBotId);
+        if (!sender) return json(res, 403, { error: "unknown sender" });
+        const fromThreadId = String(body.fromThreadId ?? sender.threadId);
+        if (!store.taskByThread(sender.id, fromThreadId)) {
+          return json(res, 403, { error: "source thread does not belong to sender" });
+        }
+        if (!routines) return json(res, 503, { error: "routines unavailable" });
+        try {
+          const routine = createRoutineForBot(store, fromBotId, routines, body);
+          return json(res, 201, { routine });
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      {
+        const routineRunMatch = path.match(/^\/api\/internal\/run-routine\/([\w-]+)$/);
+        if (routineRunMatch && method === "POST") {
+          const body = await readBody(req);
+          const fromBotId = String(body.fromBotId ?? "");
+          const sender = store.bot(fromBotId);
+          if (!sender) return json(res, 403, { error: "unknown sender" });
+          const fromThreadId = String(body.fromThreadId ?? sender.threadId);
+          if (!store.taskByThread(sender.id, fromThreadId)) {
+            return json(res, 403, { error: "source thread does not belong to sender" });
+          }
+          if (!routines) return json(res, 503, { error: "routines unavailable" });
+          const routine = routines.listRoutines().find((candidate) => candidate.id === routineRunMatch[1]);
+          if (!routine) return json(res, 404, { error: "no such routine" });
+          if (!canManageRoutine(store, fromBotId, routine.botId)) {
+            return json(res, 403, { error: "you may only run routines you own unless you are the section Chief" });
+          }
+          const run = routines.runNow(routineRunMatch[1]);
+          return run ? json(res, 201, { run }) : json(res, 404, { error: "no such routine" });
+        }
       }
       return json(res, 404, { error: "unknown internal endpoint" });
     }
@@ -5899,28 +6140,29 @@ const server = createServer(async (req, res) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       const action = m[2] as "run" | "stop" | "recreate";
       const target = localVmTargetForBot(bot.id);
-      if (target.key === SHARED_LOCAL_VM_TARGET.key) {
-        return json(res, 409, { error: "Shared mode manages this desktop in App Settings → Local VM" });
-      }
+      const sharedTarget = target.key === SHARED_LOCAL_VM_TARGET.key;
       if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(target.key)) {
-        return json(res, 409, { error: "this bot's Local VM setup action is still running" });
+        return json(res, 409, { error: sharedTarget ? "the shared Local VM setup action is still running" : "this bot's Local VM setup action is still running" });
       }
-      if (action === "run" && localVmProvisionBusy) {
+      if (!sharedTarget && action === "run" && localVmProvisionBusy) {
         return json(res, 409, { error: "another per-bot Local VM is being created — retry after it finishes" });
       }
       const vmOwner = localVmLeaseFor(target).current(localVmOwnerBusy);
-      if (vmOwner || bot.busy) {
-        return json(res, 409, { error: "this bot is using its Local VM — stop the turn first" });
+      if (vmOwner && (action === "stop" || action === "recreate" || action === "run")) {
+        return json(res, 409, { error: sharedTarget ? "the shared Local VM is being used by a bot — stop that turn first" : "this bot is using its Local VM — stop the turn first" });
+      }
+      if (bot.busy && (action === "stop" || action === "recreate")) {
+        return json(res, 409, { error: sharedTarget ? "this bot is using the shared Local VM — stop the turn first" : "this bot is using its Local VM — stop the turn first" });
       }
       // Fence this target, and the cross-target capacity decision for creates,
       // before the first await so two phone requests cannot both pass the limit.
       localVmLifecycleBusy.add(target.key);
-      if (action === "run" || action === "recreate") localVmProvisionBusy = true;
+      if (!sharedTarget && (action === "run" || action === "recreate")) localVmProvisionBusy = true;
       try {
         if (action === "run" || action === "recreate") {
           const before = await containerComputerStatus(undefined, undefined, target);
           if (!before.runtime) return json(res, 409, { error: before.problem ?? "No container runtime is installed" });
-          if (action === "run" && !(await containerComputerExists(before.runtime, target))) {
+          if (!sharedTarget && action === "run" && !(await containerComputerExists(before.runtime, target))) {
             const count = await existingPerBotLocalVmCount(before.runtime);
             if (count >= localVmMaxInstances(cfg)) {
               return json(res, 409, {
@@ -5928,8 +6170,11 @@ const server = createServer(async (req, res) => {
               });
             }
           }
+          if (action === "run" && before.container === "stopped") {
+            return json(res, 409, { error: "This desktop image cannot safely resume; recreate the Local VM" });
+          }
           if (action === "recreate" && before.container === "missing") {
-            return json(res, 409, { error: "this bot has no Local VM to recreate — use Create instead" });
+            return json(res, 409, { error: sharedTarget ? "there is no Local VM to recreate — use Create instead" : "this bot has no Local VM to recreate — use Create instead" });
           }
           if (action === "recreate") await containerComputerAction("remove", undefined, undefined, target);
         }
@@ -5942,7 +6187,7 @@ const server = createServer(async (req, res) => {
           busy: false,
         }));
       } finally {
-        if (action === "run" || action === "recreate") localVmProvisionBusy = false;
+        if (!sharedTarget && (action === "run" || action === "recreate")) localVmProvisionBusy = false;
         localVmLifecycleBusy.delete(target.key);
       }
     }

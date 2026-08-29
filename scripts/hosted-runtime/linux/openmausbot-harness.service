@@ -1,0 +1,19 @@
+[Unit]
+Description=OpenMausBot harness (cloud VPS)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=OMB_RUNTIME_ROOT=/opt/openmausbot/runtime
+Environment=OMB_USER_DATA=/var/lib/openmausbot
+Environment=OMB_PORT=8799
+ExecStart=/opt/openmausbot/runtime/start-harness.sh
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/openmausbot/harness.out.log
+StandardError=append:/var/log/openmausbot/harness.err.log
+
+[Install]
+WantedBy=multi-user.target

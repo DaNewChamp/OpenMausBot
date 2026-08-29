@@ -58,12 +58,23 @@ describe("phone-safe Local VM projection", () => {
     }
   });
 
-  it("denies per-bot actions in shared mode and while a lease is busy", () => {
-    const shared = projectLocalVmStatus(status({ container: "missing", ready: false }), { mode: "shared", maxInstances: 2 });
-    expect(shared.can_create).toBe(false);
-    expect(shared.can_stop).toBe(false);
-    expect(shared.can_recreate).toBe(false);
+  it("allows shared-mode lifecycle actions when the desktop is idle", () => {
+    const sharedStopped = projectLocalVmStatus(status({ container: "stopped", ready: false }), { mode: "shared", maxInstances: 2 });
+    expect(sharedStopped.can_create).toBe(false);
+    expect(sharedStopped.can_stop).toBe(false);
+    expect(sharedStopped.can_recreate).toBe(true);
+    expect(sharedStopped.problem).toBe("Recreate the Local VM.");
 
+    const sharedMissing = projectLocalVmStatus(status({ container: "missing", ready: false }), { mode: "shared", maxInstances: 2 });
+    expect(sharedMissing.can_create).toBe(true);
+    expect(sharedMissing.can_recreate).toBe(false);
+
+    const sharedRunning = projectLocalVmStatus(status(), { mode: "shared", maxInstances: 2 });
+    expect(sharedRunning.can_stop).toBe(true);
+    expect(sharedRunning.can_recreate).toBe(true);
+  });
+
+  it("denies lifecycle actions while a lease is busy", () => {
     const busy = projectLocalVmStatus(status(), { mode: "per-bot", maxInstances: 2, busy: true });
     expect(busy.busy).toBe(true);
     expect(busy.can_stop).toBe(false);

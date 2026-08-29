@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>V Bot Viewer</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+      body { margin: 0; background: #0b0d10; color: #eef2f7; display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; }
+      aside { border-right: 1px solid #1e2630; padding: 16px; }
+      main { padding: 20px; }
+      h1 { font-size: 18px; margin: 0 0 12px; }
+      button, .bot { width: 100%; text-align: left; background: #141922; color: inherit; border: 1px solid #243041; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; }
+      button:hover, .bot:hover { border-color: #4b7cff; }
+      .bot.active { border-color: #4b7cff; background: #182033; }
+      .msg { padding: 10px 0; border-bottom: 1px solid #18202b; white-space: pre-wrap; }
+      .role { color: #8aa0bf; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+      .empty { color: #8aa0bf; }
+    </style>
+  </head>
+  <body>
+    <aside>
+      <h1>V Bot</h1>
+      <div id="bots" class="empty">Loading bots…</div>
+    </aside>
+    <main>
+      <h1 id="title">Select a bot</h1>
+      <div id="thread"></div>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>

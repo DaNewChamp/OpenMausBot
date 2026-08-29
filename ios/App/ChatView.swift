@@ -210,24 +210,16 @@ struct ChatView: View {
                         if let live = session.state.streaming[threadId], !live.isEmpty {
                             StreamingBubble(
                                 text: live,
-                                reasoning: nil,
                                 color: streamingTintColor,
                                 speaker: streamingSpeaker
                             )
                                 .id(Self.liveBubbleId)
-                        } else if let thinking = session.state.reasoning[threadId], !thinking.isEmpty {
-                            // Only while there is no answer yet. Once tokens
-                            // of the reply exist, the reasoning is behind us
-                            // and showing both is just noise.
-                            StreamingBubble(
-                                text: nil,
-                                reasoning: thinking,
-                                color: streamingTintColor,
-                                speaker: streamingSpeaker
+                        } else if current.busy
+                                    || !(session.state.reasoning[threadId] ?? "").isEmpty {
+                            WorkingTypingIndicatorView(
+                                chat: current,
+                                speakerBotId: workingBotId
                             )
-                                .id(Self.liveBubbleId)
-                        } else if current.busy {
-                            TypingIndicatorView(tintColor: MausPalette.color(streamingTintColor))
                                 .id(Self.liveBubbleId)
                                 .accessibilityLabel(
                                     streamingSpeaker.map { "\($0.name) is working" }
@@ -256,8 +248,16 @@ struct ChatView: View {
                     }
                     scrollToLatest(proxy)
                 }
-                .onChange(of: current.busy) { _, busy in
-                    guard busy else { return }
+                .onChange(of: transcript.last?.text) { _, _ in
+                    scrollToLatest(proxy, animated: false)
+                }
+                .onChange(of: current.busy) { _, _ in
+                    scrollToLatest(proxy)
+                }
+                .onChange(of: composerFocused) { _, _ in
+                    scrollToLatest(proxy)
+                }
+                .onChange(of: draft.isEmpty) { _, _ in
                     scrollToLatest(proxy)
                 }
                 // Follow the text as it arrives. Keyed on length rather than
@@ -266,7 +266,10 @@ struct ChatView: View {
                 // into a stutter, because each scroll interrupts the last.
                 .onChange(of: session.state.streaming[threadId]?.count ?? 0) { _, length in
                     guard length > 0 else { return }
-                    proxy.scrollTo(Self.liveBubbleId, anchor: .bottom)
+                    scrollToLatest(proxy, animated: false)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { _ in
+                    scrollToLatest(proxy, animated: false)
                 }
                 .onChange(of: session.focusedMessageId) { _, messageId in
                     guard let messageId,
@@ -339,6 +342,7 @@ struct ChatView: View {
             GroupProfileView(room: room)
         }
         .task(id: threadId) {
+            session.setForegroundThread(threadId)
             if newAfterMessageId == nil, current.unread {
                 newAfterMessageId = messages.last(where: { $0.role == .user })?.id
             }
@@ -374,7 +378,12 @@ struct ChatView: View {
             // reconnects leave this revision alone, preserving local notices.
             reconcilePendingQueue(in: messages, authoritativeRefresh: true)
         }
-        .onDisappear { dictation.stop() }
+        .onDisappear {
+            dictation.stop()
+            if NotificationCoordinator.shared.foregroundThreadId == threadId {
+                session.setForegroundThread(nil)
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { dictation.stop() }
         }
@@ -536,6 +545,9 @@ struct ChatView: View {
 
             if case let .bot(bot) = current {
                 ChatModelPickerButton(bot: bot, showingPicker: $showingModelPicker)
+            }
+
+            if case .bot = current {
                 Button {
                     Haptics.selection()
                     showingComputer = true
@@ -935,6 +947,13 @@ struct ChatView: View {
         streamingSpeaker?.color ?? current.color
     }
 
+    private var workingBotId: String? {
+        switch current {
+        case let .bot(bot): return bot.id
+        case let .room(room): return room.busyBotId
+        }
+    }
+
     private var activeMentionQuery: String? {
         guard case .room = current else { return nil }
         return GroupRouting.activeMentionQuery(in: draft)
@@ -999,7 +1018,7 @@ struct ChatView: View {
         messages.contains { $0.card?.isPending == true }
     }
 
-    private func scrollToLatest(_ proxy: ScrollViewProxy) {
+    private func scrollToLatest(_ proxy: ScrollViewProxy, animated: Bool = true) {
         let streaming = session.state.streaming[threadId] ?? ""
         let thinking = session.state.reasoning[threadId] ?? ""
         let target: String
@@ -1010,12 +1029,20 @@ struct ChatView: View {
         } else {
             return
         }
-        Task { @MainActor in
-            if reduceMotion {
+        func scroll(_ proxy: ScrollViewProxy) {
+            if reduceMotion || !animated {
                 proxy.scrollTo(target, anchor: .bottom)
             } else {
                 withAnimation { proxy.scrollTo(target, anchor: .bottom) }
             }
+        }
+        Task { @MainActor in
+            scroll(proxy)
+            // Keyboard, chips, and safe-area inset settle after the first pass.
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            scroll(proxy)
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            scroll(proxy)
         }
     }
 
@@ -2703,7 +2730,6 @@ struct ScreenShot: View {
 /// static is honest until then.
 struct StreamingBubble: View {
     let text: String?
-    let reasoning: String?
     var color: String = "blue"
     var speaker: (name: String, color: String)?
 
@@ -2714,14 +2740,6 @@ struct StreamingBubble: View {
                     Text(speaker.name)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color.primary)
-                }
-                if let reasoning, !reasoning.isEmpty, text?.isEmpty != false {
-                    AgentThoughtChamberView(
-                        reasoning: String(reasoning.suffix(2_000)),
-                        botName: speaker?.name ?? "Bot",
-                        mascotColor: MausPalette.color(color),
-                        isStreaming: true
-                    )
                 }
                 if let text, !text.isEmpty {
                     // Same renderer as the settled bubble, for the same

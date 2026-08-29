@@ -30,6 +30,8 @@ public enum ComputerPresentationState: Equatable, Sendable {
                 self = frame != nil ? .watching : .starting
             } else if Self.supportsCloudViewer(bot) {
                 self = .cloudViewerAvailable
+            } else if bot.computer == "cloud" && bot.cloudBackend == "vps" {
+                self = .unavailable(message: "Cloud runs on your VPS. Send a message to start a turn, then watch the desktop here.")
             } else {
                 self = .unavailable(message: Self.idleWaitingMessage)
             }
@@ -63,10 +65,9 @@ public enum ComputerPresentationState: Equatable, Sendable {
         return bot.cloudBackend == nil || bot.cloudBackend == "box"
     }
 
-    /// Local VM lifecycle controls are available only for an explicitly
-    /// configured VM whose paired device has received the safe status
-    /// projection. The status itself is also required to be per-bot: shared
-    /// mode remains a desktop-only lifecycle surface.
+    /// Local VM lifecycle controls are available for an explicitly configured
+    /// VM whose paired device has received the safe status projection and at
+    /// least one guarded server-side action (create, stop, recreate).
     public static func supportsLocalVmControls(
         _ bot: Bot,
         status: LocalVmStatus?,
@@ -76,7 +77,7 @@ public enum ComputerPresentationState: Equatable, Sendable {
               bot.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "vm",
               let status
         else { return false }
-        return status.mode == .perBot
+        return status.canCreate || status.canStop || status.canRecreate
     }
 
     /// Computer values are supplied by the desktop and can grow over time.

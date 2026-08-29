@@ -20,6 +20,7 @@ struct CompanionApp: App {
             RootView()
                 .environmentObject(session)
                 .onAppear {
+                    session.setAppActive(true)
                     session.connect()
                     session.consumeShareInbox()
                     liveActivities.attach(to: session)
@@ -28,14 +29,17 @@ struct CompanionApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
                     case .active:
+                        session.setAppActive(true)
                         liveActivities.setBackground(false)
                         session.connect()
                         session.consumeShareInbox()
                         Task { await session.refreshNotificationAuthorization() }
                     case .background:
+                        session.setAppActive(false)
                         liveActivities.setBackground(true)
                         session.linger()
-                    case .inactive: break
+                    case .inactive:
+                        session.setAppActive(false)
                     @unknown default: break
                     }
                 }

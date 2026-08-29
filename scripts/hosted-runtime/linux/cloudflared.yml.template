@@ -1,0 +1,6 @@
+tunnel: TUNNEL_ID
+credentials-file: /etc/openmausbot/cloudflared-credentials.json
+ingress:
+  - hostname: openmaus.posival.com
+    service: unix:/var/lib/openmausbot/omb-hosted/omb-companion-origin-main/origin.sock
+  - service: http_status:404

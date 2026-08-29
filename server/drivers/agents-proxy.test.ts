@@ -21,7 +21,10 @@ let askResponse: unknown = { botName: "Helper", text: "hi from helper" };
 let lastDelegateBody: any = null;
 let delegateResponse: unknown = { queued: true, message: "Delegation queued." };
 let lastCreateBody: any = null;
+let lastConfigureBody: any = null;
 let lastCredentialBody: any = null;
+let lastCreateRoomBody: any = null;
+let lastCreateRoutineBody: any = null;
 
 let child: ChildProcess;
 const pending = new Map<number, (msg: any) => void>();
@@ -50,7 +53,7 @@ beforeAll(async () => {
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(
         JSON.stringify({
-          bots: [{ id: "bot-helper", name: "Helper", model: "fake-model", busy: false }],
+          bots: [{ id: "bot-helper", name: "Helper", model: "fake-model", engine: "grok", effort: "high", busy: false }],
         }),
       );
     }
@@ -79,8 +82,26 @@ beforeAll(async () => {
       req.on("data", (c) => (data += c));
       req.on("end", () => {
         lastCreateBody = JSON.parse(data);
+        const body = lastCreateBody as Record<string, unknown>;
         res.writeHead(201, { "content-type": "application/json" });
-        res.end(JSON.stringify({ id: "bot-designer", name: "Pixel", section: "Work" }));
+        res.end(JSON.stringify({
+          id: "bot-designer",
+          name: body.name ?? "Pixel",
+          section: "Work",
+          engine: body.engine ?? "cursor",
+          model: body.model ?? "auto",
+          effort: body.effort ?? null,
+        }));
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/internal/configure-bot") {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        lastConfigureBody = JSON.parse(data);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ id: "bot-helper", name: "Helper", engine: "claude", model: "sonnet", effort: "medium" }));
       });
       return;
     }
@@ -93,6 +114,54 @@ beforeAll(async () => {
         res.end(JSON.stringify({ messageId: "msg-key", label: "OpenCode API key" }));
       });
       return;
+    }
+    if (req.method === "GET" && req.url?.startsWith("/api/internal/rooms")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(
+        JSON.stringify({
+          rooms: [{ id: "room-1", name: "Ops", section: "Work", memberNames: ["Chief", "Helper"], bulletin: "Daily standup" }],
+        }),
+      );
+    }
+    if (req.method === "POST" && req.url === "/api/internal/create-room") {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        lastCreateRoomBody = JSON.parse(data);
+        res.writeHead(201, { "content-type": "application/json" });
+        res.end(JSON.stringify({ id: "room-new", name: "Ops", threadId: "thread-room", memberIds: lastCreateRoomBody.memberIds }));
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/internal/create-routine") {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        lastCreateRoutineBody = JSON.parse(data);
+        res.writeHead(201, { "content-type": "application/json" });
+        res.end(JSON.stringify({ routine: { id: "routine-1", name: lastCreateRoutineBody.name, botId: lastCreateRoutineBody.botId ?? "bot-asker" } }));
+      });
+      return;
+    }
+    if (req.method === "GET" && req.url?.startsWith("/api/internal/routines")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(
+        JSON.stringify({
+          routines: [
+            {
+              id: "routine-1",
+              name: "Morning brief",
+              botId: "bot-asker",
+              enabled: true,
+              schedule: { type: "daily", time: "08:00", weekdays: [1, 2, 3, 4, 5] },
+            },
+          ],
+        }),
+      );
+    }
+    if (req.method === "POST" && req.url?.startsWith("/api/internal/run-routine/")) {
+      res.writeHead(201, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ run: { id: "run-1", status: "queued" } }));
     }
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "unknown" }));
@@ -132,7 +201,7 @@ afterAll(async () => {
 });
 
 describe("agents-proxy MCP surface", () => {
-  it("answers the MCP handshake and lists all five tools", async () => {
+  it("answers the MCP handshake and lists all team tools", async () => {
     const init = await rpc("initialize", { protocolVersion: "2024-11-05" });
     expect(init.result.serverInfo.name).toContain("agents");
     const list = await rpc("tools/list");
@@ -141,6 +210,14 @@ describe("agents-proxy MCP surface", () => {
       "ask_bot",
       "delegate_bot",
       "create_bot",
+      "configure_bot",
+      "run_on_bridge",
+      "list_rooms",
+      "create_room",
+      "update_room",
+      "list_routines",
+      "create_routine",
+      "run_routine",
       "request_credential",
     ]);
   });
@@ -150,7 +227,48 @@ describe("agents-proxy MCP surface", () => {
     const text = res.result.content[0].text;
     expect(text).toContain("Helper");
     expect(text).toContain("bot-helper");
+    expect(text).toContain("reasoning: high");
     expect(lastAuth).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("forwards optional engine, model, and effort when a Chief creates a specialist", async () => {
+    const res = await callTool("create_bot", {
+      name: "Pixel",
+      role: "Product designer",
+      instructions: "Design and review the user experience.",
+      engine: "claude",
+      model: "sonnet",
+      effort: "high",
+    });
+    expect(res.result.content[0].text).toContain("engine: claude");
+    expect(lastCreateBody).toMatchObject({
+      fromBotId: "bot-asker",
+      fromThreadId: "thread-asker-routine",
+      name: "Pixel",
+      role: "Product designer",
+      instructions: "Design and review the user experience.",
+      engine: "claude",
+      model: "sonnet",
+      effort: "high",
+    });
+  });
+
+  it("lets a Chief retarget an idle teammate's stack", async () => {
+    const res = await callTool("configure_bot", {
+      bot_id: "bot-helper",
+      engine: "claude",
+      model: "sonnet",
+      effort: "medium",
+    });
+    expect(res.result.content[0].text).toContain("Updated @Helper");
+    expect(lastConfigureBody).toMatchObject({
+      fromBotId: "bot-asker",
+      fromThreadId: "thread-asker-routine",
+      botId: "bot-helper",
+      engine: "claude",
+      model: "sonnet",
+      effort: "medium",
+    });
   });
 
   it("ask_bot forwards sender + depth and returns the reply", async () => {
@@ -256,6 +374,39 @@ describe("agents-proxy MCP surface", () => {
     const res = await callTool("request_credential", { credential_id: "arbitrary.config.path" });
     expect(res.result.isError).toBe(true);
     expect(lastCredentialBody).toBeNull();
+  });
+
+  it("lists rooms and creates routines through the harness", async () => {
+    const rooms = await callTool("list_rooms", {});
+    expect(rooms.result.content[0].text).toContain("Ops");
+    expect(rooms.result.content[0].text).toContain("room-1");
+
+    const room = await callTool("create_room", { name: "Ops", member_ids: ["bot-helper"] });
+    expect(room.result.content[0].text).toContain("Created room");
+    expect(lastCreateRoomBody).toMatchObject({
+      fromBotId: "bot-asker",
+      memberIds: ["bot-helper"],
+      name: "Ops",
+    });
+
+    const routines = await callTool("list_routines", {});
+    expect(routines.result.content[0].text).toContain("Morning brief");
+
+    const created = await callTool("create_routine", {
+      name: "Evening wrap",
+      prompt: "Summarize the day",
+      schedule_type: "daily",
+      time: "18:00",
+    });
+    expect(created.result.content[0].text).toContain("Created routine");
+    expect(lastCreateRoutineBody).toMatchObject({
+      fromBotId: "bot-asker",
+      name: "Evening wrap",
+      prompt: "Summarize the day",
+    });
+
+    const run = await callTool("run_routine", { routine_id: "routine-1" });
+    expect(run.result.content[0].text).toContain("queued");
   });
 
   it("rejects unknown tools with -32602", async () => {

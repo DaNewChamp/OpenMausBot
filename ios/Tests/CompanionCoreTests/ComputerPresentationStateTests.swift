@@ -54,13 +54,20 @@ final class ComputerPresentationStateTests: XCTestCase {
         XCTAssertNotEqual(state, .cloudViewerAvailable)
     }
 
+    func testIdleVpsCloudExplainsWatchDuringTurns() {
+        XCTAssertEqual(
+            ComputerPresentationState(bot: bot(computer: "cloud", cloudBackend: "vps", busy: false)),
+            .unavailable(message: "Cloud runs on your VPS. Send a message to start a turn, then watch the desktop here.")
+        )
+    }
+
     func testLocalAndVirtualMachinesNeverClaimInteractiveViewerSupport() {
         XCTAssertNotEqual(ComputerPresentationState(bot: bot(computer: "local")), .cloudViewerAvailable)
         XCTAssertNotEqual(ComputerPresentationState(bot: bot(computer: "vm")), .cloudViewerAvailable)
     }
 
-    func testLocalVmControlsRequireCapabilityAndPerBotMode() {
-        let status = LocalVmStatus(
+    func testLocalVmControlsRequireCapabilityAndActionableStatus() {
+        var status = LocalVmStatus(
             mode: .perBot,
             maxInstances: 2,
             state: .missing,
@@ -79,7 +86,31 @@ final class ComputerPresentationStateTests: XCTestCase {
         let vm = bot(computer: "vm")
         XCTAssertTrue(ComputerPresentationState.supportsLocalVmControls(vm, status: status, accessGranted: true))
         XCTAssertFalse(ComputerPresentationState.supportsLocalVmControls(vm, status: status, accessGranted: false))
+
+        status.canCreate = false
+        status.canRecreate = true
+        status.problem = "Recreate this bot's Local VM."
+        XCTAssertTrue(ComputerPresentationState.supportsLocalVmControls(vm, status: status, accessGranted: true))
+
         let shared = LocalVmStatus(
+            mode: .shared,
+            maxInstances: 1,
+            state: .stopped,
+            container: "stopped",
+            daemonUp: true,
+            imageReady: true,
+            desktopReady: false,
+            ready: false,
+            createSupported: true,
+            busy: false,
+            canCreate: false,
+            canStop: false,
+            canRecreate: true,
+            problem: "Recreate the Local VM."
+        )
+        XCTAssertTrue(ComputerPresentationState.supportsLocalVmControls(vm, status: shared, accessGranted: true))
+
+        let idleShared = LocalVmStatus(
             mode: .shared,
             maxInstances: 1,
             state: .ready,
@@ -95,7 +126,7 @@ final class ComputerPresentationStateTests: XCTestCase {
             canRecreate: false,
             problem: nil
         )
-        XCTAssertFalse(ComputerPresentationState.supportsLocalVmControls(vm, status: shared, accessGranted: true))
+        XCTAssertFalse(ComputerPresentationState.supportsLocalVmControls(vm, status: idleShared, accessGranted: true))
         XCTAssertFalse(ComputerPresentationState.supportsLocalVmControls(bot(computer: "local"), status: status, accessGranted: true))
     }
 

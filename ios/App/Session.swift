@@ -557,9 +557,11 @@ final class Session: ObservableObject {
                     if state.pinnedOverrides != previousOverrides { persistPinnedOverrides() }
                     if state.appearanceOverrides != previousAppearanceOverrides { persistAppearanceOverrides() }
                     if case let .notify(notification) = frame.frame {
+                        guard !shouldSuppressNotification(for: notification.threadId) else { continue }
                         let bot = state.bot(notification.botId)
                         let seq = frame.seq
                         Task { @MainActor in
+                            guard !shouldSuppressNotification(for: notification.threadId) else { return }
                             let png = await notificationAvatarPNG(for: bot)
                             NotificationCoordinator.shared.deliver(
                                 notification,
@@ -1680,6 +1682,19 @@ final class Session: ObservableObject {
     }
 
     // MARK: - Notification navigation
+
+    func setAppActive(_ active: Bool) {
+        NotificationCoordinator.shared.appIsActive = active
+    }
+
+    func setForegroundThread(_ threadId: String?) {
+        NotificationCoordinator.shared.foregroundThreadId = threadId
+    }
+
+    private func shouldSuppressNotification(for threadId: String) -> Bool {
+        NotificationCoordinator.shared.appIsActive
+            && NotificationCoordinator.shared.foregroundThreadId == threadId
+    }
 
     func openNotification(_ target: NotificationTarget) async {
         guard let client else {
