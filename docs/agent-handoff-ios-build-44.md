@@ -22,17 +22,30 @@ Copy this entire file (or link it) when starting a new cloud agent on this works
 - **Mac mini MCP:** `https://local.posival.com/mcp` (OAuth via PocketID / `brain.posival.com`). Cloud-agent token in `~/.mcp-auth/mcp-remote-0.1.50/*_tokens.json`; refresh via `brain.posival.com/oauth/token` with client_id from `*_client_info.json`.
 - **MacBook git remote:** `personal` (DaNewChamp fork), not `origin`.
 
-## Done this session
+## Orchestrator mode
 
-1. **Computer view UX (build 44):** idle cloud VPS shows “Waiting for agent” instead of stale timeout; `streamLoadFailure` ignores watch errors when idle; Local menu fails open when engine unknown; engine-specific disabled reasons.
-2. **Install scripts:** `./scripts/install-ios-now.sh` — MacBook = local Debug install; Mac mini = `push-ios-wifi-release.sh` (sign on mini, `devicectl` on MacBook). **Do not SSH `xcodebuild` to the MacBook** — Share appex codesign fails headlessly.
-3. Pushed to `cursor/build-36-local-vm-phone-a27c`; PR #1 updated.
+You are the **orchestrator** — dispatch focused subagents (tests, deploy, install, QA); verify output; do not do all labor in one session.
+
+### Subagent templates
+
+| Agent | Task |
+|-------|------|
+| Tests | `cd ios && swift test` (355 tests on Mac mini) |
+| Deploy | `bun run deploy:hosted-runtime` on Mac mini; bootstrap sidecar if exit 113 |
+| Install | `./scripts/install-ios-now.sh` on mini |
+| QA | Phone checklist below on physical iPhone |
+
+## Done this session (orchestrator + subagents)
+
+1. **Computer view UX (build 44):** idle cloud VPS waiting card; engine-specific Local VM disabled reasons; fail-open when capabilities unknown.
+2. **Install scripts:** `./scripts/install-ios-now.sh` — auto-picks local Debug vs mini→MacBook WiFi path.
+3. **swift test:** 355/355 pass on Mac mini.
+4. **Hosted deploy:** runtime synced on Mac mini; harness + sidecar running; `/api/local-computer` 200. Sidecar may need manual `launchctl bootstrap` after deploy.
+5. **Device install:** build **44** installed via `push-ios-wifi-release.sh` (mini archive → MacBook `devicectl`). MacBook SSH reachable.
 
 ## Primary open task
 
-**Install build 44 to Vincent’s phone.** Not successfully installed yet.
-
-Last failure: old `install-ios-via-macbook-hop.sh` path → CodeSign failed on `OpenMausCompanionShare.appex` over SSH; fallback SSH to `192.168.112.99` permission denied.
+**Phone QA on build 44** — install succeeded; Vincent should force-quit/reopen app and verify on device.
 
 ### Correct install (preferred)
 
@@ -72,7 +85,7 @@ See also [ios/AppStore/RELEASE.md](../ios/AppStore/RELEASE.md) (WiFi install sec
 - Merge PRs when ready
 - TestFlight (90382 upload limit)
 - Share extension / composer polish
-- Hosted companion redeploy if server changes land: `bun run deploy:hosted-runtime`
+- Hosted companion deploy: **done** on Mac mini for build-44 server/companion wave
 
 ## Gotchas
 
@@ -83,7 +96,7 @@ See also [ios/AppStore/RELEASE.md](../ios/AppStore/RELEASE.md) (WiFi install sec
 
 ## Goal for next agent
 
-1. Re-auth Mac mini MCP if needed.
-2. Run `./scripts/install-ios-now.sh` on Mac mini (or MacBook if phone is paired there and MCP can reach it).
-3. Confirm build 44 on device; report success or paste the last 30 lines of failure.
-4. Do not make Vincent get out of bed unless the MacBook is asleep and install is impossible remotely.
+1. Dispatch **QA agent** for phone checklist (Chief Keef Computer tab, Local VM picker, idle VPS).
+2. Optional: patch `deploy-hosted-runtime.mjs` to bootstrap sidecar like harness.
+3. Optional: TestFlight when ASC 90382 limit clears.
+4. Do not wake Vincent unless phone QA blocked by asleep MacBook or pairing issue.
