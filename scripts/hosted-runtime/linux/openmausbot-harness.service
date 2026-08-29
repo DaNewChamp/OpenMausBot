@@ -9,6 +9,8 @@ User=root
 Environment=OMB_RUNTIME_ROOT=/opt/openmausbot/runtime
 Environment=OMB_USER_DATA=/var/lib/openmausbot
 Environment=OMB_PORT=8799
+Environment=PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=OMB_EXTRA_PATH=/root/.local/bin
 ExecStart=/opt/openmausbot/runtime/start-harness.sh
 Restart=always
 RestartSec=10
