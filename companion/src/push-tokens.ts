@@ -8,7 +8,7 @@ export function savePushToken(deviceId: string, token: string): void {
   const path = join(DATA_DIR, "push-tokens.json");
   let store: Record<string, string> = {};
   try {
-    store = JSON.parse(readFileSync(path, "utf8")) as Record<string, string>;
+    store = JSON.parse(readFileSync(path, "utf8"));
   } catch {
     store = {};
   }
@@ -20,12 +20,19 @@ export function apnsConfigured(): boolean {
   return Boolean(process.env.OMB_APNS_KEY_P8 && process.env.OMB_APNS_KEY_ID && process.env.OMB_APNS_TEAM_ID);
 }
 
-/** Closed-app push. Without Apple credentials this is a no-op by design. */
-export function maybeSendApns(_payload: {
+export interface ApnsPayload {
   deviceToken: string;
   title: string;
   threadId?: string;
-}): { sent: boolean; reason?: string } {
+}
+
+export interface ApnsAttempt {
+  sent: boolean;
+  reason?: string;
+}
+
+/** Closed-app push. Without Apple credentials this is a no-op by design. */
+export function maybeSendApns(_payload: ApnsPayload): ApnsAttempt {
   if (!apnsConfigured()) return { sent: false, reason: "APNs credentials are not configured on this hub" };
   return { sent: false, reason: "APNs relay requires Apple Developer signing on the MacBook/iPhone release lane" };
 }

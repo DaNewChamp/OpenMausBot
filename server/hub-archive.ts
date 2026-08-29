@@ -5,12 +5,43 @@ import { execFileSync } from "node:child_process";
 
 import { relativizeCwd, resolvePortableCwd } from "./bot-cwd.ts";
 
+export interface HostVpsConfig {
+  sshAlias?: string;
+}
+
+export interface HostConfigPatch {
+  vps?: HostVpsConfig;
+}
+
+export interface HostBotPatch {
+  id: string;
+  computer?: string;
+  cloudBackend?: string;
+  cwd?: string;
+}
+
 export interface HostProfile {
   id: string;
   dataDir: string;
   companionDir?: string;
-  config?: Record<string, unknown>;
-  botPatches?: Array<Record<string, unknown> & { id: string }>;
+  config?: HostConfigPatch;
+  botPatches?: HostBotPatch[];
+}
+
+interface StoredBotTask {
+  cwd?: string | null;
+}
+
+interface StoredBotRecord {
+  id?: string;
+  cwd?: string;
+  computer?: string;
+  cloudBackend?: string;
+  tasks?: StoredBotTask[];
+}
+
+interface HostProfilesFile {
+  [id: string]: Omit<HostProfile, "id">;
 }
 
 export interface HubArchiveManifest {
@@ -39,7 +70,7 @@ function expandHome(path: string): string {
 }
 
 export function loadHostProfile(profilesPath: string, id: string): HostProfile {
-  const raw = JSON.parse(readFileSync(profilesPath, "utf8")) as Record<string, Omit<HostProfile, "id">>;
+  const raw: HostProfilesFile = JSON.parse(readFileSync(profilesPath, "utf8"));
   const profile = raw[id];
   if (!profile) throw new Error(`unknown host profile: ${id}`);
   return {
@@ -63,13 +94,13 @@ function checkpointMessages(dataDir: string): void {
 
 function remapBots(botsPath: string, dataDir: string, mode: "export" | "import"): void {
   if (!existsSync(botsPath)) return;
-  const bots = JSON.parse(readFileSync(botsPath, "utf8")) as Array<{ cwd?: string; tasks?: Array<{ cwd?: string | null }> }>;
+  const bots: StoredBotRecord[] = JSON.parse(readFileSync(botsPath, "utf8"));
   for (const bot of bots) {
-    if (typeof bot.cwd === "string") {
+    if (bot.cwd) {
       bot.cwd = (mode === "export" ? relativizeCwd(bot.cwd, dataDir) : resolvePortableCwd(bot.cwd, dataDir)) ?? undefined;
     }
     for (const task of bot.tasks ?? []) {
-      if (typeof task.cwd === "string") {
+      if (task.cwd) {
         task.cwd = mode === "export" ? relativizeCwd(task.cwd, dataDir) : resolvePortableCwd(task.cwd, dataDir);
       }
     }
@@ -80,7 +111,7 @@ function remapBots(botsPath: string, dataDir: string, mode: "export" | "import")
 export function applyHostProfile(dataDir: string, profile: HostProfile): void {
   const botsPath = join(dataDir, "bots.json");
   if (existsSync(botsPath) && profile.botPatches?.length) {
-    const bots = JSON.parse(readFileSync(botsPath, "utf8")) as Array<Record<string, unknown>>;
+    const bots: StoredBotRecord[] = JSON.parse(readFileSync(botsPath, "utf8"));
     for (const patch of profile.botPatches) {
       const bot = bots.find((entry) => entry.id === patch.id);
       if (!bot) continue;
@@ -145,7 +176,7 @@ export function importHubArchive(opts: {
   const src = resolve(opts.archiveDir);
   const manifestPath = join(src, "manifest.json");
   if (!existsSync(manifestPath)) throw new Error("hub archive missing manifest.json");
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as HubArchiveManifest;
+  const manifest: HubArchiveManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   mkdirSync(opts.dataDir, { recursive: true, mode: 0o700 });
   for (const name of readdirSync(src)) {
     if (name === "manifest.json" || name === "companion") continue;

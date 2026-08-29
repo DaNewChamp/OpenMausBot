@@ -9,6 +9,14 @@ This repository is Vincent's **V Bot / OpenMausBot fork** (`DaNewChamp/OpenMausB
 
 Do not claim a Cloud Agent push is live on Servarica, TestFlight, or the Mac mini bridge.
 
+The Linux Cloud Agent cannot run `swift test`. Before an iOS/TestFlight cut, the MacBook lane must rerun:
+
+```sh
+cd ios && swift test
+```
+
+If the Xcode project is stale, regenerate with `cd ios && xcodegen generate` first, then `swift test`. Idle Cloud VPS must stay on the “Waiting for agent” card (`ComputerPresentationState.idleWaitingMessage`), not a VPS-only unavailable string.
+
 ---
 
 One workflow builds everything: **Actions → Release → Run workflow**. It

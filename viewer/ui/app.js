@@ -40,11 +40,6 @@ function activeRoom() {
   return state.groups.find((group) => group.id === state.activeRoomId) ?? null;
 }
 
-function activeThreadId() {
-  if (state.activeKind === "room") return activeRoom()?.threadId ?? null;
-  return activeBot()?.threadId ?? null;
-}
-
 function toolLabel(tool) {
   if (!tool) return "an action";
   const bare = tool.replace(/^mcp__[^_]+__/, "").replace(/_/g, " ");

@@ -2,6 +2,13 @@ import { randomUUID } from "node:crypto";
 
 import type { BridgeCredentials, BridgeJob, BridgeJobResult } from "./types.ts";
 
+interface HeartbeatResponse {
+  jobs?: BridgeJob[];
+  cancelJobIds?: string[];
+  nextToken?: string;
+  error?: string;
+}
+
 function normalizeUrl(url: string): string {
   const parsed = new URL(url);
   parsed.pathname = parsed.pathname.replace(/\/$/, "");
@@ -57,12 +64,7 @@ export async function heartbeat(
       inFlight,
     }),
   });
-  const body = (await res.json()) as {
-    jobs?: BridgeJob[];
-    cancelJobIds?: string[];
-    nextToken?: string;
-    error?: string;
-  };
+  const body: HeartbeatResponse = await res.json();
   if (!res.ok) throw new Error(body.error ?? `heartbeat failed (${res.status})`);
   return { jobs: body.jobs ?? [], cancelJobIds: body.cancelJobIds ?? [], nextToken: body.nextToken };
 }

@@ -7,15 +7,25 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
-import { handleBridgeRoutes, isBridgeAdminLoopback } from "./bridge-routes.ts";
+import { handleBridgeRoutes, isBridgeAdminLoopback, type EncodedJson } from "./bridge-routes.ts";
+
+interface RouteRequestBody {
+  action?: string;
+  jobId?: string;
+  exitCode?: number;
+  stdout?: string;
+  stderr?: string;
+  truncated?: boolean;
+}
 
 function jsonReq(
   method: string,
   url: string,
-  body?: unknown,
+  body?: RouteRequestBody,
   headers: Record<string, string | string[] | undefined> = {},
 ): IncomingMessage {
   const payload = body === undefined ? "" : JSON.stringify(body);
+  // SAFETY: handleBridgeRoutes only reads method, url, headers, and the async iterable body.
   return Object.assign(Readable.from([payload]), {
     method,
     url,
@@ -25,15 +35,20 @@ function jsonReq(
 
 function capture() {
   let status = 0;
-  let body: unknown;
-  const json = (_res: ServerResponse, nextStatus: number, nextBody: unknown) => {
+  let body: EncodedJson = {};
+  const json = (_res: ServerResponse, nextStatus: number, nextBody: EncodedJson) => {
     status = nextStatus;
     body = nextBody;
   };
   return {
     json,
-    result: () => ({ status, body: body as Record<string, unknown> }),
+    result: () => ({ status, body }),
   };
+}
+
+function unusedResponse(): ServerResponse {
+  // SAFETY: handleBridgeRoutes writes through the json() callback; it does not use the ServerResponse instance.
+  return {} as ServerResponse;
 }
 
 describe("bridge admin loopback", () => {
@@ -64,7 +79,7 @@ describe("bridge job audit routes", () => {
     expect(
       await handleBridgeRoutes(
         jsonReq("GET", "/api/bridge/jobs", undefined, { "x-openmausbot-companion": "1" }),
-        {} as ServerResponse,
+        unusedResponse(),
         "GET",
         "/api/bridge/jobs",
         denied.json,
@@ -77,21 +92,21 @@ describe("bridge job audit routes", () => {
     const listed = capture();
     await handleBridgeRoutes(
       jsonReq("GET", `/api/bridge/jobs?bridgeId=${bridgeId}`),
-      {} as ServerResponse,
+      unusedResponse(),
       "GET",
       "/api/bridge/jobs",
       listed.json,
       registry,
       { loopback: true },
     );
-    const jobs = listed.result().body.jobs as Array<{ id: string }>;
+    const jobs = listed.result().body.jobs ?? [];
     expect(listed.result().status).toBe(200);
     expect(jobs.map((entry) => entry.id)).toEqual([job.id]);
 
     const cancelled = capture();
     await handleBridgeRoutes(
       jsonReq("POST", `/api/bridge/jobs/${job.id}`, { action: "cancel" }),
-      {} as ServerResponse,
+      unusedResponse(),
       "POST",
       `/api/bridge/jobs/${job.id}`,
       cancelled.json,
@@ -99,7 +114,7 @@ describe("bridge job audit routes", () => {
       { loopback: true },
     );
     expect(cancelled.result().status).toBe(200);
-    expect((cancelled.result().body.job as { status: string }).status).toBe("cancelled");
+    expect(cancelled.result().body.job?.status).toBe("cancelled");
   });
 
   it("lets a paired companion list and revoke bridges but not audit jobs", async () => {
@@ -110,7 +125,7 @@ describe("bridge job audit routes", () => {
     const listed = capture();
     await handleBridgeRoutes(
       jsonReq("GET", "/api/bridges", undefined, { "x-openmausbot-companion": "1" }),
-      {} as ServerResponse,
+      unusedResponse(),
       "GET",
       "/api/bridges",
       listed.json,
@@ -118,14 +133,14 @@ describe("bridge job audit routes", () => {
       { loopback: true },
     );
     expect(listed.result().status).toBe(200);
-    const bridges = listed.result().body.bridges as Array<{ id: string; tokenHash?: string }>;
+    const bridges = listed.result().body.bridges ?? [];
     expect(bridges[0]?.id).toBe(bridgeId);
-    expect(bridges[0]?.tokenHash).toBeUndefined();
+    expect(Object.hasOwn(bridges[0] ?? {}, "tokenHash")).toBe(false);
 
     const jobs = capture();
     await handleBridgeRoutes(
       jsonReq("GET", "/api/bridge/jobs", undefined, { "x-openmausbot-companion": "1" }),
-      {} as ServerResponse,
+      unusedResponse(),
       "GET",
       "/api/bridge/jobs",
       jobs.json,
@@ -137,7 +152,7 @@ describe("bridge job audit routes", () => {
     const revoked = capture();
     await handleBridgeRoutes(
       jsonReq("DELETE", `/api/bridges/${bridgeId}`, undefined, { "x-openmausbot-companion": "1" }),
-      {} as ServerResponse,
+      unusedResponse(),
       "DELETE",
       `/api/bridges/${bridgeId}`,
       revoked.json,
@@ -156,7 +171,7 @@ describe("bridge job audit routes", () => {
     const rotated = capture();
     await handleBridgeRoutes(
       jsonReq("POST", `/api/bridges/${bridgeId}/rotate`, undefined, { "x-openmausbot-companion": "1" }),
-      {} as ServerResponse,
+      unusedResponse(),
       "POST",
       `/api/bridges/${bridgeId}/rotate`,
       rotated.json,
@@ -179,7 +194,7 @@ describe("bridge job audit routes", () => {
         { jobId: "ghost", exitCode: 0, stdout: "hi", stderr: "", truncated: false },
         { authorization: `Bearer ${bridgeToken}` },
       ),
-      {} as ServerResponse,
+      unusedResponse(),
       "POST",
       "/api/bridge/result",
       captured.json,

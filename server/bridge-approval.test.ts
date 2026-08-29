@@ -15,6 +15,7 @@ import {
   resetBridgeApprovalsForTests,
   resolveBridgeApproval,
   type ApprovalBus,
+  type BridgeApprovalRequest,
 } from "./bridge-approval.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
@@ -63,7 +64,7 @@ describe("bridge approval card lifecycle", () => {
 
   const ownerOf = (who: BotRecord = bot) => ({ botId: who.id, threadId: who.threadId });
 
-  const shellReq = (overrides: Record<string, unknown> = {}) => ({
+  const shellReq = (overrides: Partial<BridgeApprovalRequest<{ ok: true }>> = {}) => ({
     bot,
     tool: "run_on_bridge" as const,
     command: "echo hi",

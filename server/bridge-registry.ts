@@ -199,7 +199,7 @@ function normalizeBridge(bridge: BridgeRecord): BridgeRecord {
 
 function readStore(): BridgeStoreFile {
   try {
-    const parsed = JSON.parse(readFileSync(bridgesPath(), "utf8")) as BridgeStoreFile;
+    const parsed: BridgeStoreFile = JSON.parse(readFileSync(bridgesPath(), "utf8"));
     return { bridges: (parsed.bridges ?? []).map(normalizeBridge) };
   } catch {
     return { bridges: [] };
@@ -232,7 +232,7 @@ function readJobsFile(): BridgeJobsFile {
     return { jobs: [] };
   }
   try {
-    const parsed = JSON.parse(raw) as BridgeJobsFile;
+    const parsed: BridgeJobsFile = JSON.parse(raw);
     if (!parsed || !Array.isArray(parsed.jobs)) {
       quarantineJobsFile("jobs array missing");
       return { jobs: [] };
@@ -636,7 +636,10 @@ export class BridgeRegistry {
     };
     if (opts.idempotencyKey) {
       const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
-      if (existing) return existing.job as ShellBridgeJob;
+      if (existing) {
+        if (existing.job.kind !== "shell") throw new IdempotencyConflictError();
+        return existing.job;
+      }
     }
     this.enqueueRecord(bridgeId, job, opts);
     return job;
@@ -660,7 +663,16 @@ export class BridgeRegistry {
     };
     if (opts.idempotencyKey) {
       const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
-      if (existing) return existing.job as LocalVmBridgeJob;
+      if (existing) {
+        if (
+          existing.job.kind !== "local-vm-status" &&
+          existing.job.kind !== "local-vm-action" &&
+          existing.job.kind !== "local-vm-screenshot"
+        ) {
+          throw new IdempotencyConflictError();
+        }
+        return existing.job;
+      }
     }
     this.enqueueRecord(bridgeId, job, opts);
     return job;
@@ -687,7 +699,10 @@ export class BridgeRegistry {
     };
     if (opts.idempotencyKey) {
       const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
-      if (existing) return existing.job as SshBridgeJob;
+      if (existing) {
+        if (existing.job.kind !== "ssh-exec") throw new IdempotencyConflictError();
+        return existing.job;
+      }
     }
     this.enqueueRecord(bridgeId, job, opts);
     return job;
@@ -710,7 +725,10 @@ export class BridgeRegistry {
     };
     if (opts.idempotencyKey) {
       const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
-      if (existing) return existing.job as PeekabooBridgeJob;
+      if (existing) {
+        if (existing.job.kind !== "peekaboo-observe") throw new IdempotencyConflictError();
+        return existing.job;
+      }
     }
     this.enqueueRecord(bridgeId, job, opts);
     return job;

@@ -212,11 +212,16 @@ describe("guardedBotModelSwitch", () => {
   });
 
   it("queues a valid switch when a queue callback is provided for a busy bot", async () => {
-    const bot = {
+    interface BusySwitchBot {
+      id: string;
+      busy: boolean;
+      modelSelection: { instanceId: string; model: string };
+      pendingModelSelection?: { instanceId: string; model: string };
+    }
+    const bot: BusySwitchBot = {
       id: "bot-1",
       busy: true,
       modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
-      pendingModelSelection: undefined as { instanceId: string; model: string } | undefined,
     };
     let patched = false;
 

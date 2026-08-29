@@ -408,7 +408,15 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
   if (name === "run_on_bridge") {
     const command = String(args.command ?? "").trim();
     if (!command) return { text: "run_on_bridge needs command.", isError: true };
-    const body: Record<string, unknown> = { command, fromBotId: BOT_ID, fromThreadId: THREAD_ID };
+    interface BridgeShellBody {
+      command: string;
+      fromBotId: string;
+      fromThreadId: string;
+      bridge?: string;
+      cwd?: string;
+      timeoutMs?: number;
+    }
+    const body: BridgeShellBody = { command, fromBotId: BOT_ID, fromThreadId: THREAD_ID };
     if (args.bridge) body.bridge = String(args.bridge);
     if (args.cwd) body.cwd = String(args.cwd);
     if (args.timeout_ms != null) body.timeoutMs = Number(args.timeout_ms);
@@ -427,7 +435,16 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const target = String(args.target ?? "").trim();
     if (!command) return { text: "run_on_ssh_target needs command.", isError: true };
     if (!target) return { text: "run_on_ssh_target needs target.", isError: true };
-    const body: Record<string, unknown> = { command, target, fromBotId: BOT_ID, fromThreadId: THREAD_ID };
+    interface BridgeSshBody {
+      command: string;
+      target: string;
+      fromBotId: string;
+      fromThreadId: string;
+      bridge?: string;
+      cwd?: string;
+      timeoutMs?: number;
+    }
+    const body: BridgeSshBody = { command, target, fromBotId: BOT_ID, fromThreadId: THREAD_ID };
     if (args.bridge) body.bridge = String(args.bridge);
     if (args.cwd) body.cwd = String(args.cwd);
     if (args.timeout_ms != null) body.timeoutMs = Number(args.timeout_ms);
@@ -443,7 +460,14 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
   }
   if (name === "observe_bridge_screen") {
     const mode = String(args.mode ?? "screenshot") === "see" ? "see" : "screenshot";
-    const body: Record<string, unknown> = { mode, fromBotId: BOT_ID, fromThreadId: THREAD_ID };
+    interface PeekabooBody {
+      mode: string;
+      fromBotId: string;
+      fromThreadId: string;
+      question?: string;
+      bridge?: string;
+    }
+    const body: PeekabooBody = { mode, fromBotId: BOT_ID, fromThreadId: THREAD_ID };
     if (args.question) body.question = String(args.question);
     if (args.bridge) body.bridge = String(args.bridge);
     const r = await api("/api/internal/bridge/peekaboo", { method: "POST", body: JSON.stringify(body) });

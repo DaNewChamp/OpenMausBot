@@ -5,14 +5,15 @@ import type { BridgeJob, BridgeJobResult } from "./types.ts";
 
 const execFileAsync = promisify(execFile);
 
-function failed(error: unknown): BridgeJobResult {
-  // SAFETY: bash/ssh execFile rejects with Node's ErrnoException plus captured stdio.
-  const err = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string; code?: number | string };
+type ExecFileFailure = NodeJS.ErrnoException & { stdout?: string; stderr?: string };
+
+function failed(err: ExecFileFailure): BridgeJobResult {
   const aborted = err.name === "AbortError" || err.code === "ABORT_ERR";
+  const exitCode = aborted ? 143 : Number.isFinite(err.code) ? Number(err.code) : 1;
   return {
-    exitCode: aborted ? 143 : typeof err.code === "number" ? err.code : 1,
+    exitCode,
     stdout: err.stdout ?? "",
-    stderr: aborted ? "cancelled" : (err.stderr ?? (err.message ?? String(error))),
+    stderr: aborted ? "cancelled" : (err.stderr ?? err.message ?? "command failed"),
     truncated: err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
   };
 }
@@ -31,7 +32,8 @@ export async function runShellJob(
     });
     return { exitCode: 0, stdout, stderr, truncated: false };
   } catch (error) {
-    return failed(error);
+    // SAFETY: bash/ssh execFile rejects with Node's ErrnoException plus captured stdio.
+    return failed(error as ExecFileFailure);
   }
 }
 
@@ -57,6 +59,7 @@ export async function runSshJob(
     );
     return { exitCode: 0, stdout, stderr, truncated: false };
   } catch (error) {
-    return failed(error);
+    // SAFETY: bash/ssh execFile rejects with Node's ErrnoException plus captured stdio.
+    return failed(error as ExecFileFailure);
   }
 }

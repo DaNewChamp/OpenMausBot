@@ -55,10 +55,12 @@ final class ComputerPresentationStateTests: XCTestCase {
     }
 
     func testIdleVpsCloudExplainsWatchDuringTurns() {
-        XCTAssertEqual(
-            ComputerPresentationState(bot: bot(computer: "cloud", cloudBackend: "vps", busy: false)),
-            .unavailable(message: "Cloud runs on your VPS. Send a message to start a turn, then watch the desktop here.")
-        )
+        let idleVps = bot(computer: "cloud", cloudBackend: "vps", busy: false)
+        let state = ComputerPresentationState(bot: idleVps)
+        XCTAssertEqual(state, .unavailable(message: ComputerPresentationState.idleWaitingMessage))
+        XCTAssertTrue(state.isIdleWaiting)
+        XCTAssertFalse(state.canOpenCloudViewer)
+        XCTAssertFalse(ComputerPresentationState.supportsCloudViewer(idleVps))
     }
 
     func testLocalAndVirtualMachinesNeverClaimInteractiveViewerSupport() {

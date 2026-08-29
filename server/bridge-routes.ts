@@ -4,7 +4,37 @@ import type { BridgeCapability, BridgeRegistry } from "./bridge-registry.ts";
 import { IdempotencyConflictError } from "./bridge-registry.ts";
 import { runShellOnBridge } from "./bridge-exec.ts";
 
-type JsonFn = (res: ServerResponse, status: number, body: unknown) => void;
+export interface EncodedJson {
+  error?: string;
+  ok?: boolean;
+  ignored?: boolean;
+  diagnostic?: string | null;
+  jobs?: ReturnType<BridgeRegistry["listJobs"]> | ReturnType<BridgeRegistry["pollJobs"]>;
+  job?: ReturnType<BridgeRegistry["getJob"]>;
+  bridges?: ReturnType<BridgeRegistry["list"]>;
+  bridgeId?: string;
+  cancelJobIds?: string[];
+  nextToken?: string;
+  code?: string;
+  expiresIn?: number;
+  bridgeToken?: string;
+  bridgeName?: string;
+  exitCode?: number | null;
+  stdout?: string;
+  stderr?: string;
+  truncated?: boolean;
+  finishedAt?: number;
+  generation?: number;
+  jobId?: string;
+}
+
+type JsonFn = (res: ServerResponse, status: number, body: EncodedJson) => void;
+
+type HeartbeatPayload = {
+  jobs: ReturnType<BridgeRegistry["pollJobs"]>;
+  cancelJobIds: string[];
+  nextToken?: string;
+};
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
@@ -29,9 +59,8 @@ export function isBridgeAdminLoopback(req: IncomingMessage, opts: { loopback: bo
   return opts.loopback && !isCompanionRequest(req);
 }
 
-function asStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  return value.filter((entry): entry is string => typeof entry === "string");
+function asStringArray(entries: Array<string | number | boolean | null>): string[] {
+  return entries.filter((entry): entry is string => String(entry) === entry);
 }
 
 /** Bridge HTTP surface. Returns true when the request was handled. */
@@ -143,18 +172,20 @@ export async function handleBridgeRoutes(
     if (bridgeId !== bridge.id) return json(res, 403, { error: "bridge id mismatch" }), true;
     const caps = body.capabilities === undefined ? undefined : asCapabilities(body.capabilities);
     const workerId = body.workerId ? String(body.workerId) : undefined;
+    const inFlightRaw = body.inFlight;
     bridges.touch(bridgeId, {
       hostInfo: body.hostInfo ? String(body.hostInfo) : undefined,
       capabilities: caps,
       workerId,
-      inFlight: asStringArray(body.inFlight),
+      inFlight: Array.isArray(inFlightRaw) ? asStringArray(inFlightRaw) : undefined,
     });
     const nextToken = bridges.takePendingToken(bridgeId);
-    return json(res, 200, {
+    const heartbeat: HeartbeatPayload = {
       jobs: bridges.pollJobs(bridgeId, workerId),
       cancelJobIds: bridges.cancelRequests(bridgeId),
-      ...(nextToken ? { nextToken } : {}),
-    }), true;
+    };
+    if (nextToken) heartbeat.nextToken = nextToken;
+    return json(res, 200, heartbeat), true;
   }
 
   if (method === "POST" && path === "/api/bridge/result") {

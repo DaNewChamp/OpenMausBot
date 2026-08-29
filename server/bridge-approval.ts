@@ -19,7 +19,7 @@ import { newId } from "./contracts.ts";
 import { appendDecision } from "./decision-log.ts";
 import { buildNotification } from "./notify.ts";
 import type { ApprovalBus } from "./peer-approval.ts";
-import type { BotRecord, Message } from "./store.ts";
+import type { BotRecord, Message, OptionCardData } from "./store.ts";
 
 export type { ApprovalBus } from "./peer-approval.ts";
 
@@ -65,7 +65,7 @@ const SETTLED_TTL_MS = 60_000;
 
 type Waiter<T> = {
   resolve: (result: BridgeRunDecision<T>) => void;
-  reject: (error: unknown) => void;
+  reject: (cause: Error) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
 };
@@ -160,11 +160,11 @@ function finishWaiters<T>(pending: Pending<T>, result: BridgeRunDecision<T>): vo
   }
 }
 
-function rejectWaiters<T>(pending: Pending<T>, error: unknown): void {
+function rejectWaiters<T>(pending: Pending<T>, cause: Error): void {
   const waiters = pending.waiters.splice(0);
   for (const waiter of waiters) {
     if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener("abort", waiter.onAbort);
-    waiter.reject(error);
+    waiter.reject(cause);
   }
 }
 
@@ -231,7 +231,7 @@ async function settleAllow<T>(pending: Pending<T>, source: "user" | "system"): P
     if (pendingByFingerprint.get(pending.fingerprint) === pending) {
       pendingByFingerprint.delete(pending.fingerprint);
     }
-    rejectWaiters(pending, error);
+    rejectWaiters(pending, error instanceof Error ? error : new Error("bridge execution failed"));
   }
 }
 
@@ -262,17 +262,18 @@ function pushApprovalCard(
         ? `@${bot.name} wants to observe the screen on ${req.bridgeName} [${req.bridgeId}]`
         : `@${bot.name} wants to run on ${req.bridgeName} [${req.bridgeId}]`;
   const subtitle = req.command.length > 200 ? `${req.command.slice(0, 200)}…` : req.command;
+  const card: OptionCardData = {
+    title,
+    subtitle,
+    options: allowKey ? ["Allow", "Deny", "Always allow"] : ["Allow", "Deny"],
+    requestId,
+    tool: req.tool,
+  };
+  if (allowKey) card.allowKey = allowKey;
   return bus.store.appendMessage(bot.threadId, {
     role: "bot",
     kind: "options",
-    card: {
-      title,
-      subtitle,
-      options: allowKey ? ["Allow", "Deny", "Always allow"] : ["Allow", "Deny"],
-      requestId,
-      tool: req.tool,
-      ...(allowKey ? { allowKey } : {}),
-    },
+    card,
   });
 }
 
@@ -341,7 +342,7 @@ function startPending<T>(
   const pending: Pending<T> = {
     waiters: [],
     timer: setTimeout(() => {
-      const still = pendingById.get(requestId) as Pending<T> | undefined;
+      const still: Pending<T> | undefined = pendingById.get(requestId);
       if (!still || still.settled) return;
       settleDeny(still, "system", "expired");
     }, timeoutMs),
@@ -380,7 +381,7 @@ export function requestBridgeApproval<T>(
     cwd: req.cwd,
     runTimeoutMs: req.runTimeoutMs,
   });
-  const existing = pendingByFingerprint.get(fingerprint) as Pending<T> | undefined;
+  const existing: Pending<T> | undefined = pendingByFingerprint.get(fingerprint);
   if (existing) {
     if (!existing.settled && Date.now() >= existing.expiresAt) {
       settleDeny(existing, "system", "expired");
@@ -444,14 +445,14 @@ export function resolveBridgeApproval(
 }
 
 export function cancelBridgeApprovalsFor(botId: string): void {
-  for (const pending of [...pendingById.values()]) {
+  for (const pending of Array.from(pendingById.values())) {
     if (pending.botId !== botId) continue;
     settleDeny(pending, "system", "deny");
   }
 }
 
 export function cancelBridgeApprovalsForThread(threadId: string): void {
-  for (const pending of [...pendingById.values()]) {
+  for (const pending of Array.from(pendingById.values())) {
     if (pending.threadId !== threadId && pending.logThreadId !== threadId) continue;
     settleDeny(pending, "system", "deny");
   }

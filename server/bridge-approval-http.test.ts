@@ -15,7 +15,101 @@ const ROOT = join(SERVER_DIR, "..");
 const posixOnly = describe.skipIf(process.platform === "win32");
 const TOKEN = "a".repeat(48);
 
-type Json = { status: number; body: any };
+type Json = { status: number; body: JsonResponse };
+
+interface PendingCard {
+  requestId: string;
+  answered?: string;
+  dismissed?: boolean;
+  allowKey?: string;
+  title?: string;
+}
+
+interface BotMessage {
+  id?: string;
+  kind: string;
+  card?: PendingCard;
+}
+
+interface BotListEntry {
+  id: string;
+  threadId?: string;
+  messages?: BotMessage[];
+}
+
+interface JsonResponse {
+  error?: string;
+  outcome?: string;
+  code?: string;
+  bridgeId?: string;
+  bridgeToken?: string;
+  jobs?: Array<{ id: string; generation?: number; command?: string }>;
+  bot?: { id: string; threadId: string };
+  bots?: BotListEntry[];
+}
+
+interface JsonRequestObject {
+  command?: string;
+  fromBotId?: string;
+  fromThreadId?: string;
+  bridge?: string;
+  bridgeId?: string;
+  cwd?: string;
+  timeoutMs?: number;
+  name?: string;
+  code?: string;
+  capabilities?: string[];
+  jobId?: string;
+  exitCode?: number;
+  stdout?: string;
+  stderr?: string;
+  truncated?: boolean;
+  generation?: number;
+  action?: string;
+  requestId?: string;
+  behavior?: string;
+  target?: string;
+}
+
+async function json(
+  base: string,
+  method: string,
+  path: string,
+  body?: JsonRequestObject,
+  headers?: Record<string, string>,
+): Promise<Json> {
+  const requestHeaders = new Headers(headers);
+  if (body) requestHeaders.set("content-type", "application/json");
+  const res = await fetch(`${base}${path}`, {
+    method,
+    headers: requestHeaders,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let parsed: JsonResponse = {};
+  try {
+    if (text) parsed = JSON.parse(text);
+  } catch {
+    parsed = {};
+  }
+  return { status: res.status, body: parsed };
+}
+
+async function readWirePayload(res: Response): Promise<{ error?: string; exitCode?: number; stdout?: string }> {
+  // SAFETY: fetch.json() is untyped HTTP JSON; these tests only hit JSON routes.
+  return (await res.json()) as { error?: string; exitCode?: number; stdout?: string };
+}
+
+function requireCreatedBot(body: JsonResponse): { id: string; threadId: string } {
+  if (!body.bot) throw new Error("create bot response missing bot");
+  return body.bot;
+}
+
+function requirePendingCard(message: BotMessage | null): BotMessage & { card: PendingCard } {
+  if (!message?.card?.requestId) throw new Error("expected a pending options card");
+  // SAFETY: the guard above established card.requestId, so the options card is present.
+  return message as BotMessage & { card: PendingCard };
+}
 
 async function waitHealth(base: string, child: ChildProcess, stderr: () => string): Promise<void> {
   const deadline = Date.now() + 20_000;
@@ -31,56 +125,40 @@ async function waitHealth(base: string, child: ChildProcess, stderr: () => strin
   }
 }
 
-async function json(base: string, method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<Json> {
-  const res = await fetch(`${base}${path}`, {
-    method,
-    headers: {
-      ...(body ? { "content-type": "application/json" } : {}),
-      ...headers,
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  let parsed: unknown = text;
-  try {
-    parsed = text ? JSON.parse(text) : null;
-  } catch {
-    /* keep text */
-  }
-  return { status: res.status, body: parsed };
-}
-
 function spawnHarness(opts: { approvalTimeoutMs?: number; sshTargets?: boolean }) {
   const port = 18800 + Math.floor(Math.random() * 10_000);
   const home = mkdtempSync(join(tmpdir(), "omb-bridge-http-"));
   mkdirSync(join(home, ".openmausbot"), { recursive: true });
-  writeFileSync(
-    join(home, ".openmausbot", "config.json"),
-    JSON.stringify({
-      instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } },
-      ...(opts.sshTargets
-        ? {
-            bridgeSshTargets: {
-              nas: { bridge: "mini", alias: "nas" },
-              other: { bridge: "other-mini", alias: "other" },
-            },
-          }
-        : {}),
-    }),
-  );
+  interface HarnessSshTargets {
+    nas: { bridge: string; alias: string };
+    other: { bridge: string; alias: string };
+  }
+  interface HarnessConfig {
+    instances: { ghost: { driver: string; displayName: string } };
+    bridgeSshTargets?: HarnessSshTargets;
+  }
+  const config: HarnessConfig = {
+    instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } },
+  };
+  if (opts.sshTargets) {
+    config.bridgeSshTargets = {
+      nas: { bridge: "mini", alias: "nas" },
+      other: { bridge: "other-mini", alias: "other" },
+    };
+  }
+  writeFileSync(join(home, ".openmausbot", "config.json"), JSON.stringify(config));
   let stderr = "";
+  const env: NodeJS.ProcessEnv = {
+    HOME: home,
+    USERPROFILE: home,
+    OMB_PORT: String(port),
+    OMB_COMMS_TOKEN: TOKEN,
+  };
+  if (process.env.PATH) env.PATH = process.env.PATH;
+  if (opts.approvalTimeoutMs != null) env.OMB_BRIDGE_APPROVAL_TIMEOUT_MS = String(opts.approvalTimeoutMs);
   const child = spawn(process.execPath, ["--experimental-strip-types", join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
-    env: {
-      ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-      HOME: home,
-      USERPROFILE: home,
-      OMB_PORT: String(port),
-      OMB_COMMS_TOKEN: TOKEN,
-      ...(opts.approvalTimeoutMs != null
-        ? { OMB_BRIDGE_APPROVAL_TIMEOUT_MS: String(opts.approvalTimeoutMs) }
-        : {}),
-    },
+    env,
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stderr!.on("data", (c) => {
@@ -97,9 +175,9 @@ posixOnly("internal bridge approval over HTTP", () => {
   let bridgeToken = "";
   let jobsCompleted = 0;
 
-  const api = (method: string, path: string, body?: unknown, headers?: Record<string, string>) =>
+  const api = (method: string, path: string, body?: JsonRequestObject, headers?: Record<string, string>) =>
     json(harness.base, method, path, body, headers);
-  const internal = (path: string, body: unknown, extra?: RequestInit) =>
+  const internal = (path: string, body: JsonRequestObject, extra?: RequestInit) =>
     fetch(`${harness.base}${path}`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
@@ -119,12 +197,15 @@ posixOnly("internal bridge approval over HTTP", () => {
     await api("POST", "/api/bridge/heartbeat", { bridgeId: registered.body.bridgeId, capabilities }, {
       authorization: `Bearer ${registered.body.bridgeToken}`,
     });
-    return { bridgeId: registered.body.bridgeId as string, bridgeToken: registered.body.bridgeToken as string };
+    const bridgeId = registered.body.bridgeId;
+    const bridgeToken = registered.body.bridgeToken;
+    if (!bridgeId || !bridgeToken) throw new Error("bridge register missing credentials");
+    return { bridgeId, bridgeToken };
   }
 
   async function drainJobs(token: string, id: string) {
     const beat = await api("POST", "/api/bridge/heartbeat", { bridgeId: id }, { authorization: `Bearer ${token}` });
-    const jobs = (beat.body.jobs ?? []) as Array<{ id: string; generation?: number; command?: string }>;
+    const jobs = beat.body.jobs ?? [];
     for (const job of jobs) {
       jobsCompleted += 1;
       await api(
@@ -149,10 +230,9 @@ posixOnly("internal bridge approval over HTTP", () => {
     const deadline = Date.now() + ms;
     while (Date.now() < deadline) {
       const { body } = await api("GET", "/api/bots");
-      const found = (body.bots ?? []).find((b: { id: string }) => b.id === botId);
+      const found = (body.bots ?? []).find((b) => b.id === botId);
       const card = found?.messages?.find(
-        (m: { kind: string; card?: { requestId?: string; answered?: string; dismissed?: boolean } }) =>
-          m.kind === "options" && m.card?.requestId && !m.card.answered && m.card.dismissed !== true,
+        (m) => m.kind === "options" && m.card?.requestId && !m.card.answered && m.card.dismissed !== true,
       );
       if (card) return card;
       await new Promise((r) => setTimeout(r, 50));
@@ -165,10 +245,10 @@ posixOnly("internal bridge approval over HTTP", () => {
     await waitHealth(harness.base, harness.child, harness.stderr);
     const created = await api("POST", "/api/bots");
     expect(created.status).toBe(201);
-    bot = created.body.bot;
+    bot = requireCreatedBot(created.body);
     const createdOther = await api("POST", "/api/bots");
     expect(createdOther.status).toBe(201);
-    other = createdOther.body.bot;
+    other = requireCreatedBot(createdOther.body);
     const paired = await pairBridge("mini", ["shell", "ssh-forward"]);
     bridgeId = paired.bridgeId;
     bridgeToken = paired.bridgeToken;
@@ -187,7 +267,7 @@ posixOnly("internal bridge approval over HTTP", () => {
       bridge: "missing-bridge",
     });
     expect(res.status).toBe(400);
-    const body = (await res.json()) as { error?: string };
+    const body = await readWirePayload(res);
     expect(String(body.error)).toMatch(/no online bridge/i);
     expect(await waitForCard(bot.id, 400)).toBeNull();
   });
@@ -200,8 +280,7 @@ posixOnly("internal bridge approval over HTTP", () => {
       fromThreadId: bot.threadId,
       bridgeId,
     });
-    const card = await waitForCard(bot.id);
-    expect(card, "missing grant must hold a real card").not.toBeNull();
+    const card = requirePendingCard(await waitForCard(bot.id));
     expect(card.card.allowKey).toBe("bridge:run_on_bridge:echo");
     expect(card.card.title).toContain(bridgeId);
 
@@ -241,7 +320,7 @@ posixOnly("internal bridge approval over HTTP", () => {
     expect(allowed.status).toBe(200);
     expect(allowed.body.outcome).toBe("allowed-once");
     expect(result.status).toBe(200);
-    const payload = (await result.json()) as { exitCode: number };
+    const payload = await readWirePayload(result);
     expect(payload.exitCode).toBe(0);
     expect(jobs).toHaveLength(1);
     expect(jobsCompleted).toBe(1);
@@ -265,8 +344,7 @@ posixOnly("internal bridge approval over HTTP", () => {
     };
     const first = internal("/api/internal/bridge/shell", body);
     const second = internal("/api/internal/bridge/shell", body);
-    const card = await waitForCard(bot.id);
-    expect(card).not.toBeNull();
+    const card = requirePendingCard(await waitForCard(bot.id));
     const allowP = api("POST", `/api/bots/${bot.id}/respond`, {
       requestId: card.card.requestId,
       behavior: "allow",
@@ -284,8 +362,8 @@ posixOnly("internal bridge approval over HTTP", () => {
     expect(allowed.body.outcome).toBe("allowed-once");
     expect(a.status).toBe(200);
     expect(b.status).toBe(200);
-    const pa = (await a.json()) as { stdout?: string };
-    const pb = (await b.json()) as { stdout?: string };
+    const pa = await readWirePayload(a);
+    const pb = await readWirePayload(b);
     expect(pa.stdout).toBe(pb.stdout);
     expect(jobs).toHaveLength(1);
     expect(jobsCompleted).toBe(1);
@@ -319,13 +397,13 @@ posixOnly("internal bridge approval over HTTP", () => {
     });
     await new Promise((r) => setTimeout(r, 200));
     const { body } = await api("GET", "/api/bots");
-    const found = (body.bots ?? []).find((b: { id: string }) => b.id === bot.id);
+    const found = (body.bots ?? []).find((b) => b.id === bot.id);
     const live = (found?.messages ?? []).filter(
-      (m: { kind: string; card?: { requestId?: string; answered?: string } }) =>
-        m.kind === "options" && m.card?.requestId && !m.card.answered,
+      (m) => m.kind === "options" && m.card?.requestId && !m.card.answered,
     );
     expect(live.length).toBeGreaterThanOrEqual(6);
     for (const card of live) {
+      if (!card.card?.requestId) continue;
       await api("POST", `/api/bots/${bot.id}/respond`, { requestId: card.card.requestId, behavior: "deny" });
     }
     expect((await first).status).toBe(403);
@@ -345,16 +423,15 @@ posixOnly("internal bridge approval over HTTP", () => {
       { command: "echo abandoned", fromBotId: bot.id, fromThreadId: bot.threadId, bridgeId },
       { signal: ac.signal },
     );
-    const card = await waitForCard(bot.id);
-    expect(card).not.toBeNull();
+    const card = requirePendingCard(await waitForCard(bot.id));
     ac.abort();
     await held.catch(() => undefined);
     const deadline = Date.now() + 2_000;
     let settled = false;
     while (Date.now() < deadline) {
       const { body } = await api("GET", "/api/bots");
-      const found = (body.bots ?? []).find((b: { id: string }) => b.id === bot.id);
-      const live = found?.messages?.find((m: { id: string }) => m.id === card.id);
+      const found = (body.bots ?? []).find((b) => b.id === bot.id);
+      const live = found?.messages?.find((m) => m.id === card.id);
       if (live?.card?.answered) {
         settled = true;
         break;
@@ -377,19 +454,20 @@ posixOnly("internal bridge approval expiry over HTTP", () => {
   let bot: { id: string; threadId: string };
   let bridgeId = "";
 
-  const api = (method: string, path: string, body?: unknown) => json(harness.base, method, path, body);
+  const api = (method: string, path: string, body?: JsonRequestObject) => json(harness.base, method, path, body);
 
   beforeAll(async () => {
     harness = spawnHarness({ approvalTimeoutMs: 200 });
     await waitHealth(harness.base, harness.child, harness.stderr);
     const created = await api("POST", "/api/bots");
-    bot = created.body.bot;
+    bot = requireCreatedBot(created.body);
     const pairing = await api("POST", "/api/bridge/pairing");
     const registered = await api("POST", "/api/bridge/register", {
       name: "mini",
       code: pairing.body.code,
       capabilities: ["shell"],
     });
+    if (!registered.body.bridgeId) throw new Error("bridge register missing id");
     bridgeId = registered.body.bridgeId;
     await fetch(`${harness.base}/api/bridge/heartbeat`, {
       method: "POST",
@@ -416,10 +494,9 @@ posixOnly("internal bridge approval expiry over HTTP", () => {
     const deadline = Date.now() + 2_000;
     while (Date.now() < deadline && !requestId) {
       const { body } = await api("GET", "/api/bots");
-      const found = (body.bots ?? []).find((b: { id: string }) => b.id === bot.id);
+      const found = (body.bots ?? []).find((b) => b.id === bot.id);
       const card = found?.messages?.find(
-        (m: { kind: string; card?: { requestId?: string; answered?: string } }) =>
-          m.kind === "options" && m.card?.requestId,
+        (m) => m.kind === "options" && m.card?.requestId,
       );
       if (card?.card?.requestId) requestId = card.card.requestId;
       else await new Promise((r) => setTimeout(r, 40));

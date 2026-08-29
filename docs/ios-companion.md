@@ -23,6 +23,9 @@ The first version includes:
 - Approvals and questions, including narrow “always allow” grants.
 - Resumable SSE, streamed reply text, reconnect hydration, and an opt-in live
   Box computer view. The loopback-only VPS SSH viewer remains desktop-only.
+  Idle Cloud VPS uses the same “Waiting for agent” card as other idle
+  watch-only destinations (`idleWaitingMessage`); the destination help line
+  explains that the phone can only watch.
 - A phone-safe Local VM status and lifecycle surface for explicitly enabled
   devices. The phone can create, stop, or recreate an idle bot VM on the Mac
   while the durable workspace remains on that Mac.
