@@ -95,6 +95,7 @@ async function main() {
   run
   status
 
+  OMB_BRIDGE_SHELL=1        advertise shell execution capability
   OMB_BRIDGE_LOCAL_VM=1     advertise local-vm relay capability
   OMB_BRIDGE_SSH_FORWARD=1  advertise ssh-forward capability
 `);
