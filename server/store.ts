@@ -350,10 +350,16 @@ export interface BotRecord {
   /** The coordinator for this bot's sidebar section. The store enforces
    * at most one Chief per section (including the unsectioned area). */
   chiefOfStaff?: boolean;
+  /** Optional manager within the same section (Chief of Staff or a sub-chief). */
+  reportsToBotId?: string;
   /** Pause for human approval before this bot talks to a peer (ask_bot,
    * delegate_bot). Off by default: a chief-of-staff-style bot is most
    * useful when it can coordinate without nagging. */
   approvePeerComms?: boolean;
+  /** When on, turns route through the fastest available engine: Codex, then
+   * Claude/Cursor, then Grok — using low effort / fast model ids. The stored
+   * picker choice is kept for when fast mode is off. */
+  fastMode?: boolean;
   /** Whether this bot may use the workspace's connected apps (Composio).
    * Unset/true = allowed (the user configured the key deliberately);
    * false = this bot never receives the connection. Imported team members
@@ -880,7 +886,10 @@ export class Store {
 
   createBot(
     profile: Partial<
-      Pick<BotRecord, "name" | "title" | "description" | "color" | "mascotExpression" | "modelSelection" | "section">
+      Pick<
+        BotRecord,
+        "name" | "title" | "description" | "color" | "mascotExpression" | "modelSelection" | "section" | "reportsToBotId"
+      >
     > = {},
     opts: {
       /** false = no greeting/onboarding seed. Imported bots must not open
@@ -905,6 +914,7 @@ export class Store {
       createdAt: Date.now(),
     };
     if (section) bot.section = section;
+    if (profile.reportsToBotId) bot.reportsToBotId = profile.reportsToBotId;
     bot.tasks = [{ threadId: bot.threadId, title: UNTITLED_TASK, createdAt: bot.createdAt, resumeCursors: {} }];
     this.bots.unshift(bot);
     this.saveBots();

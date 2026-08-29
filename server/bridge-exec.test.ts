@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
-import { resolveBridge, runShellOnBridge } from "./bridge-exec.ts";
+import { resolveBridge, runShellOnBridge, runSshOnBridge } from "./bridge-exec.ts";
 
 describe("bridge exec", () => {
   beforeEach(() => {
@@ -14,7 +14,7 @@ describe("bridge exec", () => {
     const registry = new BridgeRegistry();
     const { code } = registry.startPairing();
     const { bridgeId } = registry.register({ name: "Mac mini", code, capabilities: ["shell"] });
-    registry.touch(bridgeId, "mini");
+    registry.touch(bridgeId, { hostInfo: "mini" });
     expect(resolveBridge(registry, { name: "Mac mini" })?.id).toBe(bridgeId);
   });
 
@@ -44,6 +44,43 @@ describe("bridge exec", () => {
       exitCode: 0,
       stdout: "hi\n",
       bridgeName: "worker",
+    });
+    vi.useRealTimers();
+  });
+
+  it("runs ssh job through ssh-forward bridge", async () => {
+    vi.useFakeTimers();
+    const registry = new BridgeRegistry();
+    const { code } = registry.startPairing();
+    const { bridgeId } = registry.register({
+      name: "mini",
+      code,
+      capabilities: ["shell", "ssh-forward"],
+    });
+    registry.touch(bridgeId);
+
+    const runPromise = runSshOnBridge(registry, {
+      name: "mini",
+      alias: "windows",
+      command: "hostname",
+      timeoutMs: 5_000,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    const [job] = registry.pollJobs(bridgeId);
+    expect(job?.kind).toBe("ssh-exec");
+    registry.storeResult({
+      jobId: job!.id,
+      bridgeId,
+      exitCode: 0,
+      stdout: "windows\n",
+      stderr: "",
+      finishedAt: Date.now(),
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(runPromise).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: "windows\n",
+      bridgeName: "mini",
     });
     vi.useRealTimers();
   });

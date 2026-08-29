@@ -13,6 +13,10 @@ const launchAgents = join(home, "Library", "LaunchAgents");
 const logsDir = join(home, "Library", "Logs", "OpenMausBotBridge");
 const hostedUrl = process.env.OMB_BRIDGE_URL ?? "https://openmaus.posival.com";
 const bridgeName = process.env.OMB_BRIDGE_NAME ?? hostname();
+const bridgeEnv = [
+  ["OMB_BRIDGE_LOCAL_VM", process.env.OMB_BRIDGE_LOCAL_VM ?? "1"],
+  ["OMB_BRIDGE_SSH_FORWARD", process.env.OMB_BRIDGE_SSH_FORWARD ?? "1"],
+].filter(([, v]) => v === "1" || v === "true");
 
 const flags = new Set(process.argv.slice(2));
 const skipBuild = flags.has("--skip-build");
@@ -50,6 +54,10 @@ exec "$NODE" "${runtimeRoot}/bridge/index.js" run
 );
 
 const plistPath = join(launchAgents, "com.posival.openmaus-bridge.plist");
+const envPlist =
+  bridgeEnv.length === 0
+    ? ""
+    : `  <key>EnvironmentVariables</key><dict>${bridgeEnv.map(([k, v]) => `<key>${k}</key><string>${v}</string>`).join("")}</dict>\n`;
 writeFileSync(
   plistPath,
   `<?xml version="1.0" encoding="UTF-8"?>
@@ -57,7 +65,7 @@ writeFileSync(
 <plist version="1.0"><dict>
   <key>Label</key><string>com.posival.openmaus-bridge</string>
   <key>ProgramArguments</key><array><string>${startScript}</string></array>
-  <key>RunAtLoad</key><true/>
+${envPlist}  <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>${logsDir}/bridge.out.log</string>
   <key>StandardErrorPath</key><string>${logsDir}/bridge.err.log</string>

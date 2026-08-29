@@ -80,7 +80,11 @@ export async function handleBridgeRoutes(
     const body = await readJson(req);
     const bridgeId = String(body.bridgeId ?? bridge.id);
     if (bridgeId !== bridge.id) return json(res, 403, { error: "bridge id mismatch" }), true;
-    bridges.touch(bridgeId, body.hostInfo ? String(body.hostInfo) : undefined);
+    const caps = asCapabilities(body.capabilities);
+    bridges.touch(bridgeId, {
+      hostInfo: body.hostInfo ? String(body.hostInfo) : undefined,
+      capabilities: caps.length ? caps : undefined,
+    });
     return json(res, 200, { jobs: bridges.pollJobs(bridgeId) }), true;
   }
 

@@ -6,27 +6,129 @@
     <title>V Bot Viewer</title>
     <style>
       :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; }
-      body { margin: 0; background: #0b0d10; color: #eef2f7; display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; }
-      aside { border-right: 1px solid #1e2630; padding: 16px; }
-      main { padding: 20px; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #0b0d10;
+        color: #eef2f7;
+        display: grid;
+        grid-template-columns: 280px 1fr;
+        min-height: 100vh;
+      }
+      body.computer-open { grid-template-columns: 280px 1fr 340px; }
+      aside { border-right: 1px solid #1e2630; padding: 16px; overflow: auto; }
+      main { padding: 20px; overflow: auto; display: flex; flex-direction: column; min-height: 0; }
+      #computer {
+        display: none;
+        border-left: 1px solid #1e2630;
+        padding: 16px;
+        overflow: auto;
+        flex-direction: column;
+        gap: 12px;
+      }
+      body.computer-open #computer { display: flex; }
       h1 { font-size: 18px; margin: 0 0 12px; }
-      button, .bot { width: 100%; text-align: left; background: #141922; color: inherit; border: 1px solid #243041; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; }
+      h2 { font-size: 14px; margin: 0 0 8px; color: #8aa0bf; text-transform: uppercase; letter-spacing: 0.04em; }
+      button, .bot {
+        width: 100%;
+        text-align: left;
+        background: #141922;
+        color: inherit;
+        border: 1px solid #243041;
+        border-radius: 10px;
+        padding: 10px 12px;
+        margin-bottom: 8px;
+        cursor: pointer;
+        font: inherit;
+      }
       button:hover, .bot:hover { border-color: #4b7cff; }
       .bot.active { border-color: #4b7cff; background: #182033; }
+      .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+      .toolbar button { width: auto; margin: 0; }
+      .toolbar .title { flex: 1; font-size: 18px; font-weight: 600; margin: 0; }
+      #thread { flex: 1; overflow: auto; }
       .msg { padding: 10px 0; border-bottom: 1px solid #18202b; white-space: pre-wrap; }
-      .role { color: #8aa0bf; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+      .role { color: #8aa0bf; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+      .streaming {
+        margin-top: 12px;
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px dashed #243041;
+        color: #c5d4ea;
+        white-space: pre-wrap;
+      }
+      .streaming .label { font-size: 11px; color: #6d86a8; margin-bottom: 6px; text-transform: uppercase; }
+      .approval {
+        margin: 12px 0;
+        padding: 14px;
+        border-radius: 14px;
+        border: 1px solid #4b7cff66;
+        background: #121824;
+      }
+      .approval.settled { opacity: 0.7; border-color: #243041; }
+      .approval h3 { margin: 0 0 8px; font-size: 15px; }
+      .approval pre {
+        margin: 0 0 10px;
+        padding: 10px;
+        border-radius: 8px;
+        background: #0b0f16;
+        font-size: 12px;
+        overflow: auto;
+        max-height: 160px;
+      }
+      .approval .held {
+        margin-bottom: 10px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: #2a2210;
+        border: 1px solid #6b5520;
+        color: #e8c96a;
+        font-size: 12px;
+      }
+      .approval .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+      .approval .actions button { width: auto; min-width: 88px; }
+      .approval .actions button.allow { border-color: #2f8f5b; }
+      .approval .actions button.deny { border-color: #a44; }
+      .approval .status { font-size: 13px; color: #8aa0bf; margin-top: 8px; }
+      #screen {
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid #243041;
+        background: #000;
+        min-height: 180px;
+        object-fit: contain;
+      }
+      .status-grid { font-size: 13px; line-height: 1.5; color: #a8b8d0; }
+      .status-grid dt { color: #6d86a8; display: inline; }
+      .status-grid dd { display: inline; margin: 0 0 0 4px; }
+      .status-grid div { margin-bottom: 4px; }
       .empty { color: #8aa0bf; }
+      .error { color: #f88; font-size: 13px; margin-top: 8px; }
+      #connection { font-size: 12px; color: #6d86a8; margin-bottom: 8px; }
+      #connection.live { color: #5ecf8f; }
     </style>
   </head>
   <body>
     <aside>
       <h1>V Bot</h1>
+      <div id="connection">Connecting…</div>
       <div id="bots" class="empty">Loading bots…</div>
     </aside>
     <main>
-      <h1 id="title">Select a bot</h1>
+      <div class="toolbar">
+        <h1 class="title" id="title">Select a bot</h1>
+        <button type="button" id="toggle-computer">Computer</button>
+      </div>
       <div id="thread"></div>
+      <div id="streaming" hidden></div>
     </main>
+    <section id="computer" aria-label="Computer panel">
+      <h2>Computer</h2>
+      <img id="screen" alt="Bot screen" hidden />
+      <div id="screen-empty" class="empty">No live frame yet.</div>
+      <div id="local-status" class="status-grid"></div>
+      <div id="computer-error" class="error" hidden></div>
+    </section>
     <script src="./app.js"></script>
   </body>
 </html>

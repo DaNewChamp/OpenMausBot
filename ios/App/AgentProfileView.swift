@@ -31,6 +31,7 @@ struct AgentProfileView: View {
     @State private var pickedInstanceId: String
     @State private var pickedModel: String
     @State private var pickedEffort: String?
+    @State private var fastMode: Bool
     @State private var busy = false
     @State private var savingModel = false
     @State private var modelSaveTask: Task<Void, Never>?
@@ -64,6 +65,7 @@ struct AgentProfileView: View {
         _pickedInstanceId = State(initialValue: bot.modelSelection.instanceId)
         _pickedModel = State(initialValue: bot.modelSelection.model)
         _pickedEffort = State(initialValue: bot.modelSelection.effort)
+        _fastMode = State(initialValue: bot.fastMode == true)
         _baseline = State(initialValue: ProfileFormSnapshot(bot: bot))
         _selectedColor = State(initialValue: bot.color)
         _selectedShape = State(initialValue: MascotMark(rawValue: bot.mascotShape?.rawValue ?? MascotMark.droplet.rawValue) ?? .droplet)
@@ -704,6 +706,19 @@ struct AgentProfileView: View {
                 .accessibilityLabel("Reasoning")
                 .accessibilityValue(Self.effortLabel(pickedEffort))
                 .accessibilityHint(current.busy == true ? "Interrupt this agent before switching models" : "How hard this bot thinks")
+            }
+
+            Toggle(isOn: $fastMode) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Fast mode")
+                    Text("Codex first, then Claude/Cursor, then Grok — low effort when supported.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .disabled(modelSwitchBlocked)
+            .onChange(of: fastMode) { _, enabled in
+                Task { _ = await session.updateFastMode(enabled, for: current) }
             }
 
             if savingModel {

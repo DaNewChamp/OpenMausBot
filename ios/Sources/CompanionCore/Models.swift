@@ -286,6 +286,7 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
     public var hidden: Bool?
     public var chiefOfStaff: Bool?
     public var autoApprove: Bool?
+    public var fastMode: Bool?
     public var alwaysAllow: [String]?
     public var computer: String?
     /// Which cloud computer backs `computer == "cloud"`. Absent (older
@@ -999,6 +1000,14 @@ public struct BotModelPatch: Encodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case instanceId, model, effort
+    }
+}
+
+public struct BotFastModePatch: Encodable, Sendable {
+    public let fastMode: Bool
+
+    public init(fastMode: Bool) {
+        self.fastMode = fastMode
     }
 }
 

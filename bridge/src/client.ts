@@ -34,14 +34,18 @@ export async function registerBridge(input: {
   };
 }
 
-export async function heartbeat(credentials: BridgeCredentials, hostInfo?: string): Promise<BridgeJob[]> {
+export async function heartbeat(
+  credentials: BridgeCredentials,
+  hostInfo?: string,
+  capabilities?: string[],
+): Promise<BridgeJob[]> {
   const res = await fetch(`${credentials.url}/api/bridge/heartbeat`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${credentials.bridgeToken}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ bridgeId: credentials.bridgeId, hostInfo }),
+    body: JSON.stringify({ bridgeId: credentials.bridgeId, hostInfo, capabilities }),
   });
   const body = (await res.json()) as { jobs?: BridgeJob[]; error?: string };
   if (!res.ok) throw new Error(body.error ?? `heartbeat failed (${res.status})`);

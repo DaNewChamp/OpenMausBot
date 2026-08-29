@@ -25,7 +25,8 @@ import * as checkpoints from "./checkpoints.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
 import { handleBridgeRoutes } from "./bridge-routes.ts";
-import { runShellOnBridge } from "./bridge-exec.ts";
+import { runShellOnBridge, runSshOnBridge } from "./bridge-exec.ts";
+import { runLocalVmOnBridge, shouldRelayLocalVm } from "./bridge-local-vm.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import {
   decideDelivery,
@@ -40,6 +41,7 @@ import {
   snapshotAvatarGenerationState,
 } from "./avatar-image.ts";
 import { guardedBotModelSwitch, parseBotModelPatch, resolveBotModelSelection } from "./bot-model.ts";
+import { resolveFastDispatch } from "./fast-routing.ts";
 import { parseChatPin } from "./chat-pin.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
@@ -55,6 +57,13 @@ import * as box from "./box.ts";
 import { cloudBackendChangeError, vpsAliasChangeError } from "./cloud-backend.ts";
 import * as composio from "./composio.ts";
 import { chiefOfStaffSystemPrompt, sectionPeerCoordinationPrompt, taggedPeerNudge } from "./chief-of-staff.ts";
+import {
+  canConfigureBot,
+  canCreateBot,
+  resolveCreateReportsToWithStore,
+  validateNewBotReportsTo,
+  validateReportsToForBot,
+} from "./bot-hierarchy.ts";
 import { botSelfAwarenessCatalog, botSelfAwarenessPersona } from "./bot-self-awareness.ts";
 import {
   createRoomForChief,
@@ -97,6 +106,7 @@ import {
   syncCredentialEnv,
   withInstanceCli,
   vpsSshAlias,
+  bridgeSshTarget,
   DATA_DIR,
   EVENTS_DIR,
   NATIVE_DIR,
@@ -122,6 +132,7 @@ import {
   roomResponders,
   sectionKey,
   Store,
+  type BotRecord,
   type GroupDefaultResponder,
   type GroupRecord,
   type Message,
@@ -1814,7 +1825,7 @@ async function startTurn(
   // a task takes its name from the first thing you asked it to do
   if (text.trim() && !opts?.cardContinuation) store.titleTaskFromFirstMessage(bot.id, text, threadId);
 
-  const instance = opts?.runOn === "cloud"
+  let instance = opts?.runOn === "cloud"
     ? registry.instances().find((candidate) => candidate.driverKind === "boxAgent") ?? null
     : registry.get(bot.modelSelection.instanceId);
   if (!instance) {
@@ -1827,11 +1838,31 @@ async function startTurn(
       { status: 409 },
     );
   }
-  const instanceId = instance.instanceId;
-  const model = opts?.runOn === "cloud" ? instance.models.default : bot.modelSelection.model;
+  let instanceId = instance.instanceId;
+  let model = opts?.runOn === "cloud" ? instance.models.default : bot.modelSelection.model;
   // a cloud routine borrows the instance default model, so it borrows no
   // per-bot effort either
-  const effort = opts?.runOn === "cloud" ? undefined : bot.modelSelection.effort;
+  let effort = opts?.runOn === "cloud" ? undefined : bot.modelSelection.effort;
+  if (opts?.runOn !== "cloud" && bot.fastMode) {
+    const fast = resolveFastDispatch({
+      stored: bot.modelSelection,
+      instances: registry.instances().map((candidate) => ({
+        instanceId: candidate.instanceId,
+        driverKind: candidate.driverKind,
+        models: candidate.models,
+        capabilities: candidate.adapter.capabilities,
+      })),
+    });
+    if (fast) {
+      const fastInstance = registry.get(fast.instanceId);
+      if (fastInstance) {
+        instance = fastInstance;
+        instanceId = fast.instanceId;
+        model = fast.model;
+        effort = fast.effort;
+      }
+    }
+  }
   // A selection can be persisted while its engine is offline. Re-check when
   // the engine returns so an old or unsupported value never reaches a CLI.
   if (effort && !instance.adapter.capabilities.effortLevels?.includes(effort)) {
@@ -1888,6 +1919,7 @@ async function startTurn(
     replaysNatively: instance.driverKind === "grok",
   });
 
+  const manager = bot.reportsToBotId ? store.bot(bot.reportsToBotId) : null;
   const persona = botSelfAwarenessPersona({
     id: bot.id,
     name: bot.name,
@@ -1895,6 +1927,9 @@ async function startTurn(
     description: bot.description,
     section: bot.section,
     chiefOfStaff: bot.chiefOfStaff,
+    reportsToBotId: bot.reportsToBotId,
+    reportsToName: manager?.name,
+    reportsToTitle: manager?.title,
   });
 
   // busy flips immediately so the composer locks; the dispatch itself runs
@@ -2564,6 +2599,7 @@ async function runGroupMemberTurn(
   const sectionPeers = store.bots.filter(
     (b) => b.id !== bot.id && !b.hidden && sectionKey(b.section) === sectionKey(bot.section),
   );
+  const roomManager = bot.reportsToBotId ? store.bot(bot.reportsToBotId) : null;
   const system = [
     botSelfAwarenessPersona(
       {
@@ -2573,6 +2609,9 @@ async function runGroupMemberTurn(
         description: bot.description,
         section: bot.section,
         chiefOfStaff: bot.chiefOfStaff,
+        reportsToBotId: bot.reportsToBotId,
+        reportsToName: roomManager?.name,
+        reportsToTitle: roomManager?.title,
       },
       {
         name: group.name,
@@ -3477,6 +3516,15 @@ async function localVmPhonePayload(target: LocalVmTarget) {
   });
 }
 
+async function localVmPhonePayloadFromStatus(status: Awaited<ReturnType<typeof containerComputerStatus>>, target: LocalVmTarget) {
+  const owner = localVmLeaseFor(target).current(localVmOwnerBusy);
+  return projectLocalVmStatus(status, {
+    mode: localVmMode(cfg),
+    maxInstances: localVmMaxInstances(cfg),
+    busy: Boolean(owner) || localVmLifecycleBusy.has(target.key),
+  });
+}
+
 async function existingPerBotLocalVmCount(runtime: Runtime) {
   const targets = [...new Map(store.bots.map((bot) => {
     const target = perBotLocalVmTarget(bot.id);
@@ -3698,16 +3746,22 @@ const server = createServer(async (req, res) => {
               !b.hidden &&
               sectionKey(b.section) === sectionKey(sender.section),
           )
-          .map((b) => ({
-            id: b.id,
-            name: b.name,
-            model: b.modelSelection.model,
-            engine: b.modelSelection.instanceId,
-            effort: b.modelSelection.effort ?? null,
-            busy: !!b.busy,
-            title: b.title || undefined,
-            description: b.description || undefined,
-          }));
+          .map((b) => {
+            const manager = b.reportsToBotId ? store.bot(b.reportsToBotId) : null;
+            return {
+              id: b.id,
+              name: b.name,
+              model: b.modelSelection.model,
+              engine: b.modelSelection.instanceId,
+              effort: b.modelSelection.effort ?? null,
+              busy: !!b.busy,
+              title: b.title || undefined,
+              description: b.description || undefined,
+              chiefOfStaff: Boolean(b.chiefOfStaff),
+              reportsToBotId: b.reportsToBotId || undefined,
+              reportsToName: manager?.name,
+            };
+          });
         return json(res, 200, { bots });
       }
       if (method === "POST" && path === "/api/internal/ask-bot") {
@@ -3889,8 +3943,8 @@ const server = createServer(async (req, res) => {
         if (!store.taskByThread(chief.id, fromThreadId)) {
           return json(res, 403, { error: "source thread does not belong to sender" });
         }
-        if (!chief.chiefOfStaff) {
-          return json(res, 403, { error: "only a section's Chief of Staff can create operator bots" });
+        if (!canCreateBot(chief)) {
+          return json(res, 403, { error: "only a section Chief or team lead may create operator bots" });
         }
         if (store.bots.length >= MAX_WORKSPACE_BOTS) {
           return json(res, 409, { error: `this workspace is limited to ${MAX_WORKSPACE_BOTS} bots` });
@@ -3900,6 +3954,20 @@ const server = createServer(async (req, res) => {
         const instructions = String(body.instructions ?? "").trim();
         if (!name || !role || !instructions) {
           return json(res, 400, { error: "name, role, and instructions are required" });
+        }
+        const reportsResolved = resolveCreateReportsToWithStore(
+          store,
+          chief,
+          body.reportsTo ? String(body.reportsTo) : body.reports_to ? String(body.reports_to) : undefined,
+        );
+        if (reportsResolved.error) return json(res, 400, { error: reportsResolved.error });
+        let reportsToBotId = reportsResolved.reportsToBotId;
+        if (!reportsToBotId && chief.chiefOfStaff && /^Chief of/i.test(role)) {
+          reportsToBotId = chief.id;
+        }
+        if (reportsToBotId) {
+          const reportsErr = validateNewBotReportsTo(store, chief.section, reportsToBotId);
+          if (reportsErr) return json(res, 400, { error: reportsErr });
         }
         if (name.length > 80) return json(res, 400, { error: "name must be at most 80 characters" });
         if (role.length > 120) return json(res, 400, { error: "role must be at most 120 characters" });
@@ -3957,6 +4025,8 @@ const server = createServer(async (req, res) => {
           composio: false,
           autoApprove: false,
           approvePeerComms: false,
+          ...(reportsToBotId ? { reportsToBotId } : {}),
+          ...(body.fastMode === true || body.fast_mode === true ? { fastMode: true } : {}),
         })!;
         return json(res, 201, {
           id: safeBot.id,
@@ -3966,56 +4036,101 @@ const server = createServer(async (req, res) => {
           engine: safeBot.modelSelection.instanceId,
           model: safeBot.modelSelection.model,
           effort: safeBot.modelSelection.effort ?? null,
+          reportsToBotId: safeBot.reportsToBotId ?? null,
         });
       }
       if (method === "POST" && path === "/api/internal/configure-bot") {
         const body = await readBody(req);
         const fromBotId = String(body.fromBotId ?? "");
-        const chief = store.bot(fromBotId);
-        if (!chief) return json(res, 403, { error: "unknown sender" });
-        if (!chief.chiefOfStaff) {
-          return json(res, 403, { error: "only a section's Chief of Staff can configure operator bots" });
-        }
-        const fromThreadId = String(body.fromThreadId ?? chief.threadId);
-        if (!store.taskByThread(chief.id, fromThreadId)) {
+        const actor = store.bot(fromBotId);
+        if (!actor) return json(res, 403, { error: "unknown sender" });
+        const fromThreadId = String(body.fromThreadId ?? actor.threadId);
+        if (!store.taskByThread(actor.id, fromThreadId)) {
           return json(res, 403, { error: "source thread does not belong to sender" });
         }
         const targetId = String(body.botId ?? body.bot_id ?? "");
         const target = store.bot(targetId);
         if (!target) return json(res, 404, { error: "no such bot" });
-        if (sectionKey(target.section) !== sectionKey(chief.section)) {
-          return json(res, 403, { error: "that bot belongs to a different section" });
+        if (!canConfigureBot(actor, target)) {
+          return json(res, 403, { error: "you may only configure bots in your section that you manage" });
         }
-        if (target.id === chief.id) {
+        if (target.id === actor.id) {
           return json(res, 400, { error: "use the profile or chat model picker to change your own engine" });
         }
-        const requested = parseBotModelPatch({
-          instanceId: String(body.instanceId ?? body.engine ?? target.modelSelection.instanceId),
-          model: String(body.model ?? target.modelSelection.model),
-          ...(body.effort === null ? { effort: null } : body.effort !== undefined ? { effort: String(body.effort) } : {}),
-        });
-        if (!requested.ok) return json(res, 400, { error: requested.error });
-        resetPathCache();
-        const switched = await guardedBotModelSwitch({
-          requested: requested.patch,
-          describe: () => registry.describe(),
-          current: () => store.bot(target.id),
-          patch: (id, selection) => store.patchBot(id, { modelSelection: selection }),
-        });
-        if (switched.kind === "missing") return json(res, 404, { error: "no such bot" });
-        if (switched.kind === "busy") {
-          return json(res, 409, { error: "that bot is working — interrupt it before changing its model" });
+        const profilePatch: Partial<BotRecord> = {};
+        if (body.role !== undefined || body.title !== undefined) {
+          const role = String(body.role ?? body.title ?? "").trim();
+          if (!role || role.length > 120) return json(res, 400, { error: "role must be 1–120 characters" });
+          profilePatch.title = role;
         }
-        if (switched.kind === "invalid") return json(res, 400, { error: switched.error });
-        const bot = switched.kind === "patched" ? switched.bot : switched.bot;
+        if (body.instructions !== undefined || body.description !== undefined) {
+          const instructions = String(body.instructions ?? body.description ?? "").trim();
+          if (instructions.length > 1_000) {
+            return json(res, 400, { error: "instructions must be at most 1000 characters" });
+          }
+          profilePatch.description = instructions;
+        }
+        if (body.reports_to !== undefined || body.reportsTo !== undefined) {
+          if (!actor.chiefOfStaff) {
+            return json(res, 403, { error: "only the section Chief may change reporting lines" });
+          }
+          const nextReports =
+            body.reports_to === null || body.reportsTo === null
+              ? undefined
+              : String(body.reports_to ?? body.reportsTo ?? "").trim() || undefined;
+          const reportsErr = validateReportsToForBot(store, target.id, nextReports);
+          if (reportsErr) return json(res, 400, { error: reportsErr });
+          profilePatch.reportsToBotId = nextReports;
+        }
+        const wantsModel =
+          body.instanceId !== undefined ||
+          body.engine !== undefined ||
+          body.model !== undefined ||
+          body.effort !== undefined;
+        let bot = target;
+        if (wantsModel) {
+          const requested = parseBotModelPatch({
+            instanceId: String(body.instanceId ?? body.engine ?? target.modelSelection.instanceId),
+            model: String(body.model ?? target.modelSelection.model),
+            ...(body.effort === null ? { effort: null } : body.effort !== undefined ? { effort: String(body.effort) } : {}),
+          });
+          if (!requested.ok) return json(res, 400, { error: requested.error });
+          resetPathCache();
+          const switched = await guardedBotModelSwitch({
+            requested: requested.patch,
+            describe: () => registry.describe(),
+            current: () => store.bot(target.id),
+            patch: (id, selection) => store.patchBot(id, { modelSelection: selection }),
+          });
+          if (switched.kind === "missing") return json(res, 404, { error: "no such bot" });
+          if (switched.kind === "busy") {
+            return json(res, 409, { error: "that bot is working — interrupt it before changing its model" });
+          }
+          if (switched.kind === "invalid") return json(res, 400, { error: switched.error });
+          bot = switched.kind === "patched" ? switched.bot : switched.bot;
+        }
+        if (Object.keys(profilePatch).length) {
+          const patched = store.patchBot(bot.id, profilePatch);
+          if (!patched) return json(res, 404, { error: "no such bot" });
+          bot = patched;
+        }
+        if (body.fastMode !== undefined || body.fast_mode !== undefined) {
+          const next = body.fastMode ?? body.fast_mode;
+          if (typeof next !== "boolean") return json(res, 400, { error: "fastMode must be true or false" });
+          const patched = store.patchBot(bot.id, { fastMode: next });
+          if (!patched) return json(res, 404, { error: "no such bot" });
+          bot = patched;
+        }
         const visible = wireBot(bot);
         broadcast({ kind: "bot", bot: visible });
         return json(res, 200, {
           id: bot.id,
           name: bot.name,
+          title: bot.title,
           engine: bot.modelSelection.instanceId,
           model: bot.modelSelection.model,
           effort: bot.modelSelection.effort ?? null,
+          reportsToBotId: bot.reportsToBotId ?? null,
         });
       }
       if (method === "POST" && path === "/api/internal/request-credential") {
@@ -4238,6 +4353,25 @@ const server = createServer(async (req, res) => {
           const result = await runShellOnBridge(bridges, {
             bridgeId: body.bridgeId ? String(body.bridgeId) : undefined,
             name: body.bridge ? String(body.bridge) : body.name ? String(body.name) : undefined,
+            command: String(body.command ?? ""),
+            cwd: body.cwd ? String(body.cwd) : undefined,
+            timeoutMs: body.timeoutMs == null ? undefined : Number(body.timeoutMs),
+          });
+          return json(res, 200, result);
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      if (method === "POST" && path === "/api/internal/bridge/ssh") {
+        const body = await readBody(req);
+        try {
+          const targetKey = String(body.target ?? "");
+          const mapped = bridgeSshTarget(cfg, targetKey);
+          if (!mapped) return json(res, 400, { error: `unknown ssh target: ${targetKey}` });
+          const result = await runSshOnBridge(bridges, {
+            bridgeId: body.bridgeId ? String(body.bridgeId) : undefined,
+            name: body.bridge ? String(body.bridge) : mapped.bridge,
+            alias: mapped.alias,
             command: String(body.command ?? ""),
             cwd: body.cwd ? String(body.cwd) : undefined,
             timeoutMs: body.timeoutMs == null ? undefined : Number(body.timeoutMs),
@@ -5541,6 +5675,10 @@ const server = createServer(async (req, res) => {
         if (typeof body.autoApprove !== "boolean") return json(res, 400, { error: "autoApprove must be true or false" });
         patch.autoApprove = body.autoApprove;
       }
+      if (body.fastMode !== undefined) {
+        if (typeof body.fastMode !== "boolean") return json(res, 400, { error: "fastMode must be true or false" });
+        patch.fastMode = body.fastMode;
+      }
       // "Auto on this Mac" hands a bot the user's real session, so the grant
       // must prove a human saw the warning. The desktop dialog is the only
       // caller that sends acknowledgeLocalAuto; without it a PATCH that would
@@ -6115,6 +6253,27 @@ const server = createServer(async (req, res) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const target = localVmTargetForBot(bot.id);
+      if (await shouldRelayLocalVm(bridges)) {
+        try {
+          const { data } = await runLocalVmOnBridge(bridges, { botId: bot.id, op: "status" });
+          const status = data as Awaited<ReturnType<typeof containerComputerStatus>>;
+          return json(
+            res,
+            200,
+            req.headers["x-openmausbot-companion"] === "1"
+              ? await localVmPhonePayloadFromStatus(status, target)
+              : {
+                  ...status,
+                  commands: setupCommands(status.runtime, process.platform, target),
+                  idle_timeout_ms: LOCAL_VM_IDLE_MS,
+                  mode: localVmMode(cfg),
+                  max_instances: localVmMaxInstances(cfg),
+                },
+          );
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
       return json(
         res,
         200,
@@ -6140,6 +6299,17 @@ const server = createServer(async (req, res) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       const action = m[2] as "run" | "stop" | "recreate";
       const target = localVmTargetForBot(bot.id);
+      if (await shouldRelayLocalVm(bridges)) {
+        try {
+          const { data } = await runLocalVmOnBridge(bridges, { botId: bot.id, op: "action", action });
+          const status = data as Awaited<ReturnType<typeof containerComputerStatus>>;
+          if (action === "run" || action === "recreate") localVmIdleFor(target).touch();
+          if (action === "stop") localVmIdleFor(target).cancel();
+          return json(res, 200, await localVmPhonePayloadFromStatus(status, target));
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
       const sharedTarget = target.key === SHARED_LOCAL_VM_TARGET.key;
       if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(target.key)) {
         return json(res, 409, { error: sharedTarget ? "the shared Local VM setup action is still running" : "this bot's Local VM setup action is still running" });
@@ -6248,6 +6418,15 @@ const server = createServer(async (req, res) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const target = localVmTargetForBot(bot.id);
+      if (await shouldRelayLocalVm(bridges)) {
+        try {
+          const { data } = await runLocalVmOnBridge(bridges, { botId: bot.id, op: "screenshot" });
+          localVmIdleFor(target).touch();
+          return json(res, 200, data);
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
       localVmIdleFor(target).touch();
       return json(res, 200, {
         image: await containerComputerScreenshot(undefined, undefined, target),

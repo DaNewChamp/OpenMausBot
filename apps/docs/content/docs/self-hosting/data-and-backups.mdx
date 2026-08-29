@@ -10,6 +10,43 @@ OpenMausBot keeps its application state under `~/.openmausbot`, including config
 
 Close OpenMausBot before taking a filesystem-level backup so SQLite and configuration files are captured consistently. Preserve the entire `.openmausbot` directory rather than selecting individual database files.
 
+### Local snapshot
+
+```bash
+bun run sync:data backup
+```
+
+### Daily cloud backup (Google Drive via rclone)
+
+The Mac mini pulls the live **servarica** fleet (`/var/lib/openmausbot`), tarballs bots + hierarchy + transcripts + companion pairing, and uploads to `gdrive_supermemory:OpenMausBot/backups/servarica/`.
+
+```bash
+bun run backup:cloud
+node scripts/backup-openmausbot-cloud.mjs install-launchd   # daily 03:15 on the mini
+```
+
+Each backup includes `manifest.json` with the full bot roster and `reportsToBotId` hierarchy tree.
+
+List remote backups:
+
+```bash
+node scripts/backup-openmausbot-cloud.mjs list --host-label servarica
+```
+
+Restore from Google Drive:
+
+```bash
+bun run sync:data restore --from-cloud latest
+# or
+node scripts/backup-openmausbot-cloud.mjs restore --stamp latest --host-label servarica
+```
+
+Back up the mini harness only (without pulling servarica first):
+
+```bash
+bun run backup:cloud:local
+```
+
 ## Do not copy secrets casually
 
 Packaged desktop builds may protect credentials using operating-system secure storage. Copying the JSON directory to another machine does not necessarily make protected credentials usable there, and it should not be treated as a portable credential export.

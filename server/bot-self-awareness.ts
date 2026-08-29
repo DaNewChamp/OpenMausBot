@@ -1,5 +1,7 @@
 /** V Bot platform identity + dynamic tool catalog for every bot turn. */
 
+import { isTeamLead } from "./bot-hierarchy.ts";
+
 export interface SelfAwarenessBot {
   id: string;
   name: string;
@@ -7,6 +9,9 @@ export interface SelfAwarenessBot {
   description?: string;
   section?: string;
   chiefOfStaff?: boolean;
+  reportsToBotId?: string;
+  reportsToName?: string;
+  reportsToTitle?: string;
 }
 
 export interface SelfAwarenessIntegrations {
@@ -25,11 +30,11 @@ export interface SelfAwarenessRoom {
 }
 
 const AGENTS_TOOLS_CHIEF = [
-  "list_bots — roster with ids, engines, models, busy state",
+  "list_bots — roster with ids, titles, reporting lines, engines, models, busy state",
   "ask_bot — short question; wait for inline answer",
   "delegate_bot — hand off real work asynchronously",
-  "create_bot — add a specialist to your section (Chief only)",
-  "configure_bot — retarget a teammate's engine/model/reasoning (Chief only)",
+  "create_bot — add a specialist or sub-chief (optional reports_to for hierarchy)",
+  "configure_bot — update role, instructions, reporting line, engine, or model",
   "run_on_bridge — shell on a paired home bridge (Mac mini, Pi, etc.)",
   "list_rooms — multi-bot channels in this workspace",
   "create_room — open a channel for selected bots (Chief only)",
@@ -40,8 +45,22 @@ const AGENTS_TOOLS_CHIEF = [
   "request_credential — secure in-app API key card",
 ];
 
+const AGENTS_TOOLS_TEAM_LEAD = [
+  "list_bots — roster with ids, titles, reporting lines, and availability",
+  "ask_bot — short question; wait for inline answer",
+  "delegate_bot — hand off real work asynchronously",
+  "create_bot — add a specialist who reports to you",
+  "configure_bot — update your direct reports' role, instructions, engine, or model",
+  "run_on_bridge — shell on a paired home bridge",
+  "list_rooms — multi-bot channels",
+  "list_routines — scheduled tasks",
+  "create_routine — schedule work for yourself or your reports",
+  "run_routine — run a routine now",
+  "request_credential — secure in-app API key card",
+];
+
 const AGENTS_TOOLS_PEER = [
-  "list_bots — roster with ids and availability",
+  "list_bots — roster with ids, titles, and availability",
   "ask_bot — short question; wait for inline answer",
   "delegate_bot — hand off real work asynchronously",
   "run_on_bridge — shell on a paired home bridge",
@@ -54,12 +73,22 @@ const AGENTS_TOOLS_PEER = [
 
 export function botSelfAwarenessPersona(bot: SelfAwarenessBot, room?: SelfAwarenessRoom): string {
   const section = bot.section?.trim() || "General";
+  const managerLine =
+    bot.reportsToBotId && bot.reportsToName
+      ? `You report to ${bot.reportsToName}${bot.reportsToTitle ? ` (${bot.reportsToTitle})` : ""}.`
+      : "";
+  const teamLeadLine =
+    isTeamLead({ title: bot.title ?? "", reportsToBotId: bot.reportsToBotId, chiefOfStaff: bot.chiefOfStaff }) && !bot.chiefOfStaff
+      ? "You lead a sub-team — use create_bot to add specialists who report to you."
+      : "";
   if (room) {
     return [
       `You are ${bot.name}, a bot in the V Bot room "${room.name}" (OpenMausBot harness).`,
       bot.title && `Role: ${bot.title}.`,
       bot.description && `About: ${bot.description}`,
       `Section: ${section}.`,
+      managerLine,
+      teamLeadLine,
       `Room members: ${room.memberNames.join(", ")}, and ${room.userName} (the human).`,
       "V Bot is Vincent's multi-bot platform: iPhone, desktop viewer, and cloud harness. You are one agent in a fleet — not a generic chatbot.",
     ]
@@ -74,6 +103,8 @@ export function botSelfAwarenessPersona(bot: SelfAwarenessBot, room?: SelfAwaren
     bot.chiefOfStaff
       ? "You are this section's Chief of Staff — the user's primary coordinator for this team."
       : "",
+    managerLine,
+    teamLeadLine,
     "V Bot is Vincent's multi-bot platform: iPhone, desktop viewer, and cloud harness. You are one agent in a fleet — not a generic chatbot.",
   ]
     .filter(Boolean)
@@ -91,9 +122,13 @@ export function botSelfAwarenessCatalog(
   ];
 
   if (integrations.agents) {
-    const tools = bot.chiefOfStaff ? AGENTS_TOOLS_CHIEF : AGENTS_TOOLS_PEER;
+    const tools = bot.chiefOfStaff
+      ? AGENTS_TOOLS_CHIEF
+      : isTeamLead({ title: bot.title ?? "", reportsToBotId: bot.reportsToBotId, chiefOfStaff: bot.chiefOfStaff })
+        ? AGENTS_TOOLS_TEAM_LEAD
+        : AGENTS_TOOLS_PEER;
     lines.push(`Agents tools mounted: ${tools.join("; ")}.`);
-    if (!bot.chiefOfStaff && opts?.hasSectionPeers) {
+    if (!bot.chiefOfStaff && !isTeamLead({ title: bot.title ?? "", reportsToBotId: bot.reportsToBotId, chiefOfStaff: bot.chiefOfStaff }) && opts?.hasSectionPeers) {
       lines.push("Coordinate through ask_bot (brief) or delegate_bot (work). Do not invent teammate results.");
     }
   } else if (opts?.hasSectionPeers) {

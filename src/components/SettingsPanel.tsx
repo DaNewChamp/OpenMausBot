@@ -342,6 +342,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
         | "chiefOfStaff"
         | "approvePeerComms"
         | "composio"
+        | "fastMode"
         | "modelSelection"
       >
     > & { acknowledgeLocalAuto?: boolean },
@@ -590,6 +591,35 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
               </div>
             </div>
           )}
+
+          <div className="rounded-xl bg-card p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-[15px] font-medium text-ink">Fast mode</div>
+                <div className="mt-0.5 text-[13px] text-ink-secondary">
+                  Prefer the fastest engine on each turn: Codex, then Claude/Cursor, then Grok — with low effort when supported.
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={Boolean(bot.fastMode)}
+                aria-label="Fast mode"
+                onClick={() => patch({ fastMode: !bot.fastMode })}
+                className={cn(
+                  "relative mt-0.5 h-7 w-12 shrink-0 rounded-full transition-colors",
+                  bot.fastMode ? "bg-accent" : "bg-control",
+                )}
+              >
+                <span
+                  className={cn(
+                    "absolute top-[3px] size-[22px] rounded-full bg-panel shadow transition-[left]",
+                    bot.fastMode ? "left-[21px]" : "left-[3px]",
+                  )}
+                />
+              </button>
+            </div>
+          </div>
 
           <div className="rounded-xl bg-card p-4">
             <div className="text-[15px] font-medium text-ink">Computer</div>

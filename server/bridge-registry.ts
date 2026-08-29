@@ -17,15 +17,39 @@ export interface BridgeRecord {
   hostInfo?: string;
 }
 
-export interface BridgeJob {
+export type LocalVmBridgeJobKind = "local-vm-status" | "local-vm-action" | "local-vm-screenshot";
+
+export interface LocalVmJobPayload {
+  botId: string;
+  action?: "run" | "stop" | "remove" | "recreate";
+}
+
+interface BridgeJobBase {
   id: string;
   bridgeId: string;
-  kind: "shell";
-  command: string;
-  cwd?: string;
   timeoutMs: number;
   createdAt: number;
 }
+
+export interface ShellBridgeJob extends BridgeJobBase {
+  kind: "shell";
+  command: string;
+  cwd?: string;
+}
+
+export interface LocalVmBridgeJob extends BridgeJobBase {
+  kind: LocalVmBridgeJobKind;
+  payload: LocalVmJobPayload;
+}
+
+export interface SshBridgeJob extends BridgeJobBase {
+  kind: "ssh-exec";
+  alias: string;
+  command: string;
+  cwd?: string;
+}
+
+export type BridgeJob = ShellBridgeJob | LocalVmBridgeJob | SshBridgeJob;
 
 export interface BridgeJobResult {
   jobId: string;
@@ -77,6 +101,17 @@ function safeEqual(a: string, b: string): boolean {
   const right = Buffer.from(b);
   if (left.length !== right.length) return false;
   return timingSafeEqual(left, right);
+}
+
+function bridgeRecord(bridgeId: string): BridgeRecord | null {
+  return readStore().bridges.find((b) => b.id === bridgeId) ?? null;
+}
+
+function requireCapability(bridgeId: string, capability: BridgeCapability): BridgeRecord {
+  const bridge = bridgeRecord(bridgeId);
+  if (!bridge) throw new Error("unknown bridge");
+  if (!bridge.capabilities.includes(capability)) throw new Error(`bridge lacks ${capability} capability`);
+  return bridge;
 }
 
 export class BridgeRegistry {
@@ -142,12 +177,13 @@ export class BridgeRegistry {
     return store.bridges.find((b) => safeEqual(b.tokenHash, digest)) ?? null;
   }
 
-  touch(bridgeId: string, hostInfo?: string): BridgeRecord | null {
+  touch(bridgeId: string, patch?: { hostInfo?: string; capabilities?: BridgeCapability[] }): BridgeRecord | null {
     const store = readStore();
     const bridge = store.bridges.find((b) => b.id === bridgeId);
     if (!bridge) return null;
     bridge.lastSeenAt = Date.now();
-    if (hostInfo) bridge.hostInfo = hostInfo;
+    if (patch?.hostInfo) bridge.hostInfo = patch.hostInfo;
+    if (patch?.capabilities?.length) bridge.capabilities = patch.capabilities;
     writeStore(store);
     return bridge;
   }
@@ -160,11 +196,53 @@ export class BridgeRegistry {
     return true;
   }
 
-  enqueueShell(bridgeId: string, command: string, cwd?: string, timeoutMs = 60_000): BridgeJob {
-    const job: BridgeJob = {
+  enqueueShell(bridgeId: string, command: string, cwd?: string, timeoutMs = 60_000): ShellBridgeJob {
+    requireCapability(bridgeId, "shell");
+    const job: ShellBridgeJob = {
       id: randomUUID(),
       bridgeId,
       kind: "shell",
+      command,
+      cwd,
+      timeoutMs,
+      createdAt: Date.now(),
+    };
+    this.pendingJobs.set(job.id, job);
+    return job;
+  }
+
+  enqueueLocalVmJob(
+    bridgeId: string,
+    kind: LocalVmBridgeJobKind,
+    payload: LocalVmJobPayload,
+    timeoutMs = 120_000,
+  ): LocalVmBridgeJob {
+    requireCapability(bridgeId, "local-vm");
+    const job: LocalVmBridgeJob = {
+      id: randomUUID(),
+      bridgeId,
+      kind,
+      payload,
+      timeoutMs,
+      createdAt: Date.now(),
+    };
+    this.pendingJobs.set(job.id, job);
+    return job;
+  }
+
+  enqueueSshExec(
+    bridgeId: string,
+    alias: string,
+    command: string,
+    cwd?: string,
+    timeoutMs = 60_000,
+  ): SshBridgeJob {
+    requireCapability(bridgeId, "ssh-forward");
+    const job: SshBridgeJob = {
+      id: randomUUID(),
+      bridgeId,
+      kind: "ssh-exec",
+      alias,
       command,
       cwd,
       timeoutMs,

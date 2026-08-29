@@ -1128,6 +1128,13 @@ public struct CompanionClient: Sendable {
         ).bot
     }
 
+    public func updateFastMode(botId: String, patch: BotFastModePatch) async throws -> Bot {
+        try await send(
+            try makeRequest("PATCH", "/api/bots/\(botId)", encodedBody: patch),
+            as: BotResponse.self
+        ).bot
+    }
+
     /// Paired-safe conversation pinning. This narrow route accepts only the
     /// Boolean pin value; the server returns the authoritative bot record.
     /// Older paired servers predate the narrow route and answer with their
