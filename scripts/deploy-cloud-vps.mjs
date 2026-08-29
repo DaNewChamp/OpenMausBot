@@ -149,14 +149,18 @@ async function waitHarness(remote = false, timeoutMs = 90_000) {
 function installRemoteNode() {
   ssh(`
 set -euo pipefail
-need_node() {
-  command -v node >/dev/null 2>&1 || return 0
-  major=$(node -v | sed 's/v//' | cut -d. -f1)
-  [ "$major" -ge 24 ]
-}
-if need_node; then
-  echo "node $(node -v) ok"
+if command -v node >/dev/null 2>&1; then
+  major=\$(node -v | sed 's/v//' | cut -d. -f1)
+  if [ "\$major" -ge 24 ]; then
+    echo "node \$(node -v) ok"
+  else
+    echo "node too old: \$(node -v)"
+    need_install=1
+  fi
 else
+  need_install=1
+fi
+if [ "\${need_install:-0}" = "1" ]; then
   echo "installing Node.js 24…"
   export DEBIAN_FRONTEND=noninteractive
   curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
@@ -176,19 +180,19 @@ AUTH=/root/.ssh/authorized_keys
 CFG=/root/.ssh/config
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
-if [ ! -f "$KEY" ]; then
-  ssh-keygen -t ed25519 -N "" -f "$KEY" -C openmaus-local-docker
-  grep -qF "$(cat ${KEY}.pub)" "$AUTH" 2>/dev/null || cat ${KEY}.pub >> "$AUTH"
-  chmod 600 "$AUTH"
+if [ ! -f "\$KEY" ]; then
+  ssh-keygen -t ed25519 -N "" -f "\$KEY" -C openmaus-local-docker
+  grep -qF "\$(cat \$KEY.pub)" "\$AUTH" 2>/dev/null || cat \$KEY.pub >> "\$AUTH"
+  chmod 600 "\$AUTH"
 fi
-cat > "$CFG" <<EOF
+cat > "\$CFG" <<EOF
 Host ${DOCKER_SSH_ALIAS}
   HostName 127.0.0.1
   User root
   IdentityFile ${REMOTE.etc}/openmaus_local
   StrictHostKeyChecking accept-new
 EOF
-chmod 600 "$CFG"
+chmod 600 "\$CFG"
 ssh -o BatchMode=yes ${DOCKER_SSH_ALIAS} true
 docker -H ssh://${DOCKER_SSH_ALIAS} info >/dev/null
 echo "local docker over ssh://${DOCKER_SSH_ALIAS} ok"
