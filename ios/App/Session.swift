@@ -1169,6 +1169,40 @@ final class Session: ObservableObject {
         }
     }
 
+    func listBridges() async -> [BridgeHost] {
+        guard let client else { return [] }
+        do {
+            return try await client.listBridges()
+        } catch {
+            if !error.isCancellation { actionError = error.localizedDescription }
+            return []
+        }
+    }
+
+    func revokeBridge(_ bridge: BridgeHost) async -> Bool {
+        guard let client else { return false }
+        do {
+            try await client.revokeBridge(id: bridge.id)
+            Haptics.selection()
+            return true
+        } catch {
+            if !error.isCancellation { actionError = error.localizedDescription }
+            return false
+        }
+    }
+
+    func rotateBridgeToken(_ bridge: BridgeHost) async -> Bool {
+        guard let client else { return false }
+        do {
+            try await client.rotateBridgeToken(id: bridge.id)
+            Haptics.selection()
+            return true
+        } catch {
+            if !error.isCancellation { actionError = error.localizedDescription }
+            return false
+        }
+    }
+
     func updateGroupSetup(
         roomId: String,
         bulletin: String? = nil,

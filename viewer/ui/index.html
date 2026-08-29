@@ -28,7 +28,8 @@
       }
       body.computer-open #computer { display: flex; }
       h1 { font-size: 18px; margin: 0 0 12px; }
-      h2 { font-size: 14px; margin: 0 0 8px; color: #8aa0bf; text-transform: uppercase; letter-spacing: 0.04em; }
+      h2 { font-size: 14px; margin: 16px 0 8px; color: #8aa0bf; text-transform: uppercase; letter-spacing: 0.04em; }
+      aside h2:first-of-type { margin-top: 16px; }
       button, .bot {
         width: 100%;
         text-align: left;
@@ -43,9 +44,10 @@
       }
       button:hover, .bot:hover { border-color: #4b7cff; }
       .bot.active { border-color: #4b7cff; background: #182033; }
-      .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+      .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
       .toolbar button { width: auto; margin: 0; }
       .toolbar .title { flex: 1; font-size: 18px; font-weight: 600; margin: 0; }
+      .toolbar select { background: #141922; color: inherit; border: 1px solid #243041; border-radius: 8px; padding: 8px; font: inherit; }
       #thread { flex: 1; overflow: auto; }
       .msg { padding: 10px 0; border-bottom: 1px solid #18202b; white-space: pre-wrap; }
       .role { color: #8aa0bf; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
@@ -90,6 +92,35 @@
       .approval .actions button.allow { border-color: #2f8f5b; }
       .approval .actions button.deny { border-color: #a44; }
       .approval .status { font-size: 13px; color: #8aa0bf; margin-top: 8px; }
+      #composer {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid #1e2630;
+      }
+      #composer textarea {
+        flex: 1;
+        min-height: 72px;
+        resize: vertical;
+        background: #141922;
+        color: inherit;
+        border: 1px solid #243041;
+        border-radius: 10px;
+        padding: 10px 12px;
+        font: inherit;
+      }
+      #composer button { width: auto; align-self: flex-end; margin: 0; }
+      .bridge {
+        font-size: 13px;
+        padding: 8px 10px;
+        border: 1px solid #243041;
+        border-radius: 10px;
+        margin-bottom: 8px;
+      }
+      .bridge .meta { color: #8aa0bf; font-size: 12px; margin: 4px 0 8px; }
+      .bridge .row { display: flex; gap: 6px; }
+      .bridge button { width: auto; margin: 0; padding: 6px 8px; font-size: 12px; }
       #screen {
         width: 100%;
         border-radius: 10px;
@@ -102,6 +133,8 @@
       .status-grid dt { color: #6d86a8; display: inline; }
       .status-grid dd { display: inline; margin: 0 0 0 4px; }
       .status-grid div { margin-bottom: 4px; }
+      .vm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+      .vm-actions button { width: auto; margin: 0; }
       .empty { color: #8aa0bf; }
       .error { color: #f88; font-size: 13px; margin-top: 8px; }
       #connection { font-size: 12px; color: #6d86a8; margin-bottom: 8px; }
@@ -112,21 +145,37 @@
     <aside>
       <h1>V Bot</h1>
       <div id="connection">Connecting…</div>
+      <h2>Bots</h2>
       <div id="bots" class="empty">Loading bots…</div>
+      <h2>Rooms</h2>
+      <div id="rooms" class="empty">No rooms.</div>
+      <h2>Bridges</h2>
+      <div id="bridges" class="empty">Loading bridges…</div>
     </aside>
     <main>
       <div class="toolbar">
         <h1 class="title" id="title">Select a bot</h1>
+        <select id="model-picker" hidden></select>
+        <button type="button" id="interrupt" hidden>Interrupt</button>
         <button type="button" id="toggle-computer">Computer</button>
       </div>
       <div id="thread"></div>
       <div id="streaming" hidden></div>
+      <form id="composer" hidden>
+        <textarea id="composer-text" placeholder="Message…" rows="3"></textarea>
+        <button type="submit">Send</button>
+      </form>
     </main>
     <section id="computer" aria-label="Computer panel">
       <h2>Computer</h2>
       <img id="screen" alt="Bot screen" hidden />
       <div id="screen-empty" class="empty">No live frame yet.</div>
       <div id="local-status" class="status-grid"></div>
+      <div class="vm-actions">
+        <button type="button" id="vm-run">Create / start</button>
+        <button type="button" id="vm-stop">Stop</button>
+        <button type="button" id="vm-recreate">Recreate</button>
+      </div>
       <div id="computer-error" class="error" hidden></div>
     </section>
     <script src="./app.js"></script>

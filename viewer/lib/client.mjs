@@ -110,3 +110,59 @@ export async function alwaysAllowTool(botId, allowKey) {
 export async function fetchLocalComputer(botId) {
   return cloudFetch(`/api/bots/${botId}/local-computer`);
 }
+
+export async function sendBotMessage(botId, text, mode = "auto") {
+  return cloudFetch(`/api/bots/${botId}/messages`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text, mode }),
+  });
+}
+
+export async function sendRoomMessage(roomId, text) {
+  return cloudFetch(`/api/groups/${roomId}/messages`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+}
+
+export async function interruptBot(botId) {
+  return cloudFetch(`/api/bots/${botId}/interrupt`, { method: "POST" });
+}
+
+export async function interruptRoom(roomId) {
+  return cloudFetch(`/api/groups/${roomId}/interrupt`, { method: "POST" });
+}
+
+export async function listBridges() {
+  return cloudFetch("/api/bridges");
+}
+
+export async function revokeBridge(bridgeId) {
+  return cloudFetch(`/api/bridges/${bridgeId}`, { method: "DELETE" });
+}
+
+export async function rotateBridgeToken(bridgeId) {
+  return cloudFetch(`/api/bridges/${bridgeId}/rotate`, { method: "POST" });
+}
+
+export async function fetchInstances() {
+  return cloudFetch("/api/instances");
+}
+
+export async function patchBotModel(botId, patch) {
+  return cloudFetch(`/api/bots/${botId}/model`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function localVmAction(botId, action) {
+  return cloudFetch(`/api/bots/${botId}/local-computer/${action}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+}

@@ -5,12 +5,22 @@ import { fileURLToPath } from "node:url";
 import {
   alwaysAllowTool,
   cloudFetch,
+  fetchInstances,
   fetchLocalComputer,
   fetchThreadMessages,
   hydrateFleet,
+  interruptBot,
+  interruptRoom,
+  listBridges,
   loadCursor,
+  localVmAction,
+  patchBotModel,
   respondToRequest,
+  revokeBridge,
+  rotateBridgeToken,
   saveCursor,
+  sendBotMessage,
+  sendRoomMessage,
 } from "../lib/client.mjs";
 import { advanceCursor, createSseParser } from "../lib/sse.mjs";
 
@@ -126,6 +136,16 @@ ipcMain.handle("viewer:respond", async (_event, { threadId, requestId, behavior,
 );
 ipcMain.handle("viewer:alwaysAllow", async (_event, { botId, allowKey }) => alwaysAllowTool(botId, allowKey));
 ipcMain.handle("viewer:localComputer", async (_event, botId) => fetchLocalComputer(botId));
+ipcMain.handle("viewer:localVmAction", async (_event, { botId, action }) => localVmAction(botId, action));
+ipcMain.handle("viewer:sendBot", async (_event, { botId, text }) => sendBotMessage(botId, text));
+ipcMain.handle("viewer:sendRoom", async (_event, { roomId, text }) => sendRoomMessage(roomId, text));
+ipcMain.handle("viewer:interruptBot", async (_event, botId) => interruptBot(botId));
+ipcMain.handle("viewer:interruptRoom", async (_event, roomId) => interruptRoom(roomId));
+ipcMain.handle("viewer:bridges", async () => listBridges());
+ipcMain.handle("viewer:revokeBridge", async (_event, bridgeId) => revokeBridge(bridgeId));
+ipcMain.handle("viewer:rotateBridge", async (_event, bridgeId) => rotateBridgeToken(bridgeId));
+ipcMain.handle("viewer:instances", async () => fetchInstances());
+ipcMain.handle("viewer:patchModel", async (_event, { botId, patch }) => patchBotModel(botId, patch));
 ipcMain.handle("viewer:setScreens", async (_event, enabled) => {
   const next = Boolean(enabled);
   if (next === screensEnabled) return { screens: screensEnabled };

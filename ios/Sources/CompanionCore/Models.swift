@@ -1042,6 +1042,26 @@ public struct ChatPinPatch: Encodable, Sendable {
     }
 }
 
+public struct BridgeHost: Codable, Hashable, Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    public var capabilities: [String]
+    public var grantedCapabilities: [String]?
+    public var createdAt: Double
+    public var lastSeenAt: Double
+    public var hostInfo: String?
+    public var online: Bool?
+}
+
+struct BridgesResponse: Decodable, Sendable {
+    var bridges: [BridgeHost]
+}
+
+struct BridgeMutationResponse: Decodable, Sendable {
+    var ok: Bool
+    var bridgeId: String?
+}
+
 public struct GroupSetupPatch: Encodable, Sendable {
     public var bulletin: String?
     public var defaultResponder: GroupResponder?

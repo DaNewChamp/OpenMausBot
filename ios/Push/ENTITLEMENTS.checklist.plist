@@ -1,0 +1,8 @@
+<!-- Placeholder. Do not enable aps-environment in the shipping app entitlements
+     until the MacBook/iPhone release lane signs a TestFlight build. See README.md. -->
+<plist version="1.0">
+<dict>
+  <key>Note</key>
+  <string>APNs entitlements stay off until Apple signing. group.com.posival.openmausmobile already exists for the share extension.</string>
+</dict>
+</plist>
