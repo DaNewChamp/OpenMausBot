@@ -67,8 +67,8 @@ struct ComputerView: View {
     @State private var photoSaveMessage: String?
     @State private var localVmViewerURL: URL?
     @State private var localVmSurfaceError: String?
+    @State private var viewerLoadFailed = false
     @State private var vmTypeDraft = ""
-    @State private var vmKeyboardTrigger = 0
     @FocusState private var vmKeyboardFocused: Bool
 
     private var localVmInteractive: Bool {
@@ -82,7 +82,7 @@ struct ComputerView: View {
     }
 
     private var usingLiveViewer: Bool {
-        localVmInteractive && localVmViewerURL != nil
+        localVmInteractive && localVmViewerURL != nil && !viewerLoadFailed
     }
 
     private static let firstFrameTimeout = ComputerWatchLifecycle.firstFrameTimeout
@@ -204,7 +204,17 @@ struct ComputerView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: presentationState)
         .safeAreaInset(edge: .bottom) {
             if showsLocalVmBottomChrome {
-                localVmChrome
+                VStack(spacing: 0) {
+                    if vmKeyboardFocused && localVmInteractive {
+                        VmKeyboardBar(
+                            text: $vmTypeDraft,
+                            isFocused: $vmKeyboardFocused,
+                            onSend: { Task { await submitVmTypedText() } }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    localVmChrome
+                }
             } else if case .watching = presentationState, image != nil {
                 VStack(spacing: 0) {
                     clipboardPasteBar
@@ -322,11 +332,13 @@ struct ComputerView: View {
                 try? await Task.sleep(for: .seconds(2))
             }
         }
-        .task(id: "local-vm-viewer-\(current.id)-\(localVmStatus?.ready == true)-\(session.localVmAccess)") {
-            guard localVmInteractive else {
+        .task(id: "local-vm-viewer-\(current.id)-\(isLocalVm)-\(localVmStatus?.ready == true)-\(session.localVmAccess)") {
+            guard isLocalVm else {
                 localVmViewerURL = nil
                 return
             }
+            guard localVmInteractive else { return }
+            viewerLoadFailed = false
             guard localVmViewerURL == nil else { return }
             let joined = await session.localVmViewerURL(for: current)
             guard !Task.isCancelled else { return }
@@ -434,12 +446,12 @@ struct ComputerView: View {
             if usingLiveViewer, let localVmViewerURL {
                 VMViewerWebView(
                     url: localVmViewerURL,
-                    keyboardTrigger: vmKeyboardTrigger,
                     onLoadFailed: { message in
+                        viewerLoadFailed = true
                         localVmSurfaceError = message
-                        self.localVmViewerURL = nil
                     }
                 )
+                    .id("local-vm-viewer-\(current.id)")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityLabel("\(current.name)'s Local VM")
             } else if case .watching = presentationState, let image, localVmInteractive {
@@ -471,26 +483,7 @@ struct ComputerView: View {
                 stateCard
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-
-            if localVmInteractive {
-                vmHiddenKeyboardField
-            }
         }
-    }
-
-    private var vmHiddenKeyboardField: some View {
-        TextField("Type on the Local VM", text: $vmTypeDraft, axis: .vertical)
-            .lineLimit(1...4)
-            .focused($vmKeyboardFocused)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .submitLabel(.done)
-            .opacity(0.01)
-            .frame(width: 1, height: 1)
-            .accessibilityHidden(true)
-            .onSubmit {
-                Task { await submitVmTypedText() }
-            }
     }
 
     private var localVmChrome: some View {
@@ -512,9 +505,6 @@ struct ComputerView: View {
             vmKeyboardFocused = false
         } else {
             vmKeyboardFocused = true
-            if usingLiveViewer {
-                vmKeyboardTrigger += 1
-            }
         }
     }
 

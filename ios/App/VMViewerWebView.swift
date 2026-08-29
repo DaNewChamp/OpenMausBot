@@ -4,7 +4,6 @@ import WebKit
 /// Live noVNC viewer for a proxied Local VM desktop URL.
 struct VMViewerWebView: UIViewRepresentable {
     let url: URL
-    var keyboardTrigger: Int
     var onLoadFailed: ((String) -> Void)?
 
     func makeCoordinator() -> Coordinator {
@@ -28,8 +27,8 @@ struct VMViewerWebView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.onLoadFailed = onLoadFailed
-        let target = Self.stableURLString(url)
-        let current = webView.url.map(Self.stableURLString)
+        let target = Self.stableViewerKey(for: url)
+        let current = webView.url.map(Self.stableViewerKey)
         // WKWebView.url drops the hash noVNC reads for autoconnect. Comparing
         // absoluteString therefore reloads on every SwiftUI pass and the viewer
         // never stays connected.
@@ -38,23 +37,24 @@ struct VMViewerWebView: UIViewRepresentable {
             context.coordinator.resetHealthCheck()
             webView.load(URLRequest(url: url))
         }
-        if context.coordinator.lastKeyboardTrigger != keyboardTrigger {
-            context.coordinator.lastKeyboardTrigger = keyboardTrigger
-            context.coordinator.showKeyboard()
-        }
     }
 
-    private static func stableURLString(_ url: URL) -> String {
+    /// Identity for reload guards — strips noVNC hash and the one-time
+    /// `omb_viewer` ticket (dropped from `webView.url` after Set-Cookie).
+    static func stableViewerKey(for url: URL) -> String {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return url.absoluteString
         }
         components.fragment = nil
+        if var queryItems = components.queryItems {
+            queryItems.removeAll { $0.name == "omb_viewer" }
+            components.queryItems = queryItems.isEmpty ? nil : queryItems
+        }
         return components.string ?? url.absoluteString
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         weak var webView: WKWebView?
-        var lastKeyboardTrigger = 0
         var loadedURL: String?
         var onLoadFailed: ((String) -> Void)?
         private var healthCheckTask: Task<Void, Never>?
@@ -80,30 +80,27 @@ struct VMViewerWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            guard !Self.isCancelledNavigationError(error) else { return }
             onLoadFailed?(error.localizedDescription)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            guard !Self.isCancelledNavigationError(error) else { return }
             onLoadFailed?(error.localizedDescription)
+        }
+
+        private static func isCancelledNavigationError(_ error: Error) -> Bool {
+            let nsError = error as NSError
+            return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
         }
 
         private func scheduleHealthCheck(on webView: WKWebView) {
             resetHealthCheck()
             healthCheckTask = Task { @MainActor in
-                try? await Task.sleep(for: .seconds(4))
+                try? await Task.sleep(for: .seconds(8))
                 guard !Task.isCancelled else { return }
-                webView.evaluateJavaScript(Self.healthScript) { value, _ in
-                    guard let state = value as? String else { return }
-                    if state == "broken" {
-                        self.onLoadFailed?("The live Local VM viewer could not load. Showing the desktop preview instead.")
-                    }
-                }
+                webView.evaluateJavaScript(Self.healthScript) { _, _ in }
             }
-        }
-
-        func showKeyboard() {
-            guard let webView else { return }
-            webView.evaluateJavaScript(Self.keyboardScript, completionHandler: nil)
         }
 
         private static let chromeScript = """
@@ -127,27 +124,6 @@ struct VMViewerWebView: UIViewRepresentable {
           var controls = document.querySelectorAll('.noVNC_button, #noVNC_control_bar_anchor').length;
           if (controls > 0 && styles === 0) return 'broken';
           return 'ok';
-        })();
-        """
-
-        private static let keyboardScript = """
-        (function() {
-          var input = document.getElementById('noVNC_keyboardinput')
-            || document.getElementById('keyboardinput');
-          if (input) {
-            input.removeAttribute('readonly');
-            input.style.opacity = '0.01';
-            input.style.position = 'fixed';
-            input.style.left = '0';
-            input.style.bottom = '0';
-            input.style.width = '1px';
-            input.style.height = '1px';
-            input.focus();
-            return true;
-          }
-          var button = document.getElementById('noVNC_keyboard_button');
-          if (button) { button.click(); return true; }
-          return false;
         })();
         """
     }
