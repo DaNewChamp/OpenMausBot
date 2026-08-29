@@ -1075,7 +1075,7 @@ describe("harness HTTP API", () => {
     await api("DELETE", `/api/bots/${bot.id}`);
   });
 
-  it("refuses a paired model switch while the bot is working, except a no-op reselect", async () => {
+  it("queues a paired model switch while the bot is working, except a no-op reselect", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
     const instances = (await api("GET", "/api/instances")).body.instances;
     const claude = instances.find((instance: { instanceId: string }) => instance.instanceId === "claude");
@@ -1096,8 +1096,10 @@ describe("harness HTTP API", () => {
         instanceId: "claude",
         model: next.id,
       });
-      expect(busySwitch.status).toBe(409);
-      expect(busySwitch.body.error).toContain("already working");
+      expect(busySwitch.status).toBe(200);
+      expect(busySwitch.body.queued).toBe(true);
+      expect(busySwitch.body.bot.modelSelection.model).toBe(currentModel);
+      expect(busySwitch.body.bot.pendingModelSelection.model).toBe(next.id);
 
       const same = await api("PATCH", `/api/bots/${bot.id}/model`, {
         instanceId: "claude",

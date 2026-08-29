@@ -122,7 +122,31 @@ async function cuaReady(runtime: Runtime, containerName: string): Promise<boolea
   }
 }
 
-async function localVmStatus(botId: string): Promise<Record<string, unknown>> {
+interface LocalVmStatusSnapshot {
+  platform: NodeJS.Platform;
+  runtime: Runtime | null;
+  available: Runtime[];
+  daemonUp: boolean;
+  image: boolean;
+  imageMatches: boolean;
+  managed: boolean;
+  container: "running" | "stopped" | "missing";
+  network: "loopback";
+  security: "hardened";
+  persistence: "durable";
+  desktopReady: boolean;
+  desktop_error: null;
+  create_supported: true;
+  ready: boolean;
+  problem: string | null;
+  container_name: string;
+  target_key: string;
+  workspace_path: string;
+  viewer_port: null;
+  viewer_url: string;
+}
+
+async function localVmStatus(botId: string): Promise<LocalVmStatusSnapshot> {
   const target = perBotLocalVmTarget(botId);
   const runtime = await detectRuntime();
   const container = runtime ? await containerState(runtime, target.containerName) : "missing";
@@ -215,7 +239,7 @@ async function localVmAction(
   botId: string,
   action: "run" | "stop" | "remove" | "recreate",
   signal?: AbortSignal,
-): Promise<Record<string, unknown>> {
+): Promise<LocalVmStatusSnapshot> {
   const target = perBotLocalVmTarget(botId);
   const runtime = await detectRuntime();
   if (!runtime) throw new Error("No container runtime is installed");
@@ -290,6 +314,7 @@ export async function runLocalVmJob(
     }
     return { exitCode: 1, stdout: "", stderr: `unsupported local-vm job: ${job.kind}`, truncated: false };
   } catch (error) {
+    // SAFETY: docker/podman execFile rejects with Node's ErrnoException.
     const err = error as NodeJS.ErrnoException;
     const aborted = err.name === "AbortError" || err.code === "ABORT_ERR";
     return {

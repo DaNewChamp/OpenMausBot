@@ -14,6 +14,7 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { savePushToken, apnsConfigured } from "./push-tokens.ts";
+import { bearerToken } from "./devices.ts";
 import {
   COMPANION_ENDPOINT_KINDS,
   MAX_COMPANION_ENDPOINTS,
@@ -378,6 +379,7 @@ export function createProxyHandler(options: ProxyOptions) {
     if (method === "POST" && path === "/api/companion/push-token") {
       if (!device) return sendJson(res, 401, { error: "pair this device first" });
       const deviceId = device.id;
+      if (!deviceId) return sendJson(res, 401, { error: "pair this device first" });
       readJson(req, 8 * 1024, true).then(
         (body) => {
           const token = String(body.token ?? body.deviceToken ?? "").trim();

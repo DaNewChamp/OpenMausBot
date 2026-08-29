@@ -25,8 +25,8 @@ describe("bridge local-vm relay", () => {
     const runPromise = runLocalVmOnBridge(registry, { name: "mini", botId: "bot-a", op: "status" });
     await vi.advanceTimersByTimeAsync(500);
     const [job] = registry.pollJobs(bridgeId);
-    expect(job?.kind).toBe("local-vm-status");
-    expect(job && "payload" in job ? job.payload.botId : "").toBe("bot-a");
+    if (!job || job.kind !== "local-vm-status") throw new Error("expected local-vm-status job");
+    expect(job.payload.botId).toBe("bot-a");
     registry.storeResult({
       jobId: job!.id,
       bridgeId,

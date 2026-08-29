@@ -1,31 +1,32 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { describe, expect, it } from "vitest";
 
 import { localVmViewerJoinPath, upgradeHopByHopHeaders } from "./local-vm-viewer-proxy.ts";
 
-test("localVmViewerJoinPath points noVNC at the harness viewer proxy root", () => {
-  const join = localVmViewerJoinPath("bot-1", { port: 6080, password: "secret" });
-  assert.match(join.viewerPath, /^\/api\/bots\/bot-1\/local-computer\/viewer\/vnc\.html#/);
-  const fragment = join.viewerPath.slice(join.viewerPath.indexOf("#") + 1);
-  const params = new URLSearchParams(fragment);
-  assert.equal(params.get("autoconnect"), "true");
-  assert.equal(params.get("resize"), "scale");
-  assert.equal(params.get("password"), "secret");
-  assert.equal(params.get("path"), "api/bots/bot-1/local-computer/viewer");
-  assert.notEqual(params.get("path"), "websockify");
-});
-
-test("upgradeHopByHopHeaders keeps websocket handshake headers", () => {
-  const forwarded = upgradeHopByHopHeaders({
-    upgrade: "websocket",
-    connection: "Upgrade",
-    "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
-    "sec-websocket-version": "13",
-    "x-openmausbot-companion": "1",
+describe("local VM viewer proxy", () => {
+  it("points noVNC at the harness viewer proxy root", () => {
+    const join = localVmViewerJoinPath("bot-1", { port: 6080, password: "secret" });
+    expect(join.viewerPath).toMatch(/^\/api\/bots\/bot-1\/local-computer\/viewer\/vnc\.html#/);
+    const fragment = join.viewerPath.slice(join.viewerPath.indexOf("#") + 1);
+    const params = new URLSearchParams(fragment);
+    expect(params.get("autoconnect")).toBe("true");
+    expect(params.get("resize")).toBe("scale");
+    expect(params.get("password")).toBe("secret");
+    expect(params.get("path")).toBe("api/bots/bot-1/local-computer/viewer");
+    expect(params.get("path")).not.toBe("websockify");
   });
-  assert.equal(forwarded.upgrade, "websocket");
-  assert.equal(forwarded.connection, "Upgrade");
-  assert.equal(forwarded["sec-websocket-key"], "dGhlIHNhbXBsZSBub25jZQ==");
-  assert.equal(forwarded["sec-websocket-version"], "13");
-  assert.equal(forwarded["x-openmausbot-companion"], "1");
+
+  it("keeps websocket handshake headers on upgrade hops", () => {
+    const forwarded = upgradeHopByHopHeaders({
+      upgrade: "websocket",
+      connection: "Upgrade",
+      "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+      "sec-websocket-version": "13",
+      "x-openmausbot-companion": "1",
+    });
+    expect(forwarded.upgrade).toBe("websocket");
+    expect(forwarded.connection).toBe("Upgrade");
+    expect(forwarded["sec-websocket-key"]).toBe("dGhlIHNhbXBsZSBub25jZQ==");
+    expect(forwarded["sec-websocket-version"]).toBe("13");
+    expect(forwarded["x-openmausbot-companion"]).toBe("1");
+  });
 });

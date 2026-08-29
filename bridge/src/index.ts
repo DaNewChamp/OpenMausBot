@@ -27,13 +27,18 @@ function bridgeCapabilities(): string[] {
 }
 
 async function handleJob(job: BridgeJob, signal?: AbortSignal) {
-  if (job.kind === "shell") return runShellJob(job, signal);
-  if (job.kind === "ssh-exec") return runSshJob(job, signal);
-  if (job.kind === "peekaboo-observe") return runPeekabooJob(job, signal);
-  if (job.kind === "local-vm-status" || job.kind === "local-vm-action" || job.kind === "local-vm-screenshot") {
-    return runLocalVmJob(job, signal);
+  switch (job.kind) {
+    case "shell":
+      return runShellJob(job, signal);
+    case "ssh-exec":
+      return runSshJob(job, signal);
+    case "peekaboo-observe":
+      return runPeekabooJob(job, signal);
+    case "local-vm-status":
+    case "local-vm-action":
+    case "local-vm-screenshot":
+      return runLocalVmJob(job, signal);
   }
-  return { exitCode: 1, stdout: "", stderr: `unsupported job kind: ${(job as BridgeJob).kind}`, truncated: false };
 }
 
 interface InFlightJob {

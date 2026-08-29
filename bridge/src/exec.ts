@@ -6,6 +6,7 @@ import type { BridgeJob, BridgeJobResult } from "./types.ts";
 const execFileAsync = promisify(execFile);
 
 function failed(error: unknown): BridgeJobResult {
+  // SAFETY: bash/ssh execFile rejects with Node's ErrnoException plus captured stdio.
   const err = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string; code?: number | string };
   const aborted = err.name === "AbortError" || err.code === "ABORT_ERR";
   return {

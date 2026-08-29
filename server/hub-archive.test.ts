@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { relativizeCwd, resolvePortableCwd } from "./bot-cwd.ts";
-import { applyHostProfile, exportHubArchive, importHubArchive } from "./hub-archive.ts";
+import { exportHubArchive, importHubArchive } from "./hub-archive.ts";
 
 describe("portable workspace cwds", () => {
   it("round-trips a cwd under the hub data dir", () => {

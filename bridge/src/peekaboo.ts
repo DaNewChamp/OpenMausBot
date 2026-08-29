@@ -28,6 +28,7 @@ export async function runPeekabooJob(
     });
     return { exitCode: 0, stdout, stderr, truncated: false };
   } catch (error) {
+    // SAFETY: execFile rejects with Node's ErrnoException plus captured stdio.
     const err = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string; code?: number | string };
     const aborted = err.name === "AbortError" || err.code === "ABORT_ERR";
     const missing = err.code === "ENOENT";
