@@ -154,13 +154,20 @@ the host computer remain unreachable through the companion.
 - **Thin client.** The harness already folds provider events into settled
   messages. The phone folds `message`, `message.patch`, and `bot` frames, plus
   the small `runtime` delta subset needed to show a reply while it is typed.
+  Token deltas are coalesced on a short frame cadence before SwiftUI publishes,
+  incomplete markdown stays hidden behind a working state, and the live
+  bubble is replaced by the settled message without a duplicate tail. The
+  transcript only autoscrolls while the reader is already near the bottom.
+  VoiceOver announces working/finished, not each token.
 - **`screens=off`.** The harness would otherwise push a base64 desktop capture
   every few seconds to a device on cellular.
 - **Reconnect by cursor.** The stream is resumable: hold the `<streamId>:<seq>`
   cursor, and on reconnect the server replays what was missed or says
-  `resumed: false`, which is the signal to hydrate. Lifecycle — not the parser —
-  is the hard part of a phone client, which is why the stream is torn down
-  deliberately on backgrounding rather than left for iOS to kill.
+  `resumed: false`, which is the signal to hydrate. Unflushed token bursts
+  keep their cursor until they are folded, so a drop mid-flush cannot skip
+  tokens. Lifecycle — not the parser — is the hard part of a phone client,
+  which is why the stream is torn down deliberately on backgrounding rather
+  than left for iOS to kill.
 - **No optimistic state.** Actions call the harness and let the event stream
   deliver the result. A phone that draws its own version of what just happened
   is a phone that disagrees with the laptop.
