@@ -678,31 +678,20 @@ struct AgentProfileView: View {
             Button("Try again") { Task { await loadInstances() } }
                 .disabled(busy || savingModel)
         } else {
-            Picker("Provider", selection: providerSelection) {
-                ForEach(advertisedInstances) { instance in
-                    Text(instance.pickerTitle).tag(instance.instanceId)
+            ModelPickerView(
+                instances: instances,
+                selectedInstanceId: $pickedInstanceId,
+                selectedModelId: $pickedModel,
+                disabled: modelSwitchBlocked || advertisedInstances.isEmpty,
+                modelsDisabled: reconstructedModelDisabled,
+                footerHint: reconstructedHostHint
+            ) {
+                let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances)?.capabilities?.effortLevels ?? []
+                if let effort = pickedEffort, !levels.contains(effort) {
+                    pickedEffort = nil
                 }
-                if advertisedInstances.contains(where: { $0.instanceId == pickedInstanceId }) == false {
-                    Text(currentProviderTitle).tag(pickedInstanceId)
-                }
+                scheduleModelSave()
             }
-            .disabled(modelSwitchBlocked || advertisedInstances.isEmpty)
-            .accessibilityLabel("Provider")
-            .accessibilityValue(currentProviderTitle)
-            .accessibilityHint(current.busy == true ? "Interrupt this agent before switching models" : reconstructedHostHint)
-
-            Picker("Model", selection: modelSelection) {
-                ForEach(modelsForPickedInstance) { option in
-                    Text(option.label).tag(option.id)
-                }
-                if modelsForPickedInstance.contains(where: { $0.id == pickedModel }) == false {
-                    Text(currentModelTitle).tag(pickedModel)
-                }
-            }
-            .disabled(modelSwitchBlocked || modelsForPickedInstance.isEmpty || reconstructedModelDisabled)
-            .accessibilityLabel("Model")
-            .accessibilityValue(currentModelTitle)
-            .accessibilityHint(current.busy == true ? "Interrupt this agent before switching models" : "Choose the model this agent uses")
 
             if showsEffortPicker {
                 Picker("Reasoning", selection: effortSelection) {

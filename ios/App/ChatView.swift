@@ -35,6 +35,7 @@ struct ChatView: View {
     @State private var pendingQueueNotices: [String: PendingQueueNotice] = [:]
     @State private var showingTasks = false
     @State private var showingComputer = false
+    @State private var showingModelPicker = false
     @State private var showingProfile = false
     @State private var showCommandHUD = false
     @State private var shareFile: ShareFile?
@@ -324,6 +325,13 @@ struct ChatView: View {
         .navigationDestination(isPresented: $showingComputer) {
             if case let .bot(bot) = current { ComputerView(bot: bot) }
         }
+        .sheet(isPresented: $showingModelPicker) {
+            if case let .bot(bot) = current {
+                ChatModelPickerSheet(bot: bot)
+                    .environmentObject(session)
+                    .presentationDetents([.medium, .large])
+            }
+        }
         .navigationDestination(item: $commRoom) { room in
             ChatView(chat: .room(room))
         }
@@ -526,7 +534,8 @@ struct ChatView: View {
 
             Spacer(minLength: 8)
 
-            if case .bot = current {
+            if case let .bot(bot) = current {
+                ChatModelPickerButton(bot: bot, showingPicker: $showingModelPicker)
                 Button {
                     Haptics.selection()
                     showingComputer = true
