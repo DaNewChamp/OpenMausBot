@@ -270,6 +270,8 @@ Session 3: rotation/revoke + companion routes + iOS Bridges list (items 5–7).
 ## Live state (2026-08-29)
 
 - Branch: `cursor/vps-turn-ready-cache-08ea` (deployed to Servarica)
+- Phase 1 Session 1 landed in `9f1b410`, `67eef04`, and `010bcdc`: bridge capabilities are opt-in, 1 MB output truncation is reported end-to-end, and bridge build debris is ignored.
+- Live verified: a no-flag bridge paired with `capabilities: []`; the retained Mac mini bridge advertises `shell` + `local-vm`; `run_on_bridge hostname` returned `Vincents-Mac-mini.local`; oversized output returned `truncated: true`.
 - Chief Keef + Investments desk section fix applied on VPS
 - Turn-ready VPS cache shipped (`server/vps-computer.ts`)
 - iOS build 54 (model picker backdrop fix)
