@@ -197,11 +197,13 @@ struct ChatModelPickerButton: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .glassCapsule()
+        .glassCapsuleBackdrop()
         .fixedSize()
         .accessibilityLabel("Model, \(instanceTitle), \(modelTitle)")
-        .accessibilityHint("Opens model picker")
-        .disabled(current.busy == true)
-        .opacity(current.busy == true ? 0.5 : 1)
+        .accessibilityHint(
+            current.busy == true
+                ? "Opens model picker; interrupt this agent before switching models"
+                : "Opens model picker"
+        )
     }
 }

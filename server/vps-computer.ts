@@ -781,6 +781,9 @@ export async function vpsComputerAction(
         } else {
           assertUsableContainer(before);
           if (before.container === "stopped") await run(["start", containerRef]);
+          // Explicit Cloud turns call provision on every message. When the
+          // managed container is already up, skip the readiness poll loop.
+          else if (before.ready) return before;
         }
       } else if (action === "start") {
         if (before.container === "missing") throw Object.assign(new Error("No VPS container exists for this bot"), { status: 409 });

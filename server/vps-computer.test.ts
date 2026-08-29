@@ -410,6 +410,15 @@ describe("VPS computer", () => {
     expect(run.at(-1)).not.toBe(staleImageId);
   });
 
+  it("skips the readiness poll when provision finds an already-ready container", async () => {
+    const ready = fixture();
+    const status = await vpsComputerAction("provision", CONFIG, BOT_ID, ready.runner);
+    expect(status.ready).toBe(true);
+    expect(ready.calls.some(({ args }) => args[2] === "run")).toBe(false);
+    expect(ready.calls.some(({ args }) => args[2] === "start")).toBe(false);
+    expect(ready.calls.some(({ args }) => args[2] === "build")).toBe(false);
+  });
+
   it("starts and sleeps only the managed container, never the VPS", async () => {
     const start = fixture({ running: false });
     const started = await vpsComputerAction("start", CONFIG, BOT_ID, start.runner);
