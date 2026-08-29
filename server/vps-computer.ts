@@ -53,7 +53,33 @@ const LOCK_ACQUIRE_TIMEOUT_MS = 5_000;
 // every frame; each full status is several docker-over-SSH processes. Same
 // pattern as container-computer's screenshotStatusCache, and the same TTL.
 const STATUS_CACHE_TTL_MS = 10_000;
+// Explicit Cloud calls provision on every turn. The poll cache is deleted at
+// the start of each provision, so turn-ready keeps a longer-lived snapshot
+// of the last verified-ready container and skips six docker-over-SSH hops
+// before Cursor/Codex can start.
+const TURN_READY_CACHE_TTL_MS = 120_000;
 const statusCache = new Map<string, { status: VpsComputerStatus; expiresAt: number }>();
+const turnReadyCache = new Map<string, { status: VpsComputerStatus; expiresAt: number }>();
+
+function rememberTurnReady(key: string, status: VpsComputerStatus): void {
+  if (status.ready && status.container === "running") {
+    turnReadyCache.set(key, { status, expiresAt: Date.now() + TURN_READY_CACHE_TTL_MS });
+  }
+}
+
+function getTurnReady(key: string): VpsComputerStatus | null {
+  const cached = turnReadyCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    turnReadyCache.delete(key);
+    return null;
+  }
+  return cached.status;
+}
+
+function invalidateTurnReady(key: string): void {
+  turnReadyCache.delete(key);
+}
 const viewerConnections = new Map<string, { privateIp: string; password: string }>();
 const desktopTunnels = new Map<
   string,
@@ -566,7 +592,10 @@ export async function vpsComputerStatus(
     if (cached && cached.expiresAt > Date.now()) return cached.status;
   }
   const status = await computeVpsComputerStatus(cfg, botId, runner);
-  if (cacheable) statusCache.set(key, { status, expiresAt: Date.now() + STATUS_CACHE_TTL_MS });
+  if (cacheable) {
+    statusCache.set(key, { status, expiresAt: Date.now() + STATUS_CACHE_TTL_MS });
+    rememberTurnReady(key, status);
+  }
   return status;
 }
 
@@ -756,9 +785,14 @@ export async function vpsComputerAction(
   if (!alias) throw Object.assign(new Error("VPS is not configured — add an SSH config alias in App Settings → Connections"), { status: 409 });
   const key = `${alias}:${vpsContainerName(botId)}`;
   const operation = async () => {
+    if (action === "provision") {
+      const cached = getTurnReady(key);
+      if (cached) return cached;
+    }
     // A mutation invalidates every cached poll answer, before and after: the
     // panel must never keep showing the pre-action world for a TTL.
     statusCache.delete(key);
+    invalidateTurnReady(key);
     try {
       const before = await computeVpsComputerStatus(cfg, botId, runner);
       if (!before.daemonUp) throw Object.assign(new Error(before.problem ?? "Docker over SSH is not reachable"), { status: 409 });
@@ -783,7 +817,10 @@ export async function vpsComputerAction(
           if (before.container === "stopped") await run(["start", containerRef]);
           // Explicit Cloud turns call provision on every message. When the
           // managed container is already up, skip the readiness poll loop.
-          else if (before.ready) return before;
+          else if (before.ready) {
+            rememberTurnReady(key, before);
+            return before;
+          }
         }
       } else if (action === "start") {
         if (before.container === "missing") throw Object.assign(new Error("No VPS container exists for this bot"), { status: 409 });
@@ -805,13 +842,18 @@ export async function vpsComputerAction(
           );
         }
         await run(["rm", "-f", containerRef]);
-        return computeVpsComputerStatus(cfg, botId, runner);
+        const removed = await computeVpsComputerStatus(cfg, botId, runner);
+        invalidateTurnReady(key);
+        return removed;
       } else {
         if (before.container !== "running") throw Object.assign(new Error("The VPS container is not running"), { status: 409 });
         assertUsableContainer(before);
         await run(["stop", containerRef]);
       }
-      return action === "stop" ? computeVpsComputerStatus(cfg, botId, runner) : waitForVpsReady(cfg, botId, runner);
+      const after = action === "stop" ? await computeVpsComputerStatus(cfg, botId, runner) : await waitForVpsReady(cfg, botId, runner);
+      if (after.ready) rememberTurnReady(key, after);
+      else invalidateTurnReady(key);
+      return after;
     } finally {
       statusCache.delete(key);
     }

@@ -419,6 +419,16 @@ describe("VPS computer", () => {
     expect(ready.calls.some(({ args }) => args[2] === "build")).toBe(false);
   });
 
+  it("reuses turn-ready cache on back-to-back explicit Cloud provision calls", async () => {
+    const ready = fixture();
+    const first = await vpsComputerAction("provision", CONFIG, BOT_ID, ready.runner);
+    expect(first.ready).toBe(true);
+    const callsAfterFirst = ready.calls.length;
+    const second = await vpsComputerAction("provision", CONFIG, BOT_ID, ready.runner);
+    expect(second.ready).toBe(true);
+    expect(ready.calls.length).toBe(callsAfterFirst);
+  });
+
   it("starts and sleeps only the managed container, never the VPS", async () => {
     const start = fixture({ running: false });
     const started = await vpsComputerAction("start", CONFIG, BOT_ID, start.runner);
