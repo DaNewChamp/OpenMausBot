@@ -209,24 +209,16 @@ struct ChatView: View {
                         if let live = session.state.streaming[threadId], !live.isEmpty {
                             StreamingBubble(
                                 text: live,
-                                reasoning: nil,
                                 color: streamingTintColor,
                                 speaker: streamingSpeaker
                             )
                                 .id(Self.liveBubbleId)
-                        } else if let thinking = session.state.reasoning[threadId], !thinking.isEmpty {
-                            // Only while there is no answer yet. Once tokens
-                            // of the reply exist, the reasoning is behind us
-                            // and showing both is just noise.
-                            StreamingBubble(
-                                text: nil,
-                                reasoning: thinking,
-                                color: streamingTintColor,
-                                speaker: streamingSpeaker
+                        } else if current.busy
+                                    || !(session.state.reasoning[threadId] ?? "").isEmpty {
+                            WorkingTypingIndicatorView(
+                                chat: current,
+                                speakerBotId: workingBotId
                             )
-                                .id(Self.liveBubbleId)
-                        } else if current.busy {
-                            TypingIndicatorView(tintColor: MausPalette.color(streamingTintColor))
                                 .id(Self.liveBubbleId)
                                 .accessibilityLabel(
                                     streamingSpeaker.map { "\($0.name) is working" }
@@ -941,6 +933,13 @@ struct ChatView: View {
 
     private var streamingTintColor: String {
         streamingSpeaker?.color ?? current.color
+    }
+
+    private var workingBotId: String? {
+        switch current {
+        case let .bot(bot): return bot.id
+        case let .room(room): return room.busyBotId
+        }
     }
 
     private var activeMentionQuery: String? {
@@ -2719,7 +2718,6 @@ struct ScreenShot: View {
 /// static is honest until then.
 struct StreamingBubble: View {
     let text: String?
-    let reasoning: String?
     var color: String = "blue"
     var speaker: (name: String, color: String)?
 
@@ -2730,14 +2728,6 @@ struct StreamingBubble: View {
                     Text(speaker.name)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color.primary)
-                }
-                if let reasoning, !reasoning.isEmpty, text?.isEmpty != false {
-                    AgentThoughtChamberView(
-                        reasoning: String(reasoning.suffix(2_000)),
-                        botName: speaker?.name ?? "Bot",
-                        mascotColor: MausPalette.color(color),
-                        isStreaming: true
-                    )
                 }
                 if let text, !text.isEmpty {
                     // Same renderer as the settled bubble, for the same
