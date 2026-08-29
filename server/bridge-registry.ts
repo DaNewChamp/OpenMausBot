@@ -177,12 +177,13 @@ export class BridgeRegistry {
     return store.bridges.find((b) => safeEqual(b.tokenHash, digest)) ?? null;
   }
 
-  touch(bridgeId: string, hostInfo?: string): BridgeRecord | null {
+  touch(bridgeId: string, patch?: { hostInfo?: string; capabilities?: BridgeCapability[] }): BridgeRecord | null {
     const store = readStore();
     const bridge = store.bridges.find((b) => b.id === bridgeId);
     if (!bridge) return null;
     bridge.lastSeenAt = Date.now();
-    if (hostInfo) bridge.hostInfo = hostInfo;
+    if (patch?.hostInfo) bridge.hostInfo = patch.hostInfo;
+    if (patch?.capabilities?.length) bridge.capabilities = patch.capabilities;
     writeStore(store);
     return bridge;
   }

@@ -14,7 +14,7 @@ describe("bridge exec", () => {
     const registry = new BridgeRegistry();
     const { code } = registry.startPairing();
     const { bridgeId } = registry.register({ name: "Mac mini", code, capabilities: ["shell"] });
-    registry.touch(bridgeId, "mini");
+    registry.touch(bridgeId, { hostInfo: "mini" });
     expect(resolveBridge(registry, { name: "Mac mini" })?.id).toBe(bridgeId);
   });
 

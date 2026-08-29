@@ -36,7 +36,7 @@ async function runDaemon(credentials = loadCredentials()) {
   console.log(`bridge: ${credentials.name} → ${credentials.url}`);
   for (;;) {
     try {
-      const jobs = await heartbeat(credentials, hostname());
+      const jobs = await heartbeat(credentials, hostname(), bridgeCapabilities());
       for (const job of jobs) {
         const label =
           job.kind === "shell"
