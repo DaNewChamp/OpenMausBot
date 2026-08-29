@@ -6,9 +6,9 @@
 //   node scripts/sync-openmausbot-data.mjs backup
 //   node scripts/sync-openmausbot-data.mjs push --host servarica --companion --restart
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -158,11 +158,13 @@ function backup() {
   console.log(`backup → ${dest}`);
 }
 
-function restore() {
-  const from = args.find((a, i) => args[i - 1] === "--from");
-  if (!from) throw new Error("restore needs --from /path/to/backup");
-  const src = join(from, "openmausbot");
-  if (!existsSync(src)) throw new Error(`missing ${src}`);
+function restoreFromCloud(stamp = "latest") {
+  const label = args.find((a, i) => args[i - 1] === "--host-label") ?? "servarica";
+  const backupScript = join(root, "scripts", "backup-openmausbot-cloud.mjs");
+  run("node", [backupScript, "restore", "--stamp", stamp, "--host-label", label]);
+}
+
+function restoreInner(from, src) {
   const backupFirst = join(home, ".openmausbot.pre-restore");
   if (existsSync(LOCAL_DATA) && !dryRun) {
     cpSync(LOCAL_DATA, backupFirst, { recursive: true, force: true });
@@ -173,6 +175,19 @@ function restore() {
   if (existsSync(companionSrc)) cpSync(companionSrc, LOCAL_COMPANION, { recursive: true, force: true });
   summarize(LOCAL_DATA);
   console.log("restore done — restart harness on the target host");
+}
+
+function restore() {
+  const cloudIdx = args.indexOf("--from-cloud");
+  if (cloudIdx !== -1) {
+    restoreFromCloud(args[cloudIdx + 1] ?? "latest");
+    return;
+  }
+  const from = args.find((a, i) => args[i - 1] === "--from");
+  if (!from) throw new Error("restore needs --from /path/to/backup or --from-cloud [latest|stamp]");
+  const src = join(from, "openmausbot");
+  if (!existsSync(src)) throw new Error(`missing ${src}`);
+  restoreInner(from, src);
 }
 
 switch (command) {
@@ -193,6 +208,7 @@ switch (command) {
   node scripts/sync-openmausbot-data.mjs push --host servarica [--companion] [--restart]
   node scripts/sync-openmausbot-data.mjs pull --host servarica [--companion]
   node scripts/sync-openmausbot-data.mjs backup
-  node scripts/sync-openmausbot-data.mjs restore --from ~/Backups/openmausbot/<stamp>`);
+  node scripts/sync-openmausbot-data.mjs restore --from ~/Backups/openmausbot/<stamp>
+  node scripts/sync-openmausbot-data.mjs restore --from-cloud latest [--host-label servarica]`);
     process.exit(command ? 1 : 0);
 }
