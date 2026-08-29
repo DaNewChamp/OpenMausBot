@@ -23,28 +23,42 @@ function bridgeCapabilities(): string[] {
   return capabilities;
 }
 
-async function handleJob(job: BridgeJob) {
-  if (job.kind === "shell") return runShellJob(job);
-  if (job.kind === "ssh-exec") return runSshJob(job);
+async function handleJob(job: BridgeJob, signal?: AbortSignal) {
+  if (job.kind === "shell") return runShellJob(job, signal);
+  if (job.kind === "ssh-exec") return runSshJob(job, signal);
   if (job.kind === "local-vm-status" || job.kind === "local-vm-action" || job.kind === "local-vm-screenshot") {
     return runLocalVmJob(job);
   }
   return { exitCode: 1, stdout: "", stderr: `unsupported job kind: ${(job as BridgeJob).kind}`, truncated: false };
 }
 
+interface InFlightJob {
+  generation: number;
+  abort: AbortController;
+}
+
 async function runDaemon(credentials = loadCredentials()) {
   if (!credentials) throw new Error(`no saved credentials at ${credentialsPath()} — run: connect --url … --code …`);
   console.log(`bridge: ${credentials.name} → ${credentials.url}`);
-  const inFlight = new Set<string>();
+  const inFlight = new Map<string, InFlightJob>();
   for (;;) {
     try {
-      const jobs = await heartbeat(credentials, hostname(), bridgeCapabilities());
+      const { jobs, cancelJobIds } = await heartbeat(credentials, hostname(), bridgeCapabilities());
+      for (const jobId of cancelJobIds) {
+        inFlight.get(jobId)?.abort.abort();
+      }
       for (const job of jobs) {
-        if (inFlight.has(job.id)) {
-          console.log(`job ${job.id}: already in flight, skipping duplicate delivery`);
-          continue;
+        const existing = inFlight.get(job.id);
+        if (existing) {
+          if (existing.generation === (job.generation ?? existing.generation)) {
+            console.log(`job ${job.id}: already in flight, skipping duplicate delivery`);
+            continue;
+          }
+          existing.abort.abort();
+          inFlight.delete(job.id);
         }
-        inFlight.add(job.id);
+        const abort = new AbortController();
+        inFlight.set(job.id, { generation: job.generation ?? 0, abort });
         const label =
           job.kind === "shell"
             ? job.command
@@ -52,12 +66,15 @@ async function runDaemon(credentials = loadCredentials()) {
               ? `ssh ${job.alias} ${job.command}`
               : `${job.kind} ${job.payload.botId}`;
         console.log(`job ${job.id}: ${label}`);
-        try {
-          const result = await handleJob(job);
-          await submitResult(credentials, job.id, result);
-        } finally {
-          inFlight.delete(job.id);
-        }
+        void handleJob(job, abort.signal)
+          .then((result) => submitResult(credentials, job.id, result, job.generation))
+          .catch((error) => {
+            console.warn(`job ${job.id}: ${error instanceof Error ? error.message : String(error)}`);
+          })
+          .finally(() => {
+            const current = inFlight.get(job.id);
+            if (current?.abort === abort) inFlight.delete(job.id);
+          });
       }
     } catch (error) {
       console.warn(`bridge heartbeat: ${error instanceof Error ? error.message : String(error)}`);

@@ -91,11 +91,16 @@ Loopback harness route: `POST /api/internal/bridge/ssh` with `{ target, command,
 
 | Route | Auth | Purpose |
 |---|---|---|
-| `POST /api/bridge/pairing` | loopback TCP | Start 6-digit pairing window |
+| `POST /api/bridge/pairing` | direct loopback (not companion) | Start 6-digit pairing window |
 | `POST /api/bridge/register` | pairing code | Mint bridge bearer token |
-| `POST /api/bridge/heartbeat` | bridge bearer | Poll jobs |
-| `POST /api/bridge/result` | bridge bearer | Submit job output |
-| `GET /api/bridges` | loopback TCP | List registered bridges |
+| `POST /api/bridge/heartbeat` | bridge bearer | Poll jobs + cancel ids |
+| `POST /api/bridge/result` | bridge bearer | Submit job output (must echo `generation`) |
+| `GET /api/bridges` | direct loopback or paired companion | Scrubbed roster (`online`, capabilities, no tokens) |
+| `DELETE /api/bridges/:id` | direct loopback or paired companion | Revoke a bridge and cancel-request in-flight jobs |
+| `GET /api/bridge/jobs` | direct loopback + `OMB_BRIDGE_ADMIN_TOKEN` | Job audit |
+| `POST /api/bridge/jobs/:id` `{action:cancel}` | same operator token | Request cancel / interrupt |
+
+Job administration uses the bearer in `DATA_DIR/bridge-admin.token` (or `OMB_BRIDGE_ADMIN_TOKEN`). The companion sidecar never counts as direct loopback. `run_on_bridge` requires a scoped always-allow grant (`bridge:run_on_bridge:<program>`); auto mode does not inherit.
 
 ## Desktop viewer (Phase C)
 

@@ -35,6 +35,7 @@ describe("bridge local-vm relay", () => {
       stderr: "",
       truncated: false,
       finishedAt: Date.now(),
+      generation: job!.generation,
     });
     await vi.advanceTimersByTimeAsync(500);
     await expect(runPromise).resolves.toMatchObject({

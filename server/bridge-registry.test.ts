@@ -49,6 +49,30 @@ describe("BridgeRegistry", () => {
     expect(registry.list().find((bridge) => bridge.id === bridgeId)?.capabilities).toEqual([]);
   });
 
+  it("does not let a heartbeat add capabilities beyond the paired grant", () => {
+    const registry = new BridgeRegistry();
+    const { code } = registry.startPairing();
+    const { bridgeId } = registry.register({ name: "locked", code, capabilities: [] });
+    registry.touch(bridgeId, { capabilities: ["shell", "local-vm"] });
+    const listed = registry.list().find((bridge) => bridge.id === bridgeId);
+    expect(listed?.capabilities).toEqual([]);
+    expect(listed?.grantedCapabilities).toEqual([]);
+  });
+
+  it("revokes a bridge and cancel-requests its in-flight jobs", () => {
+    const registry = new BridgeRegistry();
+    const { code } = registry.startPairing();
+    const { bridgeId } = registry.register({ name: "gone", code, capabilities: ["shell"] });
+    const running = registry.enqueueShell(bridgeId, "echo running");
+    registry.pollJobs(bridgeId);
+    const queued = registry.enqueueShell(bridgeId, "echo queued");
+    expect(registry.revoke(bridgeId)).toBe(true);
+    expect(registry.list().find((bridge) => bridge.id === bridgeId)).toBeUndefined();
+    expect(registry.getJob(queued.id)?.status).toBe("cancelled");
+    expect(registry.getJob(running.id)?.cancelRequestedAt).toBeTruthy();
+    expect(registry.getJob(running.id)?.status).toBe("running");
+  });
+
   it("delivers shell jobs on heartbeat and keeps durable status until result", () => {
     const registry = new BridgeRegistry();
     const { code } = registry.startPairing();
@@ -70,6 +94,7 @@ describe("BridgeRegistry", () => {
       stderr: "",
       truncated: false,
       finishedAt: Date.now(),
+      generation: jobs[0]?.generation,
     });
     expect(registry.getJob(job.id)?.status).toBe("succeeded");
   });

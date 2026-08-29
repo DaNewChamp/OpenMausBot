@@ -36,6 +36,32 @@ describe("credentials", () => {
     expect(ask("POST", "/api/health", false)?.status).toBe(401);
     expect(ask("GET", "/api/healthz", false)?.status).toBe(401);
   });
+
+  it("lets only the three bridge daemon POSTs through without a device token", () => {
+    expect(ask("POST", "/api/bridge/register", false)).toBeNull();
+    expect(ask("POST", "/api/bridge/heartbeat", false)).toBeNull();
+    expect(ask("POST", "/api/bridge/result", false)).toBeNull();
+    for (const [method, path] of [
+      ["GET", "/api/bridge/jobs"],
+      ["GET", "/api/bridge/jobs/job-1"],
+      ["POST", "/api/bridge/jobs/job-1"],
+      ["POST", "/api/bridge/pairing"],
+      ["GET", "/api/bridge/register"],
+      ["POST", "/api/bridge/unknown"],
+      ["DELETE", "/api/bridge/result"],
+    ] as Array<[string, string]>) {
+      expect(ask(method, path, false)?.status, `${method} ${path}`).toBe(401);
+      expect(ask(method, path, true)?.status, `auth ${method} ${path}`).toBe(404);
+    }
+  });
+
+  it("lets a paired phone list and revoke bridges, not dump jobs", () => {
+    expect(ask("GET", "/api/bridges")).toBeNull();
+    expect(ask("DELETE", "/api/bridges/bridge-1")).toBeNull();
+    expect(ask("GET", "/api/bridges", false)?.status).toBe(401);
+    expect(ask("POST", "/api/bridges")?.status).toBe(404);
+    expect(ask("GET", "/api/bridge/jobs")?.status).toBe(404);
+  });
 });
 
 describe("what the app may do", () => {

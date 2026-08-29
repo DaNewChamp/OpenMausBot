@@ -40,6 +40,7 @@ describe("bridge exec", () => {
       stderr: "",
       truncated: false,
       finishedAt: Date.now(),
+      generation: job!.generation,
     });
     await vi.advanceTimersByTimeAsync(500);
     await expect(runPromise).resolves.toMatchObject({
@@ -78,6 +79,7 @@ describe("bridge exec", () => {
       stderr: "",
       truncated: false,
       finishedAt: Date.now(),
+      generation: job!.generation,
     });
     await vi.advanceTimersByTimeAsync(500);
     await expect(runPromise).resolves.toMatchObject({

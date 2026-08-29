@@ -13,16 +13,22 @@ export async function waitForBridgeJobResult(
     registry.reconcile();
     const status = registry.jobStatus(jobId);
     if (status === "cancelled") throw new Error(`bridge job cancelled waiting for ${bridgeName}`);
+    const result = registry.result(jobId);
+    if (result) return result;
     if (status === "failed") {
       const record = registry.getJob(jobId);
       throw new Error(record?.error ?? `bridge job failed waiting for ${bridgeName}`);
     }
-    const result = registry.result(jobId);
-    if (result) return result;
     await sleep(400);
   }
   registry.reconcile(Date.now());
   const late = registry.result(jobId);
   if (late) return late;
+  const lateStatus = registry.jobStatus(jobId);
+  if (lateStatus === "cancelled") throw new Error(`bridge job cancelled waiting for ${bridgeName}`);
+  if (lateStatus === "failed") {
+    const record = registry.getJob(jobId);
+    throw new Error(record?.error ?? `bridge job failed waiting for ${bridgeName}`);
+  }
   throw new Error(`bridge job timed out waiting for ${bridgeName}`);
 }

@@ -3,13 +3,14 @@
 // folds one SSE event stream; every provider process runs here.
 import { execFile } from "node:child_process";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { extname, join } from "node:path";
 import { promisify } from "node:util";
 
 import { z } from "zod";
+import { writeFileAtomic } from "./atomic.ts";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import {
   CREDENTIAL_TARGETS,
@@ -24,7 +25,7 @@ import { approvalKey, autoVerdict } from "./auto-approve.ts";
 import * as checkpoints from "./checkpoints.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
-import { handleBridgeRoutes } from "./bridge-routes.ts";
+import { handleBridgeRoutes, isCompanionRequest } from "./bridge-routes.ts";
 import { runShellOnBridge, runSshOnBridge } from "./bridge-exec.ts";
 import { runLocalVmOnBridge, shouldRelayLocalVm } from "./bridge-local-vm.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
@@ -274,12 +275,21 @@ bus.attach(registry.instances());
 // agents-proxy calls; regenerated each boot (the proxy gets it via env).
 const COMMS_TOKEN = randomBytes(24).toString("hex");
 const bridges = new BridgeRegistry();
+const BRIDGE_ADMIN_TOKEN = process.env.OMB_BRIDGE_ADMIN_TOKEN?.trim() || randomBytes(24).toString("hex");
+mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+writeFileAtomic(join(DATA_DIR, "bridge-admin.token"), `${BRIDGE_ADMIN_TOKEN}\n`, { mode: 0o600 });
 
 /** Constant-time bearer check for the internal comms endpoints. The token
  * is high-entropy and loopback-only, so a timing oracle is a long shot —
  * but the compare costs nothing to make safe. */
 function authorizedComms(header: string | string[] | undefined): boolean {
   const expected = Buffer.from(`Bearer ${COMMS_TOKEN}`);
+  const got = Buffer.from(Array.isArray(header) ? "" : (header ?? ""));
+  return got.length === expected.length && timingSafeEqual(got, expected);
+}
+
+function authorizedBridgeAdmin(header: string | string[] | undefined): boolean {
+  const expected = Buffer.from(`Bearer ${BRIDGE_ADMIN_TOKEN}`);
   const got = Buffer.from(Array.isArray(header) ? "" : (header ?? ""));
   return got.length === expected.length && timingSafeEqual(got, expected);
 }
@@ -3723,7 +3733,11 @@ const server = createServer(async (req, res) => {
     if (origin && !isAllowedOrigin(origin)) {
       return json(res, 403, { error: "forbidden: cross-origin request" });
     }
-    if (await handleBridgeRoutes(req, res, method, path, json, bridges, { loopback: isDirectLoopback(req) })) {
+    if (await handleBridgeRoutes(req, res, method, path, json, bridges, {
+      companion: isCompanionRequest(req),
+      direct: isDirectLoopback(req) && !isCompanionRequest(req),
+      operator: isDirectLoopback(req) && !isCompanionRequest(req) && authorizedBridgeAdmin(req.headers.authorization),
+    })) {
       return;
     }
     // ── internal peer-agent comms (localhost + shared token only) ──────
@@ -4349,11 +4363,43 @@ const server = createServer(async (req, res) => {
       }
       if (method === "POST" && path === "/api/internal/bridge/shell") {
         const body = await readBody(req);
+        const fromBotId = String(body.fromBotId ?? "");
+        const bot = fromBotId ? store.bot(fromBotId) : undefined;
+        if (!bot) return json(res, 403, { error: "bridge execution requires approval from a known bot" });
+        const command = String(body.command ?? "");
+        const verdict = autoVerdict(bot, "run_on_bridge", command, { scope: "bridge" });
+        if (!verdict.approve) {
+          appendDecision(DATA_DIR, {
+            threadId: String(body.fromThreadId ?? ""),
+            botId: bot.id,
+            botName: bot.name,
+            tool: "run_on_bridge",
+            summary: command.slice(0, 240),
+            decision: "card-shown",
+            source: verdict.source,
+            rule: verdict.rule,
+          });
+          return json(res, 403, {
+            error: "bridge execution requires approval",
+            allowKey: approvalKey("run_on_bridge", command, "bridge"),
+            source: verdict.source,
+          });
+        }
+        appendDecision(DATA_DIR, {
+          threadId: String(body.fromThreadId ?? ""),
+          botId: bot.id,
+          botName: bot.name,
+          tool: "run_on_bridge",
+          summary: command.slice(0, 240),
+          decision: "auto-approved",
+          source: verdict.source,
+          rule: verdict.rule,
+        });
         try {
           const result = await runShellOnBridge(bridges, {
             bridgeId: body.bridgeId ? String(body.bridgeId) : undefined,
             name: body.bridge ? String(body.bridge) : body.name ? String(body.name) : undefined,
-            command: String(body.command ?? ""),
+            command,
             cwd: body.cwd ? String(body.cwd) : undefined,
             timeoutMs: body.timeoutMs == null ? undefined : Number(body.timeoutMs),
           });
@@ -4364,6 +4410,38 @@ const server = createServer(async (req, res) => {
       }
       if (method === "POST" && path === "/api/internal/bridge/ssh") {
         const body = await readBody(req);
+        const fromBotId = String(body.fromBotId ?? "");
+        const bot = fromBotId ? store.bot(fromBotId) : undefined;
+        if (!bot) return json(res, 403, { error: "bridge execution requires approval from a known bot" });
+        const command = String(body.command ?? "");
+        const verdict = autoVerdict(bot, "run_on_ssh_target", command, { scope: "bridge" });
+        if (!verdict.approve) {
+          appendDecision(DATA_DIR, {
+            threadId: String(body.fromThreadId ?? ""),
+            botId: bot.id,
+            botName: bot.name,
+            tool: "run_on_ssh_target",
+            summary: command.slice(0, 240),
+            decision: "card-shown",
+            source: verdict.source,
+            rule: verdict.rule,
+          });
+          return json(res, 403, {
+            error: "bridge execution requires approval",
+            allowKey: approvalKey("run_on_ssh_target", command, "bridge"),
+            source: verdict.source,
+          });
+        }
+        appendDecision(DATA_DIR, {
+          threadId: String(body.fromThreadId ?? ""),
+          botId: bot.id,
+          botName: bot.name,
+          tool: "run_on_ssh_target",
+          summary: command.slice(0, 240),
+          decision: "auto-approved",
+          source: verdict.source,
+          rule: verdict.rule,
+        });
         try {
           const targetKey = String(body.target ?? "");
           const mapped = bridgeSshTarget(cfg, targetKey);
@@ -4372,7 +4450,7 @@ const server = createServer(async (req, res) => {
             bridgeId: body.bridgeId ? String(body.bridgeId) : undefined,
             name: body.bridge ? String(body.bridge) : mapped.bridge,
             alias: mapped.alias,
-            command: String(body.command ?? ""),
+            command,
             cwd: body.cwd ? String(body.cwd) : undefined,
             timeoutMs: body.timeoutMs == null ? undefined : Number(body.timeoutMs),
           });
