@@ -510,8 +510,8 @@ final class StoreTests: XCTestCase {
 /// folds. These pin the handover between the two, which is where every
 /// streaming bug in this project's desktop client has lived.
 final class StreamingTests: XCTestCase {
-    private func delta(_ text: String, thread: String = "t1", kind: String = "assistant_text") -> Frame {
-        .runtime(RuntimeEvent(type: "content.delta", threadId: thread, delta: text, streamKind: kind))
+    private func delta(_ text: String, thread: String = "t1", kind: String = "assistant_text", id: String? = nil) -> Frame {
+        .runtime(RuntimeEvent(type: "content.delta", threadId: thread, delta: text, streamKind: kind, eventId: id))
     }
 
     func testDeltasAccumulateIntoLiveText() {
@@ -583,6 +583,40 @@ final class StreamingTests: XCTestCase {
         state.apply(.runtime(RuntimeEvent(type: "turn.completed", threadId: "t1", delta: nil, streamKind: nil)))
         XCTAssertNil(state.streaming["t1"])
         XCTAssertEqual(state.streaming["t2"], "for two", "one bot finishing must not silence another")
+    }
+
+    func testDuplicateEventIdsAreNotAppendedTwice() {
+        var state = CompanionState()
+        state.apply(delta("Hello", id: "e1"))
+        state.apply(delta("Hello", id: "e1"))
+        state.apply(delta(" world", id: "e2"))
+        XCTAssertEqual(state.streaming["t1"], "Hello world")
+    }
+
+    func testLateDeltasAfterASettledReplyAreIgnoredUntilTheNextTurn() {
+        var state = CompanionState()
+        state.apply(delta("partial", id: "e1"))
+        state.apply(.message(threadId: "t1", message: Message(
+            id: "m1", role: .bot, kind: .text, at: 1, text: "partial answer"
+        )))
+        state.apply(delta(" leftover", id: "late"))
+        XCTAssertNil(state.streaming["t1"])
+
+        state.apply(.runtime(RuntimeEvent(type: "turn.started", threadId: "t1", eventId: "turn-2")))
+        state.apply(delta("Next", id: "e3"))
+        XCTAssertEqual(state.streaming["t1"], "Next")
+    }
+
+    func testHydrateClearsAStaleLiveTail() throws {
+        var state = CompanionState()
+        state.apply(delta("ghost from the last connection"))
+        let url = try XCTUnwrap(
+            Bundle.module.url(forResource: "bots-paged", withExtension: "json", subdirectory: "Fixtures")
+                ?? Bundle.module.url(forResource: "bots-paged", withExtension: "json")
+        )
+        state.hydrate(try JSONDecoder().decode(Fleet.self, from: Data(contentsOf: url)))
+        XCTAssertTrue(state.streaming.isEmpty)
+        XCTAssertTrue(state.reasoning.isEmpty)
     }
 }
 
