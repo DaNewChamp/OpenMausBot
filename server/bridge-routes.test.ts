@@ -102,6 +102,71 @@ describe("bridge job audit routes", () => {
     expect((cancelled.result().body.job as { status: string }).status).toBe("cancelled");
   });
 
+  it("lets a paired companion list and revoke bridges but not audit jobs", async () => {
+    const registry = new BridgeRegistry();
+    const { code } = registry.startPairing();
+    const { bridgeId } = registry.register({ name: "mini", code, capabilities: ["shell"] });
+
+    const listed = capture();
+    await handleBridgeRoutes(
+      jsonReq("GET", "/api/bridges", undefined, { "x-openmausbot-companion": "1" }),
+      {} as ServerResponse,
+      "GET",
+      "/api/bridges",
+      listed.json,
+      registry,
+      { loopback: true },
+    );
+    expect(listed.result().status).toBe(200);
+    const bridges = listed.result().body.bridges as Array<{ id: string; tokenHash?: string }>;
+    expect(bridges[0]?.id).toBe(bridgeId);
+    expect(bridges[0]?.tokenHash).toBeUndefined();
+
+    const jobs = capture();
+    await handleBridgeRoutes(
+      jsonReq("GET", "/api/bridge/jobs", undefined, { "x-openmausbot-companion": "1" }),
+      {} as ServerResponse,
+      "GET",
+      "/api/bridge/jobs",
+      jobs.json,
+      registry,
+      { loopback: true },
+    );
+    expect(jobs.result().status).toBe(403);
+
+    const revoked = capture();
+    await handleBridgeRoutes(
+      jsonReq("DELETE", `/api/bridges/${bridgeId}`, undefined, { "x-openmausbot-companion": "1" }),
+      {} as ServerResponse,
+      "DELETE",
+      `/api/bridges/${bridgeId}`,
+      revoked.json,
+      registry,
+      { loopback: true },
+    );
+    expect(revoked.result().status).toBe(200);
+    expect(registry.list()).toEqual([]);
+  });
+
+  it("lets a paired companion rotate a bridge token", async () => {
+    const registry = new BridgeRegistry();
+    const { code } = registry.startPairing();
+    const { bridgeId, bridgeToken } = registry.register({ name: "mini", code, capabilities: ["shell"] });
+
+    const rotated = capture();
+    await handleBridgeRoutes(
+      jsonReq("POST", `/api/bridges/${bridgeId}/rotate`, undefined, { "x-openmausbot-companion": "1" }),
+      {} as ServerResponse,
+      "POST",
+      `/api/bridges/${bridgeId}/rotate`,
+      rotated.json,
+      registry,
+      { loopback: true },
+    );
+    expect(rotated.result().status).toBe(200);
+    expect(registry.authorize(`Bearer ${bridgeToken}`)?.id).toBe(bridgeId);
+  });
+
   it("does not invent jobs from unsolicited results", async () => {
     const registry = new BridgeRegistry();
     const { code } = registry.startPairing();

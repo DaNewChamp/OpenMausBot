@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -33,15 +34,26 @@ function perBotLocalVmTarget(botId: string): LocalVmTarget {
 const CUA_SOCKET = "/run/user/1000/openmausbot-cua.sock";
 const CUA_EXECUTABLE = "/usr/local/libexec/openmausbot/cua-driver";
 const CUA_DRIVER_VERSION = "0.20.0";
+const BASE_IMAGE = process.env.OMB_BRIDGE_VM_BASE_IMAGE?.trim() ||
+  "docker.io/trycua/xfce-cua@sha256:274eb636f5cf3fc58f705916ee72b7a701270b3877369d08533a385c5325be9b";
+const MANAGED_IMAGE = process.env.OMB_BRIDGE_VM_IMAGE?.trim() ||
+  `localhost/openmausbot/cua-local-vm:driver-${CUA_DRIVER_VERSION}-v5`;
+const VM_WORKSPACE_GUEST = "/home/cua/workspace";
 
 type Runtime = "docker" | "podman";
 
-async function runner(command: string, args: string[], timeout = 30_000): Promise<{ stdout: string }> {
+async function runner(
+  command: string,
+  args: string[],
+  timeout = 30_000,
+  signal?: AbortSignal,
+): Promise<{ stdout: string }> {
   const { stdout } = await execFileAsync(command, args, {
     timeout,
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
     env: process.env,
+    signal,
   });
   return { stdout };
 }
@@ -147,24 +159,78 @@ async function localVmStatus(botId: string): Promise<Record<string, unknown>> {
   };
 }
 
-async function localVmAction(botId: string, action: "run" | "stop" | "remove" | "recreate"): Promise<Record<string, unknown>> {
+async function imageExists(runtime: Runtime, ref: string, signal?: AbortSignal): Promise<boolean> {
+  try {
+    await runner(runtime, ["image", "inspect", ref], 8_000, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureImage(runtime: Runtime, signal?: AbortSignal): Promise<string> {
+  if (await imageExists(runtime, MANAGED_IMAGE, signal)) return MANAGED_IMAGE;
+  await runner(runtime, ["pull", BASE_IMAGE], 10 * 60_000, signal);
+  if (await imageExists(runtime, MANAGED_IMAGE, signal)) return MANAGED_IMAGE;
+  return BASE_IMAGE;
+}
+
+async function createContainer(runtime: Runtime, botId: string, signal?: AbortSignal): Promise<void> {
+  const target = perBotLocalVmTarget(botId);
+  mkdirSync(target.workspaceDir, { recursive: true, mode: 0o700 });
+  const image = await ensureImage(runtime, signal);
+  await runner(
+    runtime,
+    [
+      "run",
+      "-d",
+      "--name",
+      target.containerName,
+      "--hostname",
+      target.containerName,
+      "--memory",
+      "4g",
+      "--cpus",
+      "2",
+      "--cap-drop",
+      "ALL",
+      "--cap-add",
+      "SETUID",
+      "--cap-add",
+      "SETGID",
+      "--shm-size",
+      "512m",
+      "--mount",
+      `type=bind,source=${target.workspaceDir},target=${VM_WORKSPACE_GUEST}`,
+      "-p",
+      "127.0.0.1::6901",
+      image,
+    ],
+    120_000,
+    signal,
+  );
+}
+
+async function localVmAction(
+  botId: string,
+  action: "run" | "stop" | "remove" | "recreate",
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
   const target = perBotLocalVmTarget(botId);
   const runtime = await detectRuntime();
   if (!runtime) throw new Error("No container runtime is installed");
-  const normalized = action === "recreate" ? "remove" : action;
-  if (normalized === "remove") {
-    await runner(runtime, ["rm", "-f", target.containerName], 60_000).catch(() => undefined);
-    if (action === "recreate") {
-      throw new Error("recreate requires a prepared Local VM image on the bridge host — run create locally first");
-    }
-  } else if (normalized === "stop") {
-    await runner(runtime, ["stop", target.containerName], 60_000);
-  } else if (normalized === "run") {
+  if (action === "remove") {
+    await runner(runtime, ["rm", "-f", target.containerName], 60_000, signal).catch(() => undefined);
+  } else if (action === "recreate") {
+    await runner(runtime, ["rm", "-f", target.containerName], 60_000, signal).catch(() => undefined);
+    await createContainer(runtime, botId, signal);
+  } else if (action === "stop") {
+    await runner(runtime, ["stop", target.containerName], 60_000, signal);
+  } else if (action === "run") {
     const state = await containerState(runtime, target.containerName);
     if (state === "missing") {
-      throw new Error("No Local VM container exists on the bridge — create it on the bridge host first");
-    }
-    if (state === "stopped") {
+      await createContainer(runtime, botId, signal);
+    } else if (state === "stopped") {
       throw new Error("This desktop image cannot safely resume; recreate the Local VM");
     }
   }
@@ -207,6 +273,7 @@ async function localVmScreenshot(botId: string): Promise<{ image: string }> {
 
 export async function runLocalVmJob(
   job: LocalVmBridgeJob,
+  signal?: AbortSignal,
 ): Promise<BridgeJobResult> {
   try {
     const { botId, action } = job.payload;
@@ -216,17 +283,19 @@ export async function runLocalVmJob(
     }
     if (job.kind === "local-vm-action") {
       if (!action) throw new Error("action required");
-      return { exitCode: 0, stdout: JSON.stringify(await localVmAction(botId, action)), stderr: "", truncated: false };
+      return { exitCode: 0, stdout: JSON.stringify(await localVmAction(botId, action, signal)), stderr: "", truncated: false };
     }
     if (job.kind === "local-vm-screenshot") {
       return { exitCode: 0, stdout: JSON.stringify(await localVmScreenshot(botId)), stderr: "", truncated: false };
     }
     return { exitCode: 1, stdout: "", stderr: `unsupported local-vm job: ${job.kind}`, truncated: false };
   } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    const aborted = err.name === "AbortError" || err.code === "ABORT_ERR";
     return {
-      exitCode: 1,
+      exitCode: aborted ? 143 : 1,
       stdout: "",
-      stderr: error instanceof Error ? error.message : String(error),
+      stderr: aborted ? "cancelled" : error instanceof Error ? error.message : String(error),
       truncated: false,
     };
   }

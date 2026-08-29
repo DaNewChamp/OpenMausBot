@@ -469,6 +469,7 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // Sidecar-owned, authenticated endpoint metadata. The proxy terminates it
   // locally; it never becomes a newly exposed harness route.
   { method: "GET", path: /^\/api\/companion\/endpoints$/ },
+  { method: "POST", path: /^\/api\/companion\/push-token$/ },
 
   // the fleet, and making a bot
   { method: "GET", path: /^\/api\/bots$/ },
@@ -544,6 +545,12 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "PATCH", path: /^\/api\/routines\/[\w-]+$/ },
   { method: "DELETE", path: /^\/api\/routines\/[\w-]+$/ },
   { method: "POST", path: /^\/api\/routines\/[\w-]+\/run$/ },
+
+  // Scrubbed bridge roster, revoke, and heartbeat-carried token rotation.
+  // Job audit/cancel/pairing stay off this list.
+  { method: "GET", path: /^\/api\/bridges$/ },
+  { method: "DELETE", path: /^\/api\/bridges\/[\w-]+$/ },
+  { method: "POST", path: /^\/api\/bridges\/[\w-]+\/rotate$/ },
 
   // Multi-account Composio management exposes opaque ids and aliases only.
   // Revocation stays on the Mac: the account DELETE route is deliberately

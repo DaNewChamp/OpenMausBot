@@ -148,3 +148,27 @@ describe("unattended turns", () => {
     expect(autoDecision(bot, "Bash", "git status", { unattended: false })).toBeTruthy();
   });
 });
+
+describe("bridge execution", () => {
+  it("does not inherit auto mode for run_on_bridge", () => {
+    expect(
+      autoDecision({ autoApprove: true }, "run_on_bridge", "hostname", { scope: "bridge" }),
+    ).toBeNull();
+  });
+
+  it("honours a program-scoped always-allow grant on a home bridge", () => {
+    expect(
+      autoDecision({ alwaysAllow: ["bridge:run_on_bridge:hostname"] }, "run_on_bridge", "hostname", {
+        scope: "bridge",
+      }),
+    ).toBe("auto-approved bridge:run_on_bridge:hostname (always allowed)");
+  });
+
+  it("still cards destructive bridge commands even with a grant", () => {
+    expect(
+      autoDecision({ alwaysAllow: ["bridge:run_on_bridge:rm"] }, "run_on_bridge", "rm -rf /", {
+        scope: "bridge",
+      }),
+    ).toBeNull();
+  });
+});

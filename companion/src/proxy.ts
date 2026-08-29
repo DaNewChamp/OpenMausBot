@@ -13,7 +13,7 @@
 // serve. Nothing upstream has to change, or even know this exists.
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 
-import { bearerToken } from "./devices.ts";
+import { savePushToken, apnsConfigured } from "./push-tokens.ts";
 import {
   COMPANION_ENDPOINT_KINDS,
   MAX_COMPANION_ENDPOINTS,
@@ -373,6 +373,23 @@ export function createProxyHandler(options: ProxyOptions) {
     // default-deny checks above and never send it to the harness.
     if (method === "GET" && path === "/api/companion/endpoints") {
       return sendJson(res, 200, endpointSnapshot(options));
+    }
+
+    if (method === "POST" && path === "/api/companion/push-token") {
+      if (!device) return sendJson(res, 401, { error: "pair this device first" });
+      const deviceId = device.id;
+      readJson(req, 8 * 1024, true).then(
+        (body) => {
+          const token = String(body.token ?? body.deviceToken ?? "").trim();
+          if (!token || token.length > 400) {
+            return sendJson(res, 400, { error: "deviceToken required" });
+          }
+          savePushToken(deviceId, token);
+          return sendJson(res, 200, { ok: true, apns: apnsConfigured() });
+        },
+        (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
+      return;
     }
 
     // Connector-card mutations are the one JSON body this proxy validates

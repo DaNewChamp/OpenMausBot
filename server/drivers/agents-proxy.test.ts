@@ -25,6 +25,7 @@ let lastConfigureBody: any = null;
 let lastCredentialBody: any = null;
 let lastCreateRoomBody: any = null;
 let lastCreateRoutineBody: any = null;
+let lastBridgeBody: any = null;
 let bridgeResponse: unknown = { bridgeName: "Mac mini", exitCode: 0, stdout: "ok\n", stderr: "", truncated: false };
 
 let child: ChildProcess;
@@ -120,6 +121,7 @@ beforeAll(async () => {
       let data = "";
       req.on("data", (c) => (data += c));
       req.on("end", () => {
+        lastBridgeBody = JSON.parse(data);
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(bridgeResponse));
       });
@@ -223,6 +225,7 @@ describe("agents-proxy MCP surface", () => {
       "configure_bot",
       "run_on_bridge",
       "run_on_ssh_target",
+      "observe_bridge_screen",
       "list_rooms",
       "create_room",
       "update_room",
@@ -392,6 +395,7 @@ describe("agents-proxy MCP surface", () => {
     const res = await callTool("run_on_bridge", { command: "printf x" });
     expect(res.result.content[0].text).toContain("output truncated at 1 MB");
     expect(res.result.isError).toBe(true);
+    expect(lastBridgeBody).toMatchObject({ command: "printf x", fromBotId: "bot-asker", fromThreadId: "thread-asker-routine" });
     bridgeResponse = { bridgeName: "Mac mini", exitCode: 0, stdout: "ok\n", stderr: "", truncated: false };
   });
 

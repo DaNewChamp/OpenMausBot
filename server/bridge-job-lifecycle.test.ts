@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -107,7 +107,7 @@ describe("bridge job lifecycle", () => {
     vi.useRealTimers();
   });
 
-  it("cancels queued and running jobs", async () => {
+  it("cancels queued jobs immediately and cancel-requests running work", async () => {
     vi.useFakeTimers();
     try {
       const { registry, bridgeId } = pairedShellBridge();
@@ -116,7 +116,23 @@ describe("bridge job lifecycle", () => {
 
       const running = registry.enqueueShell(bridgeId, "echo running");
       registry.pollJobs(bridgeId);
-      expect(registry.cancelJob(running.id)?.status).toBe("cancelled");
+      const requested = registry.cancelJob(running.id);
+      expect(requested?.status).toBe("running");
+      expect(requested?.cancelRequestedAt).toBeTruthy();
+      expect(registry.cancelRequests(bridgeId)).toEqual([running.id]);
+
+      expect(
+        registry.storeResult({
+          jobId: running.id,
+          bridgeId,
+          exitCode: 143,
+          stdout: "",
+          stderr: "cancelled",
+          truncated: false,
+          finishedAt: Date.now(),
+        }),
+      ).toBe("accepted");
+      expect(registry.getJob(running.id)?.status).toBe("cancelled");
 
       const waitPromise = waitForBridgeJobResult(registry, running.id, 5_000, "mini");
       const rejection = expect(waitPromise).rejects.toThrow(/cancelled/);
@@ -257,4 +273,74 @@ describe("bridge job lifecycle", () => {
     expect(registry.getJob(job.id)?.attempt).toBe(3);
     vi.useRealTimers();
   });
+
+  it("does not let a heartbeat add capabilities beyond the paired grant", () => {
+    const { registry, bridgeId } = pairedShellBridge();
+    registry.touch(bridgeId, { capabilities: ["shell", "peekaboo", "local-vm"] });
+    expect(registry.list().find((bridge) => bridge.id === bridgeId)?.capabilities).toEqual(["shell"]);
+  });
+
+  it("leases a running job to one worker so a second daemon cannot steal it", () => {
+    vi.useFakeTimers();
+    const { registry, bridgeId } = pairedShellBridge();
+    const job = registry.enqueueShell(bridgeId, "echo lease");
+    expect(registry.pollJobs(bridgeId, "worker-a")).toHaveLength(1);
+    expect(registry.pollJobs(bridgeId, "worker-b")).toEqual([]);
+    expect(registry.getJob(job.id)?.claimedBy).toBe("worker-a");
+
+    registry.touch(bridgeId, { workerId: "worker-b" });
+    vi.advanceTimersByTime(31_000);
+    registry.reconcile(Date.now());
+    expect(registry.pollJobs(bridgeId, "worker-b")).toHaveLength(1);
+    vi.useRealTimers();
+  });
+
+  it("quarantines a corrupt jobs ledger instead of silently dropping evidence", () => {
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(join(DATA_DIR, "bridge-jobs.json"), "{not-json", { mode: 0o600 });
+    const registry = new BridgeRegistry();
+    expect(registry.listJobs()).toEqual([]);
+    expect(registry.jobsFileDiagnostic()).toMatch(/JSON parse failed/);
+    const evidence = readdirSync(DATA_DIR).some((name) => name.startsWith("bridge-jobs.json.corrupt-"));
+    expect(evidence).toBe(true);
+    expect(readFileSync(join(DATA_DIR, "bridge-jobs.json.quarantined"), "utf8")).toContain("{not-json");
+  });
+
+  it("rejects a result from a previous generation as stale", () => {
+    const { registry, bridgeId } = pairedShellBridge();
+    const job = registry.enqueueShell(bridgeId, "echo gen");
+    registry.pollJobs(bridgeId, "worker-a");
+    const firstGeneration = registry.getJob(job.id)?.generation;
+    expect(firstGeneration).toBe(1);
+
+    vi.useFakeTimers();
+    registry.touch(bridgeId, { workerId: "worker-b" });
+    vi.advanceTimersByTime(31_000);
+    registry.reconcile(Date.now());
+    expect(registry.pollJobs(bridgeId, "worker-b")).toHaveLength(1);
+    expect(registry.getJob(job.id)?.generation).toBe(2);
+    vi.useRealTimers();
+
+    expect(
+      registry.storeResult({
+        jobId: job.id,
+        bridgeId,
+        generation: firstGeneration,
+        exitCode: 0,
+        stdout: "late",
+        stderr: "",
+        truncated: false,
+        finishedAt: Date.now(),
+      }),
+    ).toBe("stale");
+    expect(registry.getJob(job.id)?.status).toBe("running");
+  });
+
+  it("refuses peekaboo jobs unless the capability was granted at pairing", () => {
+    const { registry, bridgeId } = pairedShellBridge();
+    expect(() => registry.enqueuePeekaboo(bridgeId, { mode: "screenshot" }, 15_000)).toThrow(/peekaboo/);
+    registry.touch(bridgeId, { capabilities: ["shell", "peekaboo"] });
+    expect(() => registry.enqueuePeekaboo(bridgeId, { mode: "screenshot" }, 15_000)).toThrow(/peekaboo/);
+  });
 });
+

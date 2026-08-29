@@ -72,3 +72,27 @@ export async function runSshOnBridge(
   const result = await waitForBridgeJobResult(registry, job.id, timeoutMs, bridge.name);
   return { ...result, bridgeName: bridge.name };
 }
+
+export async function runPeekabooOnBridge(
+  registry: BridgeRegistry,
+  opts: {
+    bridgeId?: string;
+    name?: string;
+    mode: "screenshot" | "see";
+    question?: string;
+    timeoutMs?: number;
+    idempotencyKey?: string;
+  },
+): Promise<BridgeJobResult & { bridgeName: string }> {
+  const bridge = resolveBridge(registry, { ...opts, capability: "peekaboo" });
+  if (!bridge) throw new Error("no online bridge with peekaboo matched");
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const job = registry.enqueuePeekaboo(
+    bridge.id,
+    { mode: opts.mode, question: opts.question },
+    timeoutMs,
+    { idempotencyKey: opts.idempotencyKey },
+  );
+  const result = await waitForBridgeJobResult(registry, job.id, timeoutMs, bridge.name);
+  return { ...result, bridgeName: bridge.name };
+}

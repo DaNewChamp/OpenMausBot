@@ -34,6 +34,8 @@
     "sync:data": "node scripts/sync-openmausbot-data.mjs",
     "backup:cloud": "node scripts/backup-openmausbot-cloud.mjs --source-host servarica --host-label servarica",
     "backup:cloud:local": "node scripts/backup-openmausbot-cloud.mjs --host-label mac-mini",
+    "hub:export": "node --experimental-strip-types scripts/hub-archive.mjs export",
+    "hub:import": "node --experimental-strip-types scripts/hub-archive.mjs import",
     "deploy:bridge": "node scripts/deploy-bridge.mjs",
     "viewer:pair": "node scripts/pair-cloud-viewer.mjs",
     "viewer:open": "node viewer/cli.mjs open",

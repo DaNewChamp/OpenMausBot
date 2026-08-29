@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { BridgeCapability, BridgeRegistry } from "./bridge-registry.ts";
+import { IdempotencyConflictError } from "./bridge-registry.ts";
 import { runShellOnBridge } from "./bridge-exec.ts";
 
 type JsonFn = (res: ServerResponse, status: number, body: unknown) => void;
@@ -14,14 +15,23 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 
 export function asCapabilities(value: unknown): BridgeCapability[] {
   if (!Array.isArray(value)) return [];
-  const allowed = new Set<BridgeCapability>(["shell", "local-vm", "ssh-forward"]);
+  const allowed = new Set<BridgeCapability>(["shell", "local-vm", "ssh-forward", "peekaboo"]);
   return value.filter((entry): entry is BridgeCapability => typeof entry === "string" && allowed.has(entry as BridgeCapability));
+}
+
+export function isCompanionRequest(req: IncomingMessage): boolean {
+  return String(req.headers["x-openmausbot-companion"] ?? "") === "1";
 }
 
 /** Direct harness-host loopback, not the companion sidecar's loopback hop.
  * Companion sets `x-openmausbot-companion: 1` on every forwarded request. */
 export function isBridgeAdminLoopback(req: IncomingMessage, opts: { loopback: boolean }): boolean {
-  return opts.loopback && String(req.headers["x-openmausbot-companion"] ?? "") !== "1";
+  return opts.loopback && !isCompanionRequest(req);
+}
+
+function asStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((entry): entry is string => typeof entry === "string");
 }
 
 /** Bridge HTTP surface. Returns true when the request was handled. */
@@ -36,6 +46,7 @@ export async function handleBridgeRoutes(
 ): Promise<boolean> {
   if (!path.startsWith("/api/bridge")) return false;
   const admin = isBridgeAdminLoopback(req, opts);
+  const companion = isCompanionRequest(req);
 
   if (method === "POST" && path === "/api/bridge/pairing") {
     if (!admin) return json(res, 403, { error: "pair bridges from the harness host" }), true;
@@ -43,8 +54,24 @@ export async function handleBridgeRoutes(
   }
 
   if (method === "GET" && path === "/api/bridges") {
-    if (!admin) return json(res, 403, { error: "bridge list is loopback-only" }), true;
+    if (!admin && !companion) return json(res, 403, { error: "bridge list is host or paired-phone only" }), true;
     return json(res, 200, { bridges: bridges.list() }), true;
+  }
+
+  const rotateMatch = path.match(/^\/api\/bridges\/([\w-]+)\/rotate$/);
+  if (rotateMatch && method === "POST") {
+    if (!admin && !companion) return json(res, 403, { error: "bridge rotate is host or paired-phone only" }), true;
+    const rotated = bridges.rotateToken(rotateMatch[1]!);
+    if (!rotated) return json(res, 404, { error: "bridge not found" }), true;
+    return json(res, 200, { ok: true, bridgeId: rotateMatch[1] }), true;
+  }
+
+  const revokeMatch = path.match(/^\/api\/bridges\/([\w-]+)$/);
+  if (revokeMatch && method === "DELETE") {
+    if (!admin && !companion) return json(res, 403, { error: "bridge revoke is host or paired-phone only" }), true;
+    const ok = bridges.revoke(revokeMatch[1]!);
+    if (!ok) return json(res, 404, { error: "bridge not found" }), true;
+    return json(res, 200, { ok: true, bridgeId: revokeMatch[1] }), true;
   }
 
   const jobMatch = path.match(/^\/api\/bridge\/jobs\/([\w-]+)$/);
@@ -69,11 +96,12 @@ export async function handleBridgeRoutes(
     if (!admin) return json(res, 403, { error: "job audit is loopback-only" }), true;
     const url = new URL(req.url ?? "/", "http://localhost");
     const bridgeId = url.searchParams.get("bridgeId") ?? undefined;
-    return json(res, 200, { jobs: bridges.listJobs(bridgeId) }), true;
+    return json(res, 200, { jobs: bridges.listJobs(bridgeId), diagnostic: bridges.jobsFileDiagnostic() }), true;
   }
 
   const shellMatch = path.match(/^\/api\/bridges\/([\w-]+)\/shell$/);
-  if (method === "POST" && shellMatch && admin) {
+  if (method === "POST" && shellMatch) {
+    if (!admin) return json(res, 403, { error: "bridge shell is harness-host only" }), true;
     try {
       const body = await readJson(req);
       const result = await runShellOnBridge(bridges, {
@@ -85,7 +113,8 @@ export async function handleBridgeRoutes(
       });
       return json(res, 200, result), true;
     } catch (error) {
-      return json(res, 400, { error: error instanceof Error ? error.message : String(error) }), true;
+      const status = error instanceof IdempotencyConflictError ? 409 : 400;
+      return json(res, status, { error: error instanceof Error ? error.message : String(error) }), true;
     }
   }
 
@@ -113,11 +142,19 @@ export async function handleBridgeRoutes(
     const bridgeId = String(body.bridgeId ?? bridge.id);
     if (bridgeId !== bridge.id) return json(res, 403, { error: "bridge id mismatch" }), true;
     const caps = body.capabilities === undefined ? undefined : asCapabilities(body.capabilities);
+    const workerId = body.workerId ? String(body.workerId) : undefined;
     bridges.touch(bridgeId, {
       hostInfo: body.hostInfo ? String(body.hostInfo) : undefined,
       capabilities: caps,
+      workerId,
+      inFlight: asStringArray(body.inFlight),
     });
-    return json(res, 200, { jobs: bridges.pollJobs(bridgeId) }), true;
+    const nextToken = bridges.takePendingToken(bridgeId);
+    return json(res, 200, {
+      jobs: bridges.pollJobs(bridgeId, workerId),
+      cancelJobIds: bridges.cancelRequests(bridgeId),
+      ...(nextToken ? { nextToken } : {}),
+    }), true;
   }
 
   if (method === "POST" && path === "/api/bridge/result") {
@@ -132,9 +169,11 @@ export async function handleBridgeRoutes(
       stderr: String(body.stderr ?? ""),
       truncated: body.truncated === true,
       finishedAt: Date.now(),
+      generation: body.generation == null ? undefined : Number(body.generation),
     });
     if (stored === "missing") return json(res, 404, { error: "job not found" }), true;
     if (stored === "foreign") return json(res, 403, { error: "job belongs to another bridge" }), true;
+    if (stored === "stale") return json(res, 409, { error: "stale job generation" }), true;
     return json(res, 200, { ok: true, ignored: stored === "duplicate" }), true;
   }
 

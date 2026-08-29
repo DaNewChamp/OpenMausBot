@@ -158,6 +158,19 @@ const TOOLS = [
     },
   },
   {
+    name: "observe_bridge_screen",
+    description:
+      "Opt-in observation of a paired Mac bridge host screen via Peekaboo. screenshot captures the display; see answers a question about what is visible. Never clicks or types. Requires OMB_BRIDGE_PEEKABOO=1 on the bridge and user approval.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["screenshot", "see"], description: "screenshot (default) or see." },
+        question: { type: "string", description: "Optional question when mode is see." },
+        bridge: { type: "string", description: "Optional bridge display name." },
+      },
+    },
+  },
+  {
     name: "list_rooms",
     description:
       "List multi-bot rooms/channels in this V Bot workspace that you belong to. Each room has an id, member bots, and optional bulletin.",
@@ -395,7 +408,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
   if (name === "run_on_bridge") {
     const command = String(args.command ?? "").trim();
     if (!command) return { text: "run_on_bridge needs command.", isError: true };
-    const body: Record<string, unknown> = { command };
+    const body: Record<string, unknown> = { command, fromBotId: BOT_ID, fromThreadId: THREAD_ID };
     if (args.bridge) body.bridge = String(args.bridge);
     if (args.cwd) body.cwd = String(args.cwd);
     if (args.timeout_ms != null) body.timeoutMs = Number(args.timeout_ms);
@@ -414,7 +427,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const target = String(args.target ?? "").trim();
     if (!command) return { text: "run_on_ssh_target needs command.", isError: true };
     if (!target) return { text: "run_on_ssh_target needs target.", isError: true };
-    const body: Record<string, unknown> = { command, target };
+    const body: Record<string, unknown> = { command, target, fromBotId: BOT_ID, fromThreadId: THREAD_ID };
     if (args.bridge) body.bridge = String(args.bridge);
     if (args.cwd) body.cwd = String(args.cwd);
     if (args.timeout_ms != null) body.timeoutMs = Number(args.timeout_ms);
@@ -425,6 +438,19 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const parts = [`SSH target ${target} via bridge ${r.bridgeName ?? "unknown"} exit ${exitCode}`];
     if (r.truncated === true) parts.push("[output truncated at 1 MB]");
     if (stdout) parts.push(`stdout:\n${stdout}`);
+    if (stderr) parts.push(`stderr:\n${stderr}`);
+    return { text: parts.join("\n\n"), isError: Number(r.exitCode) !== 0 };
+  }
+  if (name === "observe_bridge_screen") {
+    const mode = String(args.mode ?? "screenshot") === "see" ? "see" : "screenshot";
+    const body: Record<string, unknown> = { mode, fromBotId: BOT_ID, fromThreadId: THREAD_ID };
+    if (args.question) body.question = String(args.question);
+    if (args.bridge) body.bridge = String(args.bridge);
+    const r = await api("/api/internal/bridge/peekaboo", { method: "POST", body: JSON.stringify(body) });
+    const stdout = String(r.stdout ?? "").trim();
+    const stderr = String(r.stderr ?? "").trim();
+    const parts = [`Peekaboo on ${r.bridgeName ?? "unknown"} exit ${r.exitCode ?? "?"}`];
+    if (stdout) parts.push(stdout);
     if (stderr) parts.push(`stderr:\n${stderr}`);
     return { text: parts.join("\n\n"), isError: Number(r.exitCode) !== 0 };
   }

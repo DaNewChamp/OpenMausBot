@@ -15,8 +15,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const home = homedir();
 const LOCAL_DATA = join(home, ".openmausbot");
 const LOCAL_COMPANION = join(home, ".openmausbot-companion");
-const CHIEF_BOT_ID = "94a201dd-537d-40be-8da3-e723532c982b";
-const DOCKER_SSH_ALIAS = "openmaus-docker";
+const HOST_PROFILES = JSON.parse(readFileSync(join(root, "scripts", "host-profiles.json"), "utf8"));
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -58,27 +57,30 @@ function checkpointMessages(dataDir) {
 }
 
 function patchCloudStaging(stagingDir) {
+  const profile = HOST_PROFILES[host] ?? HOST_PROFILES.servarica;
   const botsPath = join(stagingDir, "bots.json");
-  if (existsSync(botsPath)) {
+  if (existsSync(botsPath) && Array.isArray(profile?.botPatches)) {
     const bots = JSON.parse(readFileSync(botsPath, "utf8"));
     let changed = false;
-    for (const bot of bots) {
-      if (bot.id !== CHIEF_BOT_ID) continue;
-      if (bot.computer !== "cloud") {
-        bot.computer = "cloud";
-        changed = true;
-      }
-      if (bot.cloudBackend !== "vps") {
-        bot.cloudBackend = "vps";
-        changed = true;
+    for (const patch of profile.botPatches) {
+      const bot = bots.find((entry) => entry.id === patch.id);
+      if (!bot) continue;
+      for (const [key, value] of Object.entries(patch)) {
+        if (key === "id") continue;
+        if (bot[key] !== value) {
+          bot[key] = value;
+          changed = true;
+        }
       }
     }
     if (changed) writeFileSync(botsPath, `${JSON.stringify(bots, null, 2)}\n`);
   }
-  const configPath = join(stagingDir, "config.json");
-  const config = existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : {};
-  config.vps = { sshAlias: DOCKER_SSH_ALIAS };
-  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  if (profile?.config && Object.keys(profile.config).length) {
+    const configPath = join(stagingDir, "config.json");
+    const config = existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : {};
+    Object.assign(config, profile.config);
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  }
 }
 
 function stageLocalData() {
