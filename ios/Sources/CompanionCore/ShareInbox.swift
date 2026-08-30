@@ -3,11 +3,14 @@ import Foundation
 
 public enum ShareInboxError: Error, Equatable, Sendable, LocalizedError {
     case lockUnavailable
+    case appGroupUnavailable
 
     public var errorDescription: String? {
         switch self {
         case .lockUnavailable:
             "Shared content is busy. Try again."
+        case .appGroupUnavailable:
+            "Couldn't save shared content. Try again."
         }
     }
 }
@@ -29,12 +32,21 @@ public enum ShareInbox {
         }
     }
 
+    private struct Storage {
+        var directory: URL
+        var defaults: UserDefaults
+    }
+
     private static let processLock = NSLock()
 
     #if DEBUG
     public static var testRootURL: URL?
     public static var testDefaultsSuite: String?
     public static var testForceLockUnavailable = false
+    public static var testAppGroupAvailable: Bool?
+    public static var testStorePreviewActive: Bool?
+    public static var testStorePreviewRootURL: URL?
+    public static var testStorePreviewDefaultsSuite: String?
     #endif
 
     public static func isValidImageFilename(_ name: String) -> Bool {
@@ -45,31 +57,31 @@ public enum ShareInbox {
     }
 
     public static func save(text: String? = nil, url: String? = nil, imageData: Data? = nil) throws {
-        try withLock {
-            let previous = peekPayload()
+        try withLock { storage in
+            let previous = peekPayload(storage)
             var payload = Payload(text: text, url: url)
             if let imageData {
                 let name = "\(UUID().uuidString).jpg"
-                let file = containerURL().appendingPathComponent(name)
+                let file = storage.directory.appendingPathComponent(name)
                 try imageData.write(to: file, options: .atomic)
                 payload.imageFilename = name
             }
             let data = try JSONEncoder().encode(payload)
-            defaults().set(data, forKey: payloadKey)
+            storage.defaults.set(data, forKey: payloadKey)
             if let oldName = previous?.imageFilename, oldName != payload.imageFilename {
-                removeImageFileIfValid(oldName)
+                removeImageFileIfValid(oldName, in: storage)
             }
         }
     }
 
     public static func consume() throws -> (payload: Payload, imageData: Data?)? {
-        try withLock {
-            guard let data = defaults().data(forKey: payloadKey),
+        try withLock { storage in
+            guard let data = storage.defaults.data(forKey: payloadKey),
                   let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return nil }
-            defaults().removeObject(forKey: payloadKey)
+            storage.defaults.removeObject(forKey: payloadKey)
             var imageData: Data?
             if let name = payload.imageFilename, isValidImageFilename(name) {
-                let file = containerURL().appendingPathComponent(name)
+                let file = storage.directory.appendingPathComponent(name)
                 imageData = try? Data(contentsOf: file)
                 try? FileManager.default.removeItem(at: file)
             }
@@ -78,36 +90,36 @@ public enum ShareInbox {
     }
 
     public static func clearPending() throws {
-        try withLock {
-            guard let data = defaults().data(forKey: payloadKey),
+        try withLock { storage in
+            guard let data = storage.defaults.data(forKey: payloadKey),
                   let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
-                defaults().removeObject(forKey: payloadKey)
+                storage.defaults.removeObject(forKey: payloadKey)
                 return
             }
-            defaults().removeObject(forKey: payloadKey)
+            storage.defaults.removeObject(forKey: payloadKey)
             if let name = payload.imageFilename {
-                removeImageFileIfValid(name)
+                removeImageFileIfValid(name, in: storage)
             }
         }
     }
 
     public static func hasPending() throws -> Bool {
-        try withLock {
-            defaults().data(forKey: payloadKey) != nil
+        try withLock { storage in
+            storage.defaults.data(forKey: payloadKey) != nil
         }
     }
 
-    private static func peekPayload() -> Payload? {
-        guard let data = defaults().data(forKey: payloadKey) else { return nil }
+    private static func peekPayload(_ storage: Storage) -> Payload? {
+        guard let data = storage.defaults.data(forKey: payloadKey) else { return nil }
         return try? JSONDecoder().decode(Payload.self, from: data)
     }
 
-    private static func removeImageFileIfValid(_ name: String) {
+    private static func removeImageFileIfValid(_ name: String, in storage: Storage) {
         guard isValidImageFilename(name) else { return }
-        try? FileManager.default.removeItem(at: containerURL().appendingPathComponent(name))
+        try? FileManager.default.removeItem(at: storage.directory.appendingPathComponent(name))
     }
 
-    private static func withLock<T>(_ body: () throws -> T) throws -> T {
+    private static func withLock<T>(_ body: (Storage) throws -> T) throws -> T {
         processLock.lock()
         defer { processLock.unlock() }
         #if DEBUG
@@ -115,7 +127,8 @@ public enum ShareInbox {
             throw ShareInboxError.lockUnavailable
         }
         #endif
-        let lockURL = containerURL().appendingPathComponent(".share-inbox.lock")
+        let storage = try resolvedStorage()
+        let lockURL = storage.directory.appendingPathComponent(".share-inbox.lock")
         if !FileManager.default.fileExists(atPath: lockURL.path) {
             FileManager.default.createFile(
                 atPath: lockURL.path,
@@ -134,25 +147,75 @@ public enum ShareInbox {
         guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
             throw ShareInboxError.lockUnavailable
         }
-        return try body()
+        return try body(storage)
     }
 
-    private static func defaults() -> UserDefaults {
-        #if DEBUG
-        if let suite = testDefaultsSuite, let defaults = UserDefaults(suiteName: suite) {
-            return defaults
-        }
-        #endif
-        return UserDefaults(suiteName: appGroup)!
-    }
-
-    public static func containerURL() -> URL {
+    private static func resolvedStorage() throws -> Storage {
         #if DEBUG
         if let testRootURL {
-            try? FileManager.default.createDirectory(at: testRootURL, withIntermediateDirectories: true)
-            return testRootURL
+            try FileManager.default.createDirectory(at: testRootURL, withIntermediateDirectories: true)
+            guard let suite = testDefaultsSuite, let defaults = UserDefaults(suiteName: suite) else {
+                throw ShareInboxError.appGroupUnavailable
+            }
+            return Storage(directory: testRootURL, defaults: defaults)
         }
         #endif
-        return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)!
+
+        let appGroupURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: appGroup
+        )
+        #if DEBUG
+        let appGroupAvailable = testAppGroupAvailable ?? (appGroupURL != nil)
+        let storePreviewActive = testStorePreviewActive
+            ?? ProcessInfo.processInfo.arguments.contains("-store-preview")
+        let debugBuild = true
+        #else
+        let appGroupAvailable = appGroupURL != nil
+        let storePreviewActive = false
+        let debugBuild = false
+        #endif
+
+        switch ShareInboxContainerPolicy.resolution(
+            appGroupAvailable: appGroupAvailable,
+            storePreviewActive: storePreviewActive,
+            debugBuild: debugBuild
+        ) {
+        case .appGroup:
+            guard let appGroupURL,
+                  let defaults = UserDefaults(suiteName: appGroup) else {
+                throw ShareInboxError.appGroupUnavailable
+            }
+            return Storage(directory: appGroupURL, defaults: defaults)
+        case .storePreviewInbox:
+            #if DEBUG
+            return try previewStorage()
+            #else
+            throw ShareInboxError.appGroupUnavailable
+            #endif
+        case .unavailable:
+            throw ShareInboxError.appGroupUnavailable
+        }
     }
+
+    #if DEBUG
+    private static func previewStorage() throws -> Storage {
+        let root: URL
+        if let testStorePreviewRootURL {
+            root = testStorePreviewRootURL
+        } else if let support = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first {
+            root = ShareInboxContainerPolicy.previewInboxURL(applicationSupport: support)
+        } else {
+            throw ShareInboxError.appGroupUnavailable
+        }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let suite = testStorePreviewDefaultsSuite ?? ShareInboxContainerPolicy.previewDefaultsSuite
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            throw ShareInboxError.appGroupUnavailable
+        }
+        return Storage(directory: root, defaults: defaults)
+    }
+    #endif
 }

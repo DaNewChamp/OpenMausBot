@@ -39,15 +39,21 @@ public enum HomeRosterLayoutPolicy: Sendable {
         return max(rowContentLeadingInset, scaled)
     }
 
+    /// Hero avatar + caption. Not stretched to screenshot-pixel y=400;
+    /// that canvas is a scaled iPhone shot, not a 590pt layout.
     public static func pinnedShelfReservedHeight(nameBlockHeight: CGFloat) -> CGFloat {
-        let targetAtReference = referenceFirstRowY
-            - referenceSafeAreaTop
-            - headerChromeHeight
-            - shelfTopPadding
-            - shelfBottomPadding
-        let contentMinimum = PinnedChatShelfLayout.heroAvatar
+        PinnedChatShelfLayout.heroAvatar
             + PinnedChatShelfLayout.heroCaptionSpacing
             + nameBlockHeight
-        return max(contentMinimum, targetAtReference)
+    }
+
+    /// Convert a Y coordinate from the 590×1280 reference screenshot into
+    /// points on a phone whose width is `paneWidth`.
+    public static func referenceCanvasY(_ y: CGFloat, paneWidth: CGFloat) -> CGFloat {
+        y * paneWidth / referenceWidth
+    }
+
+    public static func screenshotY(pointY: CGFloat, paneWidth: CGFloat) -> CGFloat {
+        pointY * referenceWidth / paneWidth
     }
 }

@@ -53,6 +53,34 @@ final class HomeRosterLayoutPolicyTests: XCTestCase {
         XCTAssertEqual(two.mode, .hero)
         XCTAssertGreaterThan(two.spacing, 0)
         XCTAssertFalse(PinnedChatShelfLayout.overflows(pinCount: 3))
+        XCTAssertTrue(heroGroupFits(paneWidth: HomeRosterLayoutPolicy.referenceWidth, pinCount: 2))
+        XCTAssertTrue(heroGroupFits(paneWidth: HomeRosterLayoutPolicy.referenceWidth, pinCount: 3))
+    }
+
+    func testSinglePinKeepsHeroAvatarOnNarrowPhone() {
+        let layout = PinnedChatShelfLayout.metrics(paneWidth: 390, pinCount: 1)
+        XCTAssertEqual(layout.mode, .hero)
+        XCTAssertEqual(layout.avatar, 123, accuracy: 0.5)
+        XCTAssertEqual(layout.spacing, 0)
+        XCTAssertTrue(heroGroupFits(paneWidth: 390, pinCount: 1))
+    }
+
+    func testTwoPinsKeepHeroAvatarWhenTheGroupFits() {
+        let layout = PinnedChatShelfLayout.metrics(paneWidth: 390, pinCount: 2)
+        XCTAssertEqual(layout.mode, .hero)
+        XCTAssertEqual(layout.avatar, 123, accuracy: 0.5)
+        XCTAssertGreaterThan(layout.spacing, 0)
+        XCTAssertTrue(heroGroupFits(paneWidth: 390, pinCount: 2))
+    }
+
+    func testThreePinsShrinkToFitNarrowPhoneWithoutClipping() {
+        let layout = PinnedChatShelfLayout.metrics(paneWidth: 390, pinCount: 3)
+        XCTAssertEqual(layout.mode, .hero)
+        XCTAssertLessThan(layout.avatar, PinnedChatShelfLayout.heroAvatar)
+        XCTAssertGreaterThan(layout.avatar, 0)
+        XCTAssertEqual(layout.avatar, layout.tile)
+        XCTAssertTrue(heroGroupFits(paneWidth: 390, pinCount: 3))
+        XCTAssertFalse(PinnedChatShelfLayout.overflows(pinCount: 3))
     }
 
     func testPinnedShelfOverflowsOnFourthPin() {
@@ -66,17 +94,12 @@ final class HomeRosterLayoutPolicyTests: XCTestCase {
         XCTAssertLessThan(compact.avatar, PinnedChatShelfLayout.heroAvatar)
     }
 
-    func testPinnedShelfReservedHeightPlacesFirstRowNearReferenceY() {
-        let reserved = PinnedChatShelfLayout.reservedHeight(
-            nameBlockHeight: PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: 13)
-        )
-        let firstRowY = HomeRosterLayoutPolicy.referenceSafeAreaTop
-            + HomeRosterLayoutPolicy.headerChromeHeight
-            + HomeRosterLayoutPolicy.shelfTopPadding
-            + reserved
-            + HomeRosterLayoutPolicy.shelfBottomPadding
-        XCTAssertEqual(firstRowY, HomeRosterLayoutPolicy.referenceFirstRowY, accuracy: 2)
-        XCTAssertGreaterThanOrEqual(reserved, PinnedChatShelfLayout.heroAvatar + 7 + 28)
+    func testPinnedShelfReservedHeightIsHeroContentNotStretchedBand() {
+        let name = PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: 13)
+        let reserved = PinnedChatShelfLayout.reservedHeight(nameBlockHeight: name)
+        XCTAssertEqual(reserved, PinnedChatShelfLayout.heroAvatar + 7 + name)
+        XCTAssertEqual(reserved, 158, accuracy: 0.5)
+        XCTAssertLessThan(reserved, 249)
     }
 
     func testPinnedShelfReservedHeightGrowsWithAccessibilityType() {
@@ -93,5 +116,107 @@ final class HomeRosterLayoutPolicyTests: XCTestCase {
         let layout = PinnedChatShelfLayout.metrics(paneWidth: 200, pinCount: 4)
         XCTAssertEqual(layout.mode, .compact)
         XCTAssertGreaterThanOrEqual(layout.avatar, PinnedChatShelfLayout.minimumAvatar)
+    }
+
+    func testZeroPinAndLoadingShelfReserveNoHeight() {
+        XCTAssertFalse(
+            CalmSurfacePolicy.reservesPinnedShelfRegion(pinCount: 0, animatingCollapse: false)
+        )
+        XCTAssertEqual(
+            PinnedChatShelfLayout.reservedHeight(
+                pinCount: 0,
+                rosterResolved: false,
+                animatingCollapse: false,
+                nameBlockHeight: PinnedChatShelfLayout.nameBlock
+            ),
+            0
+        )
+        XCTAssertEqual(
+            PinnedChatShelfLayout.reservedHeight(
+                pinCount: 0,
+                rosterResolved: true,
+                animatingCollapse: false,
+                nameBlockHeight: PinnedChatShelfLayout.nameBlock
+            ),
+            0
+        )
+        let shown = PinnedChatShelfLayout.reservedHeight(
+            nameBlockHeight: PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: 13)
+        )
+        XCTAssertEqual(shown, 158, accuracy: 0.5)
+        XCTAssertNotEqual(
+            PinnedChatShelfLayout.reservedHeight(
+                pinCount: 0,
+                rosterResolved: false,
+                animatingCollapse: false,
+                nameBlockHeight: PinnedChatShelfLayout.nameBlock
+            ),
+            shown
+        )
+    }
+
+    func testResolvedPinnedShelfHeightIsStableAcrossHeroCounts() {
+        let name = PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: 13)
+        let one = PinnedChatShelfLayout.reservedHeight(
+            pinCount: 1,
+            rosterResolved: true,
+            animatingCollapse: false,
+            nameBlockHeight: name
+        )
+        let three = PinnedChatShelfLayout.reservedHeight(
+            pinCount: 3,
+            rosterResolved: true,
+            animatingCollapse: false,
+            nameBlockHeight: name
+        )
+        XCTAssertEqual(one, three)
+        XCTAssertEqual(one, 158, accuracy: 0.5)
+        let collapsing = PinnedChatShelfLayout.reservedHeight(
+            pinCount: 0,
+            rosterResolved: true,
+            animatingCollapse: true,
+            nameBlockHeight: name
+        )
+        XCTAssertEqual(collapsing, one)
+    }
+
+    func testReferenceCanvasPlacesFirstRowNearY400() {
+        let reserved = PinnedChatShelfLayout.reservedHeight(
+            pinCount: 1,
+            rosterResolved: true,
+            animatingCollapse: false,
+            nameBlockHeight: PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: 13)
+        )
+        let firstRowPt = HomeRosterLayoutPolicy.referenceSafeAreaTop
+            + HomeRosterLayoutPolicy.headerChromeHeight
+            + HomeRosterLayoutPolicy.shelfTopPadding
+            + reserved
+            + HomeRosterLayoutPolicy.shelfBottomPadding
+        let y590 = HomeRosterLayoutPolicy.screenshotY(
+            pointY: firstRowPt,
+            paneWidth: 402
+        )
+        // 123pt hero + 56pt chrome cannot land on image-y 400; do not stretch
+        // empty shelf to fake it. Content-sized reservation sits in-band.
+        XCTAssertEqual(firstRowPt, 309, accuracy: 2)
+        XCTAssertEqual(y590, 453, accuracy: 12)
+        XCTAssertGreaterThan(y590, 380)
+        XCTAssertLessThan(y590, 480)
+        XCTAssertEqual(HomeRosterLayoutPolicy.profileDiameter, 56)
+        XCTAssertEqual(HomeRosterLayoutPolicy.chromeButtonDiameter, 58)
+        XCTAssertEqual(HomeRosterLayoutPolicy.rowAvatar, 58)
+        XCTAssertEqual(HomeRosterLayoutPolicy.rowMinHeight, 104)
+        XCTAssertEqual(
+            HomeRosterLayoutPolicy.referenceCanvasY(400, paneWidth: 402),
+            272.5,
+            accuracy: 0.5
+        )
+    }
+
+    private func heroGroupFits(paneWidth: CGFloat, pinCount: Int) -> Bool {
+        let layout = PinnedChatShelfLayout.metrics(paneWidth: paneWidth, pinCount: pinCount)
+        let inner = paneWidth - PinnedChatShelfLayout.pagePadding * 2
+        let width = CGFloat(pinCount) * layout.tile + CGFloat(max(pinCount - 1, 0)) * layout.spacing
+        return width <= inner + 0.5
     }
 }

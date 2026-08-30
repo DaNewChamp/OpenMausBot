@@ -13,6 +13,10 @@ final class ShareInboxTests: XCTestCase {
         ShareInbox.testRootURL = testRoot
         ShareInbox.testDefaultsSuite = "ShareInboxTests.\(UUID().uuidString)"
         ShareInbox.testForceLockUnavailable = false
+        ShareInbox.testAppGroupAvailable = nil
+        ShareInbox.testStorePreviewActive = nil
+        ShareInbox.testStorePreviewRootURL = nil
+        ShareInbox.testStorePreviewDefaultsSuite = nil
         try? ShareInbox.clearPending()
     }
 
@@ -21,6 +25,10 @@ final class ShareInboxTests: XCTestCase {
         try? ShareInbox.clearPending()
         ShareInbox.testRootURL = nil
         ShareInbox.testDefaultsSuite = nil
+        ShareInbox.testAppGroupAvailable = nil
+        ShareInbox.testStorePreviewActive = nil
+        ShareInbox.testStorePreviewRootURL = nil
+        ShareInbox.testStorePreviewDefaultsSuite = nil
         try? FileManager.default.removeItem(at: testRoot)
         super.tearDown()
     }
@@ -126,6 +134,56 @@ final class ShareInboxTests: XCTestCase {
         XCTAssertThrowsError(try ShareInbox.save(text: "blocked")) { error in
             XCTAssertEqual(error as? ShareInboxError, .lockUnavailable)
         }
+    }
+
+    func testUnavailableAppGroupFailsClosedOutsideStorePreview() {
+        ShareInbox.testRootURL = nil
+        ShareInbox.testDefaultsSuite = nil
+        ShareInbox.testAppGroupAvailable = false
+        ShareInbox.testStorePreviewActive = false
+        XCTAssertThrowsError(try ShareInbox.save(text: "nope")) { error in
+            XCTAssertEqual(error as? ShareInboxError, .appGroupUnavailable)
+        }
+        XCTAssertThrowsError(try ShareInbox.hasPending()) { error in
+            XCTAssertEqual(error as? ShareInboxError, .appGroupUnavailable)
+        }
+        XCTAssertThrowsError(try ShareInbox.consume()) { error in
+            XCTAssertEqual(error as? ShareInboxError, .appGroupUnavailable)
+        }
+    }
+
+    func testStorePreviewInboxIsIsolatedWhenAppGroupMissing() throws {
+        ShareInbox.testRootURL = nil
+        ShareInbox.testDefaultsSuite = nil
+        ShareInbox.testAppGroupAvailable = false
+        ShareInbox.testStorePreviewActive = true
+        let previewRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("store-preview-inbox-\(UUID().uuidString)", isDirectory: true)
+        ShareInbox.testStorePreviewRootURL = previewRoot
+        ShareInbox.testStorePreviewDefaultsSuite = "ShareInboxPreviewTests.\(UUID().uuidString)"
+        defer {
+            try? ShareInbox.clearPending()
+            try? FileManager.default.removeItem(at: previewRoot)
+        }
+
+        try ShareInbox.save(text: "preview-only")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: previewRoot.path))
+        XCTAssertFalse(previewRoot.path.contains(ShareInbox.appGroup))
+        let consumed = try XCTUnwrap(try ShareInbox.consume())
+        XCTAssertEqual(consumed.payload.text, "preview-only")
+        XCTAssertNil(try ShareInbox.consume())
+    }
+
+    func testStorePreviewFlagDoesNotRedirectWhenTestContainerExists() throws {
+        let previewRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("unused-preview-\(UUID().uuidString)", isDirectory: true)
+        ShareInbox.testStorePreviewRootURL = previewRoot
+        ShareInbox.testStorePreviewActive = true
+        ShareInbox.testAppGroupAvailable = false
+        try ShareInbox.save(text: "stays-in-test-root")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: previewRoot.path))
+        let consumed = try XCTUnwrap(try ShareInbox.consume())
+        XCTAssertEqual(consumed.payload.text, "stays-in-test-root")
     }
 
     private func inboxJPEGNames() -> [String] {

@@ -16,6 +16,9 @@ public enum ShareExtensionPostPolicy: Sendable {
         if error as? ShareInboxError == .lockUnavailable {
             return .failClosed(message: busyCopy)
         }
+        if error as? ShareInboxError == .appGroupUnavailable {
+            return .failClosed(message: genericCopy)
+        }
         return .failClosed(message: genericCopy)
     }
 

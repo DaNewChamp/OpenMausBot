@@ -92,6 +92,16 @@ final class CalmSurfacePolicyTests: XCTestCase {
             nameBlockHeight: PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: 22)
         )
         XCTAssertGreaterThanOrEqual(large, compact)
-        XCTAssertEqual(large, HomeRosterLayoutPolicy.pinnedShelfReservedHeight(nameBlockHeight: 44))
+        XCTAssertEqual(
+            large,
+            HomeRosterLayoutPolicy.pinnedShelfReservedHeight(
+                nameBlockHeight: PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: 22)
+            )
+        )
+        let extraLarge = PinnedChatShelfLayout.reservedHeight(
+            nameBlockHeight: PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: 44)
+        )
+        XCTAssertGreaterThan(extraLarge, compact)
+        XCTAssertEqual(extraLarge, 123 + 7 + 44, accuracy: 0.5)
     }
 }

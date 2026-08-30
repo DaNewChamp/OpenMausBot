@@ -70,6 +70,25 @@ public struct PinnedChatShelfLayout: Equatable, Sendable {
         HomeRosterLayoutPolicy.pinnedShelfReservedHeight(nameBlockHeight: nameBlockHeight)
     }
 
+    /// Zero pins / a cold loading roster must not keep the hero slot.
+    /// Once pins exist, height stays at the hero reservation so the list does
+    /// not jump; a collapsing last pin keeps that slot until the animation ends.
+    public static func reservedHeight(
+        pinCount: Int,
+        rosterResolved: Bool,
+        animatingCollapse: Bool,
+        nameBlockHeight: CGFloat
+    ) -> CGFloat {
+        let coldEmpty = pinCount <= 0 && !rosterResolved && !animatingCollapse
+        let resolvedEmpty = pinCount <= 0 && rosterResolved && !animatingCollapse
+        if coldEmpty || resolvedEmpty { return 0 }
+        guard CalmSurfacePolicy.reservesPinnedShelfRegion(
+            pinCount: pinCount,
+            animatingCollapse: animatingCollapse
+        ) else { return 0 }
+        return reservedHeight(nameBlockHeight: nameBlockHeight)
+    }
+
     /// Single-line caption2 label area that scales with Dynamic Type.
     public static func nameBlockHeight(
         captionLineHeight: CGFloat,
@@ -89,17 +108,39 @@ public struct PinnedChatShelfLayout: Equatable, Sendable {
     public static func metrics(paneWidth: CGFloat, pinCount: Int) -> PinnedChatShelfLayout {
         switch mode(for: pinCount) {
         case .hero:
-            return heroMetrics(pinCount: pinCount)
+            return heroMetrics(paneWidth: paneWidth, pinCount: pinCount)
         case .compact:
             return compactMetrics(paneWidth: paneWidth)
         }
     }
 
-    private static func heroMetrics(pinCount: Int) -> PinnedChatShelfLayout {
-        let spacing = pinCount <= 1 ? CGFloat(0) : heroTileSpacing
+    private static func heroMetrics(paneWidth: CGFloat, pinCount: Int) -> PinnedChatShelfLayout {
+        if pinCount <= 1 {
+            return PinnedChatShelfLayout(
+                avatar: heroAvatar,
+                tile: heroAvatar,
+                spacing: 0,
+                mode: .hero
+            )
+        }
+        let inner = max(paneWidth - pagePadding * 2, 1)
+        var spacing = heroTileSpacing
+        var tile = heroAvatar
+        let needed = CGFloat(pinCount) * tile + CGFloat(pinCount - 1) * spacing
+        if needed > inner {
+            let spacingBudget = CGFloat(pinCount - 1) * spacing
+            if spacingBudget + CGFloat(pinCount) <= inner {
+                tile = (inner - spacingBudget) / CGFloat(pinCount)
+            } else {
+                tile = min(heroAvatar, inner / CGFloat(pinCount))
+                spacing = pinCount > 1
+                    ? max(0, (inner - tile * CGFloat(pinCount)) / CGFloat(pinCount - 1))
+                    : 0
+            }
+        }
         return PinnedChatShelfLayout(
-            avatar: heroAvatar,
-            tile: heroAvatar,
+            avatar: tile,
+            tile: tile,
             spacing: spacing,
             mode: .hero
         )
