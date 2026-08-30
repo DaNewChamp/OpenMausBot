@@ -264,7 +264,7 @@ struct SettingsView: View {
         .frame(minHeight: VBotSurface.Hit.minimum)
     }
 
-    private var statusText: String { session.status.settingsText }
+    private var statusText: String { session.status.settingsText(previouslyLive: session.previouslyLive) }
 }
 
 private struct ComputerSettingsRow: View {
@@ -389,7 +389,7 @@ struct ConnectionSecurityView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(connection.name)
                     .font(.headline)
-                Label(session.status.settingsText,
+                Label(session.status.settingsText(previouslyLive: session.previouslyLive),
                       systemImage: session.status == .live ? "checkmark.circle.fill" : "circle.dotted")
                     .font(.subheadline)
                     .foregroundStyle(session.status == .live ? Color.green : Color.secondary)
@@ -498,7 +498,9 @@ struct ConnectionSecurityView: View {
         case .live:
             return "This computer is connected and responding normally."
         case .connecting:
-            return "OpenMausBot is trying the saved connection automatically."
+            return session.previouslyLive
+                ? "Reconnecting automatically. Cached chats stay available."
+                : "OpenMausBot is trying the saved connection automatically."
         case let .offline(reason):
             return reason
         case .unauthorized:
@@ -517,9 +519,15 @@ struct ConnectionSecurityView: View {
 
 private extension Session.Status {
     var settingsText: String {
+        settingsText(previouslyLive: false)
+    }
+
+    func settingsText(previouslyLive: Bool) -> String {
         switch self {
         case .live: return "Connected"
-        case .connecting: return "Connecting…"
+        case .connecting: return previouslyLive
+            ? ConnectionResiliencePolicy.reconnectingCopy
+            : ConnectionResiliencePolicy.connectingCopy
         case .unpaired: return "Not paired"
         case .unauthorized: return "Needs pairing"
         case .offline: return "Offline"

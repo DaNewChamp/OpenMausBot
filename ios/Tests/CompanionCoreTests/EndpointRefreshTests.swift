@@ -245,6 +245,76 @@ final class EndpointRefreshTests: XCTestCase {
         XCTAssertEqual(connection.automaticEndpoints.map(\.kind), [.hosted, .tailnet])
     }
 
+    func testStaleEndpointRefreshGenerationIsIgnored() {
+        XCTAssertTrue(ConnectionResiliencePolicy.shouldApplyEndpointRefresh(
+            startedGeneration: 2,
+            currentGeneration: 2,
+            connectionID: "pair-1",
+            currentConnectionID: "pair-1",
+            sourceBaseURL: "https://mac.companion.example",
+            currentBaseURL: "https://mac.companion.example"
+        ))
+        XCTAssertFalse(ConnectionResiliencePolicy.shouldApplyEndpointRefresh(
+            startedGeneration: 1,
+            currentGeneration: 2,
+            connectionID: "pair-1",
+            currentConnectionID: "pair-1",
+            sourceBaseURL: "https://mac.companion.example",
+            currentBaseURL: "https://mac.companion.example"
+        ))
+        XCTAssertFalse(ConnectionResiliencePolicy.shouldApplyEndpointRefresh(
+            startedGeneration: 2,
+            currentGeneration: 2,
+            connectionID: "pair-1",
+            currentConnectionID: "pair-2",
+            sourceBaseURL: "https://mac.companion.example",
+            currentBaseURL: "https://mac.companion.example"
+        ))
+        XCTAssertFalse(ConnectionResiliencePolicy.shouldApplyEndpointRefresh(
+            startedGeneration: 2,
+            currentGeneration: 2,
+            connectionID: "pair-1",
+            currentConnectionID: "pair-1",
+            sourceBaseURL: "https://mac.companion.example",
+            currentBaseURL: "http://192.168.1.42:8810"
+        ))
+    }
+
+    func testOverlappingRefreshKeepsTheNewestGeneration() {
+        var generation = 0
+        generation = ConnectionResiliencePolicy.nextGeneration(after: generation)
+        let first = generation
+        generation = ConnectionResiliencePolicy.nextGeneration(after: generation)
+        XCTAssertFalse(ConnectionResiliencePolicy.shouldApply(
+            startedGeneration: first,
+            currentGeneration: generation
+        ))
+        XCTAssertTrue(ConnectionResiliencePolicy.shouldApply(
+            startedGeneration: generation,
+            currentGeneration: generation
+        ))
+    }
+
+    func testHostedRefreshRebuildDoesNotPromoteLAN() throws {
+        let routes = try Self.routes()
+        var connection = Connection(
+            name: "Mac",
+            host: routes.hosted.host,
+            port: routes.hosted.port,
+            activeEndpoint: routes.hosted,
+            endpoints: [routes.hosted],
+            allowedRouteKinds: [.hosted],
+            allowedLocalRouteURLs: []
+        )
+        connection.reconcile(try Self.metadata())
+        let rotation = ConnectionResiliencePolicy.liveRotation(
+            working: routes.hosted,
+            ordered: connection.orderedEndpoints
+        )
+        XCTAssertEqual(rotation.map(\.kind), [.hosted])
+        XCTAssertFalse(rotation.contains { !$0.protectsCredentials })
+    }
+
     private static func metadata() throws -> CompanionConnectionMetadata {
         try JSONDecoder().decode(CompanionConnectionMetadata.self, from: fullMetadata)
     }

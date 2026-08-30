@@ -248,6 +248,7 @@ final class ConnectionTests: XCTestCase {
         for value in [
             "http://desktop.example/session",
             "javascript:alert(1)",
+            "https://127.0.0.1/session",
             "not a URL"
         ] {
             let data = try JSONSerialization.data(withJSONObject: ["joinUrl": value])

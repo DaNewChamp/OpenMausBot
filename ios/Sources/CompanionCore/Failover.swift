@@ -151,17 +151,19 @@ public enum ConnectionAdvice {
         let advice: String
         switch code {
         case .cannotFindHost:
-            advice = "\u{201C}\(host)\u{201D} didn't resolve. If that's a Tailscale name, this phone may not be on the tailnet."
+            advice = "\u{201C}\(ConnectionResiliencePolicy.sanitizedRouteLabel(host: host))\u{201D} didn't resolve. If that's a Tailscale name, this phone may not be on the tailnet."
         case .cannotConnectToHost:
             advice = "Reached your computer, but Phone access isn't answering on port \(port) — open \(ProductIdentity.displayName) → Settings → Phone."
         case .timedOut:
-            advice = "No route to your computer at \(host) — different network, or a firewall."
+            advice = "No route to your computer at \(ConnectionResiliencePolicy.sanitizedRouteLabel(host: host)) — different network, or a firewall."
         case .notConnectedToInternet:
             advice = "You're offline."
+        case .networkConnectionLost:
+            advice = "The connection dropped."
         default:
-            advice = "Could not reach \(host): \(URLError(code).localizedDescription)"
+            advice = "Could not reach \(ConnectionResiliencePolicy.sanitizedRouteLabel(host: host))."
         }
-        let fallback = next.map { " Trying \($0) next." } ?? ""
+        let fallback = next.map { " Trying \(ConnectionResiliencePolicy.sanitizedRouteLabel(host: $0)) next." } ?? ""
         return advice + fallback + " The app keeps retrying automatically."
     }
 
@@ -170,8 +172,8 @@ public enum ConnectionAdvice {
         host: String,
         tryingNext next: String? = nil
     ) -> String {
-        let fallback = next.map { " Trying \($0) next." } ?? ""
-        return "The route through \(host) is temporarily unavailable (HTTP \(code))." +
+        let fallback = next.map { " Trying \(ConnectionResiliencePolicy.sanitizedRouteLabel(host: $0)) next." } ?? ""
+        return "The route through \(ConnectionResiliencePolicy.sanitizedRouteLabel(host: host)) is temporarily unavailable (HTTP \(code))." +
             fallback + " The app keeps retrying automatically."
     }
 }

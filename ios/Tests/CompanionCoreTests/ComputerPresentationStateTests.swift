@@ -57,8 +57,9 @@ final class ComputerPresentationStateTests: XCTestCase {
     func testIdleVpsCloudExplainsWatchDuringTurns() {
         XCTAssertEqual(
             ComputerPresentationState(bot: bot(computer: "cloud", cloudBackend: "vps", busy: false)),
-            .unavailable(message: "Cloud runs on your VPS. Send a message to start a turn, then watch the desktop here.")
+            .unavailable(message: CloudViewerPolicy.vpsWatchCopy)
         )
+        XCTAssertTrue(CloudViewerPolicy.vpsWatchCopy.contains(CloudViewerPolicy.interactiveUnavailable))
     }
 
     func testLocalAndVirtualMachinesNeverClaimInteractiveViewerSupport() {
@@ -342,9 +343,15 @@ final class ComputerPresentationStateTests: XCTestCase {
         let idleVps = bot(computer: "cloud", cloudBackend: "vps", busy: false)
         XCTAssertEqual(
             ComputerPresentationState(bot: idleVps),
-            .unavailable(message: "Cloud runs on your VPS. Send a message to start a turn, then watch the desktop here.")
+            .unavailable(message: CloudViewerPolicy.vpsWatchCopy)
         )
         XCTAssertFalse(ComputerPresentationState(bot: idleVps).isIdleWaiting)
+        XCTAssertEqual(
+            ComputerPresentationState.watchCaption(for: idleVps),
+            CloudViewerPolicy.vpsBusyWatchCopy
+        )
+        XCTAssertNil(ComputerPresentationState.watchCaption(for: bot(computer: "cloud", cloudBackend: "box")))
+        XCTAssertNil(ComputerPresentationState.watchCaption(for: bot(computer: "vm")))
     }
 
     func testStreamLoadFailureIgnoresWatchTimeoutWhenIdle() {
@@ -366,7 +373,7 @@ final class ComputerPresentationStateTests: XCTestCase {
                     wantsScreenPreview: false
                 )
             ),
-            .unavailable(message: "Cloud runs on your VPS. Send a message to start a turn, then watch the desktop here.")
+            .unavailable(message: CloudViewerPolicy.vpsWatchCopy)
         )
     }
 
@@ -420,5 +427,74 @@ final class ComputerPresentationStateTests: XCTestCase {
         var lifecycle = ComputerWatchLifecycle()
         lifecycle.failed("  ")
         XCTAssertEqual(lifecycle.failureMessage, "We couldn't load this computer right now.")
+    }
+
+    func testCloudJoinURLMustBePublicHTTPSAndNeverLoopback() throws {
+        let valid = try XCTUnwrap(CloudViewerPolicy.validatedJoinURL(
+            "https://desktop.example/session/fresh?ticket=secret#autoconnect"
+        ))
+        XCTAssertEqual(valid.scheme, "https")
+        XCTAssertEqual(valid.host, "desktop.example")
+        XCTAssertTrue(valid.absoluteString.contains("ticket=secret"))
+        XCTAssertEqual(
+            CloudViewerPolicy.sanitizedOrigin(for: valid),
+            "https://desktop.example"
+        )
+        XCTAssertFalse(CloudViewerPolicy.sanitizedOrigin(for: valid)?.contains("ticket") == true)
+
+        for raw in [
+            "http://desktop.example/session",
+            "https://127.0.0.1/vnc",
+            "https://localhost/vnc",
+            "https://[::1]/vnc",
+            "https://192.168.1.42/vnc",
+            "https://10.0.0.8/vnc",
+            "https://mac.local/vnc",
+            "https://user:pass@desktop.example/session",
+            "javascript:alert(1)",
+            "not a URL",
+        ] {
+            XCTAssertNil(CloudViewerPolicy.validatedJoinURL(raw), raw)
+        }
+    }
+
+    func testCloudJoinURLSanitizesOriginAndRejectsPersistence() throws {
+        let url = try XCTUnwrap(CloudViewerPolicy.validatedJoinURL(
+            "https://box.example:8443/vnc.html?omb_viewer=ticket-1#autoconnect=true"
+        ))
+        XCTAssertEqual(CloudViewerPolicy.sanitizedOrigin(for: url), "https://box.example:8443")
+        XCTAssertTrue(CloudViewerPolicy.originAccessibilityLabel(for: url).contains("External cloud desktop"))
+        XCTAssertFalse(CloudViewerPolicy.originAccessibilityLabel(for: url).contains("ticket"))
+        XCTAssertTrue(CloudViewerPolicy.persistableViewerKeys.isEmpty)
+        XCTAssertTrue(CloudViewerPolicy.externalSemantics.contains("does not keep"))
+    }
+
+    func testCloudDesktopSessionDecoderUsesTheSameHTTPSPolicy() throws {
+        let valid = Data(#"{"joinUrl":"https://desktop.example/session/fresh?token=secret"}"#.utf8)
+        let session = try JSONDecoder().decode(CloudDesktopSession.self, from: valid)
+        XCTAssertEqual(CloudViewerPolicy.sanitizedOrigin(for: session.url), "https://desktop.example")
+        XCTAssertTrue(session.url.absoluteString.contains("token=secret"))
+
+        for value in [
+            "http://desktop.example/session",
+            "https://127.0.0.1/session",
+            "https://192.168.1.9/session",
+            "javascript:alert(1)",
+        ] {
+            let data = try JSONSerialization.data(withJSONObject: ["joinUrl": value])
+            XCTAssertThrowsError(try JSONDecoder().decode(CloudDesktopSession.self, from: data), value)
+        }
+    }
+
+    func testVpsBusyStateIsWatchOnlyNeverInteractive() {
+        let busyVps = bot(computer: "cloud", cloudBackend: "vps", busy: true)
+        let frame = ScreenFrame(png: "c2NyZWVu", mime: "image/png")
+        XCTAssertNotEqual(ComputerPresentationState(bot: busyVps), .cloudViewerAvailable)
+        XCTAssertEqual(ComputerPresentationState(bot: busyVps, frame: frame), .watching)
+        XCTAssertEqual(
+            ComputerPresentationState.watchCaption(for: busyVps),
+            CloudViewerPolicy.vpsBusyWatchCopy
+        )
+        XCTAssertFalse(ComputerPresentationState.supportsCloudViewer(busyVps))
     }
 }

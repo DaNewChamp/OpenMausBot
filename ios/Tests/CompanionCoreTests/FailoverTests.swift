@@ -335,4 +335,157 @@ final class FailoverTests: XCTestCase {
         XCTAssertEqual(refused.baseURL?.absoluteString, local.url)
         XCTAssertEqual(connection.dialing(otherLocal).activeEndpoint, local)
     }
+
+    // MARK: - Reconnect banner and generations
+
+    func testReconnectBannerProgressesToLiveWithoutOfflineFlash() {
+        let first = ConnectionResiliencePolicy.banner(
+            previouslyLive: false,
+            connecting: true
+        )
+        XCTAssertEqual(first.kind, .connecting)
+        XCTAssertEqual(first.text, ConnectionResiliencePolicy.connectingCopy)
+        XCTAssertEqual(first.accessibilityLabel, ConnectionResiliencePolicy.connectingAccessibility)
+
+        let retry = ConnectionResiliencePolicy.banner(
+            previouslyLive: true,
+            connecting: true
+        )
+        XCTAssertEqual(retry.kind, .reconnecting)
+        XCTAssertEqual(retry.text, ConnectionResiliencePolicy.reconnectingCopy)
+        XCTAssertEqual(retry.accessibilityLabel, ConnectionResiliencePolicy.reconnectingAccessibility)
+
+        let live = ConnectionResiliencePolicy.banner(
+            live: true,
+            previouslyLive: true
+        )
+        XCTAssertFalse(live.isVisible)
+    }
+
+    func testHardOfflineStaysVisibleWhenThePhoneHasNoNetwork() {
+        let banner = ConnectionResiliencePolicy.banner(
+            previouslyLive: true,
+            offlineReason: "You're offline. The app keeps retrying automatically."
+        )
+        XCTAssertEqual(banner.kind, .offline)
+        XCTAssertTrue(banner.text.contains("You're offline."))
+    }
+
+    func testRetryableFailuresKeepReconnectVisible() {
+        XCTAssertTrue(ConnectionResiliencePolicy.keepsRetryVisible(after: URLError(.timedOut)))
+        XCTAssertTrue(ConnectionResiliencePolicy.keepsRetryVisible(after: URLError(.cannotFindHost)))
+        XCTAssertTrue(ConnectionResiliencePolicy.keepsRetryVisible(after: URLError(.networkConnectionLost)))
+        XCTAssertTrue(ConnectionResiliencePolicy.keepsRetryVisible(
+            after: APIError.status(code: 502, message: nil)
+        ))
+        XCTAssertFalse(ConnectionResiliencePolicy.keepsRetryVisible(after: URLError(.notConnectedToInternet)))
+        XCTAssertFalse(ConnectionResiliencePolicy.keepsRetryVisible(after: URLError(.cancelled)))
+        XCTAssertFalse(ConnectionResiliencePolicy.keepsRetryVisible(
+            after: APIError.status(code: 401, message: nil)
+        ))
+    }
+
+    func testForegroundNudgeCutsBackoffWithoutForceQuit() {
+        XCTAssertTrue(ConnectionResiliencePolicy.shouldNudgeReconnect(
+            streamRunning: true,
+            inBackoff: true,
+            isLive: false,
+            isUnauthorized: false,
+            isUnpaired: false
+        ))
+        XCTAssertFalse(ConnectionResiliencePolicy.shouldNudgeReconnect(
+            streamRunning: true,
+            inBackoff: false,
+            isLive: false,
+            isUnauthorized: false,
+            isUnpaired: false
+        ))
+        XCTAssertFalse(ConnectionResiliencePolicy.shouldNudgeReconnect(
+            streamRunning: true,
+            inBackoff: true,
+            isLive: true,
+            isUnauthorized: false,
+            isUnpaired: false
+        ))
+    }
+
+    func testStaleStreamGenerationDoesNotWin() {
+        XCTAssertTrue(ConnectionResiliencePolicy.shouldApply(startedGeneration: 4, currentGeneration: 4))
+        XCTAssertFalse(ConnectionResiliencePolicy.shouldApply(startedGeneration: 3, currentGeneration: 4))
+        XCTAssertEqual(ConnectionResiliencePolicy.nextGeneration(after: 4), 5)
+    }
+
+    func testCachedScreenSurvivesReconnectAndDropsOnPairingLoss() {
+        XCTAssertTrue(ConnectionResiliencePolicy.shouldPreserveCachedScreen(
+            unpaired: false,
+            unauthorized: false
+        ))
+        XCTAssertFalse(ConnectionResiliencePolicy.shouldPreserveCachedScreen(
+            unpaired: true,
+            unauthorized: false
+        ))
+        XCTAssertFalse(ConnectionResiliencePolicy.shouldPreserveCachedScreen(
+            unpaired: false,
+            unauthorized: true
+        ))
+    }
+
+    func testLiveRotationNeverDowngradesHostedToCleartextLAN() throws {
+        let hosted = try XCTUnwrap(CompanionEndpoint(
+            url: "https://mac.companion.example", kind: .hosted, priority: 0
+        ))
+        let lan = try XCTUnwrap(CompanionEndpoint(
+            url: "http://192.168.1.42:8810", kind: .lan, priority: 200
+        ))
+        XCTAssertEqual(
+            ConnectionResiliencePolicy.liveRotation(working: hosted, ordered: [hosted, lan]).map(\.kind),
+            [.hosted]
+        )
+        XCTAssertEqual(
+            ConnectionResiliencePolicy.liveRotation(working: lan, ordered: [hosted]).map(\.kind),
+            [.hosted],
+            "a stale cleartext working route that left policy cannot lead"
+        )
+    }
+
+    func testExplicitLANWorkingRouteMayUpgradeToHosted() throws {
+        let hosted = try XCTUnwrap(CompanionEndpoint(
+            url: "https://mac.companion.example", kind: .hosted, priority: 0
+        ))
+        let lan = try XCTUnwrap(CompanionEndpoint(
+            url: "http://192.168.1.42:8810", kind: .lan, priority: 200
+        ))
+        XCTAssertEqual(
+            ConnectionResiliencePolicy.liveRotation(working: lan, ordered: [hosted, lan]).map(\.kind),
+            [.lan, .hosted]
+        )
+    }
+
+    func testAdviceNeverIncludesSchemesOrQueryTokens() {
+        let message = ConnectionAdvice.message(
+            for: .cannotFindHost,
+            host: "https://user:token@mac.companion.example/path?ticket=secret",
+            port: 443,
+            tryingNext: "https://c-abc.openmausbot.com/join?omb=1"
+        )
+        XCTAssertTrue(message.contains("mac.companion.example"))
+        XCTAssertTrue(message.contains("c-abc.openmausbot.com"))
+        XCTAssertTrue(message.contains("Trying"))
+        XCTAssertFalse(message.contains("https://"))
+        XCTAssertFalse(message.contains("token"))
+        XCTAssertFalse(message.contains("ticket"))
+        XCTAssertFalse(message.contains("omb="))
+    }
+
+    func testDroppedConnectionCopyIsCalm() {
+        let message = ConnectionAdvice.message(
+            for: .networkConnectionLost,
+            host: "https://mac.companion.example",
+            port: 443
+        )
+        XCTAssertTrue(message.contains("The connection dropped."))
+        XCTAssertTrue(message.contains("retrying automatically"))
+        XCTAssertFalse(message.contains("https://"))
+        XCTAssertFalse(message.contains("NSURLError"))
+    }
 }

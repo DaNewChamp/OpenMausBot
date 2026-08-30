@@ -42,7 +42,7 @@ public enum ComputerPresentationState: Equatable, Sendable {
             } else if Self.supportsCloudViewer(bot) {
                 self = .cloudViewerAvailable
             } else if bot.computer == "cloud" && bot.cloudBackend == "vps" {
-                self = .unavailable(message: "Cloud runs on your VPS. Send a message to start a turn, then watch the desktop here.")
+                self = .unavailable(message: CloudViewerPolicy.vpsWatchCopy)
             } else {
                 self = .unavailable(message: Self.idleWaitingMessage)
             }
@@ -139,6 +139,13 @@ public enum ComputerPresentationState: Equatable, Sendable {
 
     public var canOpenCloudViewer: Bool {
         self == .cloudViewerAvailable
+    }
+
+    /// Honest watch-only caption for backends that can stream frames but
+    /// cannot open an interactive phone viewer.
+    public static func watchCaption(for bot: Bot) -> String? {
+        guard bot.computer == "cloud", bot.cloudBackend == "vps" else { return nil }
+        return CloudViewerPolicy.vpsBusyWatchCopy
     }
 }
 

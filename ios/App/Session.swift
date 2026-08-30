@@ -48,6 +48,20 @@ final class Session: ObservableObject {
     @Published private(set) var authoritativeHydrationRevision = 0
     @Published private(set) var connection: Connection?
     @Published private(set) var status: Status = .unpaired
+    /// Roster/settings projection of `status` plus whether this pairing has
+    /// already been live. Views should not switch on Status for banner copy.
+    var connectionBanner: ConnectionResiliencePolicy.Banner {
+        let offline: String?
+        if case let .offline(reason) = status { offline = reason } else { offline = nil }
+        return ConnectionResiliencePolicy.banner(
+            unpaired: status == .unpaired,
+            unauthorized: status == .unauthorized,
+            live: status == .live,
+            previouslyLive: previouslyLive,
+            connecting: status == .connecting,
+            offlineReason: offline
+        )
+    }
     /// Transient, user-facing failures from an action they just took.
     @Published var actionError: String? {
         didSet {
@@ -117,6 +131,15 @@ final class Session: ObservableObject {
     /// can finish after its replacement starts; its cleanup must not clear
     /// the replacement's handle.
     private var streamGeneration = 0
+    /// Identifies the in-flight authenticated endpoint snapshot. A slower
+    /// older refresh must not overwrite a newer pairing or dial.
+    private var endpointRefreshGeneration = 0
+    /// True after this pairing has completed a live hello. Distinguishes
+    /// first connect copy from reconnecting without a new Status case.
+    @Published private(set) var previouslyLive = false
+    /// True while `run()` is sleeping between attempts. Foregrounding then
+    /// nudges a new dial instead of waiting out the backoff.
+    private var inBackoff = false
     private var engineSyncGeneration = 0
     private var modelCatalogGate = ModelCatalogRefreshGate()
     private var modelUpdateGenerations: [String: Int] = [:]
@@ -232,6 +255,7 @@ final class Session: ObservableObject {
             modelCatalog = state.bots.compactMap { storePreviewInstance(matching: $0) }
             recordHydration(resumed: false)
             status = .live
+            previouslyLive = true
             return
         }
 #endif
@@ -410,6 +434,8 @@ final class Session: ObservableObject {
     }
 
     func signOut() {
+        streamGeneration = ConnectionResiliencePolicy.nextGeneration(after: streamGeneration)
+        endpointRefreshGeneration = ConnectionResiliencePolicy.nextGeneration(after: endpointRefreshGeneration)
         streamTask?.cancel()
         streamTask = nil
         endpointRefreshTask?.cancel()
@@ -442,6 +468,8 @@ final class Session: ObservableObject {
         modelUpdateGenerations.removeAll()
         resetInterruptedModelWriteTracking()
         rotation = CandidateRotation(hosts: [])
+        previouslyLive = false
+        inBackoff = false
         resetStreamCoalescer()
         state = CompanionState()
         localVmStatuses.removeAll()
@@ -467,14 +495,30 @@ final class Session: ObservableObject {
         }
         // back before the grace period ran out: keep the stream, drop the task
         endLinger()
-        guard client != nil, streamTask == nil else { return }
+        guard client != nil else { return }
+        if streamTask != nil {
+            if ConnectionResiliencePolicy.shouldNudgeReconnect(
+                streamRunning: true,
+                inBackoff: inBackoff,
+                isLive: status == .live,
+                isUnauthorized: status == .unauthorized,
+                isUnpaired: status == .unpaired
+            ) {
+                restartStream()
+            }
+            return
+        }
         reconnectDelay = 0
-        streamGeneration += 1
+        inBackoff = false
+        streamGeneration = ConnectionResiliencePolicy.nextGeneration(after: streamGeneration)
         let generation = streamGeneration
         streamTask = Task { [weak self] in
             guard let self else { return }
-            await self.run()
-            guard self.streamGeneration == generation else { return }
+            await self.run(generation: generation)
+            guard ConnectionResiliencePolicy.shouldApply(
+                startedGeneration: generation,
+                currentGeneration: self.streamGeneration
+            ) else { return }
             self.streamTask = nil
         }
     }
@@ -544,6 +588,7 @@ final class Session: ObservableObject {
         guard streamTask != nil else { return }
         streamTask?.cancel()
         streamTask = nil
+        inBackoff = false
         connect()
     }
 
@@ -552,10 +597,13 @@ final class Session: ObservableObject {
     /// a known point instead of wherever the socket happened to die.
     func disconnect() {
         flushStreamCoalescer()
+        streamGeneration = ConnectionResiliencePolicy.nextGeneration(after: streamGeneration)
+        endpointRefreshGeneration = ConnectionResiliencePolicy.nextGeneration(after: endpointRefreshGeneration)
         streamTask?.cancel()
         streamTask = nil
         endpointRefreshTask?.cancel()
         endpointRefreshTask = nil
+        inBackoff = false
         endLinger()
     }
 
@@ -585,10 +633,23 @@ final class Session: ObservableObject {
         lingerTask = .invalid
     }
 
-    private func run() async {
+    private func applyStreamStatus(_ next: Status, generation: Int) {
+        guard ConnectionResiliencePolicy.shouldApply(
+            startedGeneration: generation,
+            currentGeneration: streamGeneration
+        ) else { return }
+        status = next
+    }
+
+    private func run(generation: Int) async {
         while !Task.isCancelled {
+            guard ConnectionResiliencePolicy.shouldApply(
+                startedGeneration: generation,
+                currentGeneration: streamGeneration
+            ) else { return }
             guard let client else { return }
-            status = .connecting
+            inBackoff = false
+            applyStreamStatus(.connecting, generation: generation)
             log.info("opening stream, cursor=\(self.state.cursor ?? "none", privacy: .public)")
             do {
                 // The query is fixed when the connection opens, so changing
@@ -599,6 +660,10 @@ final class Session: ObservableObject {
                 // on what is actually a deliberate reconnect.
                 for try await frame in try client.events(since: state.cursor, screens: screenWatchers.totalCount > 0) {
                     if Task.isCancelled { return }
+                    guard ConnectionResiliencePolicy.shouldApply(
+                        startedGeneration: generation,
+                        currentGeneration: streamGeneration
+                    ) else { return }
                     reconnectDelay = 0
 
                     if case let .hello(cursor, resumed) = frame.frame {
@@ -614,13 +679,18 @@ final class Session: ObservableObject {
                         // reconnecting must still ask for the missing gap.
                         if !resumed {
                             try await hydrate()
+                            guard ConnectionResiliencePolicy.shouldApply(
+                                startedGeneration: generation,
+                                currentGeneration: streamGeneration
+                            ) else { return }
                             state.resetCursor(cursor)
                             recordHydration(resumed: resumed)
                         }
                         var next = state
                         next.apply(frame.frame)
                         state = next
-                        status = .live
+                        previouslyLive = true
+                        applyStreamStatus(.live, generation: generation)
                         // Remember what actually carried the stream for
                         // display and legacy ordering. Typed routes retain
                         // their explicit security priority next launch.
@@ -632,10 +702,15 @@ final class Session: ObservableObject {
                 }
                 // the stream ended without an error — the harness went away
                 log.notice("stream ended without an error")
-                status = .offline("Lost the connection.")
+                if previouslyLive {
+                    applyStreamStatus(.connecting, generation: generation)
+                } else {
+                    applyStreamStatus(.offline("Lost the connection."), generation: generation)
+                }
             } catch let error as APIError where error.isUnauthorized {
                 log.error("stream refused: unauthorized")
-                status = .unauthorized
+                previouslyLive = false
+                applyStreamStatus(.unauthorized, generation: generation)
                 return
             } catch {
                 // backgrounding cancels the stream on purpose; that is not a
@@ -644,15 +719,35 @@ final class Session: ObservableObject {
                     log.info("stream closed by us")
                     return
                 }
+                if let urlError = error as? URLError, urlError.code == .cancelled {
+                    log.info("stream closed by us")
+                    return
+                }
+                guard ConnectionResiliencePolicy.shouldApply(
+                    startedGeneration: generation,
+                    currentGeneration: streamGeneration
+                ) else { return }
                 log.error("stream failed: \(error.localizedDescription, privacy: .public)")
-                status = .offline(failureMessage(for: error))
+                let advice = failureMessage(for: error)
+                if ConnectionResiliencePolicy.keepsRetryVisible(after: error) {
+                    applyStreamStatus(.connecting, generation: generation)
+                } else {
+                    applyStreamStatus(.offline(advice), generation: generation)
+                }
             }
 
             if Task.isCancelled { return }
+            guard ConnectionResiliencePolicy.shouldApply(
+                startedGeneration: generation,
+                currentGeneration: streamGeneration
+            ) else { return }
             // 1s, 2s, 4s… to 15s. A phone that woke on a network which is
-            // not the laptop's should not hammer it.
+            // not the laptop's should not hammer it. Foregrounding sets
+            // `inBackoff` and `connect()` will cut this sleep short.
             reconnectDelay = reconnectDelay == 0 ? 1 : min(reconnectDelay * 2, 15)
+            inBackoff = true
             try? await Task.sleep(nanoseconds: reconnectDelay * 1_000_000_000)
+            inBackoff = false
         }
     }
 
@@ -802,13 +897,15 @@ final class Session: ObservableObject {
         var next: String?
         if let candidate = rotation.advanceEndpoint(after: error), let token {
             client = CompanionClient(connection: connection.dialing(candidate), token: token)
-            next = candidate.displayAddress
-            log.info("advancing to companion route \(candidate.url, privacy: .public)")
+            next = ConnectionResiliencePolicy.sanitizedRouteLabel(candidate)
+            log.info("advancing companion route kind=\(candidate.kind.rawValue, privacy: .public)")
         }
+        let failedHost = failed.map(ConnectionResiliencePolicy.sanitizedRouteLabel)
+            ?? ConnectionResiliencePolicy.sanitizedRouteLabel(host: connection.host)
         if let urlError = error as? URLError {
             return ConnectionAdvice.message(
                 for: urlError.code,
-                host: failed?.displayAddress ?? connection.host,
+                host: failedHost,
                 port: failed?.port ?? connection.port,
                 tryingNext: next
             )
@@ -818,7 +915,7 @@ final class Session: ObservableObject {
            ConnectionAdvice.shouldTryAnotherRoute(after: error) {
             return ConnectionAdvice.message(
                 forGatewayStatus: code,
-                host: failed?.displayAddress ?? connection.host,
+                host: failedHost,
                 tryingNext: next
             )
         }
@@ -843,14 +940,23 @@ final class Session: ObservableObject {
     private func refreshConnectionMetadata(using sourceClient: CompanionClient) {
         guard let connectionID = connection?.id else { return }
         let workingEndpoint = rotation.currentEndpoint ?? sourceClient.connection.activeEndpoint
+        let sourceBaseURL = sourceClient.connection.baseURL?.absoluteString
+        endpointRefreshGeneration = ConnectionResiliencePolicy.nextGeneration(after: endpointRefreshGeneration)
+        let generation = endpointRefreshGeneration
         endpointRefreshTask?.cancel()
         endpointRefreshTask = Task { [weak self] in
             do {
                 let metadata = try await sourceClient.connectionMetadata()
                 try Task.checkCancellation()
                 guard let self,
-                      self.connection?.id == connectionID,
-                      self.client?.connection.baseURL == sourceClient.connection.baseURL,
+                      ConnectionResiliencePolicy.shouldApplyEndpointRefresh(
+                        startedGeneration: generation,
+                        currentGeneration: self.endpointRefreshGeneration,
+                        connectionID: connectionID,
+                        currentConnectionID: self.connection?.id,
+                        sourceBaseURL: sourceBaseURL,
+                        currentBaseURL: self.client?.connection.baseURL?.absoluteString
+                      ),
                       var updated = self.connection
                 else { return }
 
@@ -862,18 +968,20 @@ final class Session: ObservableObject {
                 )
 
                 // Keep the currently live route first until this stream ends.
-                // CandidateRotation applies the same no-downgrade policy used
-                // by pairing, while the saved connection uses advertised
+                // liveRotation applies the same no-downgrade policy used by
+                // pairing, while the saved connection uses advertised
                 // security priorities on the next launch.
-                let liveRoutes = workingEndpoint.map { route in
-                    [route] + updated.orderedEndpoints.filter { $0.url != route.url }
-                } ?? updated.orderedEndpoints
-                self.rotation = CandidateRotation(endpoints: liveRoutes)
+                self.rotation = CandidateRotation(
+                    endpoints: ConnectionResiliencePolicy.liveRotation(
+                        working: workingEndpoint,
+                        ordered: updated.orderedEndpoints
+                    )
+                )
                 log.info("refreshed \(metadata.endpoints.count, privacy: .public) companion routes")
             } catch is CancellationError {
                 return
             } catch {
-                log.debug("endpoint refresh unavailable: \(error.localizedDescription, privacy: .public)")
+                log.debug("endpoint refresh unavailable")
             }
         }
     }
@@ -895,6 +1003,7 @@ final class Session: ObservableObject {
         connection = updated
         UserDefaults.standard.set(try? JSONEncoder().encode(updated), forKey: Self.connectionKey)
         rotation = CandidateRotation(endpoints: updated.orderedEndpoints)
+        endpointRefreshGeneration = ConnectionResiliencePolicy.nextGeneration(after: endpointRefreshGeneration)
         if let token {
             client = CompanionClient(connection: updated.dialing(endpoint), token: token)
         }
@@ -1130,9 +1239,16 @@ final class Session: ObservableObject {
     /// Ask for one fresh cloud viewer URL. Unlike ordinary actions this
     /// returns the value to a browser sheet and never writes it to app state.
     func cloudDesktop(for bot: Bot) async throws -> URL {
+        guard ComputerPresentationState.supportsCloudViewer(bot) else {
+            throw APIError.transport(CloudViewerPolicy.interactiveUnavailable)
+        }
         guard let client else { throw APIError.transport("This computer is offline.") }
         do {
-            return try await client.cloudDesktop(botId: bot.id).url
+            let minted = try await client.cloudDesktop(botId: bot.id)
+            guard let url = CloudViewerPolicy.validatedJoinURL(minted.url) else {
+                throw APIError.transport(CloudViewerPolicy.invalidAddressMessage)
+            }
+            return url
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
             throw error

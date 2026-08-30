@@ -569,14 +569,11 @@ public struct CloudDesktopSession: Decodable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let raw = try container.decode(String.self, forKey: .joinUrl)
-        guard let parsed = URL(string: raw),
-              parsed.scheme?.lowercased() == "https",
-              parsed.host != nil
-        else {
+        guard let parsed = CloudViewerPolicy.validatedJoinURL(raw) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .joinUrl,
                 in: container,
-                debugDescription: "Cloud desktop URL must be HTTPS"
+                debugDescription: "Cloud desktop URL must be a public HTTPS origin"
             )
         }
         url = parsed

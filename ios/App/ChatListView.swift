@@ -600,28 +600,31 @@ struct StatusBanner: View {
 
     var body: some View {
         Group {
-            switch session.status {
-            case .live, .unpaired:
+            switch session.connectionBanner.kind {
+            case .hidden:
                 EmptyView()
-            case .connecting:
-                banner("Connecting…", systemImage: "arrow.triangle.2.circlepath", tint: .secondary)
-            case let .offline(reason):
-                banner(reason, systemImage: "wifi.slash", tint: .orange)
+            case .connecting, .reconnecting:
+                banner(session.connectionBanner, tint: .secondary)
+            case .offline:
+                banner(session.connectionBanner, tint: .orange)
             case .unauthorized:
-                banner("This phone was unpaired on the computer.", systemImage: "lock.slash", tint: .red)
+                banner(session.connectionBanner, tint: .red)
             }
         }
-        .animation(reduceMotion ? nil : .default, value: session.status)
+        .animation(reduceMotion ? nil : .default, value: session.connectionBanner.kind)
     }
 
-    private func banner(_ text: String, systemImage: String, tint: Color) -> some View {
-        Label(text, systemImage: systemImage)
+    private func banner(_ presentation: ConnectionResiliencePolicy.Banner, tint: Color) -> some View {
+        Label(presentation.text, systemImage: presentation.systemImage)
             .font(.footnote)
             .foregroundStyle(tint)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
+            .frame(minHeight: VBotSurface.Hit.minimum)
             .glassCapsule(interactive: false)
             .padding(.bottom, 8)
+            .accessibilityLabel(presentation.accessibilityLabel)
+            .accessibilityAddTraits(.updatesFrequently)
     }
 }
 

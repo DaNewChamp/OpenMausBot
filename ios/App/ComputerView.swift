@@ -227,7 +227,14 @@ struct ComputerView: View {
 
     private var streamFailure: String? {
         switch session.status {
-        case let .offline(message): return message
+        case let .offline(message):
+            if ConnectionResiliencePolicy.shouldPreserveCachedScreen(
+                unpaired: false,
+                unauthorized: false
+            ), image != nil {
+                return nil
+            }
+            return message
         case .unauthorized: return "This phone is no longer paired with the computer."
         case .unpaired: return "Pair this phone with a computer to watch the screen."
         case .connecting, .live: return nil
@@ -315,11 +322,11 @@ struct ComputerView: View {
             .onChange(of: vmKeyboardFocused) { _, focused in
                 if !focused { vmTypeDraft = "" }
             }
-            .alert("Open live cloud desktop?", isPresented: $confirmingDesktop) {
+            .alert(CloudViewerPolicy.confirmTitle, isPresented: $confirmingDesktop) {
                 Button("Cancel", role: .cancel) {}
-                Button("Open desktop") { Task { await openDesktop() } }
+                Button(CloudViewerPolicy.openDesktopTitle) { Task { await openDesktop() } }
             } message: {
-                Text("This gives this phone full control of the cloud computer, including anything signed in inside it.")
+                Text(CloudViewerPolicy.externalSemantics)
             }
             .sheet(
                 isPresented: Binding(
@@ -329,7 +336,7 @@ struct ComputerView: View {
             ) {
                 if let desktopURL {
                     CloudDesktopBrowser(url: desktopURL)
-                        .ignoresSafeArea()
+                        .ignoresSafeArea(edges: .bottom)
                 }
             }
             .alert(item: $confirmingLocalVmAction) { action in
@@ -379,6 +386,7 @@ struct ComputerView: View {
                 syncScreenWatch(resetFrame: false)
             }
             .onDisappear {
+                desktopURL = nil
                 localVmViewerURL = nil
                 viewerReady = false
                 viewerLoadFailed = false
@@ -396,7 +404,16 @@ struct ComputerView: View {
             .onChange(of: session.status) { _, status in
                 switch status {
                 case let .offline(message):
-                    session.clearScreen(of: bot.id)
+                    let preserve = ConnectionResiliencePolicy.shouldPreserveCachedScreen(
+                        unpaired: false,
+                        unauthorized: false
+                    )
+                    if preserve, image != nil {
+                        break
+                    }
+                    if !preserve {
+                        session.clearScreen(of: bot.id)
+                    }
                     screenWatch.failed(message)
                 case .unauthorized:
                     session.clearScreen(of: bot.id)
@@ -405,16 +422,13 @@ struct ComputerView: View {
                     session.clearScreen(of: bot.id)
                     screenWatch.failed("Pair this phone with a computer to watch the screen.")
                 case .connecting:
-                    if screenWatch.phase == .watching {
-                        session.clearScreen(of: bot.id)
-                        screenWatch.retry()
-                    }
+                    break
                 case .live:
                     guard ComputerPresentationState.hasKnownComputer(current) else { return }
-                    if wantsScreenPreview, screenWatch.failureMessage != nil {
+                    if wantsScreenPreview, screenWatch.failureMessage != nil, image == nil {
                         session.clearScreen(of: bot.id)
                         screenWatch.retry()
-                    } else if !wantsScreenPreview, screenWatch.phase != .idle {
+                    } else if !wantsScreenPreview, screenWatch.phase != .idle, image == nil {
                         screenWatch.reset()
                     }
                 }
@@ -570,9 +584,10 @@ struct ComputerView: View {
                 }
                 if canOpenCloudViewer {
                     Divider()
-                    Button("Open secure cloud viewer", systemImage: "display") {
+                    Button(CloudViewerPolicy.openDesktopTitle, systemImage: "display") {
                         confirmingDesktop = true
                     }
+                    .disabled(openingDesktop)
                 }
             } label: {
                 GlassChromeGlyph(systemImage: "ellipsis")
@@ -757,13 +772,32 @@ struct ComputerView: View {
                 Image(systemName: "display.and.arrow.down")
                     .font(.system(size: 30, weight: .medium))
                     .foregroundStyle(.primary.opacity(0.9))
-                Text("Cloud desktop ready")
+                Text(CloudViewerPolicy.boxReadyTitle)
                     .font(.body.weight(.semibold))
-                Text("Live preview will appear while the agent works. You can also open a secure viewer below.")
+                Text(CloudViewerPolicy.boxReadyCopy)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 28)
+                Text(CloudViewerPolicy.externalSemantics)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
+                Button(CloudViewerPolicy.openDesktopTitle) {
+                    Haptics.selection()
+                    confirmingDesktop = true
+                }
+                .buttonStyle(.borderedProminent)
+                .frame(minHeight: VBotSurface.Hit.minimum)
+                .disabled(openingDesktop)
+                .accessibilityLabel(CloudViewerPolicy.openDesktopTitle)
+                .accessibilityHint(CloudViewerPolicy.externalSemantics)
+                if openingDesktop {
+                    ProgressView()
+                        .padding(.top, 4)
+                        .accessibilityLabel("Opening cloud desktop")
+                }
             }
             .foregroundStyle(Color.primary)
             .padding(VBotSurface.Space.section)
@@ -862,7 +896,7 @@ struct ComputerView: View {
             return "Waiting for a desktop preview from the Local VM."
         }
         if current.cloudBackend == "vps" || current.computer == "local" {
-            return "This phone can watch frames while the agent works. Control stays on the paired computer."
+            return CloudViewerPolicy.vpsBusyWatchCopy
         }
         if current.busy == true {
             return "Waiting for the first frame."
@@ -885,8 +919,8 @@ struct ComputerView: View {
             return "Running on Local VM. The desktop updates while this screen is open."
         case "cloud":
             return current.cloudBackend == "vps"
-                ? "Running on your VPS. The phone can only watch."
-                : "Running on Cloud. Open a live frame while the agent is working, or use the secure viewer from ···."
+                ? CloudViewerPolicy.vpsWatchCopy
+                : "Running on Cloud. Open a live frame while the agent is working, or use Open cloud desktop."
         case "local":
             return "Running on this Mac. Use ··· to switch to Local or Cloud."
         case "off":
@@ -955,6 +989,15 @@ struct ComputerView: View {
             }
 
             Spacer(minLength: 0)
+
+            if let watchCaption = ComputerPresentationState.watchCaption(for: current) {
+                Text(watchCaption)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .frame(maxWidth: 160, alignment: .trailing)
+                    .accessibilityLabel(watchCaption)
+            }
 
             GlassButton(systemImage: "square.grid.2x2", weight: .medium) {
                 Haptics.selection()
@@ -1032,8 +1075,11 @@ struct ComputerView: View {
                         showingControls = false
                         confirmingDesktop = true
                     } label: {
-                        Label("Open secure cloud viewer", systemImage: "display")
+                        Label(CloudViewerPolicy.openDesktopTitle, systemImage: "display")
                     }
+                    .disabled(openingDesktop)
+                    .frame(minHeight: VBotSurface.Hit.minimum)
+                    .accessibilityHint(CloudViewerPolicy.externalSemantics)
                     .vbotRowSurface()
                 }
                 if canShowLocalVmControls {
@@ -1346,6 +1392,7 @@ struct ComputerView: View {
         do {
             desktopURL = try await session.cloudDesktop(for: current)
         } catch {
+            desktopURL = nil
             desktopError = error.localizedDescription
         }
     }
