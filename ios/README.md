@@ -1,4 +1,9 @@
-# OpenMausBot companion (iOS)
+# V Bot companion (iOS)
+
+V Bot is the private product name for this native client. The iOS bundle identifier remains
+`com.posival.openmausmobile` deliberately: changing it would strand existing TestFlight installs,
+Keychain pairing state, widgets, and the share extension. Upstream OpenMausBot attribution and
+clean-room boundaries remain documented below.
 
 Your bots keep running on the laptop. This is the phone you watch them from,
 answer their approvals on, and send them the next thing.
@@ -8,12 +13,13 @@ transcripts and computers. The phone owns nothing — it is a second client of t
 same harness the desktop app talks to, through the restricted sidecar described in
 [`docs/ios-companion.md`](../docs/ios-companion.md).
 
-## Status
+## Status (build 62)
 
-Built and verified against a real harness on both a simulator and an iPhone:
-QR handoff, Bonjour discovery, manual LAN and Tailscale pairing, the roster, paged chat,
-streaming replies, the computer view, and — the one that matters — an approval
-raised by a bot on the Mac, answered on the phone, with the bot carrying on.
+The private release line is build 62 (`CURRENT_PROJECT_VERSION: 62`) at repository HEAD `8bf9ef9`.
+The code and focused suites cover QR handoff, Bonjour/manual LAN and Tailscale pairing, the roster,
+paged chat, settled replies, model/provider selection, attachments, the computer view, and approval
+flows. Build 62 is recorded as valid in internal TestFlight; a fresh physical-device install,
+cellular VM exercise, and deployed-HEAD parity are release gates and are not claimed by this README.
 
 The event stream deliberately reads raw bytes rather than
 `URLSession.AsyncBytes.lines`. Three easy-to-miss failure modes are covered by

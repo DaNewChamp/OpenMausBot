@@ -1,7 +1,7 @@
 # V Bot Premium Mobile Roadmap
 
-> **Planning artifact for the `cursor/vbot-premium-plan` worktree.**  
-> Audited against **TestFlight build 56** (`ios/project.yml` → `CURRENT_PROJECT_VERSION: "56"`, marketing `1.0.0`).  
+> **Planning artifact for the V Bot private release line.**
+> Audited against **TestFlight build 62** (`ios/project.yml` → `CURRENT_PROJECT_VERSION: "62"`, marketing `1.0.0`) and repository HEAD **`8bf9ef9`**.
 > Observable Grok Bot behavior and screenshots are **reference only** — implementation must be clean-room.
 
 **Goal:** Make V Bot a smooth, visually premium, model-agnostic Grok Bot alternative with reliable local and cloud VM surfaces — without copying proprietary code, private APIs, or assets.
@@ -12,26 +12,30 @@
 
 ---
 
-## 1. Current-State Scorecard (build 56)
+## 1. Current-State Scorecard (build 62)
 
 Scores are **1–10** for perceived polish + reliability on a physical iPhone against a paired Mac harness. Higher = closer to premium Grok-class feel without compromising V Bot identity.
 
-| Area | Score | Build-56 baseline | Primary gaps |
+| Area | Score | Build-62 implementation state | Primary gaps |
 |---|---:|---|---|
-| **Home** (`ChatListView`, `PinnedChatShelf`, `UpdatesSheet`) | **7** | Near-black canvas (`VBotSurface`), glass header, pinned hero row, Updates pill, Needs-you island, swipe pin | Large-roster scroll jank untested at 100+ chats; search opens secondary mode without transition polish; account sheet vs settings split feels uneven |
-| **Chat** (`ChatView`, `SpeechBubble`, `MarkdownText`) | **8** | Coalesced streaming, near-bottom follow, grouped tool runs, approval cards, NEW divider, quoted reply | `ChatView.swift` still ~3k LOC — Release compile risk; long transcripts need memory/scroll profiling |
-| **Profile / Settings** (`AgentProfileView`, `SettingsView`, `ConnectedAppsView`) | **7** | Full agent profile (avatar, model, voice, routines), calm settings hierarchy, haptics/sounds toggles | Profile sheets duplicate model picker logic from chat; offline/disconnected states vary by screen |
-| **Groups / Pinning** (`GroupProfileView`, `NewGroupSheet`, `PinnedChatShelf`, `GroupRouting`) | **7** | Pin shelf (3-across), group profile with instructions + default responder, mention routing | Group creation UX is functional not delightful; no drag-reorder for pins |
-| **Composer / Keyboard** (`ChatView` composer, `SpeechDictation`, `VmKeyboardBar`) | **8** | Build 56: soft haptic on send, 44pt targets, computer-return keyboard restore (`composerLayoutRevision`), dictation, slash HUD | Busy/interrupt affordances dense; mention autocomplete could use stronger visual hierarchy |
-| **Attachments** (`ChatView`, `ShareInbox`, `AttachmentTests`) | **6** | Image pick/camera/file import, 10MB cap, share extension handoff, failed-upload retention | Images only — no video; share-to-chat routing can feel abrupt without staging preview |
-| **Streaming / Tool activity** (`StreamPresentation`, `ToolRunGrouping`, `AgentThoughtChamberView`, `TypingIndicatorView`) | **8** | Frame cadence coalescer, stable markdown gate, tool-run disclosure, reasoning chamber, VoiceOver phase announcements | Reasoning UI is custom not Grok-cloned — good; error/reconnect banners could be more legible |
-| **Onboarding / Pairing** (`CompanionApp`, `OnboardingViews`, `PairingView`, `PairingScanner`) | **7** | Welcome → opt-in pairing, QR-first, Bonjour discovery, hosted/Tailscale paths, notification education | No closed-app push; hosted pairing failure copy still technical on edge cases |
-| **Model routing** (`ChatModelPickerSheet`, `ModelPickerView`, `EngineSync`, `ModelClientTests`) | **7** | Per-bot instance + model + effort, inline chat picker, reconstructed-engine guardrails | Catalog load errors are plain; no “recent models” or favorites; fast-mode surfacing inconsistent |
-| **Local VM** (`ComputerView`, `VMViewerWebView`, `LocalVmInteractionChrome`, `RemoteDesktopCanvas`) | **6** | Per-bot status, create/stop/recreate, proxied noVNC viewer, pointer modes, phone clipboard bar | Viewer load failures fall back to screenshot canvas; join ticket/WebSocket health is fragile on cellular |
-| **Cloud VM** (`ComputerView`, `CloudDesktopBrowser`, `ComputerPresentationState`) | **5** | Secure Box viewer via in-app Safari; VPS/cloud screenshot watch path | No native cloud viewer; VPS explicitly unavailable on phone; cloud feels second-class vs local |
-| **Accessibility / Performance** (`ConversationTypography`, reduce-motion paths, `ChatView` a11y) | **6** | Dynamic Type on conversation text, reduce-motion on animations, extensive labels in chat | No systematic Large Content Viewer audit; `ComputerView` Release compile history; no Instruments baseline |
+| **Home** (`ChatListView`, `PinnedChatShelf`, `UpdatesSheet`) | **8** | Near-black canvas, compact Grok-proportioned header/hero avatars, centered pinned shelf, unread dots, swipe pin | Large-roster scroll and search transition still need physical-device profiling |
+| **Chat** (`ChatView`, `SpeechBubble`, `MarkdownText`) | **8** | Natural short/long bubbles, settled-message (non-streaming) presentation, near-bottom follow, grouped tools, approvals, NEW divider, quoted reply | `ChatView.swift` remains large; long-transcript memory/FPS evidence is still missing |
+| **Profile / Settings** (`AgentProfileView`, `SettingsView`, `ConnectedAppsView`) | **8** | Grok-style profile hierarchy, persisted avatar color/shape, provider-grouped model catalog, haptics/sounds toggles | Offline copy and device persistence need physical-device confirmation |
+| **Groups / Pinning** (`GroupProfileView`, `NewGroupSheet`, `PinnedChatShelf`, `GroupRouting`) | **8** | Group setup/instructions, mention routing, centered 3-across pin shelf, unread/read receipts | Drag reorder and large pin sets remain unverified |
+| **Composer / Keyboard** (`ChatView` composer, `SpeechDictation`, `VmKeyboardBar`) | **8** | Soft send/stop haptics, 44pt targets, keyboard restoration after Computer, dictation, slash HUD, share staging | Keyboard and send latency need final iPhone pass |
+| **Attachments** (`ChatView`, `ShareInbox`, `AttachmentTests`) | **8** | Image and MP4/MOV import, async thumbnails, 50MB bound, share extension staging, honest upload errors | Device share-sheet matrix is not yet recorded |
+| **Streaming / Tool activity** (`StreamPresentation`, `ToolRunGrouping`, `AgentThoughtChamberView`, `TypingIndicatorView`) | **8** | Settled replies by default, frame coalescing, grouped tool runs, reasoning chamber, VoiceOver phase announcements | Live SSE-drop exercise remains a device/backend gate |
+| **Onboarding / Pairing** (`CompanionApp`, `OnboardingViews`, `PairingView`, `PairingScanner`) | **7** | QR-first, Bonjour/manual hosted/Tailscale pairing, notification education | No closed-app push; hosted failure copy and remote-origin UX need live validation |
+| **Model routing** (`ChatModelPickerSheet`, `ModelPickerView`, `EngineSync`, `ModelClientTests`) | **8** | Server-driven provider order OpenAI → Claude → Cursor → OpenRouter → Grok Auth, per-bot model/effort, busy-switch safety | Catalog behavior on a deployed hub is not yet verified from build 62 |
+| **Local VM** (`ComputerView`, `VMViewerWebView`, `LocalVmInteractionChrome`, `RemoteDesktopCanvas`) | **7** | Per-bot lifecycle, proxied noVNC, pointer/clipboard controls, ticket refresh, screenshot fallback and save | Cellular viewer and real bridge VM lifecycle remain physical/backend gates |
+| **Cloud VM** (`ComputerView`, `CloudDesktopBrowser`, `ComputerPresentationState`) | **7** | HTTPS-only Box viewer policy, explicit VPS screenshot/watch-only state, no URL persistence | No live cloud/VPS device exercise has been recorded |
+| **Accessibility / Performance** (`ConversationTypography`, reduce-motion paths, `ChatView` a11y) | **7** | Dynamic Type, reduce-motion, VoiceOver labels/phase announcements, Release compile hardening | Instruments/FPS and Large Content Viewer audit remain open |
 
-**Release anchor (build 56):** `996d221 chore(ios): release TestFlight build 56` — composer haptics/44pt targets and reliable composer restore after Computer (`1ee000f`). Streaming coalescence landed in builds 54–55 (`dbbb0aa`, `66f4bd7`).
+**Release anchor (build 62):** `79cb731 chore(ios): bump TestFlight build 62 and update release notes` — compact Grok-proportioned home/conversation geometry, settled (non-streaming) replies, unread dots, and provider-grouped model settings. HEAD `8bf9ef9` also isolates the VPS turn-ready cache and registers the backup test with Vitest. Build 62 is recorded as `VALID / IN_BETA_TESTING`; this document does not claim a fresh device install or a deployed HEAD.
+
+### Verified public hub boundary (2026-08-30)
+
+`https://openmaus.posival.com/api/health` responds `200` with `{ "app": "openmausbot" }`. Authenticated status, bot, and version routes correctly return `401` without a paired-device token, so this check proves reachability only—not that the hub is running HEAD `8bf9ef9`, that build 62 can pair, or that VM/model/attachment flows work remotely. Deployment and device QA are explicit release gates; do not infer them from a green test suite or the health response.
 
 ---
 
@@ -43,10 +47,10 @@ Each item lists **exact files**, **priority**, and **observable acceptance crite
 
 | ID | Gap | Files / components | Acceptance criteria |
 |---|---|---|---|
-| P0-1 | **Local VM viewer reliability** | `ios/App/VMViewerWebView.swift`, `ios/App/ComputerView.swift`, `ios/App/Session.swift`, `companion/src/routes.ts` (viewer proxy), `server/local-vm-phone.ts` | On Wi‑Fi and LTE: open Computer → Local VM → live viewer loads within 8s or shows actionable retry (not blank WebView). Pointer mode toggle works in both trackpad and touch. Returning to chat restores composer above keyboard (build-56 behavior preserved). |
-| P0-2 | **Streaming reconnect without duplicate tails** | `ios/Sources/CompanionCore/Store.swift`, `ios/Sources/CompanionCore/StreamPresentation.swift`, `ios/App/ChatView.swift` | Background app ≤30s → foreground: live bubble resumes or cleanly replaces with settled message — never duplicate assistant bubbles. `StreamPresentationTests` + manual: kill SSE mid-stream, reconnect, no stuck “Working…” row. |
-| P0-3 | **Connection failover clarity** | `ios/Sources/CompanionCore/Failover.swift`, `ios/App/Session.swift`, `ios/App/ChatListView.swift` (`StatusBanner`) | Toggle Wi‑Fi off/on: status banner shows reconnecting → live without requiring force-quit. Hosted → LAN promotion never silently downgrades to cleartext LAN after user chose hosted. |
-| P0-4 | **Model switch safety while busy** | `ios/App/ChatModelPickerSheet.swift`, `ios/App/AgentProfileView.swift`, `ios/Sources/CompanionCore/Client.swift` | Busy bot: model picker disabled with inline copy; interrupt path still works. After interrupt, model change persists and next message uses new model (verify via harness transcript metadata). |
+| P0-1 | **Local VM viewer reliability** | `ios/App/VMViewerWebView.swift`, `ios/App/ComputerView.swift`, `ios/App/Session.swift`, `companion/src/routes.ts` (viewer proxy), `server/local-vm-phone.ts` | **Partially implemented.** On Wi‑Fi and LTE: open Computer → Local VM → live viewer loads within 8s or shows actionable retry (not blank WebView). Pointer mode toggle works in both trackpad and touch. Returning to chat restores composer above keyboard. Device + paired-bridge proof is still required. |
+| P0-2 | **Streaming reconnect without duplicate tails** | `ios/Sources/CompanionCore/Store.swift`, `ios/Sources/CompanionCore/StreamPresentation.swift`, `ios/App/ChatView.swift` | **Implemented in code/tests; device gate open.** Background app ≤30s → foreground must resume or replace with one settled message; manual SSE-drop proof is still required. |
+| P0-3 | **Connection failover clarity** | `ios/Sources/CompanionCore/Failover.swift`, `ios/App/Session.swift`, `ios/App/ChatListView.swift` (`StatusBanner`) | **Implemented in code/tests; device gate open.** Toggle Wi‑Fi off/on and verify reconnecting → live; hosted intent must never silently downgrade to cleartext LAN. |
+| P0-4 | **Model switch safety while busy** | `ios/App/ChatModelPickerSheet.swift`, `ios/App/AgentProfileView.swift`, `ios/Sources/CompanionCore/Client.swift` | **Implemented in code/tests; live catalog gate open.** Busy picker is disabled with inline copy; after interrupt, selection persists and the next message uses it. |
 
 ### P1 — Premium feel + Grok-class parity (clean-room)
 
@@ -54,7 +58,7 @@ Each item lists **exact files**, **priority**, and **observable acceptance crite
 |---|---|---|---|
 | P1-1 | **Surface token consistency** | `ios/App/VBotSurface.swift`, `ios/App/Glass.swift`, `ios/App/GroupProfileView.swift`, `ios/App/SettingsView.swift`, `ios/App/ComputerView.swift` | Settings, group profile, and computer screens use the same background, card, and glass treatments as home/chat — no rogue `Form` grays or one-off corner radii. Side-by-side screenshot: home ↔ settings feels like one app. |
 | P1-2 | **Loading & empty-state polish** | `ios/App/ModelPickerView.swift` (`ModelPickerLoadingView`), `ios/App/ChatListView.swift`, `ios/App/AgentProfileView.swift`, `ios/App/ComputerView.swift` | Every async surface shows skeleton or `ContentUnavailableView` within 1 frame of appear — never a blank white/black flash. Offline profile shows cached identity + “Reconnect to edit.” |
-| P1-3 | **Composer micro-interaction pass** | `ios/App/ChatView.swift`, `ios/App/PlatformBridge.swift` (`Haptics`, `SoundEffects`), `ios/App/Composer/TypingIndicatorView.swift` | Send: soft haptic + brief send-button scale (build 56 baseline). Stop: distinct haptic from send. Dictation start/stop: selection haptic. Settings toggles gate haptics/sounds app-wide. |
+| P1-3 | **Composer micro-interaction pass** | `ios/App/ChatView.swift`, `ios/App/PlatformBridge.swift` (`Haptics`, `SoundEffects`), `ios/App/Composer/TypingIndicatorView.swift` | Send: soft haptic + brief send-button scale (build 62 baseline). Stop: distinct haptic from send. Dictation start/stop: selection haptic. Settings toggles gate haptics/sounds app-wide. |
 | P1-4 | **Share extension staging** | `ios/Share/ShareViewController.swift`, `ios/Shared/ShareInbox.swift`, `ios/App/Session.swift`, `ios/App/CompanionApp.swift` | Share image/text/URL from Safari → V Bot opens with attachment preview in composer (not silent drop). Cancel clears staged payload. |
 | P1-5 | **Tool / reasoning presentation** | `ios/App/Cards/AgentThoughtChamberView.swift`, `ios/App/ChatView.swift` (tool run grouping), `ios/Sources/CompanionCore/ToolRunGrouping.swift` | Multi-tool run collapses to one disclosure; expanding shows ordered steps. Reasoning card streams title “Thinking…” → “Thinking” on settle. VoiceOver announces working/finished once per turn. |
 | P1-6 | **Group composer affordances** | `ios/Sources/CompanionCore/GroupRouting.swift`, `ios/App/ChatView.swift`, `ios/App/GroupProfileView.swift` | Mentions-only room: composer placeholder hints “@mention a bot”; `@` opens ranked candidates with bot colors. Default responder changes reflect in hint within one navigation pop. |
@@ -125,9 +129,9 @@ Bounded, non-overlapping waves in dependency order. Each wave ends with a **veri
 
 ## 5. Recommended First Wave (maximum polish, lowest regression)
 
-**Ship W1: Surface Cohesion & Perceived Responsiveness** first.
+**W1–W7 are implemented on the private release line; W8 is the remaining audit wave.**
 
-**Why:** It is almost entirely presentational — touches shared tokens (`VBotSurface`, `Glass`) and loading/empty patterns, not SSE, VM, or model wire formats. Build 56 already invested in composer haptics; W1 extends that discipline app-wide without risking the streaming/VM contracts that caused prior Release compile pain.
+**Why:** The completed waves deliberately kept presentation, stream safety, VM policy, attachments, model routing, and background presence in separate changes. Build 62 is the current iOS validation anchor; W8 is intentionally held until physical-device and Instruments evidence exists.
 
 **W1 task bundle (ordered):**
 
@@ -135,7 +139,7 @@ Bounded, non-overlapping waves in dependency order. Each wave ends with a **veri
 2. Add skeleton loaders mirroring `ModelPickerLoadingView` to `AgentProfileView` (instances/routines) and `ComputerView` (instances list, viewer connecting).
 3. Centralize haptic/sound gating in `PlatformBridge.swift` — respect `CompanionPreferences.hapticsKey` / `soundsKey` already in `SettingsView`.
 4. Polish `PinnedChatShelf` pin/unpin animation and horizontal scroll metrics (`PinnedChatShelf.swift`).
-5. Increment `CURRENT_PROJECT_VERSION` to **57**; update `ios/AppStore/en-US/release_notes.txt`.
+5. For the next upload, increment `CURRENT_PROJECT_VERSION` from **62** only after the gates below pass; update `ios/AppStore/en-US/release_notes.txt`.
 
 **W1 regression watchlist:** composer send/stop, computer return keyboard, pin swipe, pairing QR — all must pass smoke on physical device before merge.
 
@@ -145,12 +149,9 @@ Bounded, non-overlapping waves in dependency order. Each wave ends with a **veri
 
 | Stage | Build bump | Audience | Physical-device QA checkpoint |
 |---|---|---|---|
-| **Alpha** | 57–58 (W1) | Vincent only, Wi‑Fi install fallback OK | Home/settings visual cohesion; haptics toggle; pin shelf |
-| **Internal TF 1** | 59–60 (W2) | Internal TestFlight group | SSE drop mid-reply; model switch after interrupt; Release archive |
-| **Internal TF 2** | 61–62 (W3) | Internal + 1 trusted tester | Local VM create → viewer → clipboard → chat return on LTE |
-| **Internal TF 3** | 63–64 (W4–W5) | Internal group | Share extension; group mentions; model picker across engines |
-| **Internal TF 4** | 65–66 (W6–W7) | Internal group | Failover matrix; Live Activity linger |
-| **External TF** | 67+ (W8 complete) | External TestFlight | Full QA script below; 48h soak |
+| **Completed internal builds** | 57–62 (W1–W7 implementation) | Internal TestFlight | Code/test gates passed; build 62 is the current approved internal artifact |
+| **Next internal build** | 63+ (W8/device fixes) | Internal group | Only after the physical-device matrix below and any required fixes |
+| **External TF** | After W8 | External TestFlight | Full QA script below; 48h soak |
 | **App Store 1.0** | Marketing version bump when ready | Phased release manual | App Review notes from `ios/AppStore/review-notes.md` |
 
 ### Physical-device QA script (run before every internal TestFlight upload)
@@ -177,8 +178,8 @@ cd ios && xcodegen generate
 
 The premium mobile goal is **done** when all of the following are true:
 
-1. **Scorecard:** Every area in §1 is **≥8** on a physical iPhone against a production-class paired Mac (hosted + LAN tested).
-2. **P0 cleared:** P0-1 through P0-4 verified on device with no open Sev-1/Sev-2 issues.
+1. **Scorecard:** Every area in §1 is **≥8** on a physical iPhone against a production-class paired Mac (hosted + LAN tested); current scores are implementation estimates until W8 evidence is attached.
+2. **P0 cleared:** P0-1 through P0-4 verified on device with no open Sev-1/Sev-2 issues; code/tests alone are not sufficient.
 3. **Model agnostic:** User can switch among all harness-advertised instances (Codex, Claude, Grok-route, opencode-go, etc.) from chat and profile without app update; busy/interrupt rules enforced.
 4. **Local VM reliable:** Create/stop/recreate works per-bot; viewer loads or degrades to screenshot canvas with explicit status — never a silent blank surface.
 5. **Cloud VM honest:** Box interactive viewer works via in-app Safari; VPS/cloud backends show correct non-interactive copy (`ComputerPresentationState`).
@@ -187,8 +188,8 @@ The premium mobile goal is **done** when all of the following are true:
 8. **Accessibility:** VoiceOver completes home → chat → approve → settings without traps; Dynamic Type does not clip composer or bubbles at AX5.
 9. **Performance:** 500-message thread meets §P2-8 thresholds on iPhone 15 class hardware.
 10. **Clean-room:** No Grok proprietary assets, APIs, or copied UI vectors; `ProductIdentityTests` green; App Store privacy answers match binary.
-11. **Release:** External TestFlight soak ≥48h, internal QA script §6 completed on two network conditions (Wi‑Fi + cellular), `CURRENT_PROJECT_VERSION` incremented per upload, release notes user-facing.
+11. **Release:** External TestFlight soak ≥48h, internal QA script §6 completed on two network conditions (Wi‑Fi + cellular), `CURRENT_PROJECT_VERSION` incremented per upload, release notes user-facing, and the current hub commit is deployed and health-checked. None of the device/deploy gates are claimed by this planning update.
 
 ---
 
-*Plan authored from audit of `ios/App`, `ios/Tests/CompanionCoreTests`, `ios/Sources/CompanionCore`, `companion/src/routes.ts`, and build-56 release state. Execution agents should not modify this file from implementation worktrees unless explicitly tasked with plan revisions.*
+*Plan refreshed 2026-08-30 from the private release line at HEAD `8bf9ef9`, `ios/project.yml`, `ios/AppStore/en-US/release_notes.txt`, and the completed W1–W7 changes. Observable Grok Bot behavior and screenshots remain clean-room references; no proprietary code, assets, private APIs, or signing material are copied. Execution agents should not modify this file from implementation worktrees unless explicitly tasked with plan revisions.*

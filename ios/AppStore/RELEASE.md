@@ -1,12 +1,22 @@
 # TestFlight and App Store release
 
-The app is native Swift and uses XcodeGen; EAS commands do not apply.
+The app is native Swift and uses XcodeGen; EAS commands do not apply. The private product name is
+**V Bot**. Keep the existing bundle identifiers (`com.posival.openmausmobile`, `.widgets`, and
+`.share`) so current TestFlight installs, Keychain pairing, widgets, and share handoff continue to
+work; renaming the display name does not require a bundle-ID migration.
+
+## Current release state
+
+- Repository HEAD: `8bf9ef9`.
+- Current iOS project version: **62** (`MARKETING_VERSION` `1.0.0`).
+- Build 62 is recorded as `VALID / IN_BETA_TESTING` in the internal TestFlight lane.
+- This file does not claim that HEAD is deployed to the public hub or that physical-device QA is complete.
 
 ## One-time Apple setup
 
 1. Enrol in the Apple Developer Program.
-2. Register the bundle IDs `com.openmausbot.app` and `com.openmausbot.app.widgets` (or change them in `project.yml` before the first upload).
-3. Create the matching app in App Store Connect with the name **OpenMaus Mobile**, primary category **Productivity**, and a unique SKU.
+2. Register the bundle IDs `com.posival.openmausmobile`, `com.posival.openmausmobile.widgets`, and `com.posival.openmausmobile.share` (already declared in `project.yml`).
+3. Create or use the matching App Store Connect app with the display name **V Bot**, primary category **Productivity**, and a unique SKU. Preserve upstream OpenMausBot attribution in the review metadata.
 4. Create or select an Apple Distribution certificate and App Store provisioning profile.
 5. Add the review contact details in App Store Connect; do not commit private contact data or App Store Connect keys.
 
@@ -15,10 +25,10 @@ The app is native Swift and uses XcodeGen; EAS commands do not apply.
 1. Run `swift test` from `ios/` and the repository test suite.
 2. Generate the Xcode project with `xcodegen generate` from `ios/`.
 3. Set `DEVELOPMENT_TEAM` for the Release configuration in Xcode or on the archive command line.
-4. Increment `CURRENT_PROJECT_VERSION` for every upload. Update `MARKETING_VERSION` only for a new App Store version.
+4. Increment `CURRENT_PROJECT_VERSION` from 62 for every new upload. Update `MARKETING_VERSION` only for a new App Store version.
 5. Archive a generic iOS device build and validate it in Xcode Organizer.
 6. Upload to App Store Connect and distribute to internal TestFlight testers first.
-7. Complete a real-iPhone pass for pairing, Bonjour permission, Keychain restore, Tailscale, optional hosted HTTPS, approvals, background/foreground reconciliation, sign-out/revocation, and transcript sharing.
+7. Complete a real-iPhone pass for pairing, Bonjour permission, Keychain restore, Tailscale, optional hosted HTTPS, approvals, background/foreground reconciliation, sign-out/revocation, transcript sharing, attachments, and Local VM/watch paths.
 8. After internal testing, submit to an external TestFlight group before App Review.
 
 ## App Store Connect
@@ -71,7 +81,7 @@ cd ~/Github/OpenMausBot
 ./scripts/install-ios-device.sh
 ```
 
-Pulls `personal/cursor/build-36-local-vm-phone-a27c` (or set `BRANCH=…`), builds Debug, installs and launches via `devicectl`.
+Builds the selected branch (default current checkout), installs and launches via `devicectl`. Set `BRANCH=…` only when intentionally testing an older or isolated branch; do not use the historical `personal/cursor/build-36-local-vm-phone-a27c` branch as a release source.
 
 ### Path B — Mac mini archives, MacBook installs (Release, most reliable for agents)
 
@@ -102,4 +112,3 @@ If the upload limit is the only blocker, keep the `.xcarchive` under `build/` an
 - **Release compile**: if `ComputerView.swift` times out in `-O`, extract heavy `.task` bodies into private methods (see commit `9de7756`).
 - **Wrong destination id** makes `xcodebuild` list simulators only — use the `xctrace` id for build, the `devicectl` UUID for install.
 - WiFi install replaces the app at `com.posival.openmausmobile`; delete and reinstall if icon/notification cache looks stale after a branding change.
-

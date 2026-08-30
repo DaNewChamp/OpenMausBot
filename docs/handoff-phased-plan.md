@@ -2,13 +2,13 @@
 
 **Handoff document for implementing agent (Codex)**  
 Repo: `~/Github/OpenMausBot` · Fork of upstream OpenMausBot, iOS/hosted-focused · Apache-2.0  
-**Last updated:** 2026-08-29 (Fable review + Cursor session)
+**Last updated:** 2026-08-30 (V Bot build-62 closeout)
 
 ---
 
 ## 1. Executive summary
 
-V Bot already has the skeleton of the target architecture: a headless harness that owns all bot state, a scrubbing companion sidecar as the only client-facing surface, a native iOS thin client, a paired bridge daemon for home machines, and deploy scripts for both hub hosts (Mac mini launchd, Servarica VPS systemd). The two largest gaps are **trust** and **portability**: bridge shell execution today runs arbitrary commands with no user consent and `shell` capability granted by default, and hub migration is a collection of rsync scripts with hardcoded per-bot patches rather than a first-class export/import. This plan closes those two gaps first (Phases 1–2), then unifies the model switcher (3), grows the desktop viewer into a full companion client (4), completes bridge Local VM relay (5), adds closed-app push (6), and closes out Grok Bot interaction parity (7). Every phase has a live-verification gate against the deployed Servarica hub — a green build is never the exit criterion.
+V Bot now has the target split: a headless harness owns bot state, the scrubbing companion is the only phone surface, the native iOS client is paired through a restricted sidecar, the bridge daemon owns opt-in machine capabilities, and the private desktop shell is being brought to parity. Phases 1–7 have landed in code and focused tests; the remaining work is deployment reconciliation and physical-device/performance verification, not another speculative rewrite. Every phase still has a live-verification gate against the deployed hub—a green build is never the exit criterion.
 
 ---
 
@@ -17,10 +17,12 @@ V Bot already has the skeleton of the target architecture: a headless harness th
 ### Deployed today
 
 - **Hub:** Servarica VPS — systemd `openmausbot-harness`, `openmausbot-sidecar`, `openmausbot-cloudflared`; public URL `https://openmaus.posival.com`; data `/var/lib/openmausbot`; pairing `/var/lib/openmausbot-companion`; runtime `/opt/openmausbot/runtime`.
-- **Phone:** V Bot iOS **build 54** (`com.posival.openmausmobile`), paired over hosted HTTPS.
+- **Phone:** V Bot iOS **build 62** (`com.posival.openmausmobile`), recorded `VALID / IN_BETA_TESTING`; a fresh device install is not claimed by this document.
 - **Bots:** 10 hosted bots; Chief Keef in **Investments** section with CIO/Scout/Crypto/Sniper reporting in; audit via `scripts/audit-vps-bots.mjs`.
 - **Mac mini:** optional bridge host; see `docs/cloud-vps-hosting.md` §Cutover.
-- **Engines on hub:** codex (logged in), cursor-agent, claude.
+- **Engines on hub:** codex, cursor-agent, and claude are documented; the build-62 provider catalog is server-driven (OpenAI → Claude → Cursor → OpenRouter → Grok Auth) and requires an authenticated live check.
+
+The public health endpoint `https://openmaus.posival.com/api/health` returned `200` on 2026-08-30. Authenticated status/bot/version routes returned `401` without a paired-device token, so public reachability is verified but deployment parity with HEAD `8bf9ef9`, bot sync, VM control, and remote login remain gated. Do not create a second public origin or change DNS/tunnels as part of this plan.
 
 ### Current architecture
 
@@ -89,7 +91,7 @@ V Bot already has the skeleton of the target architecture: a headless harness th
 4. **Explicit capabilities** — unsupported = disabled with human-readable reason.
 5. **Machine execution requires consent** (after Phase 1) — approval or scoped always-allow.
 6. **Pairing identity durable** — survives hub migration; don't change bundle ID / URL scheme casually.
-7. **Native reimplementation only** for Grok parity — no Grok/xAI assets.
+7. **Native reimplementation only** for Grok parity — no Grok/xAI assets; keep the stable iOS bundle ID `com.posival.openmausmobile` so existing TestFlight installs and pairings survive the V Bot rename.
 8. **Verify live, not green** — exercise `https://openmaus.posival.com` and phone.
 9. **Read git log + live deploy** before editing — multi-agent repo.
 10. **Never print or commit secrets.**
@@ -98,7 +100,7 @@ V Bot already has the skeleton of the target architecture: a headless harness th
 
 ## 5. Full phase plan
 
-### Phase 1 — Bridge local-command trust boundary
+### Phase 1 — Bridge local-command trust boundary (**implemented; live gate open**)
 
 **Goal:** No agent command on a bridge without explicit, revocable user consent. Bridges advertise nothing by default.  
 **Dependencies:** none — do first.
@@ -127,7 +129,7 @@ curl -sf https://openmaus.posival.com/api/health
 
 ---
 
-### Phase 2 — First-class hub migration
+### Phase 2 — First-class hub migration (**design/runbook; round-trip gate open**)
 
 **Goal:** One export/import; phone + bridges survive; no manual bot patching.  
 **Dependencies:** after Phase 1 (grants migrate too).
@@ -146,7 +148,7 @@ curl -sf https://openmaus.posival.com/api/health
 
 ---
 
-### Phase 3 — Native switcher unification
+### Phase 3 — Native switcher unification (**implemented; live catalog gate open**)
 
 **Goal:** One picker everywhere; room/global defaults; queued switch on busy bots.  
 **Dependencies:** Phase 2 for cross-host testing.
@@ -157,7 +159,7 @@ curl -sf https://openmaus.posival.com/api/health
 
 ---
 
-### Phase 4 — Desktop companion parity
+### Phase 4 — Desktop companion parity (**shell implemented; daily-session gate open**)
 
 **Goal:** Viewer = full peer client (send, steer, approve, rooms, VM, bridges).  
 **Dependencies:** Phase 1 + 3.
@@ -168,7 +170,7 @@ curl -sf https://openmaus.posival.com/api/health
 
 ---
 
-### Phase 5 — Bridge Local VM completeness
+### Phase 5 — Bridge Local VM completeness (**implemented; paired-bridge gate open**)
 
 **Goal:** Bridge pulls VM image; create/recreate works from VPS hub.  
 **Dependencies:** Phase 1.
@@ -179,7 +181,7 @@ curl -sf https://openmaus.posival.com/api/health
 
 ---
 
-### Phase 6 — Closed-app push (APNs)
+### Phase 6 — Closed-app push (APNs) (**scaffold only; production gate open**)
 
 **Goal:** Approvals reach locked phone.  
 **Dependencies:** Phase 1; Phase 2 for token migration.
@@ -190,7 +192,7 @@ curl -sf https://openmaus.posival.com/api/health
 
 ---
 
-### Phase 7 — Grok parity closeout
+### Phase 7 — Grok parity closeout (**native UI pass implemented; physical parity gate open**)
 
 **Goal:** Close `docs/ios-grok-parity-wave35.md`; freeze or extend reconstructed engine.  
 **Dependencies:** Phase 3.
@@ -243,7 +245,7 @@ Phase 7 last
 2. Flip bridge capability defaults + docs.
 3. Truncation flag end-to-end.
 4. Tests + `node scripts/test-floor.mjs`.
-5. Deploy Servarica; re-pair mini with `OMB_BRIDGE_SHELL=1 OMB_BRIDGE_LOCAL_VM=1`.
+5. Deploy Servarica and re-pair mini with `OMB_BRIDGE_SHELL=1 OMB_BRIDGE_LOCAL_VM=1` only as an explicitly approved cutover step; the historical session did not authorize a new deployment.
 
 Session 2: approval broker + grants (items 2–4).  
 Session 3: rotation/revoke + companion routes + iOS Bridges list (items 5–7).
@@ -267,13 +269,15 @@ Session 3: rotation/revoke + companion routes + iOS Bridges list (items 5–7).
 
 ---
 
-## Live state (2026-08-29)
+## Live state (2026-08-30)
 
-- Branch: `cursor/vps-turn-ready-cache-08ea` (deployed to Servarica)
+- Private release HEAD: `8bf9ef9` (docs and desktop branches are derived from this commit). The public hub's exact commit is not exposed by unauthenticated routes and must be reconciled during the gated deployment step.
 - Phase 1 Session 1 landed in `9f1b410`, `67eef04`, and `010bcdc`: bridge capabilities are opt-in, 1 MB output truncation is reported end-to-end, and bridge build debris is ignored.
 - Live verified: a no-flag bridge paired with `capabilities: []`; the retained Mac mini bridge advertises `shell` + `local-vm`; `run_on_bridge hostname` returned `Vincents-Mac-mini.local`; oversized output returned `truncated: true`.
 - Phase 1 Session 2 (branch `cursor/bridge-job-lifecycle-08ea`): durable bridge job lifecycle in `bridge-jobs.json` with states `queued/running/succeeded/failed/cancelled`, idempotency keys, bounded retries, stale-running redelivery, loopback audit/cancel routes, and bridge daemon in-flight dedup. Focused bridge suite: 20/20 pass; bridge + agents-proxy focused: 48/48 pass; typecheck + server/bridge/companion builds pass.
 - Chief Keef + Investments desk section fix applied on VPS
 - Turn-ready VPS cache shipped (`server/vps-computer.ts`)
-- iOS build 54 (model picker backdrop fix)
+- iOS build 62 (`com.posival.openmausmobile`) is the current TestFlight artifact; release notes cover bubble geometry, compact Grok-proportioned avatars, unread dots, and provider ordering.
+- Completed implementation waves include W1 surface cohesion, W2 reconnect/model safety, W3 Local VM fallback/screenshot save, W4 share/groups/video, W5 model catalog safety, W6 HTTPS-only failover/cloud watch policy, and W7 Live Activity/APNs scaffolding. W8 (Instruments, Large Content Viewer, physical-device soak) remains open.
+- **Release gate:** before any next upload or hub deploy, run the repository suites, generate XcodeGen, archive unsigned/Release as appropriate, pair a real device, exercise the §6 QA script on Wi‑Fi and cellular, deploy only with explicit approval, then verify the public health and an authenticated bot/VM flow.
 - Do not touch Oracle firewall; do not commit secrets
