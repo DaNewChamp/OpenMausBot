@@ -20,6 +20,22 @@ public enum CalmSurfacePolicy: Sendable {
     public static func selectCatalog<T>(cached: [T], incoming: [T], failed: Bool) -> [T] {
         failed ? cached : incoming
     }
+
+    /// Destination rows and skeleton are mutually exclusive while instances load.
+    public static func showsDestinationRows(isLoading: Bool, instanceResolved: Bool) -> Bool {
+        !showsSkeleton(isLoading: isLoading, hasCachedRows: instanceResolved)
+    }
+
+    /// Unknown instances stay visible but untappable until capabilities resolve.
+    public static func destinationsSelectable(isLoading: Bool, instanceResolved: Bool) -> Bool {
+        !isLoading && instanceResolved
+    }
+
+    /// Reserve the pinned shelf slot after the first pin so 0↔1 transitions
+    /// do not shove the roster; skip reservation on a cold roster with no pins.
+    public static func reservesPinnedShelfRegion(pinCount: Int, animatingCollapse: Bool) -> Bool {
+        pinCount > 0 || animatingCollapse
+    }
 }
 
 /// Three-across pinned shelf metrics. Extra pins scroll horizontally; the
@@ -37,7 +53,19 @@ public struct PinnedChatShelfLayout: Equatable, Sendable {
     public var tile: CGFloat
     public var spacing: CGFloat
 
-    public static var reservedHeight: CGFloat { coverAvatar + nameBlock }
+    public static var reservedHeight: CGFloat { reservedHeight(nameBlockHeight: nameBlock) }
+
+    public static func reservedHeight(nameBlockHeight: CGFloat) -> CGFloat {
+        coverAvatar + 7 + nameBlockHeight
+    }
+
+    /// Two-line caption2 label area that scales with Dynamic Type.
+    public static func nameBlockHeight(
+        captionLineHeight: CGFloat,
+        lines: CGFloat = 2
+    ) -> CGFloat {
+        max(nameBlock, ceil(captionLineHeight * lines))
+    }
 
     public static func overflows(pinCount: Int) -> Bool {
         pinCount > columns

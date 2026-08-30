@@ -23,6 +23,7 @@ struct ChatListView: View {
     @State private var showingNewGroup = false
     @State private var showingAccount = false
     @State private var groupProfile: Room?
+    @State private var pinnedShelfCollapseReserve = false
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -32,7 +33,11 @@ struct ChatListView: View {
                 header
                 StatusBanner()
 
-                if query.isEmpty, !pinnedChats.isEmpty {
+                if query.isEmpty,
+                   CalmSurfacePolicy.reservesPinnedShelfRegion(
+                    pinCount: pinnedChats.count,
+                    animatingCollapse: pinnedShelfCollapseReserve
+                ) {
                     PinnedChatShelf(summaries: pinnedChats) { chat in
                         Haptics.selection()
                         open(chat)
@@ -110,6 +115,20 @@ struct ChatListView: View {
                 }
             }
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: pinnedChats.map(\.id))
+            .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: pinnedShelfCollapseReserve)
+            .onChange(of: pinnedChats.count) { oldCount, newCount in
+                if newCount > 0 {
+                    pinnedShelfCollapseReserve = true
+                } else if oldCount > 0 {
+                    pinnedShelfCollapseReserve = true
+                    let delay = reduceMotion ? 0.0 : 0.28
+                    Task {
+                        try? await Task.sleep(for: .seconds(delay))
+                        guard !Task.isCancelled, pinnedChats.isEmpty else { return }
+                        pinnedShelfCollapseReserve = false
+                    }
+                }
+            }
             // top-aligned: the roster fills downward from the header
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             // a bot that stopped for you grows out of the island

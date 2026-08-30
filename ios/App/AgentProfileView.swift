@@ -161,7 +161,13 @@ struct AgentProfileView: View {
                 config = await session.configStatus()
                 voices = await session.voiceOptions()
                 let loaded = await session.loadRoutines()
-                routines = loaded.routines.filter { $0.botId == current.id }
+                let incoming = loaded.routines.filter { $0.botId == current.id }
+                let failed = session.status != .live && incoming.isEmpty && !routines.isEmpty
+                routines = CalmSurfacePolicy.selectCatalog(
+                    cached: routines,
+                    incoming: incoming,
+                    failed: failed
+                )
                 routinesLoading = false
                 if let config, !config.canSpeak(agentVoice: voice) {
                     speakReplies = false

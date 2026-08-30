@@ -62,7 +62,8 @@ struct SettingsView: View {
                     ComputerSettingsRow(
                         name: "Connect a computer",
                         status: "Not connected",
-                        connected: false
+                        connected: false,
+                        showsChevron: false
                     )
                 }
                 .buttonStyle(.plain)
@@ -224,6 +225,7 @@ struct SettingsView: View {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 16)
             .frame(minHeight: VBotSurface.Hit.row)
@@ -269,6 +271,7 @@ private struct ComputerSettingsRow: View {
     let name: String
     let status: String
     let connected: Bool
+    var showsChevron: Bool = true
 
     var body: some View {
         HStack(spacing: 12) {
@@ -297,9 +300,12 @@ private struct ComputerSettingsRow: View {
                 }
             }
             Spacer(minLength: 8)
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
         }
         .accessibilityElement(children: .combine)
     }
@@ -607,6 +613,7 @@ struct AccountSheet: View {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.secondary)
+                    .accessibilityHidden(true)
             }
             .padding(16)
             .vbotCard()
@@ -633,6 +640,7 @@ struct AccountSheet: View {
             Image(systemName: "chevron.right")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color.secondary)
+                .accessibilityHidden(true)
         }
         .padding(16)
         .frame(minHeight: VBotSurface.Hit.row)
@@ -647,12 +655,41 @@ struct EngineSelectionView: View {
     @State private var saving = false
     @State private var error: String?
 
+    private var canEdit: Bool {
+        CalmSurfacePolicy.canEditRemoteContent(
+            isLive: session.status == .live,
+            hasConnection: session.connection != nil
+        )
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: VBotSurface.Space.section) {
                 if CalmSurfacePolicy.showsSkeleton(isLoading: loading, hasCachedRows: sync != nil) {
                     VBotSurfaceGroup {
                         CalmSkeletonList(rows: 4, label: "Loading engines")
+                    }
+                } else if let sync {
+                    if !canEdit {
+                        ReconnectToEditBanner()
+                    }
+                    enginePicker(sync)
+                    engineStatus(sync)
+                    if !sync.bots.isEmpty { syncedAgents(sync) }
+                    if !sync.groups.isEmpty { syncedGroups(sync) }
+                    if let router = sync.router, sync.reconstructedMutationsReady {
+                        hostProvider(router)
+                    }
+                    if let error {
+                        VBotSurfaceGroup {
+                            Text(error)
+                                .foregroundStyle(.secondary)
+                                .padding(16)
+                            VBotHairline().padding(.leading, 16)
+                            Button("Try again") { Task { await load() } }
+                                .padding(.horizontal, 16)
+                                .frame(minHeight: VBotSurface.Hit.row)
+                        }
                     }
                 } else if let error {
                     VBotSurfaceGroup {
@@ -663,14 +700,6 @@ struct EngineSelectionView: View {
                         Button("Try again") { Task { await load() } }
                             .padding(.horizontal, 16)
                             .frame(minHeight: VBotSurface.Hit.row)
-                    }
-                } else if let sync {
-                    enginePicker(sync)
-                    engineStatus(sync)
-                    if !sync.bots.isEmpty { syncedAgents(sync) }
-                    if !sync.groups.isEmpty { syncedGroups(sync) }
-                    if let router = sync.router, sync.reconstructedMutationsReady {
-                        hostProvider(router)
                     }
                 }
             }
@@ -686,18 +715,33 @@ struct EngineSelectionView: View {
 
     private func enginePicker(_ sync: VBotEngineSync) -> some View {
         VBotSurfaceGroup(footer: engineFooter(sync)) {
-            Picker("Primary engine", selection: Binding(
-                get: { sync.selectedEngine },
-                set: { newEngine in Task { await save(engine: newEngine) } }
-            )) {
-                ForEach(VBotPrimaryEngine.allCases) { engine in
-                    Text(engine.displayName).tag(engine)
+            ForEach(Array(VBotPrimaryEngine.allCases.enumerated()), id: \.element.id) { index, engine in
+                Button {
+                    guard canEdit, !saving else { return }
+                    Task { await save(engine: engine) }
+                } label: {
+                    HStack {
+                        Text(engine.displayName)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if sync.selectedEngine == engine {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: VBotSurface.Hit.row)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(saving || !canEdit)
+                if index < VBotPrimaryEngine.allCases.count - 1 {
+                    VBotHairline().padding(.leading, 16)
                 }
             }
-            .disabled(saving)
-            .padding(.horizontal, 16)
-            .frame(minHeight: VBotSurface.Hit.row)
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Primary engine")
     }
 
     private func engineFooter(_ sync: VBotEngineSync) -> String {
@@ -780,29 +824,50 @@ struct EngineSelectionView: View {
     }
 
     private func hostProvider(_ router: VBotRouterState) -> some View {
-        VBotSurfaceGroup(
+        let selectableProviders = router.providers.filter(\.selectable)
+        return VBotSurfaceGroup(
             title: "Host provider",
             footer: "This selection is host-wide on Grok Reconstructed, not per agent."
         ) {
-            Picker("Provider", selection: Binding(
-                get: { router.selected.provider },
-                set: { provider in Task { await saveRouter(provider: provider, modelId: nil) } }
-            )) {
-                ForEach(router.providers.filter(\.selectable)) { provider in
-                    Text(provider.label).tag(provider.id)
+            ForEach(Array(selectableProviders.enumerated()), id: \.element.id) { index, provider in
+                Button {
+                    guard canEdit, !saving else { return }
+                    Task { await saveRouter(provider: provider.id, modelId: nil) }
+                } label: {
+                    HStack {
+                        Text(provider.label)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if router.selected.provider == provider.id {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: VBotSurface.Hit.row)
+                    .contentShape(Rectangle())
                 }
-                if router.providers.contains(where: { $0.id == router.selected.provider && $0.selectable }) == false {
-                    Text(router.selected.provider).tag(router.selected.provider)
+                .buttonStyle(.plain)
+                .disabled(saving || !canEdit)
+                if index < selectableProviders.count - 1 {
+                    VBotHairline().padding(.leading, 16)
                 }
             }
-            .disabled(saving)
-            .padding(.horizontal, 16)
-            .frame(minHeight: VBotSurface.Hit.row)
+            if router.providers.contains(where: { $0.id == router.selected.provider && $0.selectable }) == false {
+                HStack {
+                    Text(router.selected.provider)
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(Color.accentColor)
+                }
+                .padding(.horizontal, 16)
+                .frame(minHeight: VBotSurface.Hit.row)
+            }
             if router.selected.provider == "cursor" {
                 VBotHairline().padding(.leading, 16)
                 cursorModelPicker(router: router)
                     .padding(.horizontal, 16)
-                    .frame(minHeight: VBotSurface.Hit.row)
             } else {
                 VBotHairline().padding(.leading, 16)
                 Text("Only Cursor models can be changed here. Other providers keep their local model.")
@@ -863,14 +928,32 @@ struct EngineSelectionView: View {
 
     private func cursorModelPicker(router: VBotRouterState) -> some View {
         let models = selectableCursorModels(for: router)
-        return Picker("Cursor model", selection: Binding(
-            get: { router.selected.modelId },
-            set: { modelId in Task { await saveRouter(provider: "cursor", modelId: modelId) } }
-        )) {
-            ForEach(models, id: \.id) { model in
-                Text(model.id).tag(model.id)
+        return VStack(spacing: 0) {
+            ForEach(Array(models.enumerated()), id: \.element.id) { index, model in
+                Button {
+                    guard canEdit, !saving else { return }
+                    Task { await saveRouter(provider: "cursor", modelId: model.id) }
+                } label: {
+                    HStack {
+                        Text(model.id)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if router.selected.modelId == model.id {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    .frame(minHeight: VBotSurface.Hit.row)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(saving || !canEdit)
+                if index < models.count - 1 {
+                    VBotHairline()
+                }
             }
         }
-        .disabled(saving)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Cursor model")
     }
 }

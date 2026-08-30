@@ -10,6 +10,13 @@ struct PinnedChatShelf: View {
 
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .caption2) private var captionLineHeight: CGFloat = 13
+
+    private var reservedHeight: CGFloat {
+        PinnedChatShelfLayout.reservedHeight(
+            nameBlockHeight: PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: captionLineHeight)
+        )
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -44,7 +51,7 @@ struct PinnedChatShelf: View {
             .scrollBounceBehavior(overflowing ? .always : .basedOnSize, axes: .horizontal)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(height: PinnedChatShelfLayout.reservedHeight)
+        .frame(height: reservedHeight)
         .animation(reduceMotion ? nil : .snappy(duration: 0.28), value: summaries.map(\.id))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Pinned conversations")

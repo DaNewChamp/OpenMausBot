@@ -160,6 +160,20 @@ struct CalmSkeletonBar: View {
                     dimmed = true
                 }
             }
+            .onChange(of: reduceMotion) { _, reduced in
+                if reduced {
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        dimmed = false
+                    }
+                } else {
+                    dimmed = false
+                    withAnimation(.easeInOut(duration: 1.15).repeatForever(autoreverses: true)) {
+                        dimmed = true
+                    }
+                }
+            }
             .accessibilityHidden(true)
     }
 }

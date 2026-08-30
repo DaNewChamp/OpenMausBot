@@ -152,10 +152,20 @@ struct ComputerView: View {
         AdvertisedModelCatalog.instance(id: current.modelSelection.instanceId, in: instances)
     }
 
+    private var instanceResolved: Bool {
+        selectedInstance != nil
+    }
+
+    private var destinationsSelectable: Bool {
+        CalmSurfacePolicy.destinationsSelectable(
+            isLoading: instancesLoading,
+            instanceResolved: instanceResolved
+        )
+    }
+
     private var localVmDestinationEnabled: Bool {
-        // Unknown instance matches the server: missing capabilities allow the
-        // destination patch until we know this engine cannot mount Local VM.
-        selectedInstance?.supportsLocalVmDestination ?? true
+        guard destinationsSelectable else { return false }
+        return selectedInstance?.supportsLocalVmDestination ?? false
     }
 
     private var localVmDestinationDisabledReason: String {
@@ -441,13 +451,13 @@ struct ComputerView: View {
                 } label: {
                     Label("Local", systemImage: destination == "vm" ? "checkmark" : "laptopcomputer")
                 }
-                .disabled(savingDestination || !localVmDestinationEnabled)
+                .disabled(savingDestination || !destinationsSelectable || !localVmDestinationEnabled)
                 Button {
                     selectDestination("cloud")
                 } label: {
                     Label("Cloud", systemImage: destination == "cloud" ? "checkmark" : "cloud")
                 }
-                .disabled(savingDestination)
+                .disabled(savingDestination || !destinationsSelectable)
                 if canShowLocalVmControls {
                     Divider()
                     if localVmStatus?.canCreate == true {
@@ -855,12 +865,16 @@ struct ComputerView: View {
         NavigationStack {
             List {
                 Section {
-                    if CalmSurfacePolicy.showsSkeleton(isLoading: instancesLoading, hasCachedRows: selectedInstance != nil) {
+                    if CalmSurfacePolicy.showsSkeleton(
+                        isLoading: instancesLoading,
+                        hasCachedRows: instanceResolved
+                    ) {
                         CalmSkeletonList(rows: 2, label: "Loading computer destinations")
                             .vbotRowSurface()
+                    } else {
+                        destinationChoice("Local", mode: "vm", enabled: localVmDestinationEnabled)
+                        destinationChoice("Cloud", mode: "cloud", enabled: destinationsSelectable)
                     }
-                    destinationChoice("Local", mode: "vm", enabled: localVmDestinationEnabled)
-                    destinationChoice("Cloud", mode: "cloud", enabled: true)
                 } header: {
                     Text("Runs on")
                 } footer: {
@@ -991,7 +1005,7 @@ struct ComputerView: View {
                 }
             }
         }
-        .disabled(!enabled || savingDestination)
+        .disabled(!enabled || savingDestination || !destinationsSelectable)
         .vbotRowSurface()
     }
 
