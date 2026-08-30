@@ -9,10 +9,23 @@ final class HomeRosterLayoutPolicyTests: XCTestCase {
     }
 
     func testHeaderChromeMatchesReferenceControls() {
-        XCTAssertEqual(HomeRosterLayoutPolicy.profileDiameter, 56)
+        XCTAssertEqual(HomeRosterLayoutPolicy.profileDiameter, 40)
+        XCTAssertEqual(HomeRosterLayoutPolicy.profileTapDiameter, 44)
+        XCTAssertLessThan(HomeRosterLayoutPolicy.profileDiameter, HomeRosterLayoutPolicy.chromeButtonDiameter)
+        XCTAssertGreaterThanOrEqual(
+            HomeRosterLayoutPolicy.profileTapDiameter,
+            HomeRosterLayoutPolicy.profileDiameter
+        )
         XCTAssertEqual(HomeRosterLayoutPolicy.chromeButtonDiameter, 58)
         XCTAssertEqual(HomeRosterLayoutPolicy.chromeButtonGap, 12)
-        XCTAssertEqual(HomeRosterLayoutPolicy.headerChromeHeight, 56 + 8 + 12)
+        XCTAssertEqual(HomeRosterLayoutPolicy.headerChromeHeight, 58 + 8 + 12)
+    }
+
+    func testProfileAvatarMatchesReferenceScaleAgainstChrome() {
+        // Grok home reference: profile ~59px, search ~80px on the 589px canvas.
+        let referenceRatio: CGFloat = 59 / 80
+        let scaled = HomeRosterLayoutPolicy.chromeButtonDiameter * referenceRatio
+        XCTAssertEqual(HomeRosterLayoutPolicy.profileDiameter, scaled, accuracy: 3)
     }
 
     func testRowMetricsMatchReferenceCadence() {
@@ -206,11 +219,11 @@ final class HomeRosterLayoutPolicyTests: XCTestCase {
         )
         // 88pt hero + 56pt chrome cannot land on image-y 400; do not stretch
         // empty shelf to fake it. Content-sized reservation sits in-band.
-        XCTAssertEqual(firstRowPt, 274.44, accuracy: 2)
+        XCTAssertEqual(firstRowPt, 276.44, accuracy: 2)
         XCTAssertEqual(y590, 403, accuracy: 12)
         XCTAssertGreaterThan(y590, 380)
         XCTAssertLessThan(y590, 430)
-        XCTAssertEqual(HomeRosterLayoutPolicy.profileDiameter, 56)
+        XCTAssertEqual(HomeRosterLayoutPolicy.profileDiameter, 40)
         XCTAssertEqual(HomeRosterLayoutPolicy.chromeButtonDiameter, 58)
         XCTAssertEqual(HomeRosterLayoutPolicy.rowAvatar, 58)
         XCTAssertEqual(HomeRosterLayoutPolicy.rowMinHeight, 104)

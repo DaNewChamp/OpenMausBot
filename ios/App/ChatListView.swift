@@ -252,9 +252,10 @@ struct ChatListView: View {
                             size: HomeRosterLayoutPolicy.profileDiameter
                         )
                         .frame(
-                            width: HomeRosterLayoutPolicy.profileDiameter,
-                            height: HomeRosterLayoutPolicy.profileDiameter
+                            width: HomeRosterLayoutPolicy.profileTapDiameter,
+                            height: HomeRosterLayoutPolicy.profileTapDiameter
                         )
+                        .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
                     .glassCircle()

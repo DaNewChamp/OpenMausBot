@@ -10,7 +10,10 @@ public enum HomeRosterLayoutPolicy: Sendable {
     public static let referenceSafeAreaTop: CGFloat = 59
     public static let referenceTextColumnX: CGFloat = 110
 
-    public static let profileDiameter: CGFloat = 56
+    /// Visible account avatar on the 590×1280 reference (~59px ≈ 40pt at 402pt pane).
+    public static let profileDiameter: CGFloat = 40
+    /// Minimum tap target for the account control; the rendered circle stays smaller.
+    public static let profileTapDiameter: CGFloat = 44
     public static let chromeButtonDiameter: CGFloat = 58
     public static let chromeButtonGap: CGFloat = 12
 
@@ -27,7 +30,7 @@ public enum HomeRosterLayoutPolicy: Sendable {
     public static let shelfBottomPadding: CGFloat = 8
 
     public static var headerChromeHeight: CGFloat {
-        profileDiameter + headerTopPadding + headerBottomPadding
+        chromeButtonDiameter + headerTopPadding + headerBottomPadding
     }
 
     public static var rowContentLeadingInset: CGFloat {
