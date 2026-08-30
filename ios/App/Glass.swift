@@ -144,10 +144,13 @@ struct ScrollEdgeChrome<Content: View>: View {
             .background(alignment: edge == .top ? .top : .bottom) {
                 LinearGradient(
                     stops: [
-                        .init(color: Color.black.opacity(0.88), location: 0),
-                        .init(color: Color.black.opacity(0.62), location: 0.2),
-                        .init(color: Color.black.opacity(0.24), location: 0.4),
-                        .init(color: .clear, location: 0.62),
+                        .init(color: Color.black.opacity(0.94), location: 0),
+                        .init(color: Color.black.opacity(0.90), location: 0.35),
+                        .init(color: Color.black.opacity(0.86), location: 0.55),
+                        .init(color: Color.black.opacity(0.82), location: 0.72),
+                        .init(color: Color.black.opacity(0.76), location: 0.83),
+                        .init(color: Color.black.opacity(0.18), location: 0.94),
+                        .init(color: .clear, location: 1),
                     ],
                     startPoint: edge == .top ? .top : .bottom,
                     endPoint: edge == .top ? .bottom : .top

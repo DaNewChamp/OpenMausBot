@@ -23,7 +23,7 @@ final class ConversationLayoutPolicyTests: XCTestCase {
         XCTAssertEqual(ConversationLayoutPolicy.bubbleHorizontalPadding, 16)
         XCTAssertEqual(ConversationLayoutPolicy.bubbleCornerRadius, 24)
         XCTAssertEqual(ConversationLayoutPolicy.bubbleMaxWidthFraction, 0.83, accuracy: 0.001)
-        XCTAssertEqual(ConversationLayoutPolicy.headerScrimHeight, 118)
+        XCTAssertEqual(ConversationLayoutPolicy.headerScrimHeight, 136)
 
         let pane = ConversationLayoutPolicy.referenceWidth
         let maxBubble = ConversationLayoutPolicy.bubbleMaxWidth(paneWidth: pane)

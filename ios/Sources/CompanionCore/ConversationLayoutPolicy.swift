@@ -23,7 +23,7 @@ public enum ConversationLayoutPolicy: Sendable {
     public static let transcriptHorizontalMargin: CGFloat = 16
     public static let bubbleHorizontalPadding: CGFloat = 16
     public static let bubbleMaxWidthFraction: CGFloat = 0.83
-    public static let headerScrimHeight: CGFloat = 118
+    public static let headerScrimHeight: CGFloat = 136
     public static let bubbleCornerRadius: CGFloat = 24
     public static let transcriptRowSpacing: CGFloat = 10
     public static let dateSeparatorTopPadding: CGFloat = 14
