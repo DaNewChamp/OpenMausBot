@@ -296,6 +296,10 @@ struct ModelPickerView: View {
                         }
 
                         if models.contains(where: { optionIsSelected($0, rail: railInstance) }) == false,
+                           ProviderCatalogPolicy.shouldDisplaySelection(
+                            currentSelection,
+                            advertised: instances
+                           ),
                            ProviderCatalogPolicy.resolvedRail(
                             advertised: instances,
                             selection: currentSelection,

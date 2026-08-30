@@ -68,6 +68,15 @@ public struct PinnedChatShelfLayout: Equatable, Sendable {
     public static let heroCaptionSpacing: CGFloat = 7
     public static let heroTileSpacing: CGFloat = 20
 
+    /// The shelf's outer container also owns the breathing room above and
+    /// below the hero tile. Keeping that inset in the fixed reservation avoids
+    /// clipping the caption when SwiftUI applies Dynamic Type metrics.
+    public static func containerHeight(nameBlockHeight: CGFloat) -> CGFloat {
+        reservedHeight(nameBlockHeight: nameBlockHeight)
+            + HomeRosterLayoutPolicy.shelfTopPadding
+            + HomeRosterLayoutPolicy.shelfBottomPadding
+    }
+
     public var avatar: CGFloat
     public var tile: CGFloat
     public var spacing: CGFloat

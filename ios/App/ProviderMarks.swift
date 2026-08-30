@@ -62,7 +62,9 @@ struct ProviderMarkView: View {
             case "claude", "claudecode":
                 SVGIconShape(path: Self.claudePath, viewBox: CGSize(width: 256, height: 257))
                     .fill(Color(red: 0.85, green: 0.47, blue: 0.34))
-            case "codex", "openai":
+            case "openai":
+                OpenAIKnotMark(size: size)
+            case "codex":
                 SVGIconShape(path: Self.codexPath, viewBox: CGSize(width: 256, height: 260))
                     .fill(Color.primary)
             case "cursor":
@@ -240,6 +242,27 @@ struct ProviderMarkView: View {
         M282.65 282.65 V400 H400 V282.65 Z \
         M517.36 400 H634.72 V634.72 H517.36 Z
         """
+}
+
+/// An original, neutral AI-provider mark. It is deliberately built from
+/// SwiftUI primitives instead of reproducing a vendor's trademark artwork.
+private struct OpenAIKnotMark: View {
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<3, id: \.self) { index in
+                Capsule(style: .continuous)
+                    .stroke(Color.primary, lineWidth: max(1.2, size * 0.12))
+                    .frame(width: size * 0.78, height: size * 0.31)
+                    .rotationEffect(.degrees(Double(index) * 60))
+            }
+            Circle()
+                .fill(Color.primary)
+                .frame(width: size * 0.12, height: size * 0.12)
+        }
+        .frame(width: size, height: size)
+    }
 }
 
 private struct SVGIconShape: Shape {

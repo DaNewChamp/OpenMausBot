@@ -13,7 +13,7 @@ struct PinnedChatShelf: View {
     @ScaledMetric(relativeTo: .caption2) private var captionLineHeight: CGFloat = 13
 
     private var reservedHeight: CGFloat {
-        PinnedChatShelfLayout.reservedHeight(
+        PinnedChatShelfLayout.containerHeight(
             nameBlockHeight: PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: captionLineHeight)
         )
     }

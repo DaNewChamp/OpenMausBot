@@ -133,6 +133,18 @@ final class HomeRosterLayoutPolicyTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(large, compact)
     }
 
+    func testPinnedShelfContainerIncludesCaptionBreathingRoom() {
+        let name = PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: 22)
+        let content = PinnedChatShelfLayout.reservedHeight(nameBlockHeight: name)
+        let container = PinnedChatShelfLayout.containerHeight(nameBlockHeight: name)
+
+        XCTAssertEqual(
+            container,
+            content + HomeRosterLayoutPolicy.shelfTopPadding + HomeRosterLayoutPolicy.shelfBottomPadding
+        )
+        XCTAssertGreaterThanOrEqual(container, content + 16)
+    }
+
     func testNarrowAccessibilityPaneKeepsReadableCompactPins() {
         let layout = PinnedChatShelfLayout.metrics(paneWidth: 200, pinCount: 4)
         XCTAssertEqual(layout.mode, .compact)

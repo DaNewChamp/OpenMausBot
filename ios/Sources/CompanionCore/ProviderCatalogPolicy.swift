@@ -32,6 +32,22 @@ public struct MobileProviderCatalog: Codable, Hashable, Sendable {
 /// phone catalog. Mirrors `server/provider-catalog.ts`.
 public enum ProviderCatalogPolicy: Sendable {
     public static let namedOrder = ["openai", "claude", "cursor", "openrouter", "grok-auth"]
+    /// Keep the OpenAI rail intentionally small and stable. Entries are
+    /// admitted only when the paired server advertises the exact ID.
+    public static let preferredOpenAIModelOrder = [
+        "gpt-5.6-sol",
+        "gpt-5.6-sol-1m",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+    ]
+    public static let preferredOpenAIModelLabels: [String: String] = [
+        "gpt-5.6-sol": "GPT-5.6 Sol",
+        "gpt-5.6-sol-1m": "GPT-5.6 Sol 1M",
+        "gpt-5.6-terra": "GPT-5.6 Terra",
+        "gpt-5.6-luna": "GPT-5.6 Luna",
+        "gpt-5.5": "GPT-5.5",
+    ]
     public static let managedByServer = "Managed by your V Bot server."
     public static let refreshModels = "Refresh models"
 
@@ -80,6 +96,9 @@ public enum ProviderCatalogPolicy: Sendable {
     public static func normalizeModelLabel(modelId: String, label: String, providerId: String) -> String {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let id = modelBase(modelId)
+        if providerId == "openai", let preferred = preferredOpenAIModelLabels[modelId] {
+            return preferred
+        }
         if providerId == "cursor", id == "auto" || id == "default" || trimmed.lowercased() == "auto" {
             return "Cursor Auto"
         }
@@ -111,6 +130,13 @@ public enum ProviderCatalogPolicy: Sendable {
                     driverKind: instance.driverKind,
                     modelId: option.id
                 )
+                guard shouldInclude(
+                    option: option,
+                    providerId: providerId,
+                    instanceId: instance.instanceId,
+                    driverKind: instance.driverKind,
+                    snapshot: instance.snapshot
+                ) else { continue }
                 var group = groups[providerId] ?? MobileCatalogProvider(
                     id: providerId,
                     label: providerLabel(
@@ -138,7 +164,20 @@ public enum ProviderCatalogPolicy: Sendable {
         }
         return MobileProviderCatalog(
             managedBy: managedByServer,
-            providers: orderProviders(Array(groups.values)).filter { !$0.models.isEmpty }
+            providers: orderProviders(Array(groups.values))
+                .map { provider in
+                    guard provider.id == "openai" else { return provider }
+                    let rank = Dictionary(uniqueKeysWithValues: preferredOpenAIModelOrder.enumerated().map { ($1, $0) })
+                    return MobileCatalogProvider(
+                        id: provider.id,
+                        label: provider.label,
+                        markKey: provider.markKey,
+                        models: provider.models.sorted {
+                            (rank[$0.id] ?? Int.max) < (rank[$1.id] ?? Int.max)
+                        }
+                    )
+                }
+                .filter { !$0.models.isEmpty }
         )
     }
 
@@ -149,7 +188,8 @@ public enum ProviderCatalogPolicy: Sendable {
             instance(from: group, advertisedById: advertisedById)
         }
         if !selection.instanceId.isEmpty,
-           !rows.contains(where: { contains(selection, in: $0) }) {
+           !rows.contains(where: { contains(selection, in: $0) }),
+           shouldDisplaySelection(selection, advertised: advertised) {
             rows.append(AdvertisedModelCatalog.orphanInstance(selection: selection))
         }
         return rows
@@ -181,7 +221,18 @@ public enum ProviderCatalogPolicy: Sendable {
             return true
         }
         guard let rail else { return hostWideEngine }
-        return !contains(selection, in: rail)
+        if contains(selection, in: rail) { return false }
+        // A direct OpenAI selection can point at a retired model after a
+        // server refresh. Keep the preferred replacement rows actionable so
+        // the user can repair the persisted choice in place.
+        return !(
+            rail.instanceId == "openai"
+                && !shouldDisplaySelection(selection, advertised: advertised)
+                && advertised.contains {
+                    $0.instanceId == selection.instanceId
+                        && isDirectOpenAIInstance(instanceId: $0.instanceId, driverKind: $0.driverKind)
+                }
+        )
     }
 
     public static func selectionAfterProviderTap(
@@ -244,6 +295,19 @@ public enum ProviderCatalogPolicy: Sendable {
         AdvertisedModelCatalog.isEmpty(groupedInstances(advertised: advertised, selection: selection))
     }
 
+    /// Whether a persisted selection may be shown as an orphan row. Retired
+    /// OpenAI models are intentionally hidden rather than echoed back into the
+    /// picker after a catalog refresh.
+    public static func shouldDisplaySelection(_ selection: ModelSelection, advertised: [Instance]) -> Bool {
+        guard let source = advertised.first(where: { $0.instanceId == selection.instanceId }) else {
+            return true
+        }
+        guard isDirectOpenAIInstance(instanceId: source.instanceId, driverKind: source.driverKind) else {
+            return true
+        }
+        return preferredOpenAIModelOrder.contains(selection.model)
+    }
+
     private static func instance(from group: MobileCatalogProvider, advertisedById: [String: Instance]) -> Instance {
         let sources = group.models.compactMap { advertisedById[$0.instanceId] }
         let available = sources.first(where: { $0.snapshot.isAvailable }) ?? sources.first
@@ -289,6 +353,20 @@ public enum ProviderCatalogPolicy: Sendable {
 
     private static func firstModel(_ models: [MobileCatalogModel]) -> MobileCatalogModel? {
         models.first(where: \.isDefault) ?? models.first
+    }
+
+    private static func shouldInclude(
+        option: ModelOption,
+        providerId: String,
+        instanceId: String,
+        driverKind: String,
+        snapshot: ProviderSnapshot
+    ) -> Bool {
+        guard providerId == "openai",
+              isDirectOpenAIInstance(instanceId: instanceId, driverKind: driverKind)
+        else { return true }
+        guard snapshot.isAvailable else { return false }
+        return preferredOpenAIModelOrder.contains(option.id)
     }
 
     private static func containsSecretKey(_ value: Any) -> Bool {
@@ -374,6 +452,12 @@ public enum ProviderCatalogPolicy: Sendable {
         driverToken(driverKind, instanceId: instanceId)
             .split(separator: " ")
             .contains(where: { $0 == "codex" })
+    }
+
+    private static func isDirectOpenAIInstance(instanceId: String, driverKind: String) -> Bool {
+        isCodexDriver(driverKind, instanceId: instanceId)
+            || normalizeKey(instanceId) == "openai"
+            || normalizeKey(driverKind) == "openai"
     }
 
     private static func isClaudeDriver(_ driverKind: String, instanceId: String) -> Bool {

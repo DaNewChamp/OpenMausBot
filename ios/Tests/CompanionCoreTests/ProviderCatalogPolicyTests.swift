@@ -9,6 +9,75 @@ final class ProviderCatalogPolicyTests: XCTestCase {
         )
     }
 
+    func testOpenAIPreferredModelOrderIsStable() {
+        XCTAssertEqual(
+            ProviderCatalogPolicy.preferredOpenAIModelOrder,
+            ["gpt-5.6-sol", "gpt-5.6-sol-1m", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]
+        )
+    }
+
+    func testOpenAICatalogFiltersRetiredAndUnavailableModels() {
+        let catalog = ProviderCatalogPolicy.catalog(from: [
+            instance(
+                id: "codex",
+                driver: "codex",
+                name: "Codex",
+                models: [
+                    ("gpt-5.5", "old label"),
+                    ("gpt-5.6-terra", "Terra"),
+                    ("gpt-4.1", "Retired"),
+                    ("gpt-5.6-sol-1m", "Sol 1M"),
+                    ("gpt-5.6-sol", "Sol"),
+                ]
+            ),
+            instance(
+                id: "codex-offline",
+                driver: "codex",
+                name: "Codex Offline",
+                models: [("gpt-5.6-luna", "Luna")],
+                state: "offline"
+            ),
+        ])
+
+        XCTAssertEqual(
+            catalog.providers.first { $0.id == "openai" }?.models.map(\.id),
+            ["gpt-5.6-sol", "gpt-5.6-sol-1m", "gpt-5.6-terra", "gpt-5.5"]
+        )
+        XCTAssertEqual(
+            catalog.providers.first { $0.id == "openai" }?.models.map(\.label),
+            ["GPT-5.6 Sol", "GPT-5.6 Sol 1M", "GPT-5.6 Terra", "GPT-5.5"]
+        )
+        XCTAssertFalse(catalog.providers.contains { $0.models.contains { $0.id == "gpt-4.1" } })
+        XCTAssertFalse(catalog.providers.contains { $0.models.contains { $0.id == "gpt-5.6-luna" } })
+    }
+
+    func testRetiredOpenAISelectionDoesNotBecomeAnOrphanRow() {
+        let advertised = [
+            instance(
+                id: "codex",
+                driver: "codex",
+                name: "Codex",
+                models: [("gpt-5.6-sol", "GPT-5.6 Sol"), ("gpt-5.4", "GPT-5.4")]
+            )
+        ]
+        let rails = ProviderCatalogPolicy.groupedInstances(
+            advertised: advertised,
+            selection: ModelSelection(instanceId: "codex", model: "gpt-5.4")
+        )
+
+        XCTAssertEqual(rails.map(\.instanceId), ["openai"])
+        XCTAssertFalse(ProviderCatalogPolicy.shouldDisplaySelection(
+            ModelSelection(instanceId: "codex", model: "gpt-5.4"),
+            advertised: advertised
+        ))
+        XCTAssertFalse(ProviderCatalogPolicy.modelsDisabled(
+            advertised: advertised,
+            selection: ModelSelection(instanceId: "codex", model: "gpt-5.4"),
+            activeRailId: nil,
+            hostWideEngine: false
+        ))
+    }
+
     func testRoutesOpenAIClaudeCursorOpenRouterAndGrokAuth() {
         XCTAssertEqual(
             ProviderCatalogPolicy.classifyProvider(instanceId: "codex", driverKind: "codex", modelId: "gpt-5.6-sol"),
@@ -98,7 +167,7 @@ final class ProviderCatalogPolicyTests: XCTestCase {
             catalog.providers.prefix(5).map(\.label),
             ["OpenAI", "Claude", "Cursor", "OpenRouter", "Grok Auth"]
         )
-        XCTAssertEqual(catalog.providers.first { $0.id == "openai" }?.models.map(\.id), ["gpt-5.3-codex", "gpt-5.6-sol"])
+        XCTAssertEqual(catalog.providers.first { $0.id == "openai" }?.models.map(\.id), ["gpt-5.6-sol", "gpt-5.3-codex"])
         XCTAssertEqual(catalog.providers.first { $0.id == "cursor" }?.models.map(\.id), ["auto", "composer-2.5"])
         XCTAssertEqual(catalog.providers.first { $0.id == "cursor" }?.models.first?.label, "Cursor Auto")
         XCTAssertFalse(catalog.providers.contains(where: { $0.label == "GPT-5.6 Sol" }))
@@ -180,13 +249,14 @@ final class ProviderCatalogPolicyTests: XCTestCase {
         driver: String,
         name: String,
         models: [(String, String)],
-        defaultId: String? = nil
+        defaultId: String? = nil,
+        state: String = "available"
     ) -> Instance {
         Instance(
             instanceId: id,
             driverKind: driver,
             displayName: name,
-            snapshot: ProviderSnapshot(state: "available", reason: nil, authenticated: true, version: nil),
+            snapshot: ProviderSnapshot(state: state, reason: nil, authenticated: true, version: nil),
             models: ModelCatalog(
                 default: defaultId ?? models.first?.0 ?? "",
                 options: models.map { ModelOption(id: $0.0, label: $0.1) }
