@@ -1,7 +1,8 @@
-V Bot build 60: share staging, mentions, video attachments, model picker, and W2/W3 regressions.
+V Bot build 61: cleaner Grok-style home and conversation layout.
 
-• Share sheet staging for text, URLs, and images before send
-• Group @mentions and Return key behavior in composer
-• MP4/MOV video attachments up to 50MB
-• Provider-neutral model picker with safe busy/reconnect/catalog handling
-• W2/W3 keyboard and Local VM regression pass
+• Refined home and chat geometry with a more compact header and composer
+• Assistant replies appear as complete messages (no token-by-token streaming)
+• Removed suggestion chips for a simpler conversation flow
+• Improved reconnect and cloud viewer resilience
+• Background Live Activity presence while sessions continue
+• Share sheet, video attachments, and model picker unchanged from build 60
