@@ -15,30 +15,77 @@
       "busy": true,
       "modelSelection": { "instanceId": "preview", "model": "preview" },
       "createdAt": 1787000000000,
-      "activeLeafId": "parity-user-2",
+      "activeLeafId": "parity-bot-final",
       "tasks": [
         { "threadId": "preview-thread-parity", "title": "Membership research", "createdAt": 1787000000000 }
       ],
       "messages": [
-        { "id": "parity-user-1", "role": "user", "kind": "text", "at": 1788099600000, "text": "How do I get a membership?" },
+        {
+          "id": "parity-bot-intro",
+          "role": "bot",
+          "kind": "text",
+          "at": 1788099000000,
+          "text": "Dan the new TicketWatch routine monitors ticketwatch members inside the tick app. It complements the existing ticket-watch flows and does not replace the dashboard view."
+        },
+        {
+          "id": "parity-comm-sent",
+          "role": "bot",
+          "kind": "activity",
+          "at": 1788099300000,
+          "parentId": "parity-bot-intro",
+          "tool": { "name": "Messaged Chief Of Investments", "ok": true },
+          "comm": { "groupId": "preview-room-lab", "withBotId": "preview-pixel", "withName": "Chief Of Investments", "withColor": "purple" }
+        },
+        {
+          "id": "parity-user-1",
+          "role": "user",
+          "kind": "text",
+          "at": 1788099600000,
+          "parentId": "parity-comm-sent",
+          "text": "They are using X right? We have 4 connected accounts. Need to review which ones use it."
+        },
+        {
+          "id": "parity-comm-from",
+          "role": "bot",
+          "kind": "activity",
+          "at": 1788099900000,
+          "parentId": "parity-user-1",
+          "tool": { "name": "Message from Chief Of Investments", "ok": true },
+          "comm": { "groupId": "preview-room-lab", "withBotId": "preview-pixel", "withName": "Chief Of Investments", "withColor": "purple" }
+        },
         {
           "id": "parity-bot-1",
           "role": "bot",
           "kind": "text",
           "at": 1788100020000,
-          "parentId": "parity-user-1",
-          "text": "You can get a membership in a few ways:\n\n1. **Buy a plan** on the website and complete checkout.\n2. **Use an invite link** from an existing member.\n3. **Ask in the group chat** and a curator can send a one-time link.\n4. **Renew** before your paid-through date so access stays uninterrupted."
+          "parentId": "parity-comm-from",
+          "text": "2 messages with Chief Of Investments. Here's the account breakdown:\n\n1. Main account\n2. Research desk\n3. Alerts feed\n4. Backup read-only"
         },
         {
-          "id": "parity-comm",
+          "id": "parity-comm-thread",
           "role": "bot",
           "kind": "activity",
           "at": 1788100080000,
           "parentId": "parity-bot-1",
-          "tool": { "name": "Messaged @Pixel", "ok": true },
-          "comm": { "groupId": "preview-room-lab", "withBotId": "preview-pixel", "withName": "Pixel", "withColor": "purple" }
+          "tool": { "name": "2 messages with Chief Of Investments", "ok": true },
+          "comm": { "groupId": "preview-room-lab", "withBotId": "preview-pixel", "withName": "Chief Of Investments", "withColor": "purple" }
         },
-        { "id": "parity-user-2", "role": "user", "kind": "text", "at": 1788100140000, "text": "Ok ty" }
+        {
+          "id": "parity-user-2",
+          "role": "user",
+          "kind": "text",
+          "at": 1788100140000,
+          "parentId": "parity-comm-thread",
+          "text": "Ok ty"
+        },
+        {
+          "id": "parity-bot-final",
+          "role": "bot",
+          "kind": "text",
+          "at": 1788102240000,
+          "parentId": "parity-user-2",
+          "text": "The new routine complements existing ticket-watch flows and won't replace the dashboard view."
+        }
       ]
     },
     {
@@ -60,7 +107,7 @@
         { "threadId": "preview-thread-scout", "title": "iOS launch research", "createdAt": 1787000000000 }
       ],
       "messages": [
-        { "id": "scout-user", "role": "user", "kind": "text", "at": 1787028500000, "text": "Compare the final TestFlight checklist with Apple’s requirements." },
+        { "id": "scout-user", "role": "user", "kind": "text", "at": 1787028500000, "text": "Compare the final TestFlight checklist with Apple's requirements." },
         { "id": "scout-reply", "role": "bot", "kind": "text", "at": 1787028580000, "parentId": "scout-user", "text": "I checked signing, privacy declarations, review notes, and the real-device test pass. One action needs your approval before I continue." },
         { "id": "scout-comm", "role": "bot", "kind": "activity", "at": 1787028610000, "parentId": "scout-reply", "tool": { "name": "Messaged @Pixel", "ok": true }, "comm": { "groupId": "preview-room-lab", "withBotId": "preview-pixel", "withName": "Pixel", "withColor": "purple" } },
         {

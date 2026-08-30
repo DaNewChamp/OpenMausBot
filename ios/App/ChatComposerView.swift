@@ -185,7 +185,7 @@ struct ChatComposerView: View {
                     }
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 22, weight: .medium))
+                        .font(.system(size: 18, weight: .medium))
                         .foregroundStyle(Color.primary)
                         .frame(
                             width: ConversationLayoutPolicy.composerButtonDiameter,
@@ -225,7 +225,7 @@ struct ChatComposerView: View {
                         .font(chatTypography.composer)
                         .foregroundStyle(Color.primary)
                         .padding(.leading, showCommandHUD || draft.hasPrefix("/") ? 0 : 16)
-                        .padding(.vertical, 12)
+                        .padding(.vertical, 10)
                         .focused($composerFocused)
                         .submitLabel(.send)
                         .allowsHitTesting(!dictation.isListening && !dictation.isStarting)

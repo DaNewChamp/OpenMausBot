@@ -141,7 +141,7 @@ struct ChatChromeView: View {
                 }
 
                 Text(identityLabel)
-                    .font(.headline)
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)

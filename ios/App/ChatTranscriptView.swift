@@ -111,22 +111,22 @@ struct ChatTranscriptView: View {
                             if let bot = floatingWorkingBot {
                                 BotAvatarView(
                                     bot: bot,
-                                    size: ConversationLayoutPolicy.floatingAdornmentSize,
+                                    size: ConversationLayoutPolicy.floatingWorkingAvatarSize,
                                     state: .working,
                                     animated: !reduceMotion
                                 )
                             } else {
                                 ChatAvatarView(
                                     chat: current,
-                                    size: ConversationLayoutPolicy.floatingAdornmentSize,
+                                    size: ConversationLayoutPolicy.floatingWorkingAvatarSize,
                                     state: .working,
                                     animated: !reduceMotion
                                 )
                             }
                         }
                         .frame(
-                            width: ConversationLayoutPolicy.floatingAdornmentSize,
-                            height: ConversationLayoutPolicy.floatingAdornmentSize
+                            width: ConversationLayoutPolicy.floatingWorkingAvatarSize,
+                            height: ConversationLayoutPolicy.floatingWorkingAvatarSize
                         )
                         .contentShape(Circle())
                     }
@@ -146,8 +146,8 @@ struct ChatTranscriptView: View {
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(Color.primary)
                             .frame(
-                                width: ConversationLayoutPolicy.floatingAdornmentSize,
-                                height: ConversationLayoutPolicy.floatingAdornmentSize
+                                width: ConversationLayoutPolicy.floatingScrollButtonSize,
+                                height: ConversationLayoutPolicy.floatingScrollButtonSize
                             )
                             .background(VBotSurface.controlSurface, in: Circle())
                             .overlay {
@@ -378,11 +378,13 @@ struct ChatTranscriptView: View {
 #if DEBUG
             .task(id: "\(threadId)|preview-not-following") {
                 guard ProcessInfo.processInfo.arguments.contains("-preview-not-following"),
-                      messages.contains(where: { $0.id == "parity-bot-1" })
+                      messages.contains(where: { $0.id == "parity-bot-final" })
                 else { return }
                 followingLatest = false
-                try? await Task.sleep(nanoseconds: 220_000_000)
-                proxy.scrollTo("parity-user-1", anchor: .bottom)
+                try? await Task.sleep(nanoseconds: 320_000_000)
+                proxy.scrollTo("parity-bot-final", anchor: .bottom)
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                followingLatest = false
             }
 #endif
     }

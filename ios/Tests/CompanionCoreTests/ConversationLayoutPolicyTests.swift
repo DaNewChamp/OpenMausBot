@@ -10,10 +10,12 @@ final class ConversationLayoutPolicyTests: XCTestCase {
     }
 
     func testHeaderChromeMatchesReferenceControls() {
-        XCTAssertEqual(ConversationLayoutPolicy.chromeButtonDiameter, 58)
-        XCTAssertEqual(ConversationLayoutPolicy.composerButtonDiameter, 58)
-        XCTAssertEqual(ConversationLayoutPolicy.composerBarHeight, 58)
-        XCTAssertEqual(ConversationLayoutPolicy.headerChromeHeight, 58 + 4 + 8)
+        XCTAssertEqual(ConversationLayoutPolicy.chromeButtonDiameter, 44)
+        XCTAssertEqual(ConversationLayoutPolicy.composerButtonDiameter, 44)
+        XCTAssertEqual(ConversationLayoutPolicy.composerBarHeight, 44)
+        XCTAssertEqual(ConversationLayoutPolicy.floatingWorkingAvatarSize, 30)
+        XCTAssertEqual(ConversationLayoutPolicy.floatingScrollButtonSize, 44)
+        XCTAssertEqual(ConversationLayoutPolicy.headerChromeHeight, 44 + 4 + 6)
     }
 
     func testTranscriptMarginsAndBubbleWidth() {
