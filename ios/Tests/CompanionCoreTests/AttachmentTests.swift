@@ -187,6 +187,36 @@ final class AttachmentTests: XCTestCase {
             AttachmentComposerCopy.errorAccessibilityLabel("Choose a PNG, JPEG, GIF, or WebP image.")
                 .localizedCaseInsensitiveContains("Attachment error")
         )
+
+        let pathCases = [
+            "/var/mobile/Containers/Data/Application/UUID/tmp/in.jpg: couldn't be opened",
+            "The file “clip.mp4” couldn’t be opened at /tmp/clip.mp4",
+            "Couldn't read /private/var/mobile/Library/Caches/share.bin",
+            "file:///Users/test/secret.png is unreadable",
+            "file:///tmp/inbox.jpg failed",
+            #"Couldn't open \\?\Volume{abc}\Users\test\secret.png"#,
+            "D:\\data\\inbox\\photo.png could not be read",
+        ]
+        for raw in pathCases {
+            let visible = AttachmentComposerCopy.visibleError(raw)
+            let spoken = AttachmentComposerCopy.errorAccessibilityLabel(raw)
+            XCTAssertEqual(visible, "Attachment could not be added.", raw)
+            XCTAssertEqual(spoken, visible, raw)
+            XCTAssertFalse(visible.contains("/var/mobile"), raw)
+            XCTAssertFalse(visible.contains("/tmp"), raw)
+            XCTAssertFalse(visible.contains("/private"), raw)
+            XCTAssertFalse(visible.contains("/Users"), raw)
+            XCTAssertFalse(visible.contains("file://"), raw)
+            XCTAssertFalse(visible.contains("\\"), raw)
+        }
+
+        let safe = "You can attach up to 10 attachments per message."
+        XCTAssertEqual(AttachmentComposerCopy.visibleError(safe), safe)
+        XCTAssertEqual(AttachmentComposerCopy.errorAccessibilityLabel(safe), safe)
+        XCTAssertEqual(
+            AttachmentComposerCopy.visibleError(safe),
+            AttachmentComposerCopy.errorAccessibilityLabel(safe)
+        )
     }
 
     func testAttachmentPromptUsesFileTagForVideoPaths() {

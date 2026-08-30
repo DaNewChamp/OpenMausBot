@@ -192,4 +192,30 @@ public enum ConnectionResiliencePolicy: Sendable {
     public static func sanitizedAdvice(_ message: String) -> String {
         message.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// Log-only stream failure summary. Type plus URLError/HTTP code; never
+    /// hosts, query strings, tokens, or `localizedDescription`.
+    public static func safeFailureLog(_ error: Error) -> String {
+        if error is CancellationError {
+            return "CancellationError"
+        }
+        if let urlError = error as? URLError {
+            return "URLError code=\(urlError.code.rawValue)"
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            return "URLError code=\(nsError.code)"
+        }
+        if let api = error as? APIError {
+            switch api {
+            case let .status(code, _):
+                return "APIError status=\(code)"
+            case .transport:
+                return "APIError transport"
+            case .badURL:
+                return "APIError badURL"
+            }
+        }
+        return String(describing: type(of: error))
+    }
 }

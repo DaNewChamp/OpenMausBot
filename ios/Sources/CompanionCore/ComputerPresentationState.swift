@@ -147,6 +147,44 @@ public enum ComputerPresentationState: Equatable, Sendable {
         guard bot.computer == "cloud", bot.cloudBackend == "vps" else { return nil }
         return CloudViewerPolicy.vpsBusyWatchCopy
     }
+
+    /// Waiting-card copy while a frame has not arrived. VPS busy copy is
+    /// only for `cloudBackend == "vps"` and never for This Mac.
+    public static func startingCopy(for bot: Bot) -> String {
+        startingCopy(computer: bot.computer, cloudBackend: bot.cloudBackend, busy: bot.busy)
+    }
+
+    public static func startingCopy(computer: String?, cloudBackend: String?, busy: Bool?) -> String {
+        let destination = computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if destination != "local", cloudBackend == "vps" {
+            return CloudViewerPolicy.vpsBusyWatchCopy
+        }
+        if busy == true {
+            return "Waiting for the first frame."
+        }
+        return "This Bot's computer is captured while it is working."
+    }
+
+    /// Destination subtitle. Local always uses This Mac copy, even if a
+    /// stale `cloudBackend` value is present.
+    public static func destinationHelp(for bot: Bot) -> String? {
+        destinationHelp(computer: bot.computer, cloudBackend: bot.cloudBackend)
+    }
+
+    public static func destinationHelp(computer: String?, cloudBackend: String?) -> String? {
+        switch computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "cloud":
+            return cloudBackend == "vps"
+                ? CloudViewerPolicy.vpsWatchCopy
+                : "Running on Cloud. Open a live frame while the agent is working, or use Open cloud desktop."
+        case "local":
+            return "Running on this Mac. Use ··· to switch to Local or Cloud."
+        case "off":
+            return "Computer access is off. Use ··· to switch to Local or Cloud."
+        default:
+            return nil
+        }
+    }
 }
 
 /// Lifecycle events for the watch-only screen stream. Keeping timeout and

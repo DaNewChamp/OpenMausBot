@@ -415,6 +415,40 @@ final class FailoverTests: XCTestCase {
         XCTAssertEqual(ConnectionResiliencePolicy.nextGeneration(after: 4), 5)
     }
 
+    func testStreamFailureLogOmitsHostsQueryAndTokens() {
+        let timedOut = ConnectionResiliencePolicy.safeFailureLog(URLError(.timedOut))
+        XCTAssertEqual(timedOut, "URLError code=\(URLError.Code.timedOut.rawValue)")
+        XCTAssertFalse(timedOut.contains("http"))
+        XCTAssertFalse(timedOut.contains("?"))
+
+        let leakingURL = URLError(
+            .cannotFindHost,
+            userInfo: [NSURLErrorFailingURLErrorKey: URL(string: "https://mac.example/?token=secret-value")!]
+        )
+        let hostLog = ConnectionResiliencePolicy.safeFailureLog(leakingURL)
+        XCTAssertEqual(hostLog, "URLError code=\(URLError.Code.cannotFindHost.rawValue)")
+        XCTAssertFalse(hostLog.contains("mac.example"))
+        XCTAssertFalse(hostLog.contains("token"))
+        XCTAssertFalse(hostLog.contains("secret"))
+
+        let api = ConnectionResiliencePolicy.safeFailureLog(
+            APIError.status(code: 502, message: "https://mac.example/stream?ticket=abc")
+        )
+        XCTAssertEqual(api, "APIError status=502")
+        XCTAssertFalse(api.contains("mac.example"))
+        XCTAssertFalse(api.contains("ticket"))
+
+        XCTAssertEqual(
+            ConnectionResiliencePolicy.safeFailureLog(APIError.transport("https://mac.example/events")),
+            "APIError transport"
+        )
+        XCTAssertEqual(ConnectionResiliencePolicy.safeFailureLog(APIError.badURL), "APIError badURL")
+        XCTAssertEqual(ConnectionResiliencePolicy.safeFailureLog(CancellationError()), "CancellationError")
+        XCTAssertFalse(
+            ConnectionResiliencePolicy.safeFailureLog(APIError.transport("https://mac.example")).contains("mac")
+        )
+    }
+
     func testCachedScreenSurvivesReconnectAndDropsOnPairingLoss() {
         XCTAssertTrue(ConnectionResiliencePolicy.shouldPreserveCachedScreen(
             unpaired: false,

@@ -668,34 +668,52 @@ final class Session: ObservableObject {
 
                     if case let .hello(cursor, resumed) = frame.frame {
                         log.info("stream live, resumed=\(resumed, privacy: .public)")
-                        // Drop unflushed deltas: if their seq was not committed,
-                        // the replay will deliver them again. A cold hydrate
-                        // replaces the transcript and must not keep a ghost tail.
-                        resetStreamCoalescer()
-                        // false means the server could not replay the gap —
-                        // the one case that costs a full hydrate. Commit the
-                        // hello cursor only after that hydrate succeeds: if
-                        // the request dies halfway through replay/hydration,
-                        // reconnecting must still ask for the missing gap.
+                        // Fetch may finish after this stream was replaced.
+                        // Live mutations stay behind shouldCommit.
+                        var preparedFleet: Fleet?
                         if !resumed {
-                            try await hydrate()
-                            guard ConnectionResiliencePolicy.shouldApply(
-                                startedGeneration: generation,
-                                currentGeneration: streamGeneration
-                            ) else { return }
-                            state.resetCursor(cursor)
-                            recordHydration(resumed: resumed)
+                            preparedFleet = try await fetchFleet()
                         }
+                        let commit = StreamTransactionPolicy.hello(
+                            startedGeneration: generation,
+                            currentGeneration: streamGeneration,
+                            resumed: resumed
+                        )
+                        guard commit.shouldApply else { return }
+                        if commit.resetCoalescer {
+                            resetStreamCoalescer()
+                        }
+                        if commit.hydrateFleet, let fleet = preparedFleet {
+                            await applyPreparedHydrate(fleet, streamGeneration: generation)
+                            let afterHydrate = StreamTransactionPolicy.hello(
+                                startedGeneration: generation,
+                                currentGeneration: streamGeneration,
+                                resumed: resumed
+                            )
+                            guard afterHydrate.applyHello else { return }
+                            state.resetCursor(cursor)
+                            recordHydration(resumed: false)
+                        }
+                        let live = StreamTransactionPolicy.hello(
+                            startedGeneration: generation,
+                            currentGeneration: streamGeneration,
+                            resumed: resumed
+                        )
+                        guard live.applyHello else { return }
                         var next = state
                         next.apply(frame.frame)
                         state = next
-                        previouslyLive = true
+                        previouslyLive = StreamTransactionPolicy.nextPreviouslyLive(
+                            current: previouslyLive,
+                            commit: live
+                        )
                         applyStreamStatus(.live, generation: generation)
-                        // Remember what actually carried the stream for
-                        // display and legacy ordering. Typed routes retain
-                        // their explicit security priority next launch.
-                        rememberWorkingRoute()
-                        refreshConnectionMetadata(using: client)
+                        if live.rememberWorkingRoute {
+                            rememberWorkingRoute()
+                        }
+                        if live.startEndpointRefresh {
+                            refreshConnectionMetadata(using: client)
+                        }
                         continue
                     }
                     applyIncomingFrame(frame)
@@ -709,7 +727,11 @@ final class Session: ObservableObject {
                 }
             } catch let error as APIError where error.isUnauthorized {
                 log.error("stream refused: unauthorized")
-                previouslyLive = false
+                previouslyLive = StreamTransactionPolicy.nextPreviouslyLiveOnUnauthorized(
+                    current: previouslyLive,
+                    startedGeneration: generation,
+                    currentGeneration: streamGeneration
+                )
                 applyStreamStatus(.unauthorized, generation: generation)
                 return
             } catch {
@@ -727,7 +749,7 @@ final class Session: ObservableObject {
                     startedGeneration: generation,
                     currentGeneration: streamGeneration
                 ) else { return }
-                log.error("stream failed: \(error.localizedDescription, privacy: .public)")
+                log.error("stream failed: \(ConnectionResiliencePolicy.safeFailureLog(error), privacy: .public)")
                 let advice = failureMessage(for: error)
                 if ConnectionResiliencePolicy.keepsRetryVisible(after: error) {
                     applyStreamStatus(.connecting, generation: generation)
@@ -751,19 +773,40 @@ final class Session: ObservableObject {
         }
     }
 
-    private func hydrate() async throws {
-        guard let client else { return }
-        let fleet = try await client.fleet(messages: 50)
+    private func streamAllows(_ requiredGeneration: Int?) -> Bool {
+        guard let requiredGeneration else { return true }
+        return StreamTransactionPolicy.shouldCommit(
+            startedGeneration: requiredGeneration,
+            currentGeneration: streamGeneration
+        )
+    }
+
+    private func fetchFleet() async throws -> Fleet? {
+        guard let client else { return nil }
+        return try await client.fleet(messages: 50)
+    }
+
+    private func applyPreparedHydrate(_ fleet: Fleet, streamGeneration requiredGeneration: Int?) async {
+        guard streamAllows(requiredGeneration) else { return }
         log.info("hydrated \(fleet.bots.count, privacy: .public) bots, \(fleet.groups.count, privacy: .public) rooms")
         resetStreamCoalescer()
         let previousAppearanceOverrides = state.appearanceOverrides
         state.hydrate(fleet)
         persistPinnedOverrides()
         if state.appearanceOverrides != previousAppearanceOverrides { persistAppearanceOverrides() }
-        await retryPendingAppearanceOverrides(using: client)
+        if let client, streamAllows(requiredGeneration) {
+            await retryPendingAppearanceOverrides(using: client)
+        }
+        guard streamAllows(requiredGeneration) else { return }
         NotificationCoordinator.shared.setBadge(state.unreadCount)
-        await refreshEngineSync(quietly: true)
-        _ = await loadModelCatalog(quietly: true)
+        await refreshEngineSync(quietly: true, requiredStreamGeneration: requiredGeneration)
+        guard streamAllows(requiredGeneration) else { return }
+        _ = await loadModelCatalog(quietly: true, requiredStreamGeneration: requiredGeneration)
+    }
+
+    private func hydrate() async throws {
+        guard let fleet = try await fetchFleet() else { return }
+        await applyPreparedHydrate(fleet, streamGeneration: nil)
     }
 
     private var hydrationRevision = HydrationRevision()
@@ -1735,7 +1778,11 @@ final class Session: ObservableObject {
     }
 
     /// Single catalog load used by chat, profile, and settings pickers.
-    func loadModelCatalog(quietly: Bool = false) async -> ModelCatalogLoadResult {
+    func loadModelCatalog(
+        quietly: Bool = false,
+        requiredStreamGeneration: Int? = nil
+    ) async -> ModelCatalogLoadResult {
+        guard streamAllows(requiredStreamGeneration) else { return .cancelled }
         let generation = modelCatalogGate.beginLoad()
         modelCatalogRefreshing = modelCatalogGate.refreshing
 
@@ -1749,6 +1796,7 @@ final class Session: ObservableObject {
         func publish(_ result: ModelCatalogLoadResult) -> ModelCatalogLoadResult {
             guard modelCatalogGate.finishLoad(startedGeneration: generation) else { return .cancelled }
             modelCatalogRefreshing = modelCatalogGate.refreshing
+            guard streamAllows(requiredStreamGeneration) else { return .cancelled }
             switch result {
             case let .loaded(instances):
                 modelCatalog = instances
@@ -1765,9 +1813,9 @@ final class Session: ObservableObject {
         }
 
         if engineSync == nil {
-            await refreshEngineSync(quietly: true)
+            await refreshEngineSync(quietly: true, requiredStreamGeneration: requiredStreamGeneration)
         }
-        guard isCurrent() else { return .cancelled }
+        guard isCurrent(), streamAllows(requiredStreamGeneration) else { return publish(.cancelled) }
 
         switch EngineSyncPolicy.catalogSource(for: engineSync) {
         case .unknown:
@@ -1781,7 +1829,7 @@ final class Session: ObservableObject {
             } else {
                 router = await reconstructedRouter()
             }
-            guard isCurrent() else { return .cancelled }
+            guard isCurrent(), streamAllows(requiredStreamGeneration) else { return publish(.cancelled) }
             guard let router else {
                 return publish(.failed(actionError ?? "Could not load providers for the selected engine."))
             }
@@ -1841,7 +1889,8 @@ final class Session: ObservableObject {
         }
     }
 
-    func refreshEngineSync(quietly: Bool = false) async {
+    func refreshEngineSync(quietly: Bool = false, requiredStreamGeneration: Int? = nil) async {
+        guard streamAllows(requiredStreamGeneration) else { return }
         engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
         let generation = engineSyncGeneration
         guard let client else { return }
@@ -1850,13 +1899,13 @@ final class Session: ObservableObject {
             guard EngineSyncPolicy.shouldApply(
                 startedGeneration: generation,
                 currentGeneration: engineSyncGeneration
-            ) else { return }
+            ), streamAllows(requiredStreamGeneration) else { return }
             engineSync = loaded
         } catch let APIError.status(code, _) where code == 404 {
             guard EngineSyncPolicy.shouldApply(
                 startedGeneration: generation,
                 currentGeneration: engineSyncGeneration
-            ) else { return }
+            ), streamAllows(requiredStreamGeneration) else { return }
             engineSync = .openMausOnly
         } catch {
             if !quietly, !Task.isCancelled { actionError = error.localizedDescription }

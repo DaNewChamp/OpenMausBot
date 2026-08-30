@@ -49,7 +49,13 @@ final class ShareViewController: SLComposeServiceViewController {
         }
 
         group.notify(queue: .main) {
-            try? ShareInbox.save(text: text, url: url, imageData: imageData)
+            do {
+                try ShareInbox.save(text: text, url: url, imageData: imageData)
+            } catch {
+                self.presentSaveFailure(ShareExtensionPostPolicy.message(for: error))
+                return
+            }
+            guard ShareExtensionPostPolicy.shouldOpenHost(after: nil) else { return }
             guard let open = URL(string: "openmausbot://share") else {
                 self.extensionContext?.completeRequest(returningItems: nil)
                 return
@@ -66,5 +72,11 @@ final class ShareViewController: SLComposeServiceViewController {
             self.openCoordinator = coordinator
             coordinator.start()
         }
+    }
+
+    private func presentSaveFailure(_ message: String) {
+        let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
     }
 }

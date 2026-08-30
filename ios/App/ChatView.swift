@@ -1299,22 +1299,21 @@ enum VideoAttachmentThumbnail {
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: 128, height: 128)
         final class CancelBox: @unchecked Sendable {
-            var gate: ResumeOnce<UIImage?>?
+            let gate = ResumeOnce<UIImage?>()
             var generator: AVAssetImageGenerator?
         }
         let box = CancelBox()
         box.generator = generator
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
-                let gate = ResumeOnce<UIImage?>(continuation)
-                box.gate = gate
+                box.gate.attach(continuation)
                 generator.generateCGImageAsynchronously(for: .zero) { cgImage, _, _ in
-                    gate.resume(returning: cgImage.map { UIImage(cgImage: $0) })
+                    box.gate.resume(returning: cgImage.map { UIImage(cgImage: $0) })
                 }
             }
         } onCancel: {
             box.generator?.cancelAllCGImageGeneration()
-            box.gate?.resume(returning: nil)
+            box.gate.resume(returning: nil)
         }
     }
 }

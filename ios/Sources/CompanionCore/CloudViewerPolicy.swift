@@ -80,6 +80,7 @@ public enum CloudViewerPolicy: Sendable {
         if canonical.hasSuffix(".localhost") || canonical.hasSuffix(".local") { return true }
         if canonical.contains(":") { return true }
         if isIPv4(canonical) { return true }
+        if !canonical.contains(".") { return true }
         return false
     }
 

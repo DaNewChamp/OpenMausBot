@@ -451,11 +451,24 @@ final class ComputerPresentationStateTests: XCTestCase {
             "https://10.0.0.8/vnc",
             "https://mac.local/vnc",
             "https://user:pass@desktop.example/session",
+            "https://user@desktop.example/session",
+            "https://169.254.1.1/vnc",
+            "https://172.16.0.8/vnc",
+            "https://172.31.255.1/vnc",
+            "https://local/vnc",
+            "https://internal/vnc",
+            "https://gateway/session",
             "javascript:alert(1)",
             "not a URL",
         ] {
             XCTAssertNil(CloudViewerPolicy.validatedJoinURL(raw), raw)
         }
+        XCTAssertNil(CloudViewerPolicy.validatedJoinURL("https://local"))
+        XCTAssertNotNil(CloudViewerPolicy.validatedJoinURL("https://box.example/session"))
+        XCTAssertTrue(CloudViewerPolicy.isForbiddenViewerHost("local"))
+        XCTAssertTrue(CloudViewerPolicy.isForbiddenViewerHost("169.254.12.4"))
+        XCTAssertTrue(CloudViewerPolicy.isForbiddenViewerHost("172.16.4.2"))
+        XCTAssertFalse(CloudViewerPolicy.isForbiddenViewerHost("desktop.example"))
     }
 
     func testCloudJoinURLSanitizesOriginAndRejectsPersistence() throws {
@@ -496,5 +509,49 @@ final class ComputerPresentationStateTests: XCTestCase {
             CloudViewerPolicy.vpsBusyWatchCopy
         )
         XCTAssertFalse(ComputerPresentationState.supportsCloudViewer(busyVps))
+    }
+
+    func testLocalThisMacHelpNeverUsesVpsBusyCopy() {
+        let localBusy = bot(computer: "local", cloudBackend: nil, busy: true)
+        let localIdle = bot(computer: "local", busy: false)
+        let localMislabelled = bot(computer: "local", cloudBackend: "vps", busy: true)
+        XCTAssertEqual(
+            ComputerPresentationState.startingCopy(for: localBusy),
+            "Waiting for the first frame."
+        )
+        XCTAssertEqual(
+            ComputerPresentationState.startingCopy(for: localIdle),
+            "This Bot's computer is captured while it is working."
+        )
+        XCTAssertNotEqual(
+            ComputerPresentationState.startingCopy(for: localBusy),
+            CloudViewerPolicy.vpsBusyWatchCopy
+        )
+        XCTAssertNotEqual(
+            ComputerPresentationState.startingCopy(for: localMislabelled),
+            CloudViewerPolicy.vpsBusyWatchCopy
+        )
+        XCTAssertEqual(
+            ComputerPresentationState.destinationHelp(for: localBusy),
+            "Running on this Mac. Use ··· to switch to Local or Cloud."
+        )
+        XCTAssertEqual(
+            ComputerPresentationState.destinationHelp(for: localMislabelled),
+            "Running on this Mac. Use ··· to switch to Local or Cloud."
+        )
+        XCTAssertFalse(
+            (ComputerPresentationState.destinationHelp(for: localBusy) ?? "")
+                .localizedCaseInsensitiveContains("VPS")
+        )
+
+        let vpsBusy = bot(computer: "cloud", cloudBackend: "vps", busy: true)
+        XCTAssertEqual(
+            ComputerPresentationState.startingCopy(for: vpsBusy),
+            CloudViewerPolicy.vpsBusyWatchCopy
+        )
+        XCTAssertEqual(
+            ComputerPresentationState.destinationHelp(for: vpsBusy),
+            CloudViewerPolicy.vpsWatchCopy
+        )
     }
 }

@@ -131,13 +131,14 @@ struct ChatComposerView: View {
             }
 
             if let attachmentError {
-                Label(attachmentError, systemImage: "exclamationmark.triangle")
+                let message = AttachmentComposerCopy.visibleError(attachmentError)
+                Label(message, systemImage: "exclamationmark.triangle")
                     .font(chatTypography.detail)
                     .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 4)
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(AttachmentComposerCopy.errorAccessibilityLabel(attachmentError))
+                    .accessibilityLabel(message)
             }
 
             if let query = activeMentionQuery, case .room = current {

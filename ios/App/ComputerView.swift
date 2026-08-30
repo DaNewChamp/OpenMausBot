@@ -895,13 +895,11 @@ struct ComputerView: View {
         if isLocalVm {
             return "Waiting for a desktop preview from the Local VM."
         }
-        if current.cloudBackend == "vps" || current.computer == "local" {
-            return CloudViewerPolicy.vpsBusyWatchCopy
-        }
-        if current.busy == true {
-            return "Waiting for the first frame."
-        }
-        return "This Bot's computer is captured while it is working."
+        return ComputerPresentationState.startingCopy(
+            computer: current.computer,
+            cloudBackend: current.cloudBackend,
+            busy: current.busy
+        )
     }
 
     private var destinationHelp: String {
@@ -917,16 +915,11 @@ struct ComputerView: View {
                 return "Recreate the Local VM below to start a fresh desktop."
             }
             return "Running on Local VM. The desktop updates while this screen is open."
-        case "cloud":
-            return current.cloudBackend == "vps"
-                ? CloudViewerPolicy.vpsWatchCopy
-                : "Running on Cloud. Open a live frame while the agent is working, or use Open cloud desktop."
-        case "local":
-            return "Running on this Mac. Use ··· to switch to Local or Cloud."
-        case "off":
-            return "Computer access is off. Use ··· to switch to Local or Cloud."
         default:
-            return "Use ··· to choose Local or Cloud."
+            return ComputerPresentationState.destinationHelp(
+                computer: destination,
+                cloudBackend: current.cloudBackend
+            ) ?? "Use ··· to choose Local or Cloud."
         }
     }
 
