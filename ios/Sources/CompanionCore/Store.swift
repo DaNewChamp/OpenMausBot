@@ -42,6 +42,8 @@ public struct CompanionState: Sendable {
     /// Character choices retained on the phone when an older paired server
     /// rejects appearance fields on the paired-safe profile route.
     public var appearanceOverrides = BotAppearanceOverrides()
+    /// Last read assistant revision per conversation, persisted on the phone.
+    public var readReceipts = ConversationReadReceipts()
     /// Threads whose live tail has been replaced by a settled message or a
     /// terminal turn. Late deltas are ignored until a new turn starts.
     var streamSealed: Set<String> = []

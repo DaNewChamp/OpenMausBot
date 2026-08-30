@@ -189,6 +189,7 @@ final class Session: ObservableObject {
     private static let connectionKey = "companion.connection"
     private static let pinnedOverridesKey = "companion.pinned-overrides"
     private static let appearanceOverridesBaseKey = "companion.appearance-overrides"
+    private static let readReceiptsBaseKey = "companion.read-receipts"
 
     private static func loadPinnedOverrides() -> ConversationPinOverrides {
         guard let data = UserDefaults.standard.data(forKey: pinnedOverridesKey),
@@ -223,6 +224,57 @@ final class Session: ObservableObject {
         )
     }
 
+    private static func readReceiptsKey(for connectionID: String) -> String {
+        "\(readReceiptsBaseKey).\(connectionID)"
+    }
+
+    private static func loadReadReceipts(for connectionID: String) -> ConversationReadReceipts {
+        guard let data = UserDefaults.standard.data(forKey: readReceiptsKey(for: connectionID)),
+              let receipts = try? JSONDecoder().decode(ConversationReadReceipts.self, from: data)
+        else { return ConversationReadReceipts() }
+        return receipts
+    }
+
+    private func persistReadReceipts() {
+        guard let connectionID = connection?.id else { return }
+        UserDefaults.standard.set(
+            try? JSONEncoder().encode(state.readReceipts),
+            forKey: Self.readReceiptsKey(for: connectionID)
+        )
+    }
+
+    private var visibleThreadId: String? {
+        NotificationCoordinator.shared.foregroundThreadId
+    }
+
+    private func applyUnreadEffects(for frame: Frame, before: CompanionState) {
+        let previousReceipts = state.readReceipts
+        switch frame {
+        case let .message(threadId, message):
+            let alreadyPresent = before.transcript(forThread: threadId).contains { $0.id == message.id }
+            state.applyUnreadOnFinalMessage(
+                threadId: threadId,
+                message: message,
+                visibleThreadId: visibleThreadId,
+                messageAlreadyPresent: alreadyPresent
+            )
+        case let .notify(notification):
+            state.applyUnreadOnNotification(notification, visibleThreadId: visibleThreadId)
+        case let .bot(bot):
+            if !bot.unread {
+                state.applyServerUnreadClear(forThread: bot.threadId)
+            }
+        case let .room(room):
+            if !room.unread {
+                state.applyServerUnreadClear(forThread: room.threadId)
+            }
+        default:
+            break
+        }
+        state.reconcileUnreadIndicators(visibleThreadId: visibleThreadId)
+        if state.readReceipts != previousReceipts { persistReadReceipts() }
+    }
+
     // MARK: - Pairing
 
     init() {
@@ -238,6 +290,8 @@ final class Session: ObservableObject {
            let fleet = try? JSONDecoder().decode(Fleet.self, from: data) {
             connection = Connection(name: "Preview Mac", host: "preview.tailnet.ts.net", port: 8810)
             state.hydrate(fleet)
+            state.reconcileReadReceiptsAfterHydrate()
+            state.reconcileUnreadIndicators(visibleThreadId: nil)
             StorePreviewHarness.apply(arguments: ProcessInfo.processInfo.arguments, to: &state)
             var previewAccess = false
             var previewDenied = false
@@ -299,6 +353,7 @@ final class Session: ObservableObject {
 
         connection = saved
         state.appearanceOverrides = Self.loadAppearanceOverrides(for: saved.id)
+        state.readReceipts = Self.loadReadReceipts(for: saved.id)
         token = stored
         // New connections honor the desktop's transport policy. Automatic
         // walking is credential-safe: protected routes stay protected, while
@@ -449,6 +504,7 @@ final class Session: ObservableObject {
         if let id = connection?.id {
             Keychain.remove(id)
             UserDefaults.standard.removeObject(forKey: Self.appearanceOverridesKey(for: id))
+            UserDefaults.standard.removeObject(forKey: Self.readReceiptsKey(for: id))
         }
         UserDefaults.standard.removeObject(forKey: Self.connectionKey)
         UserDefaults.standard.removeObject(forKey: Self.pinnedOverridesKey)
@@ -806,6 +862,8 @@ final class Session: ObservableObject {
         resetStreamCoalescer()
         let previousAppearanceOverrides = state.appearanceOverrides
         state.hydrate(fleet)
+        state.reconcileReadReceiptsAfterHydrate()
+        state.reconcileUnreadIndicators(visibleThreadId: visibleThreadId)
         if commit.persistPins { persistPinnedOverrides() }
         if commit.persistAppearance, state.appearanceOverrides != previousAppearanceOverrides {
             persistAppearanceOverrides()
@@ -925,16 +983,19 @@ final class Session: ObservableObject {
         }
         state = next
         bufferedStreamSeq = nil
+        state.reconcileUnreadIndicators(visibleThreadId: visibleThreadId)
         NotificationCoordinator.shared.setBadge(state.unreadCount)
     }
 
     private func foldAndPublish(_ frame: Frame, seq: Int?) {
         let previousOverrides = state.pinnedOverrides
         let previousAppearanceOverrides = state.appearanceOverrides
+        let before = state
         var next = state
         next.apply(frame)
         next.advance(to: seq)
         state = next
+        applyUnreadEffects(for: frame, before: before)
         if state.pinnedOverrides != previousOverrides { persistPinnedOverrides() }
         if state.appearanceOverrides != previousAppearanceOverrides { persistAppearanceOverrides() }
         if case let .notify(notification) = frame {
@@ -1510,6 +1571,10 @@ final class Session: ObservableObject {
     }
 
     func markRead(_ chat: Chat) async {
+        state.markConversationRead(stableID: chat.stableID, threadId: chat.threadId)
+        state.reconcileUnreadIndicators(visibleThreadId: visibleThreadId)
+        persistReadReceipts()
+        NotificationCoordinator.shared.setBadge(state.unreadCount)
         await perform(quietly: true) {
             switch chat {
             case let .bot(bot): try await $0.markRead(botId: bot.id)
@@ -2377,6 +2442,8 @@ final class Session: ObservableObject {
 
     func setForegroundThread(_ threadId: String?) {
         NotificationCoordinator.shared.foregroundThreadId = threadId
+        state.reconcileUnreadIndicators(visibleThreadId: threadId)
+        NotificationCoordinator.shared.setBadge(state.unreadCount)
     }
 
     private func shouldSuppressNotification(for threadId: String) -> Bool {
