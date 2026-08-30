@@ -31,6 +31,33 @@ export interface LocalVmViewerJoin {
   ready: true;
 }
 
+export function gateLocalVmPhoneJoin(input: {
+  companionMarker: string | string[] | undefined;
+  contentType: string | undefined;
+  body: unknown;
+}): { status: number; error: string } | null {
+  const marker = Array.isArray(input.companionMarker) ? input.companionMarker[0] : input.companionMarker;
+  if (marker !== "1") {
+    return { status: 403, error: "Local VM viewer join is available only through the paired companion" };
+  }
+  if (!String(input.contentType ?? "").toLowerCase().startsWith("application/json")) {
+    return { status: 415, error: "content-type must be application/json" };
+  }
+  if (input.body == null) return null;
+  if (JSON.stringify(input.body) !== "{}") {
+    return { status: 400, error: "join accepts an empty JSON object only" };
+  }
+  return null;
+}
+
+export function localVmViewerJoinDeniedIfNotReady(
+  viewer: LocalVmViewerTarget | null,
+  problem: string | null,
+): { status: number; error: string } | null {
+  if (viewer) return null;
+  return { status: 409, error: problem ?? "The Local VM desktop is not ready for viewing." };
+}
+
 const VIEWER_PREFIX = /^\/api\/bots\/([\w-]+)\/local-computer\/viewer(\/.*)?$/;
 
 export function parseLocalVmViewerRoute(path: string): { botId: string; subpath: string } | null {

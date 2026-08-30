@@ -258,6 +258,9 @@ describe("what it may not", () => {
     const screenshot = "/api/bots/bot_123/local-computer/screenshot";
     expect(validateLocalVmActionBody("POST", screenshot, {})).toBeNull();
     expect(validateLocalVmActionBody("POST", screenshot, { image: true })).toMatchObject({ status: 400 });
+    const join = "/api/bots/bot_123/local-computer/join";
+    expect(validateLocalVmActionBody("POST", join, {})).toBeNull();
+    expect(validateLocalVmActionBody("POST", join, { viewer: true })).toMatchObject({ status: 400 });
   });
 
   it("accepts only destination fields on the computer-destination patch", () => {

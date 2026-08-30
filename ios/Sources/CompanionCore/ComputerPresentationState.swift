@@ -2,10 +2,10 @@ import Foundation
 
 /// The small set of computer states the phone can honestly present.
 ///
-/// A screen frame is a watch-only surface. The only interactive viewer this
-/// client can open is the secure Box viewer minted by the paired computer;
-/// VPS, Local VM, and local-host destinations deliberately never map to that
-/// capability.
+/// A screen frame is a watch-only surface unless Local VM policy says the
+/// companion-proxied viewer (or screenshot canvas) is interactive. The only
+/// cloud viewer this client can open is the secure Box viewer minted by the
+/// paired computer; VPS and local-host destinations stay watch-only.
 public enum ComputerPresentationState: Equatable, Sendable {
     case starting
     case watching
@@ -16,12 +16,23 @@ public enum ComputerPresentationState: Equatable, Sendable {
     /// display state. Configuration and failures win over a cached frame:
     /// showing a screen after the computer was disabled, stopped, or lost is
     /// more misleading than showing a waiting card.
-    public init(bot: Bot, frame: ScreenFrame? = nil, loadFailure: String? = nil) {
+    ///
+    /// Pass `localVm` for the Local VM Computer screen so missing/stopped/error
+    /// and viewer fallback are honest. Call sites that omit it keep the
+    /// generic watch-only mapping.
+    public init(
+        bot: Bot,
+        frame: ScreenFrame? = nil,
+        loadFailure: String? = nil,
+        localVm: LocalVmDesktopPolicy.Snapshot? = nil
+    ) {
         if let loadFailure {
             let message = loadFailure.trimmingCharacters(in: .whitespacesAndNewlines)
             self = message.isEmpty
                 ? .unavailable(message: "We couldn't load this computer right now.")
                 : .unavailable(message: message)
+        } else if let localVm, LocalVmDesktopPolicy.isLocalVm(bot) {
+            self = LocalVmDesktopPolicy.surface(bot: bot, snapshot: localVm).presentationState
         } else if !Self.hasKnownComputer(bot) {
             self = .unavailable(message: Self.unavailableMessage(for: bot))
         } else if bot.busy != true {
@@ -49,9 +60,10 @@ public enum ComputerPresentationState: Equatable, Sendable {
     public static func resolve(
         bot: Bot,
         frame: ScreenFrame? = nil,
-        loadFailure: String? = nil
+        loadFailure: String? = nil,
+        localVm: LocalVmDesktopPolicy.Snapshot? = nil
     ) -> Self {
-        Self(bot: bot, frame: frame, loadFailure: loadFailure)
+        Self(bot: bot, frame: frame, loadFailure: loadFailure, localVm: localVm)
     }
 
     /// Whether this bot can receive a fresh, secure cloud viewer URL.

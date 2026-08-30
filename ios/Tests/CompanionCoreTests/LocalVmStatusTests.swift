@@ -41,6 +41,39 @@ final class LocalVmStatusTests: XCTestCase {
         XCTAssertFalse(object.keys.contains("workspace_path"))
         XCTAssertFalse(object.keys.contains("image_id"))
         XCTAssertFalse(object.keys.contains("viewer_url"))
+        XCTAssertFalse(object.keys.contains("viewer_path"))
+        XCTAssertFalse(object.keys.contains("viewerPath"))
+        XCTAssertTrue(LocalVmDesktopPolicy.encodedObjectIsPhoneSafe(object))
+    }
+
+    func testViewerSessionIsNotPartOfThePersistedStatusContract() throws {
+        let session = LocalVmViewerSession(
+            viewerPath: "/api/bots/bot-1/local-computer/viewer/vnc.html?omb_viewer=one-time#autoconnect=true",
+            ready: true
+        )
+        XCTAssertTrue(session.ready)
+        XCTAssertTrue(session.viewerPath.contains("omb_viewer"))
+        let status = LocalVmStatus(
+            mode: .perBot,
+            maxInstances: 1,
+            state: .ready,
+            container: "running",
+            daemonUp: true,
+            imageReady: true,
+            desktopReady: true,
+            ready: true,
+            createSupported: true,
+            busy: false,
+            canCreate: false,
+            canStop: true,
+            canRecreate: true,
+            problem: nil
+        )
+        let encoded = try JSONEncoder().encode(status)
+        let wire = String(decoding: encoded, as: UTF8.self)
+        XCTAssertFalse(wire.contains("viewer"))
+        XCTAssertFalse(wire.contains("omb_viewer"))
+        XCTAssertFalse(wire.contains("6080"))
     }
 
     func testUnknownValuesDegradeWithoutDroppingTheStatus() throws {

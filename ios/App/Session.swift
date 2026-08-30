@@ -72,6 +72,7 @@ final class Session: ObservableObject {
     /// until this phone receives a successful, scrubbed status response.
     @Published private(set) var localVmStatuses: [String: LocalVmStatus] = [:]
     @Published private(set) var localVmAccess = false
+    @Published private(set) var localVmAccessDenied = false
     /// One lifecycle action per bot at a time. Keeping this in the session
     /// prevents repeated taps from racing the server-side lease/capacity guard.
     @Published private(set) var pendingLocalVmActions: Set<String> = []
@@ -188,6 +189,19 @@ final class Session: ObservableObject {
             connection = Connection(name: "Preview Mac", host: "preview.tailnet.ts.net", port: 8810)
             state.hydrate(fleet)
             StorePreviewHarness.apply(arguments: ProcessInfo.processInfo.arguments, to: &state)
+            var previewAccess = false
+            var previewDenied = false
+            var previewStatuses: [String: LocalVmStatus] = [:]
+            StorePreviewHarness.applyLocalVm(
+                arguments: ProcessInfo.processInfo.arguments,
+                access: &previewAccess,
+                accessDenied: &previewDenied,
+                statuses: &previewStatuses,
+                bots: state.bots
+            )
+            localVmAccess = previewAccess
+            localVmAccessDenied = previewDenied
+            localVmStatuses = previewStatuses
             recordHydration(resumed: false)
             status = .live
             return
@@ -319,6 +333,7 @@ final class Session: ObservableObject {
         self.engineSync = nil
         localVmStatuses.removeAll()
         localVmAccess = false
+        localVmAccessDenied = false
         pendingLocalVmActions.removeAll()
         UserDefaults.standard.removeObject(forKey: Self.pinnedOverridesKey)
         // A fresh pairing settles any restore that was still waiting on the
@@ -387,6 +402,7 @@ final class Session: ObservableObject {
         state = CompanionState()
         localVmStatuses.removeAll()
         localVmAccess = false
+        localVmAccessDenied = false
         pendingLocalVmActions.removeAll()
         resetAvatarCache()
         NotificationCoordinator.shared.setBadge(0)
@@ -1099,14 +1115,17 @@ final class Session: ObservableObject {
             let snapshot = try await client.localVmStatus(botId: bot.id)
             guard !Task.isCancelled else { return }
             localVmAccess = true
+            localVmAccessDenied = false
             localVmStatuses[bot.id] = snapshot
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
             localVmAccess = false
+            localVmAccessDenied = true
             localVmStatuses.removeAll()
         } catch let error as APIError {
             if case let .status(code, _) = error, code == 403 || code == 404 {
                 localVmAccess = false
+                localVmAccessDenied = true
                 localVmStatuses.removeValue(forKey: bot.id)
             } else if !Task.isCancelled {
                 actionError = error.localizedDescription
@@ -1132,10 +1151,12 @@ final class Session: ObservableObject {
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
             localVmAccess = false
+            localVmAccessDenied = true
             localVmStatuses.removeAll()
         } catch let error as APIError {
             if case let .status(code, _) = error, code == 403 || code == 404 {
                 localVmAccess = false
+                localVmAccessDenied = true
             }
         } catch {
             return
@@ -1146,20 +1167,23 @@ final class Session: ObservableObject {
         localVmStatuses[bot.id]
     }
 
-    func localVmViewerURL(for bot: Bot) async -> (url: URL?, error: String?) {
+    func localVmViewerURL(for bot: Bot) async -> (url: URL?, error: String?, staleTicket: Bool) {
         guard localVmAccess, let client else {
-            return (nil, "Enable Local VM access for this phone in OpenMausBot → Settings → Companion.")
+            return (nil, LocalVmDesktopPolicy.accessOffMessage, false)
         }
-        guard let base = client.connection.baseURL else { return (nil, nil) }
+        guard let base = client.connection.baseURL else { return (nil, nil, false) }
         do {
             let join = try await client.localVmJoin(botId: bot.id)
-            guard join.ready else { return (nil, "The Local VM desktop is not ready yet.") }
+            guard join.ready else { return (nil, LocalVmDesktopPolicy.viewerNotReadyMessage, false) }
             let url = URL(string: join.viewerPath, relativeTo: base)?.absoluteURL
-            return (url, url == nil ? "The Local VM viewer address was invalid." : nil)
+            return (url, url == nil ? LocalVmDesktopPolicy.viewerAddressInvalidMessage : nil, false)
         } catch let error as APIError {
-            return (nil, Self.localVmSurfaceError(error))
+            if case let .status(code, _) = error, code == 401 || code == 403 {
+                return (nil, LocalVmDesktopPolicy.staleTicketMessage, true)
+            }
+            return (nil, Self.localVmSurfaceError(error), false)
         } catch {
-            return (nil, error.localizedDescription)
+            return (nil, error.localizedDescription, false)
         }
     }
 
@@ -1176,6 +1200,7 @@ final class Session: ObservableObject {
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
             localVmAccess = false
+            localVmAccessDenied = true
             localVmStatuses.removeAll()
             return error.localizedDescription
         } catch let error as APIError {
@@ -1212,16 +1237,19 @@ final class Session: ObservableObject {
             }
             guard !Task.isCancelled else { return nil }
             localVmAccess = true
+            localVmAccessDenied = false
             localVmStatuses[bot.id] = next
             await refreshLocalVmPreview(for: bot)
             return next
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
             localVmAccess = false
+            localVmAccessDenied = true
             localVmStatuses.removeAll()
         } catch let error as APIError {
             if case let .status(code, _) = error, code == 403 || code == 404 {
                 localVmAccess = false
+                localVmAccessDenied = true
                 localVmStatuses.removeValue(forKey: bot.id)
             } else if !Task.isCancelled {
                 actionError = error.localizedDescription
@@ -1492,6 +1520,23 @@ final class Session: ObservableObject {
         }
         persistAppearanceOverrides()
     }
+
+#if DEBUG
+    /// Credential-free engine row so store-preview Computer screens can
+    /// gate Local VM controls the same way a live catalog would.
+    func storePreviewInstance(matching bot: Bot) -> Instance? {
+        guard ProcessInfo.processInfo.arguments.contains("-store-preview") else { return nil }
+        let instanceId = bot.modelSelection.instanceId
+        let model = bot.modelSelection.model
+        let payload = Data("""
+        {"instanceId":"\(instanceId)","driverKind":"claudeAgent","displayName":"Preview",
+         "snapshot":{"state":"available"},
+         "models":{"default":"\(model)","options":[{"id":"\(model)","label":"\(model)"}]},
+         "capabilities":{"computerMcp":true}}
+        """.utf8)
+        return try? JSONDecoder().decode(Instance.self, from: payload)
+    }
+#endif
 
     func loadInstances() async -> ModelCatalogLoadResult {
         guard let client else { return .failed("This computer is offline.") }
@@ -2087,19 +2132,17 @@ final class Session: ObservableObject {
 /// Debug-only, credential-free fixtures for the computer panel. The normal
 /// preview still loads the real fleet-shaped JSON; these flags only replace
 /// one synthetic bot and/or inject a screen event for deterministic UI QA:
-/// `-preview-computer=starting|watching|unavailable|cloud-viewer` and the
-/// optional `-preview-bot=<id>`.
+/// `-preview-computer=starting|watching|unavailable|cloud-viewer|local-vm-idle|local-vm-starting|local-vm-error`
+/// and the optional `-preview-bot=<id>`.
 private enum StorePreviewHarness {
     private static let validScreenPNG = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAEElEQVR4nGNQ0HKBIwacHACAQwappO2xZwAAAABJRU5ErkJggg=="
 
     static func apply(arguments: [String], to state: inout CompanionState) {
         guard let argument = arguments.first(where: { $0.hasPrefix("-preview-computer=") }) else { return }
         let scenario = String(argument.dropFirst("-preview-computer=".count))
-        let target = arguments.first(where: { $0.hasPrefix("-preview-bot=") })
-            .map { String($0.dropFirst("-preview-bot=".count)) }
-            ?? state.bots.first(where: { $0.pinned != true })?.id
-            ?? state.bots.first?.id
-        guard let target, let index = state.bots.firstIndex(where: { $0.id == target }) else { return }
+        guard let target = targetBotID(arguments: arguments, state: state),
+              let index = state.bots.firstIndex(where: { $0.id == target })
+        else { return }
 
         var bot = state.bots[index]
         switch scenario {
@@ -2123,10 +2166,119 @@ private enum StorePreviewHarness {
             bot.cloudBackend = "box"
             bot.busy = false
             state.screens.removeValue(forKey: bot.id)
+        case "local-vm-idle":
+            bot.computer = "vm"
+            bot.cloudBackend = nil
+            bot.busy = false
+            state.screens.removeValue(forKey: bot.id)
+        case "local-vm-starting":
+            bot.computer = "vm"
+            bot.cloudBackend = nil
+            bot.busy = false
+            state.screens.removeValue(forKey: bot.id)
+        case "local-vm-error":
+            bot.computer = "vm"
+            bot.cloudBackend = nil
+            bot.busy = false
+            state.screens.removeValue(forKey: bot.id)
         default:
             return
         }
         state.bots[index] = bot
+    }
+
+    static func applyLocalVm(
+        arguments: [String],
+        access: inout Bool,
+        accessDenied: inout Bool,
+        statuses: inout [String: LocalVmStatus],
+        bots: [Bot]
+    ) {
+        guard let argument = arguments.first(where: { $0.hasPrefix("-preview-computer=") }) else { return }
+        let scenario = String(argument.dropFirst("-preview-computer=".count))
+        let target = arguments.first(where: { $0.hasPrefix("-preview-bot=") })
+            .map { String($0.dropFirst("-preview-bot=".count)) }
+            ?? bots.first(where: { $0.computer == "vm" })?.id
+            ?? bots.first(where: { $0.pinned != true })?.id
+            ?? bots.first?.id
+        guard let target else { return }
+
+        switch scenario {
+        case "local-vm-idle":
+            access = true
+            accessDenied = false
+            statuses[target] = LocalVmStatus(
+                mode: .perBot,
+                maxInstances: 2,
+                state: .missing,
+                container: "missing",
+                daemonUp: true,
+                imageReady: true,
+                desktopReady: false,
+                ready: false,
+                createSupported: true,
+                busy: false,
+                canCreate: true,
+                canStop: false,
+                canRecreate: false,
+                problem: "Create this bot's Local VM."
+            )
+        case "local-vm-starting":
+            access = true
+            accessDenied = false
+            statuses[target] = LocalVmStatus(
+                mode: .perBot,
+                maxInstances: 2,
+                state: .running,
+                container: "running",
+                daemonUp: true,
+                imageReady: true,
+                desktopReady: false,
+                ready: false,
+                createSupported: true,
+                busy: false,
+                canCreate: false,
+                canStop: true,
+                canRecreate: true,
+                problem: "The Local VM desktop is still starting."
+            )
+        case "local-vm-error":
+            access = true
+            accessDenied = false
+            statuses[target] = LocalVmStatus(
+                mode: .perBot,
+                maxInstances: 2,
+                state: .unavailable,
+                container: "running",
+                daemonUp: false,
+                imageReady: true,
+                desktopReady: false,
+                ready: false,
+                createSupported: true,
+                busy: false,
+                canCreate: false,
+                canStop: false,
+                canRecreate: true,
+                problem: "The Local VM desktop is unavailable."
+            )
+        default:
+            return
+        }
+    }
+
+    private static func targetBotID(arguments: [String], state: CompanionState) -> String? {
+        if let explicit = arguments.first(where: { $0.hasPrefix("-preview-bot=") }) {
+            return String(explicit.dropFirst("-preview-bot=".count))
+        }
+        let scenario = arguments.first(where: { $0.hasPrefix("-preview-computer=") })
+            .map { String($0.dropFirst("-preview-computer=".count)) }
+        if scenario?.hasPrefix("local-vm-") == true {
+            return state.bots.first(where: { $0.computer == "vm" })?.id
+                ?? state.bots.first(where: { $0.pinned != true })?.id
+                ?? state.bots.first?.id
+        }
+        return state.bots.first(where: { $0.pinned != true })?.id
+            ?? state.bots.first?.id
     }
 }
 #endif

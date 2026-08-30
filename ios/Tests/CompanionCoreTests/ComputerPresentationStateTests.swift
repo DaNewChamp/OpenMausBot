@@ -243,6 +243,89 @@ final class ComputerPresentationStateTests: XCTestCase {
         )
     }
 
+    func testLocalVmMissingStatusIsUnavailableNotStarting() {
+        let missing = LocalVmStatus(
+            mode: .perBot,
+            maxInstances: 2,
+            state: .missing,
+            container: "missing",
+            daemonUp: true,
+            imageReady: true,
+            desktopReady: false,
+            ready: false,
+            createSupported: true,
+            busy: false,
+            canCreate: true,
+            canStop: false,
+            canRecreate: false,
+            problem: "Create this bot's Local VM."
+        )
+        XCTAssertEqual(
+            ComputerPresentationState(
+                bot: bot(computer: "vm", busy: false),
+                localVm: .init(status: missing, accessGranted: true)
+            ),
+            .unavailable(message: "Create this bot's Local VM.")
+        )
+    }
+
+    func testLocalVmViewerFailureWithFrameStaysWatching() {
+        let ready = LocalVmStatus(
+            mode: .perBot,
+            maxInstances: 2,
+            state: .ready,
+            container: "running",
+            daemonUp: true,
+            imageReady: true,
+            desktopReady: true,
+            ready: true,
+            createSupported: true,
+            busy: false,
+            canCreate: false,
+            canStop: true,
+            canRecreate: true,
+            problem: nil
+        )
+        let frame = ScreenFrame(png: "c2NyZWVu", mime: "image/png")
+        XCTAssertEqual(
+            ComputerPresentationState(
+                bot: bot(computer: "vm", busy: false),
+                frame: frame,
+                localVm: .init(
+                    status: ready,
+                    accessGranted: true,
+                    hasScreenshot: true,
+                    viewerFailed: true
+                )
+            ),
+            .watching
+        )
+        XCTAssertEqual(
+            ComputerPresentationState(
+                bot: bot(computer: "vm", busy: false),
+                localVm: .init(status: ready, accessGranted: true, viewerFailed: true)
+            ),
+            .unavailable(message: LocalVmDesktopPolicy.viewerConnectFailureMessage)
+        )
+    }
+
+    func testLocalVmAccessOffDoesNotClaimInteractiveViewer() {
+        XCTAssertEqual(
+            ComputerPresentationState(
+                bot: bot(computer: "vm", busy: false),
+                localVm: .init(accessGranted: false)
+            ),
+            .unavailable(message: LocalVmDesktopPolicy.accessOffMessage)
+        )
+        XCTAssertFalse(
+            ComputerPresentationState.supportsLocalVmControls(
+                bot(computer: "vm"),
+                status: nil,
+                accessGranted: false
+            )
+        )
+    }
+
     func testLoadFailureWinsOverStaleFrame() {
         let frame = ScreenFrame(png: "c2NyZWVu", mime: "image/png")
         XCTAssertEqual(

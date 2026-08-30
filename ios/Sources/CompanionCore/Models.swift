@@ -1674,6 +1674,8 @@ public struct LocalVmScreenshot: Codable, Equatable, Sendable {
 }
 
 /// A proxied noVNC viewer path minted for this bot's ready Local VM.
+/// Deliberately `Decodable` only — the path carries a one-time ticket and
+/// must not be persisted on the phone.
 public struct LocalVmViewerSession: Decodable, Sendable {
     public var viewerPath: String
     public var ready: Bool

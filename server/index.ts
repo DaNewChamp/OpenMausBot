@@ -203,6 +203,8 @@ import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
 import { projectLocalVmStatus } from "./local-vm-phone.ts";
 import { executeLocalVmPhoneInput, validateLocalVmPhoneInput } from "./local-vm-phone-input.ts";
 import {
+  gateLocalVmPhoneJoin,
+  localVmViewerJoinDeniedIfNotReady,
   localVmViewerJoinPath,
   localVmViewerTarget,
   parseLocalVmViewerRoute,
@@ -6537,24 +6539,22 @@ const server = createServer(async (req, res) => {
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer\/join$/);
     if (m && method === "POST") {
-      if (req.headers["x-openmausbot-companion"] !== "1") {
-        return json(res, 403, { error: "Local VM viewer join is available only through the paired companion" });
-      }
-      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-        return json(res, 415, { error: "content-type must be application/json" });
-      }
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const body = await readBody(req);
-      if (body && (typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 0)) {
-        return json(res, 400, { error: "join accepts an empty JSON object only" });
-      }
+      const denial = gateLocalVmPhoneJoin({
+        companionMarker: req.headers["x-openmausbot-companion"],
+        contentType: String(req.headers["content-type"] ?? ""),
+        body,
+      });
+      if (denial) return json(res, denial.status, { error: denial.error });
       const target = localVmTargetForBot(bot.id);
       localVmIdleFor(target).touch();
       const status = await containerComputerStatus(undefined, undefined, target);
       const viewer = localVmViewerTarget(status);
       if (!viewer) {
-        return json(res, 409, { error: status.problem ?? "The Local VM desktop is not ready for viewing." });
+        const notReady = localVmViewerJoinDeniedIfNotReady(null, status.problem)!;
+        return json(res, notReady.status, { error: notReady.error });
       }
       return json(res, 200, localVmViewerJoinPath(bot.id, viewer));
     }

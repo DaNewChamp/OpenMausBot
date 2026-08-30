@@ -1,14 +1,19 @@
 import SwiftUI
 import WebKit
+import CompanionCore
 
 /// Live noVNC viewer for a proxied Local VM desktop URL.
 struct VMViewerWebView: UIViewRepresentable {
     let url: URL
     var pointerMode: VmPointerMode
-    var onLoadFailed: ((String) -> Void)?
+    /// Bumps when the parent mints a fresh one-time ticket. Stable URL keys
+    /// ignore `omb_viewer`, so generation is what forces a reload.
+    var generation: Int
+    var onLoadSucceeded: (() -> Void)?
+    var onLoadFailed: ((String, LocalVmDesktopPolicy.ViewerFailure) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onLoadFailed: onLoadFailed)
+        Coordinator(onLoadSucceeded: onLoadSucceeded, onLoadFailed: onLoadFailed)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -17,7 +22,8 @@ struct VMViewerWebView: UIViewRepresentable {
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.isOpaque = false
-        webView.backgroundColor = .black
+        webView.backgroundColor = UIColor(VBotSurface.background)
+        webView.scrollView.backgroundColor = UIColor(VBotSurface.background)
         webView.scrollView.delegate = context.coordinator
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.navigationDelegate = context.coordinator
@@ -27,48 +33,59 @@ struct VMViewerWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        context.coordinator.onLoadSucceeded = onLoadSucceeded
         context.coordinator.onLoadFailed = onLoadFailed
         context.coordinator.pointerMode = pointerMode
         context.coordinator.applyScrollZoom(for: pointerMode, on: webView)
         context.coordinator.applyPointerMode(pointerMode, on: webView)
 
-        let target = Self.stableViewerKey(for: url)
-        let current = webView.url.map(Self.stableViewerKey)
-        if current != target, context.coordinator.loadedURL != target {
+        let target = LocalVmDesktopPolicy.stableViewerKey(for: url)
+        let stableChanged = context.coordinator.loadedURL != target
+        let generationChanged = context.coordinator.loadedGeneration != generation
+        if LocalVmDesktopPolicy.shouldReloadViewer(stableKeyChanged: stableChanged, generationChanged: generationChanged) {
             context.coordinator.loadedURL = target
-            context.coordinator.resetHealthCheck()
-            webView.load(URLRequest(url: url))
+            context.coordinator.loadedGeneration = generation
+            context.coordinator.beginNewLoad()
+            webView.load(URLRequest(url: url, timeoutInterval: 15))
         }
     }
 
-    /// Identity for reload guards — strips noVNC hash and the one-time
-    /// `omb_viewer` ticket (dropped from `webView.url` after Set-Cookie).
     static func stableViewerKey(for url: URL) -> String {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return url.absoluteString
-        }
-        components.fragment = nil
-        if var queryItems = components.queryItems {
-            queryItems.removeAll { $0.name == "omb_viewer" }
-            components.queryItems = queryItems.isEmpty ? nil : queryItems
-        }
-        return components.string ?? url.absoluteString
+        LocalVmDesktopPolicy.stableViewerKey(for: url)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate {
         weak var webView: WKWebView?
         var loadedURL: String?
-        var onLoadFailed: ((String) -> Void)?
+        var loadedGeneration: Int = -1
+        var onLoadSucceeded: (() -> Void)?
+        var onLoadFailed: ((String, LocalVmDesktopPolicy.ViewerFailure) -> Void)?
         private var healthCheckTask: Task<Void, Never>?
         var pointerMode: VmPointerMode = .trackpad
+        private var reportedFailure = false
+        private var reportedSuccess = false
 
-        init(onLoadFailed: ((String) -> Void)?) {
+        init(
+            onLoadSucceeded: (() -> Void)?,
+            onLoadFailed: ((String, LocalVmDesktopPolicy.ViewerFailure) -> Void)?
+        ) {
+            self.onLoadSucceeded = onLoadSucceeded
             self.onLoadFailed = onLoadFailed
+        }
+
+        deinit {
+            healthCheckTask?.cancel()
         }
 
         func resetHealthCheck() {
             healthCheckTask?.cancel()
             healthCheckTask = nil
+        }
+
+        func beginNewLoad() {
+            resetHealthCheck()
+            reportedFailure = false
+            reportedSuccess = false
         }
 
         func applyScrollZoom(for mode: VmPointerMode, on webView: WKWebView) {
@@ -98,26 +115,48 @@ struct VMViewerWebView: UIViewRepresentable {
             webView
         }
 
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            scheduleHealthCheck(on: webView)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationResponse: WKNavigationResponse,
+            decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+        ) {
+            if let http = navigationResponse.response as? HTTPURLResponse,
+               http.statusCode == 401 || http.statusCode == 403 {
+                decisionHandler(.cancel)
+                fail(.staleTicket)
+                return
+            }
+            decisionHandler(.allow)
+        }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             webView.evaluateJavaScript(Self.chromeScript, completionHandler: nil)
             webView.evaluateJavaScript(Self.pointerModeScript(trackpad: pointerMode == .trackpad), completionHandler: nil)
             webView.evaluateJavaScript("document.body && document.body.innerText") { value, _ in
                 guard let text = value as? String else { return }
                 if text.contains("pair this device from Phone settings") {
-                    self.onLoadFailed?("This phone is no longer paired with the computer.")
+                    self.fail(.staleTicket)
                 }
             }
-            scheduleHealthCheck(on: webView)
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             guard !Self.isCancelledNavigationError(error) else { return }
-            onLoadFailed?(error.localizedDescription)
+            fail(.navigationError)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             guard !Self.isCancelledNavigationError(error) else { return }
-            onLoadFailed?(error.localizedDescription)
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorUserCancelledAuthentication {
+                fail(.staleTicket)
+                return
+            }
+            fail(.navigationError)
         }
 
         private static func isCancelledNavigationError(_ error: Error) -> Bool {
@@ -125,14 +164,50 @@ struct VMViewerWebView: UIViewRepresentable {
             return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
         }
 
+        private func fail(_ reason: LocalVmDesktopPolicy.ViewerFailure) {
+            Task { @MainActor in
+                guard !self.reportedFailure else { return }
+                self.reportedFailure = true
+                self.healthCheckTask?.cancel()
+                self.healthCheckTask = nil
+                self.onLoadFailed?(LocalVmDesktopPolicy.message(for: reason), reason)
+            }
+        }
+
+        private func succeed() {
+            Task { @MainActor in
+                guard !self.reportedSuccess, !self.reportedFailure else { return }
+                self.reportedSuccess = true
+                self.onLoadSucceeded?()
+            }
+        }
+
         private func scheduleHealthCheck(on webView: WKWebView) {
-            resetHealthCheck()
+            healthCheckTask?.cancel()
             healthCheckTask = Task { @MainActor in
-                try? await Task.sleep(for: .seconds(8))
-                guard !Task.isCancelled else { return }
-                webView.evaluateJavaScript(Self.healthScript) { value, _ in
-                    guard let result = value as? String, result == "broken" else { return }
-                    self.onLoadFailed?("The live desktop viewer could not connect. Try Recreate from ··· or switch to Cloud while the agent works.")
+                let deadline = ContinuousClock.now.advanced(by: LocalVmDesktopPolicy.viewerBlankTimeout)
+                while !Task.isCancelled {
+                    if ContinuousClock.now >= deadline {
+                        self.fail(.blankTimeout)
+                        return
+                    }
+                    do {
+                        let value = try await webView.evaluateJavaScript(Self.healthScript)
+                        if Task.isCancelled { return }
+                        if let result = value as? String {
+                            if result == "ok" {
+                                self.succeed()
+                                return
+                            }
+                            if result == "auth" {
+                                self.fail(.staleTicket)
+                                return
+                            }
+                        }
+                    } catch {
+                        if Task.isCancelled { return }
+                    }
+                    try? await Task.sleep(for: .milliseconds(400))
                 }
             }
         }
@@ -177,14 +252,14 @@ struct VMViewerWebView: UIViewRepresentable {
 
         private static let healthScript = """
         (function() {
-          var canvas = document.getElementById('noVNC_canvas');
-          if (canvas && canvas.width > 0 && canvas.height > 0) return 'ok';
+          var canvas = document.getElementById('noVNC_canvas') || document.querySelector('#noVNC_container canvas') || document.querySelector('canvas');
+          if (canvas && canvas.width > 8 && canvas.height > 8) return 'ok';
+          var rfb = window.rfb || (window.UI && window.UI.rfb);
+          var state = rfb && (rfb._rfb_connection_state || rfb._rfbConnectionState);
+          if (state === 'connected') return 'ok';
           var body = document.body ? document.body.innerText : '';
-          if (body.indexOf('pair this device') >= 0) return 'broken';
-          var styles = document.styleSheets ? document.styleSheets.length : 0;
-          var controls = document.querySelectorAll('.noVNC_button, #noVNC_control_bar_anchor').length;
-          if (controls > 0 && styles === 0) return 'broken';
-          return 'ok';
+          if (body.indexOf('pair this device') >= 0) return 'auth';
+          return 'waiting';
         })();
         """
     }

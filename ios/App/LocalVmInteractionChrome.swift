@@ -1,16 +1,18 @@
 import SwiftUI
 
-/// Grok-style floating clipboard + keyboard controls for a Local VM session.
-/// The keyboard button stays pinned bottom-right; paste/copy actions live in a
-/// card that opens from the clipboard button.
+/// Floating clipboard, screenshot save, and keyboard controls for a Local VM
+/// session. The keyboard button stays pinned bottom-right; paste/copy/save
+/// live in a card that opens from the clipboard button.
 struct LocalVmInteractionChrome: View {
     var canPaste: Bool
     var canCopy: Bool
+    var canSave: Bool = false
     var canType: Bool
     var keyboardActive: Bool
     @Binding var pointerMode: VmPointerMode
     let onPasteFromPhone: () -> Void
     let onCopyToPhone: () -> Void
+    var onSaveScreenshot: (() -> Void)? = nil
     let onToggleKeyboard: () -> Void
 
     @State private var clipboardExpanded = false
@@ -90,6 +92,11 @@ struct LocalVmInteractionChrome: View {
             Divider().opacity(0.25)
             chromeButton(title: "Copy to iPhone", systemImage: "clipboard", action: onCopyToPhone)
                 .disabled(!canCopy)
+            if let onSaveScreenshot {
+                Divider().opacity(0.25)
+                chromeButton(title: "Save to Photos", systemImage: "square.and.arrow.down", action: onSaveScreenshot)
+                    .disabled(!canSave)
+            }
         }
         .padding(.vertical, 4)
         .frame(maxWidth: 220, alignment: .leading)

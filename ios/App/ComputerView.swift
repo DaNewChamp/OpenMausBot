@@ -69,6 +69,10 @@ struct ComputerView: View {
     @State private var localVmViewerURL: URL?
     @State private var localVmSurfaceError: String?
     @State private var viewerLoadFailed = false
+    @State private var viewerReady = false
+    @State private var viewerGeneration = 0
+    @State private var viewerFailureCount = 0
+    @State private var showingPhotoSettings = false
     @State private var vmTypeDraft = ""
     @FocusState private var vmKeyboardFocused: Bool
     @AppStorage("vmPointerMode") private var vmPointerModeRaw = VmPointerMode.trackpad.rawValue
@@ -89,11 +93,12 @@ struct ComputerView: View {
     }
 
     private var usingLiveViewer: Bool {
-        localVmInteractive && localVmViewerURL != nil && !viewerLoadFailed
+        desktopSurface == .liveViewer && localVmViewerURL != nil
     }
 
     private var openingLiveViewer: Bool {
-        isLocalVm && localVmInteractive && localVmViewerURL == nil && !viewerLoadFailed && image == nil
+        isLocalVm && LocalVmDesktopPolicy.shouldJoinViewer(bot: current, snapshot: localVmSnapshot)
+            && !viewerReady && !viewerLoadFailed
     }
 
     private static let firstFrameTimeout = ComputerWatchLifecycle.firstFrameTimeout
@@ -106,6 +111,23 @@ struct ComputerView: View {
 
     private var image: UIImage? {
         frame?.data.flatMap(UIImage.init(data:))
+    }
+
+    private var localVmSnapshot: LocalVmDesktopPolicy.Snapshot {
+        LocalVmDesktopPolicy.Snapshot(
+            status: localVmStatus,
+            accessGranted: session.localVmAccess,
+            hasScreenshot: image != nil,
+            viewerURLPresent: localVmViewerURL != nil,
+            viewerFailed: viewerLoadFailed,
+            viewerReady: viewerReady,
+            instanceResolved: instanceResolved,
+            destinationsLoading: instancesLoading
+        )
+    }
+
+    private var desktopSurface: LocalVmDesktopPolicy.Surface {
+        LocalVmDesktopPolicy.surface(bot: current, snapshot: localVmSnapshot)
     }
 
     private var presentationState: ComputerPresentationState {
@@ -123,7 +145,8 @@ struct ComputerView: View {
         return ComputerPresentationState.resolve(
             bot: current,
             frame: image == nil ? nil : frame,
-            loadFailure: loadFailure ?? decodeFailure
+            loadFailure: loadFailure ?? decodeFailure,
+            localVm: isLocalVm && loadFailure == nil && decodeFailure == nil ? localVmSnapshot : nil
         )
     }
 
@@ -180,12 +203,8 @@ struct ComputerView: View {
     private var isLocalVm: Bool { destination == "vm" }
 
     private var wantsScreenPreview: Bool {
-        if current.busy == true { return true }
-        if isLocalVm {
-            // Idle Local VM uses polled screenshots and/or live noVNC — not SSE.
-            return localVmStatus?.ready != true
-        }
-        return false
+        if isLocalVm { return LocalVmDesktopPolicy.usesLiveScreenStreamTimeout() }
+        return current.busy == true
     }
 
     private var streamFailure: String? {
@@ -198,7 +217,8 @@ struct ComputerView: View {
     }
 
     private var canRetryScreen: Bool {
-        ComputerPresentationState.hasKnownComputer(current)
+        if isLocalVm { return desktopSurface.showsRetry || viewerLoadFailed }
+        return ComputerPresentationState.hasKnownComputer(current)
             && wantsScreenPreview
             && (screenWatch.failureMessage != nil || streamFailure != nil)
     }
@@ -269,6 +289,16 @@ struct ComputerView: View {
         } message: {
             Text(localVmSurfaceError ?? "")
         }
+        .alert("Photos", isPresented: $showingPhotoSettings) {
+            Button(PhotoLibrarySavePolicy.settingsActionTitle) {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(PhotoLibrarySavePolicy.deniedMessage)
+        }
         .sheet(isPresented: $showingHelp) {
             computerHelpSheet
         }
@@ -309,6 +339,9 @@ struct ComputerView: View {
             syncScreenWatch(resetFrame: false)
         }
         .onDisappear {
+            localVmViewerURL = nil
+            viewerReady = false
+            viewerLoadFailed = false
             stopScreenWatch()
         }
         .onChange(of: frame?.png) { _, png in
@@ -349,10 +382,11 @@ struct ComputerView: View {
         .onChange(of: current.computer) { _, newValue in
             let mode = newValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if mode == "vm" {
-                localVmViewerURL = nil
-                viewerLoadFailed = false
+                resetLiveViewerSession()
             } else {
                 localVmViewerURL = nil
+                viewerReady = false
+                viewerLoadFailed = false
             }
             syncScreenWatch(resetFrame: mode != "vm")
         }
@@ -371,38 +405,53 @@ struct ComputerView: View {
         }
         .task(id: "local-vm-\(current.id)-\(current.computer ?? "")") {
             guard isLocalVm else { return }
-            await session.refreshLocalVm(for: current)
+            while !Task.isCancelled {
+                await session.refreshLocalVm(for: current)
+                if !LocalVmDesktopPolicy.continueStatusPolling(
+                    isLocalVm: true,
+                    accessDenied: session.localVmAccessDenied
+                ) {
+                    break
+                }
+                try? await Task.sleep(for: LocalVmDesktopPolicy.statusPollInterval)
+            }
         }
-        .task(id: "local-vm-preview-\(current.id)-\(current.computer ?? "")") {
+        .task(id: "local-vm-preview-\(current.id)-\(current.computer ?? "")-\(session.localVmAccess)-\(viewerReady)") {
             guard isLocalVm else { return }
+            guard LocalVmDesktopPolicy.shouldPollScreenshot(bot: current, snapshot: localVmSnapshot) else { return }
             while !Task.isCancelled {
                 await session.refreshLocalVmPreview(for: current)
-                try? await Task.sleep(for: .seconds(2))
+                if !LocalVmDesktopPolicy.shouldPollScreenshot(bot: current, snapshot: localVmSnapshot) {
+                    break
+                }
+                try? await Task.sleep(for: LocalVmDesktopPolicy.screenshotPollInterval)
             }
         }
-        .task(id: "local-vm-viewer-\(current.id)-\(destination)-\(localVmStatus?.ready == true)-\(session.localVmAccess)") {
+        .task(id: "local-vm-viewer-\(current.id)-\(destination)-\(localVmStatus?.ready == true)-\(session.localVmAccess)-\(viewerGeneration)") {
             guard isLocalVm else {
-                localVmViewerURL = nil
-                viewerLoadFailed = false
+                resetLiveViewerSession()
                 return
             }
-            guard localVmInteractive else { return }
-            viewerLoadFailed = false
-            localVmViewerURL = nil
+            guard LocalVmDesktopPolicy.shouldJoinViewer(bot: current, snapshot: localVmSnapshot) else { return }
+            viewerReady = false
             let joined = await session.localVmViewerURL(for: current)
             guard !Task.isCancelled else { return }
             localVmViewerURL = joined.url
             if joined.url == nil {
-                viewerLoadFailed = true
-                if let error = joined.error {
-                    localVmSurfaceError = error
-                }
+                let reason: LocalVmDesktopPolicy.ViewerFailure = joined.staleTicket ? .staleTicket : .joinFailed
+                handleViewerFailure(joined.error ?? LocalVmDesktopPolicy.viewerConnectFailureMessage, reason: reason)
             }
         }
         .task(id: "instances-\(current.id)") {
             let hadCache = !instances.isEmpty
             if !hadCache { instancesLoading = true }
             defer { instancesLoading = false }
+#if DEBUG
+            if let preview = session.storePreviewInstance(matching: current) {
+                instances = [preview]
+                return
+            }
+#endif
             if case let .loaded(loaded) = await session.loadInstances() {
                 instances = loaded
             }
@@ -501,42 +550,10 @@ struct ComputerView: View {
     @ViewBuilder
     private var content: some View {
         ZStack {
-            if usingLiveViewer, let localVmViewerURL {
-                VMViewerWebView(
-                    url: localVmViewerURL,
-                    pointerMode: vmPointerMode,
-                    onLoadFailed: { message in
-                        viewerLoadFailed = true
-                        localVmSurfaceError = message
-                    }
-                )
-                    .id("local-vm-viewer-\(current.id)-\(vmPointerMode.rawValue)")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black)
-                    .accessibilityLabel("\(current.name)'s Local VM")
-            } else if openingLiveViewer {
-                CalmDesktopSkeleton(message: "Opening live desktop…")
-            } else if case .watching = presentationState, let image, localVmInteractive {
-                RemoteDesktopCanvas(
-                    image: image,
-                    pointerMode: vmPointerMode,
-                    onClick: { x, y, button in
-                        Task { await sendLocalVmInput(["action": "click", "x": x, "y": y, "button": button]) }
-                    },
-                    onScroll: { direction, clicks, x, y in
-                        Task {
-                            await sendLocalVmInput([
-                                "action": "scroll",
-                                "direction": direction,
-                                "clicks": clicks,
-                                "x": x,
-                                "y": y,
-                            ])
-                        }
-                    }
-                )
-                .background(Color.black)
-                .accessibilityLabel("\(current.name)'s computer")
+            VBotSurface.background
+
+            if isLocalVm {
+                localVmDesktop
             } else if case .watching = presentationState, let image {
                 Image(uiImage: image)
                     .resizable()
@@ -551,10 +568,95 @@ struct ComputerView: View {
         }
     }
 
+    @ViewBuilder
+    private var localVmDesktop: some View {
+        ZStack {
+            if case .unavailable = desktopSurface {
+                stateCard
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                if let image, !viewerReady {
+                    localVmScreenshotSurface(image)
+                }
+
+                if let localVmViewerURL,
+                   LocalVmDesktopPolicy.shouldJoinViewer(bot: current, snapshot: localVmSnapshot) || usingLiveViewer {
+                    VMViewerWebView(
+                        url: localVmViewerURL,
+                        pointerMode: vmPointerMode,
+                        generation: viewerGeneration,
+                        onLoadSucceeded: { viewerReady = true },
+                        onLoadFailed: { message, reason in
+                            handleViewerFailure(message, reason: reason)
+                        }
+                    )
+                    .opacity(viewerReady && !viewerLoadFailed ? 1 : 0)
+                    .allowsHitTesting(viewerReady && !viewerLoadFailed)
+                    .accessibilityHidden(!viewerReady)
+                    .accessibilityLabel("\(current.name)'s Local VM")
+                }
+
+                if !viewerReady, image == nil {
+                    CalmDesktopSkeleton(message: localVmStartingMessage)
+                }
+
+                if viewerLoadFailed, image != nil {
+                    Button {
+                        Haptics.selection()
+                        retryLiveViewer()
+                    } label: {
+                        Label("Try live desktop again", systemImage: "arrow.clockwise")
+                            .font(.footnote.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func localVmScreenshotSurface(_ image: UIImage) -> some View {
+        if desktopSurface.isInteractive || (localVmInteractive && desktopSurface != .screenshotWatchOnly) {
+            RemoteDesktopCanvas(
+                image: image,
+                pointerMode: vmPointerMode,
+                onClick: { x, y, button in
+                    Task { await sendLocalVmInput(["action": "click", "x": x, "y": y, "button": button]) }
+                },
+                onScroll: { direction, clicks, x, y in
+                    Task {
+                        await sendLocalVmInput([
+                            "action": "scroll",
+                            "direction": direction,
+                            "clicks": clicks,
+                            "x": x,
+                            "y": y,
+                        ])
+                    }
+                }
+            )
+            .accessibilityLabel("\(current.name)'s computer")
+        } else {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+                .accessibilityLabel("\(current.name)'s computer")
+        }
+    }
+
     private var localVmChrome: some View {
         LocalVmInteractionChrome(
             canPaste: UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
             canCopy: image != nil,
+            canSave: image != nil,
             canType: localVmInteractive,
             keyboardActive: vmKeyboardFocused,
             pointerMode: Binding(
@@ -563,6 +665,7 @@ struct ComputerView: View {
             ),
             onPasteFromPhone: { Task { await pasteFromPhoneToVm() } },
             onCopyToPhone: { copyScreen() },
+            onSaveScreenshot: { saveScreenToPhotos() },
             onToggleKeyboard: { toggleVmKeyboard() }
         )
     }
@@ -737,7 +840,7 @@ struct ComputerView: View {
                 return "Local VM is not created yet. Create it below, then open this screen again."
             }
             if canShowLocalVmControls, localVmStatus?.canRecreate == true {
-                return localVmStatus?.problem ?? "Recreate the Local VM below to start a fresh desktop."
+                return "Recreate the Local VM below to start a fresh desktop."
             }
             return "Running on Local VM. The desktop updates while this screen is open."
         case "cloud":
@@ -983,11 +1086,18 @@ struct ComputerView: View {
         guard let image else { return }
         savingPhoto = true
         photoSaveMessage = nil
-        UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-        savingPhoto = false
-        photoSaveMessage = "Saved"
-        Haptics.impact(.light)
-        Task {
+        Task { @MainActor in
+            let outcome = await ComputerPhotoSave.save(image)
+            savingPhoto = false
+            photoSaveMessage = PhotoLibrarySavePolicy.message(for: outcome)
+            switch outcome {
+            case .saved:
+                Haptics.success()
+            case .denied:
+                showingPhotoSettings = true
+            case .failed:
+                Haptics.error()
+            }
             try? await Task.sleep(for: .seconds(2))
             if !Task.isCancelled { photoSaveMessage = nil }
         }
@@ -1021,8 +1131,7 @@ struct ComputerView: View {
         savingDestination = true
         defer { savingDestination = false }
         if mode == "vm" {
-            localVmViewerURL = nil
-            viewerLoadFailed = false
+            resetLiveViewerSession()
         }
         _ = await session.updateComputerDestination(
             BotComputerDestinationPatch(computer: mode),
@@ -1044,6 +1153,7 @@ struct ComputerView: View {
     @MainActor
     private func runLocalVmAction(_ action: LocalVmAction) async {
         localVmError = nil
+        resetLiveViewerSession()
         let result = await session.performLocalVmAction(action, for: current)
         if result == nil, !Task.isCancelled {
             localVmError = "That Local VM action could not be completed. Try again from this panel."
@@ -1051,8 +1161,44 @@ struct ComputerView: View {
     }
 
     private func retryScreen() {
+        if isLocalVm {
+            retryLiveViewer()
+        }
         guard ComputerPresentationState.hasKnownComputer(current) else { return }
         restartScreenWatch()
+    }
+
+    private func resetLiveViewerSession() {
+        localVmViewerURL = nil
+        viewerReady = false
+        viewerLoadFailed = false
+        viewerFailureCount = 0
+        viewerGeneration += 1
+    }
+
+    private func retryLiveViewer() {
+        viewerLoadFailed = false
+        viewerReady = false
+        localVmSurfaceError = nil
+        viewerFailureCount = 0
+        localVmViewerURL = nil
+        viewerGeneration += 1
+    }
+
+    private func handleViewerFailure(_ message: String, reason: LocalVmDesktopPolicy.ViewerFailure) {
+        if LocalVmDesktopPolicy.shouldRefreshTicket(failureCount: viewerFailureCount, reason: reason) {
+            viewerFailureCount += 1
+            viewerReady = false
+            viewerLoadFailed = false
+            localVmViewerURL = nil
+            viewerGeneration += 1
+            return
+        }
+        viewerLoadFailed = true
+        viewerReady = false
+        if image == nil {
+            localVmSurfaceError = message
+        }
     }
 
     private func runScreenWatchTimeoutTask() async {
