@@ -62,6 +62,7 @@ struct ComputerView: View {
     @State private var showingHelp = false
     @State private var showingControls = false
     @State private var instances: [Instance] = []
+    @State private var instancesLoading = true
     @State private var savingDestination = false
     @State private var savingPhoto = false
     @State private var photoSaveMessage: String?
@@ -205,7 +206,7 @@ struct ComputerView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color.black.ignoresSafeArea()
+            VBotSurface.background.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 header
@@ -389,6 +390,9 @@ struct ComputerView: View {
             }
         }
         .task(id: "instances-\(current.id)") {
+            let hadCache = !instances.isEmpty
+            if !hadCache { instancesLoading = true }
+            defer { instancesLoading = false }
             if case let .loaded(loaded) = await session.loadInstances() {
                 instances = loaded
             }
@@ -400,7 +404,7 @@ struct ComputerView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            ChromeCircleButton(systemImage: "chevron.left") {
+            GlassButton(systemImage: "chevron.left") {
                 Haptics.selection()
                 dismiss()
             }
@@ -422,7 +426,7 @@ struct ComputerView: View {
 
             Spacer(minLength: 8)
 
-            ChromeCircleButton(systemImage: "questionmark", weight: .medium) {
+            GlassButton(systemImage: "questionmark", weight: .medium) {
                 Haptics.selection()
                 showingHelp = true
             }
@@ -472,16 +476,16 @@ struct ComputerView: View {
                     }
                 }
             } label: {
-                ChromeCircleButton(systemImage: "ellipsis")
+                GlassChromeGlyph(systemImage: "ellipsis")
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Choose Local or Cloud")
         }
         .foregroundStyle(Color.primary)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, VBotSurface.Space.chrome)
         .padding(.top, 4)
         .padding(.bottom, 10)
-        .background(Color.black.opacity(0.88))
+        .background(VBotSurface.background.opacity(0.92))
     }
 
     @ViewBuilder
@@ -498,16 +502,10 @@ struct ComputerView: View {
                 )
                     .id("local-vm-viewer-\(current.id)-\(vmPointerMode.rawValue)")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
                     .accessibilityLabel("\(current.name)'s Local VM")
             } else if openingLiveViewer {
-                VStack(spacing: 12) {
-                    ProgressView()
-                        .tint(.white)
-                    Text("Opening live desktop…")
-                        .font(.body)
-                }
-                .foregroundStyle(Color.white)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                CalmDesktopSkeleton(message: "Opening live desktop…")
             } else if case .watching = presentationState, let image, localVmInteractive {
                 RemoteDesktopCanvas(
                     image: image,
@@ -527,12 +525,14 @@ struct ComputerView: View {
                         }
                     }
                 )
+                .background(Color.black)
                 .accessibilityLabel("\(current.name)'s computer")
             } else if case .watching = presentationState, let image {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
                     .accessibilityLabel("\(current.name)'s computer")
             } else {
                 stateCard
@@ -597,55 +597,49 @@ struct ComputerView: View {
     private var stateCard: some View {
         switch presentationState {
         case .starting:
-            VStack(spacing: 12) {
-                ProgressView()
-                    .tint(.white)
-                    .controlSize(.regular)
-                    .accessibilityHidden(true)
-                Text(localVmStartingMessage)
-                    .font(.body)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 28)
-            }
-            .foregroundStyle(Color.white)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(localVmStartingMessage)
+            CalmDesktopSkeleton(message: localVmStartingMessage)
 
         case .cloudViewerAvailable:
             VStack(spacing: 14) {
                 Image(systemName: "display.and.arrow.down")
                     .font(.system(size: 30, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.9))
+                    .foregroundStyle(.primary.opacity(0.9))
                 Text("Cloud desktop ready")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.body.weight(.semibold))
                 Text("Live preview will appear while the agent works. You can also open a secure viewer below.")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color.white.opacity(0.65))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 28)
             }
-            .foregroundStyle(Color.white)
+            .foregroundStyle(Color.primary)
+            .padding(VBotSurface.Space.section)
+            .vbotCard()
+            .padding(.horizontal, VBotSurface.Space.page)
 
         case let .unavailable(message) where message == ComputerPresentationState.idleWaitingMessage:
             VStack(spacing: 14) {
                 Image(systemName: "clock")
                     .font(.system(size: 28, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.85))
+                    .foregroundStyle(.secondary)
                 Text("Waiting for agent")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.body.weight(.semibold))
                 Text(message)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color.white.opacity(0.65))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
                 Text(destinationHelp)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color.white.opacity(0.55))
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
                     .padding(.top, 4)
             }
-            .foregroundStyle(Color.white)
+            .foregroundStyle(Color.primary)
+            .padding(VBotSurface.Space.section)
+            .vbotCard()
+            .padding(.horizontal, VBotSurface.Space.page)
 
         case let .unavailable(message):
             VStack(spacing: 14) {
@@ -653,15 +647,15 @@ struct ComputerView: View {
                     .font(.system(size: 28, weight: .medium))
                     .foregroundStyle(Color.orange)
                 Text("Computer unavailable")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.body.weight(.semibold))
                 Text(message)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color.white.opacity(0.65))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
                 Text(destinationHelp)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color.white.opacity(0.55))
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
                     .padding(.top, 4)
@@ -670,6 +664,7 @@ struct ComputerView: View {
                         confirmingLocalVmAction = .create
                     }
                     .buttonStyle(.borderedProminent)
+                    .frame(minHeight: VBotSurface.Hit.minimum)
                     .disabled(pendingLocalVmAction || savingDestination)
                 }
                 if localVmDestinationEnabled, canShowLocalVmControls, localVmStatus?.canRecreate == true {
@@ -677,14 +672,19 @@ struct ComputerView: View {
                         confirmingLocalVmAction = .recreate
                     }
                     .buttonStyle(.borderedProminent)
+                    .frame(minHeight: VBotSurface.Hit.minimum)
                     .disabled(pendingLocalVmAction || savingDestination)
                 }
                 if canRetryScreen {
                     Button("Try again", action: retryScreen)
                         .buttonStyle(.borderedProminent)
+                        .frame(minHeight: VBotSurface.Hit.minimum)
                 }
             }
-            .foregroundStyle(Color.white)
+            .foregroundStyle(Color.primary)
+            .padding(VBotSurface.Space.section)
+            .vbotCard()
+            .padding(.horizontal, VBotSurface.Space.page)
 
         case .watching:
             EmptyView()
@@ -782,13 +782,13 @@ struct ComputerView: View {
 
     private var watchingControls: some View {
         HStack(spacing: 12) {
-            ChromeCircleButton(systemImage: "square.and.arrow.down", weight: .medium) {
+            GlassButton(systemImage: "square.and.arrow.down", weight: .medium) {
                 saveScreenToPhotos()
             }
             .disabled(image == nil || savingPhoto)
             .accessibilityLabel("Save to Photos")
 
-            ChromeCircleButton(systemImage: "list.clipboard", weight: .medium) {
+            GlassButton(systemImage: "list.clipboard", weight: .medium) {
                 copyScreen()
             }
             .disabled(image == nil)
@@ -803,7 +803,7 @@ struct ComputerView: View {
 
             Spacer(minLength: 0)
 
-            ChromeCircleButton(systemImage: "square.grid.2x2", weight: .medium) {
+            GlassButton(systemImage: "square.grid.2x2", weight: .medium) {
                 Haptics.selection()
                 showingControls = true
             }
@@ -811,7 +811,7 @@ struct ComputerView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
-        .background(Color.black)
+        .background(VBotSurface.background)
     }
 
     private var computerHelpSheet: some View {
@@ -819,22 +819,28 @@ struct ComputerView: View {
             List {
                 Section("This screen") {
                     Text(startingMessage)
+                        .vbotRowSurface()
                 }
                 Section("How to use Local VM") {
                     Text("Tap ··· and choose Local, then Create Local VM. The desktop is a Linux container on the paired Mac. This phone shows that desktop while this screen is open.")
+                        .vbotRowSurface()
                     Text("Grok Reconstructed cannot use Local VM as an OpenMaus mount. It still has Grok’s own Mac tools, which is why “open your VM” reached this computer. Use Claude, Codex, or an ACP engine for Local VM.")
+                        .vbotRowSurface()
                 }
                 if let localVmStatus {
                     Section("Local VM") {
                         Text(localVmStateTitle)
+                            .vbotRowSurface()
                         if let problem = localVmStatus.problem, localVmStatus.ready != true {
                             Text(problem)
+                                .vbotRowSurface()
                         }
                     }
                 }
             }
             .navigationTitle("Desktop")
             .navigationBarTitleDisplayMode(.inline)
+            .vbotGroupedChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { showingHelp = false }
@@ -849,6 +855,10 @@ struct ComputerView: View {
         NavigationStack {
             List {
                 Section {
+                    if CalmSurfacePolicy.showsSkeleton(isLoading: instancesLoading, hasCachedRows: selectedInstance != nil) {
+                        CalmSkeletonList(rows: 2, label: "Loading computer destinations")
+                            .vbotRowSurface()
+                    }
                     destinationChoice("Local", mode: "vm", enabled: localVmDestinationEnabled)
                     destinationChoice("Cloud", mode: "cloud", enabled: true)
                 } header: {
@@ -867,17 +877,22 @@ struct ComputerView: View {
                     } label: {
                         Label("Open secure cloud viewer", systemImage: "display")
                     }
+                    .vbotRowSurface()
                 }
                 if canShowLocalVmControls {
                     Section {
                         Text(localVmStateTitle)
+                            .vbotRowSurface()
                         if pendingLocalVmAction {
                             ProgressView()
+                                .vbotRowSurface()
                         }
                         if let localVmError {
                             Text(localVmError).foregroundStyle(.red)
+                                .vbotRowSurface()
                         } else if let problem = localVmStatus?.problem, localVmStatus?.ready != true {
                             Text(problem).foregroundStyle(.secondary)
+                                .vbotRowSurface()
                         }
                         if localVmStatus?.canCreate == true {
                             Button("Create", systemImage: "plus.circle") {
@@ -885,6 +900,7 @@ struct ComputerView: View {
                                 confirmingLocalVmAction = .create
                             }
                             .disabled(pendingLocalVmAction)
+                            .vbotRowSurface()
                         }
                         if localVmStatus?.canStop == true {
                             Button("Stop", systemImage: "stop.circle", role: .destructive) {
@@ -892,6 +908,7 @@ struct ComputerView: View {
                                 confirmingLocalVmAction = .stop
                             }
                             .disabled(pendingLocalVmAction)
+                            .vbotRowSurface()
                         }
                         if localVmStatus?.canRecreate == true {
                             Button("Recreate", systemImage: "arrow.clockwise.circle") {
@@ -899,6 +916,7 @@ struct ComputerView: View {
                                 confirmingLocalVmAction = .recreate
                             }
                             .disabled(pendingLocalVmAction)
+                            .vbotRowSurface()
                         }
                     } header: {
                         Text("Local VM")
@@ -911,14 +929,17 @@ struct ComputerView: View {
                         showingControls = false
                         retryScreen()
                     }
+                    .vbotRowSurface()
                 }
                 if !canOpenCloudViewer && !canShowLocalVmControls {
                     Text(destinationHelp)
                         .foregroundStyle(.secondary)
+                        .vbotRowSurface()
                 }
             }
             .navigationTitle("Controls")
             .navigationBarTitleDisplayMode(.inline)
+            .vbotGroupedChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { showingControls = false }
@@ -971,6 +992,7 @@ struct ComputerView: View {
             }
         }
         .disabled(!enabled || savingDestination)
+        .vbotRowSurface()
     }
 
     private func selectDestination(_ mode: String) {

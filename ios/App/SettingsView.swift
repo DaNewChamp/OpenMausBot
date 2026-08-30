@@ -18,36 +18,68 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section("Computer") {
-                if let connection = session.connection {
-                    NavigationLink {
-                        ConnectionSecurityView()
-                    } label: {
-                        ComputerSettingsRow(
-                            name: connection.name,
-                            status: statusText,
-                            connected: session.status == .live
-                        )
-                    }
-                } else {
-                    Button {
-                        onConnect?()
-                    } label: {
-                        ComputerSettingsRow(
-                            name: "Connect a computer",
-                            status: "Not connected",
-                            connected: false
-                        )
-                    }
-                    .disabled(onConnect == nil)
+        ScrollView {
+            VStack(spacing: VBotSurface.Space.section) {
+                computerSection
+                notificationsSection
+                hapticsSection
+                if session.connection != nil {
+                    workspaceSection
+                    appearanceSection
+                    busySection
                 }
             }
+            .padding(.horizontal, VBotSurface.Space.page)
+            .padding(.top, VBotSurface.Space.section)
+            .padding(.bottom, 36)
+        }
+        .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.inline)
+        .vbotCanvas()
+        .tint(Color.accentColor)
+        .task { await session.refreshNotificationAuthorization() }
+    }
 
-            Section {
+    private var computerSection: some View {
+        VBotSurfaceGroup(title: "Computer") {
+            if let connection = session.connection {
+                NavigationLink {
+                    ConnectionSecurityView()
+                } label: {
+                    ComputerSettingsRow(
+                        name: connection.name,
+                        status: statusText,
+                        connected: session.status == .live
+                    )
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .frame(minHeight: VBotSurface.Hit.row)
+            } else {
+                Button {
+                    onConnect?()
+                } label: {
+                    ComputerSettingsRow(
+                        name: "Connect a computer",
+                        status: "Not connected",
+                        connected: false
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(onConnect == nil)
+                .padding(.horizontal, 16)
+                .frame(minHeight: VBotSurface.Hit.row)
+            }
+        }
+    }
+
+    private var notificationsSection: some View {
+        VBotSurfaceGroup(
+            footer: "Alerts arrive while V Bot is open or was recently in the background. Closed-app delivery is not available yet."
+        ) {
+            Group {
                 if notificationsAreEnabled {
                     notificationRow
-                        .accessibilityHint(notificationAccessibilityHint)
                 } else {
                     Button {
                         enablingNotifications = true
@@ -58,109 +90,146 @@ struct SettingsView: View {
                     } label: {
                         notificationRow
                     }
+                    .buttonStyle(.plain)
                     .disabled(enablingNotifications)
-                    .accessibilityHint(notificationAccessibilityHint)
-                }
-            } footer: {
-                Text("Alerts arrive while V Bot is open or was recently in the background. Closed-app delivery is not available yet.")
-            }
-
-            Section {
-                Toggle(isOn: $hapticsEnabled) {
-                    Label {
-                        Text("Haptics")
-                    } icon: {
-                        SettingsIcon(symbol: "hand.tap", color: .purple)
-                    }
-                }
-                Toggle(isOn: $soundsEnabled) {
-                    Label {
-                        Text("Sounds")
-                    } icon: {
-                        SettingsIcon(symbol: "speaker.wave.2", color: .blue)
-                    }
-                }
-            } header: {
-                Text("Haptics & Sounds")
-            } footer: {
-                Text("Feel a light tap when you press a button, swipe a row, or save a photo. Sounds play for sends, replies, and connections.")
-            }
-
-            if session.connection != nil {
-                Section("Workspace") {
-                    NavigationLink {
-                        HiddenChatsView()
-                    } label: {
-                        Label {
-                            Text("Hidden chats")
-                        } icon: {
-                            SettingsIcon(symbol: "eye.slash", color: .gray)
-                        }
-                    }
-
-                    NavigationLink {
-                        TasksRoutinesView()
-                    } label: {
-                        Label {
-                            Text("Tasks & Routines")
-                        } icon: {
-                            SettingsIcon(symbol: "calendar.badge.clock", color: .orange)
-                        }
-                    }
-
-                    NavigationLink {
-                        ConnectedAppsView()
-                    } label: {
-                        Label {
-                            Text("Connected Apps")
-                        } icon: {
-                            SettingsIcon(symbol: "link", color: .blue)
-                        }
-                    }
-
-                    NavigationLink {
-                        EngineSelectionView()
-                    } label: {
-                        Label {
-                            Text("Desktop engine")
-                        } icon: {
-                            SettingsIcon(symbol: "cpu", color: .purple)
-                        }
-                    }
-                }
-
-                Section {
-                    Picker("Conversation text size", selection: $conversationTextSize) {
-                        Text("Small").tag(ConversationTextSize.small.rawValue)
-                        Text("Standard").tag(ConversationTextSize.standard.rawValue)
-                        Text("Large").tag(ConversationTextSize.large.rawValue)
-                    }
-                    .pickerStyle(.segmented)
-                } header: {
-                    Text("Appearance")
-                } footer: {
-                    Text("Adjusts message text, Markdown, tool details, and the composer without changing navigation or avatar sizes.")
-                }
-
-                Section {
-                    Picker("Default action", selection: $busySendDefault) {
-                        Text("Steer").tag(BusySendDefault.steer.rawValue)
-                        Text("Queue").tag(BusySendDefault.queue.rawValue)
-                    }
-                    .pickerStyle(.segmented)
-                } header: {
-                    Text("While agent is working")
-                } footer: {
-                    Text("Steer sends your next message into the active turn. Queue holds it until the current work finishes. Touch and hold Send for either choice at any time.")
                 }
             }
+            .padding(.horizontal, 16)
+            .frame(minHeight: VBotSurface.Hit.row)
+            .accessibilityHint(notificationAccessibilityHint)
         }
-        .navigationTitle("Settings")
-        .navigationBarTitleDisplayMode(.inline)
-        .scrollContentBackground(.hidden)
-        .background(VBotSurface.background.ignoresSafeArea())
-        .tint(Color.accentColor)
-        .task { await session.refreshNotificationAuthorization() }
+    }
+
+    private var hapticsSection: some View {
+        VBotSurfaceGroup(
+            title: "Haptics & Sounds",
+            footer: "Feel a light tap when you press a button, swipe a row, or save a photo. Sounds play for sends, replies, and connections."
+        ) {
+            Toggle(isOn: $hapticsEnabled) {
+                Label {
+                    Text("Haptics")
+                } icon: {
+                    SettingsIcon(symbol: "hand.tap", color: .purple)
+                }
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: VBotSurface.Hit.row)
+
+            VBotHairline().padding(.leading, 56)
+
+            Toggle(isOn: $soundsEnabled) {
+                Label {
+                    Text("Sounds")
+                } icon: {
+                    SettingsIcon(symbol: "speaker.wave.2", color: .blue)
+                }
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: VBotSurface.Hit.row)
+        }
+    }
+
+    private var workspaceSection: some View {
+        VBotSurfaceGroup(title: "Workspace") {
+            workspaceLink(
+                title: "Hidden chats",
+                symbol: "eye.slash",
+                color: .gray,
+                destination: HiddenChatsView()
+            )
+            VBotHairline().padding(.leading, 56)
+            workspaceLink(
+                title: "Tasks & Routines",
+                symbol: "calendar.badge.clock",
+                color: .orange,
+                destination: TasksRoutinesView()
+            )
+            VBotHairline().padding(.leading, 56)
+            workspaceLink(
+                title: "Connected Apps",
+                symbol: "link",
+                color: .blue,
+                destination: ConnectedAppsView()
+            )
+            VBotHairline().padding(.leading, 56)
+            workspaceLink(
+                title: "Desktop engine",
+                symbol: "cpu",
+                color: .purple,
+                destination: EngineSelectionView()
+            )
+        }
+    }
+
+    private var appearanceSection: some View {
+        VBotSurfaceGroup(
+            title: "Appearance",
+            footer: "Adjusts message text, Markdown, tool details, and the composer without changing navigation or avatar sizes."
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Conversation text size")
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                Picker("Conversation text size", selection: $conversationTextSize) {
+                    Text("Small").tag(ConversationTextSize.small.rawValue)
+                    Text("Standard").tag(ConversationTextSize.standard.rawValue)
+                    Text("Large").tag(ConversationTextSize.large.rawValue)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(minHeight: VBotSurface.Hit.row)
+        }
+    }
+
+    private var busySection: some View {
+        VBotSurfaceGroup(
+            title: "While agent is working",
+            footer: "Steer sends your next message into the active turn. Queue holds it until the current work finishes. Touch and hold Send for either choice at any time."
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Default action")
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                Picker("Default action", selection: $busySendDefault) {
+                    Text("Steer").tag(BusySendDefault.steer.rawValue)
+                    Text("Queue").tag(BusySendDefault.queue.rawValue)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(minHeight: VBotSurface.Hit.row)
+        }
+    }
+
+    private func workspaceLink<Destination: View>(
+        title: String,
+        symbol: String,
+        color: Color,
+        destination: Destination
+    ) -> some View {
+        NavigationLink {
+            destination
+        } label: {
+            HStack(spacing: 12) {
+                SettingsIcon(symbol: symbol, color: color)
+                Text(title)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: VBotSurface.Hit.row)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var notificationsAreEnabled: Bool {
@@ -190,6 +259,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .frame(minHeight: VBotSurface.Hit.minimum)
     }
 
     private var statusText: String { session.status.settingsText }
@@ -203,7 +273,7 @@ private struct ComputerSettingsRow: View {
     var body: some View {
         HStack(spacing: 12) {
             ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: VBotSurface.Radius.icon, style: .continuous)
                     .fill(MausPalette.color("blue").opacity(0.14))
                     .frame(width: 38, height: 38)
                 Image(systemName: "laptopcomputer")
@@ -226,8 +296,11 @@ private struct ComputerSettingsRow: View {
                         .lineLimit(1)
                 }
             }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
     }
 }
@@ -241,7 +314,7 @@ private struct SettingsIcon: View {
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: 28, height: 28)
-            .background(color, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .background(color, in: RoundedRectangle(cornerRadius: VBotSurface.Radius.icon, style: .continuous))
             .accessibilityHidden(true)
     }
 }
@@ -257,100 +330,25 @@ struct ConnectionSecurityView: View {
     @State private var refreshing = false
 
     var body: some View {
-        Form {
-            if let connection = session.connection {
-                Section {
-                    HStack(spacing: 14) {
-                        ProfileAvatar(name: connection.name, size: 46)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(connection.name)
-                                .font(.headline)
-                            Label(session.status.settingsText,
-                                  systemImage: session.status == .live ? "checkmark.circle.fill" : "circle.dotted")
-                                .font(.subheadline)
-                                .foregroundStyle(session.status == .live ? Color.green : Color.secondary)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                    .accessibilityElement(children: .combine)
+        ScrollView {
+            VStack(spacing: VBotSurface.Space.section) {
+                if let connection = session.connection {
+                    identityCard(connection)
+                    detailsCard(connection)
+                    troubleshootingCard
+                    signOutCard
+                } else {
+                    ContentUnavailableView("No computer connected", systemImage: "laptopcomputer.slash")
+                        .frame(minHeight: 220)
                 }
-
-                Section {
-                    DisclosureGroup("Connection details") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Group {
-                                if showingFullAddress {
-                                    Text(connection.displayAddress)
-                                        .textSelection(.enabled)
-                                } else {
-                                    Text(shortened(connection.displayAddress))
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                }
-                            }
-                            .font(.footnote.monospaced())
-                            .foregroundStyle(.secondary)
-
-                            HStack(spacing: 16) {
-                                Button(showingFullAddress ? "Hide full address" : "Show full address") {
-                                    showingFullAddress.toggle()
-                                }
-                                Button(copiedAddress ? "Copied" : "Copy") {
-                                    UIPasteboard.general.string = connection.displayAddress
-                                    copiedAddress = true
-                                    Task {
-                                        try? await Task.sleep(for: .seconds(2))
-                                        copiedAddress = false
-                                    }
-                                }
-                            }
-                            .font(.subheadline.weight(.medium))
-                        }
-                        .padding(.top, 10)
-                    }
-
-                    Button("Edit address") {
-                        addressText = connection.displayAddress
-                        editingAddress = true
-                    }
-                }
-
-                Section("Troubleshooting") {
-                    Text(troubleshootingText)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    Button {
-                        refreshing = true
-                        Task {
-                            await session.refresh()
-                            refreshing = false
-                        }
-                    } label: {
-                        HStack {
-                            Text("Try reconnecting")
-                            if refreshing {
-                                Spacer()
-                                ProgressView().controlSize(.small)
-                            }
-                        }
-                    }
-                    .disabled(refreshing)
-                }
-
-                Section {
-                    Button("Remove connection from this iPhone", role: .destructive) {
-                        confirmingSignOut = true
-                    }
-                }
-            } else {
-                ContentUnavailableView("No computer connected", systemImage: "laptopcomputer.slash")
             }
+            .padding(.horizontal, VBotSurface.Space.page)
+            .padding(.top, VBotSurface.Space.section)
+            .padding(.bottom, 36)
         }
         .navigationTitle("Connection & Security")
         .navigationBarTitleDisplayMode(.inline)
-        .scrollContentBackground(.hidden)
-        .background(VBotSurface.background.ignoresSafeArea())
+        .vbotCanvas()
         .alert("Edit address", isPresented: $editingAddress) {
             TextField("Computer address", text: $addressText)
                 .textInputAutocapitalization(.never)
@@ -377,6 +375,116 @@ struct ConnectionSecurityView: View {
         } message: {
             Text("This removes the connection from this iPhone only. It does not revoke this phone on your Mac. To remove Mac-side access, open OpenMausBot → Settings → Phone and remove this device.")
         }
+    }
+
+    private func identityCard(_ connection: Connection) -> some View {
+        HStack(spacing: 14) {
+            ProfileAvatar(name: connection.name, size: 46)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(connection.name)
+                    .font(.headline)
+                Label(session.status.settingsText,
+                      systemImage: session.status == .live ? "checkmark.circle.fill" : "circle.dotted")
+                    .font(.subheadline)
+                    .foregroundStyle(session.status == .live ? Color.green : Color.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(minHeight: VBotSurface.Hit.row)
+        .vbotCard()
+        .accessibilityElement(children: .combine)
+    }
+
+    private func detailsCard(_ connection: Connection) -> some View {
+        VBotSurfaceGroup {
+            DisclosureGroup("Connection details") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Group {
+                        if showingFullAddress {
+                            Text(connection.displayAddress)
+                                .textSelection(.enabled)
+                        } else {
+                            Text(shortened(connection.displayAddress))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    .font(.footnote.monospaced())
+                    .foregroundStyle(.secondary)
+
+                    HStack(spacing: 16) {
+                        Button(showingFullAddress ? "Hide full address" : "Show full address") {
+                            showingFullAddress.toggle()
+                        }
+                        .frame(minHeight: VBotSurface.Hit.minimum)
+                        Button(copiedAddress ? "Copied" : "Copy") {
+                            PlatformBridge.copyToPasteboard(connection.displayAddress)
+                            copiedAddress = true
+                            Task {
+                                try? await Task.sleep(for: .seconds(2))
+                                copiedAddress = false
+                            }
+                        }
+                        .frame(minHeight: VBotSurface.Hit.minimum)
+                    }
+                    .font(.subheadline.weight(.medium))
+                }
+                .padding(.top, 10)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+
+            VBotHairline().padding(.leading, 16)
+
+            Button("Edit address") {
+                addressText = connection.displayAddress
+                editingAddress = true
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .frame(minHeight: VBotSurface.Hit.row)
+        }
+    }
+
+    private var troubleshootingCard: some View {
+        VBotSurfaceGroup(title: "Troubleshooting") {
+            Text(troubleshootingText)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 8)
+
+            VBotHairline().padding(.leading, 16)
+
+            Button {
+                refreshing = true
+                Task {
+                    await session.refresh()
+                    refreshing = false
+                }
+            } label: {
+                HStack {
+                    Text("Try reconnecting")
+                    if refreshing {
+                        Spacer()
+                        ProgressView().controlSize(.small)
+                    }
+                }
+            }
+            .disabled(refreshing)
+            .padding(.horizontal, 16)
+            .frame(minHeight: VBotSurface.Hit.row)
+        }
+    }
+
+    private var signOutCard: some View {
+        Button("Remove connection from this iPhone", role: .destructive) {
+            confirmingSignOut = true
+        }
+        .frame(maxWidth: .infinity, minHeight: VBotSurface.Hit.row)
+        .vbotCard()
     }
 
     private var troubleshootingText: String {
@@ -433,7 +541,7 @@ struct AccountSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 12) {
+                VStack(spacing: VBotSurface.Space.row) {
                     accountRow
                     NavigationLink {
                         ConnectedAppsView()
@@ -465,9 +573,9 @@ struct AccountSheet: View {
                         )
                     }
                 }
-                .padding(20)
+                .padding(VBotSurface.Space.page)
             }
-            .background(AccountSheetStyle.canvas.ignoresSafeArea())
+            .vbotCanvas()
             .navigationTitle(" ")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -501,7 +609,7 @@ struct AccountSheet: View {
                     .foregroundStyle(Color.secondary)
             }
             .padding(16)
-            .background(AccountSheetStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .vbotCard()
         }
         .buttonStyle(.plain)
     }
@@ -514,10 +622,10 @@ struct AccountSheet: View {
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.body.weight(.medium))
                     .foregroundStyle(Color.primary)
                 Text(subtitle)
-                    .font(.system(size: 13))
+                    .font(.footnote)
                     .foregroundStyle(Color.secondary)
                     .lineLimit(1)
             }
@@ -527,13 +635,9 @@ struct AccountSheet: View {
                 .foregroundStyle(Color.secondary)
         }
         .padding(16)
-        .background(AccountSheetStyle.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .frame(minHeight: VBotSurface.Hit.row)
+        .vbotCard()
     }
-}
-
-private enum AccountSheetStyle {
-    static let canvas = VBotSurface.background
-    static let card = VBotSurface.card
 }
 
 struct EngineSelectionView: View {
@@ -544,137 +648,186 @@ struct EngineSelectionView: View {
     @State private var error: String?
 
     var body: some View {
-        Form {
-            if loading {
-                Section {
-                    ProgressView("Loading engines…")
-                }
-            } else if let error {
-                Section {
-                    Text(error)
-                        .foregroundStyle(.secondary)
-                    Button("Try again") { Task { await load() } }
-                }
-            } else if let sync {
-                Section {
-                    Picker("Primary engine", selection: Binding(
-                        get: { sync.selectedEngine },
-                        set: { newEngine in Task { await save(engine: newEngine) } }
-                    )) {
-                        ForEach(VBotPrimaryEngine.allCases) { engine in
-                            Text(engine.displayName).tag(engine)
-                        }
+        ScrollView {
+            VStack(spacing: VBotSurface.Space.section) {
+                if CalmSurfacePolicy.showsSkeleton(isLoading: loading, hasCachedRows: sync != nil) {
+                    VBotSurfaceGroup {
+                        CalmSkeletonList(rows: 4, label: "Loading engines")
                     }
-                    .disabled(saving)
-                } footer: {
-                    if sync.fallback, let reason = sync.fallbackReason {
-                        Text("Using OpenMaus because Grok Reconstructed is unavailable: \(reason)")
-                    } else if sync.servingEngine == .grokReconstructed {
-                        Text("V Bot is showing agents synced from Grok Bot 0.18 Reconstructed on this Mac.")
-                    } else {
-                        Text("OpenMaus remains the default engine when Grok Reconstructed is unavailable.")
+                } else if let error {
+                    VBotSurfaceGroup {
+                        Text(error)
+                            .foregroundStyle(.secondary)
+                            .padding(16)
+                        VBotHairline().padding(.leading, 16)
+                        Button("Try again") { Task { await load() } }
+                            .padding(.horizontal, 16)
+                            .frame(minHeight: VBotSurface.Hit.row)
                     }
-                }
-
-                Section("Engine status") {
-                    ForEach(sync.engines, id: \.id) { engine in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(engine.displayName)
-                                Spacer()
-                                Text(engine.isAvailable ? "Available" : "Unavailable")
-                                    .foregroundStyle(engine.isAvailable ? .green : .secondary)
-                            }
-                            if let reason = engine.reason, !engine.isAvailable {
-                                Text(reason)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-
-                if !sync.bots.isEmpty {
-                    Section("Synced agents") {
-                        ForEach(sync.bots) { bot in
-                            HStack {
-                                Text(bot.label)
-                                Spacer()
-                                if bot.busy == true {
-                                    Text("Working")
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if !sync.groups.isEmpty {
-                    Section("Synced groups") {
-                        ForEach(sync.groups) { group in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(group.label)
-                                if !group.memberIds.isEmpty {
-                                    Text("\(group.memberIds.count) member\(group.memberIds.count == 1 ? "" : "s")")
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if let router = sync.router, sync.reconstructedMutationsReady {
-                    Section {
-                        Picker("Provider", selection: Binding(
-                            get: { router.selected.provider },
-                            set: { provider in Task { await saveRouter(provider: provider, modelId: nil) } }
-                        )) {
-                            ForEach(router.providers.filter(\.selectable)) { provider in
-                                Text(provider.label).tag(provider.id)
-                            }
-                            if router.providers.contains(where: { $0.id == router.selected.provider && $0.selectable }) == false {
-                                Text(router.selected.provider).tag(router.selected.provider)
-                            }
-                        }
-                        .disabled(saving)
-                        if router.selected.provider == "cursor" {
-                            cursorModelPicker(router: router)
-                        } else {
-                            Text("Only Cursor models can be changed here. Other providers keep their local model.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    } header: {
-                        Text("Host provider")
-                    } footer: {
-                        Text("This selection is host-wide on Grok Reconstructed, not per agent.")
+                } else if let sync {
+                    enginePicker(sync)
+                    engineStatus(sync)
+                    if !sync.bots.isEmpty { syncedAgents(sync) }
+                    if !sync.groups.isEmpty { syncedGroups(sync) }
+                    if let router = sync.router, sync.reconstructedMutationsReady {
+                        hostProvider(router)
                     }
                 }
             }
+            .padding(.horizontal, VBotSurface.Space.page)
+            .padding(.top, VBotSurface.Space.section)
+            .padding(.bottom, 36)
         }
         .navigationTitle("Desktop engine")
         .navigationBarTitleDisplayMode(.inline)
-        .scrollContentBackground(.hidden)
-        .background(VBotSurface.background.ignoresSafeArea())
+        .vbotCanvas()
         .task { await load() }
     }
 
+    private func enginePicker(_ sync: VBotEngineSync) -> some View {
+        VBotSurfaceGroup(footer: engineFooter(sync)) {
+            Picker("Primary engine", selection: Binding(
+                get: { sync.selectedEngine },
+                set: { newEngine in Task { await save(engine: newEngine) } }
+            )) {
+                ForEach(VBotPrimaryEngine.allCases) { engine in
+                    Text(engine.displayName).tag(engine)
+                }
+            }
+            .disabled(saving)
+            .padding(.horizontal, 16)
+            .frame(minHeight: VBotSurface.Hit.row)
+        }
+    }
+
+    private func engineFooter(_ sync: VBotEngineSync) -> String {
+        if sync.fallback, let reason = sync.fallbackReason {
+            return "Using OpenMaus because Grok Reconstructed is unavailable: \(reason)"
+        }
+        if sync.servingEngine == .grokReconstructed {
+            return "V Bot is showing agents synced from Grok Bot 0.18 Reconstructed on this Mac."
+        }
+        return "OpenMaus remains the default engine when Grok Reconstructed is unavailable."
+    }
+
+    private func engineStatus(_ sync: VBotEngineSync) -> some View {
+        VBotSurfaceGroup(title: "Engine status") {
+            ForEach(Array(sync.engines.enumerated()), id: \.element.id) { index, engine in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(engine.displayName)
+                        Spacer()
+                        Text(engine.isAvailable ? "Available" : "Unavailable")
+                            .foregroundStyle(engine.isAvailable ? .green : .secondary)
+                    }
+                    if let reason = engine.reason, !engine.isAvailable {
+                        Text(reason)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(minHeight: VBotSurface.Hit.minimum)
+                if index < sync.engines.count - 1 {
+                    VBotHairline().padding(.leading, 16)
+                }
+            }
+        }
+    }
+
+    private func syncedAgents(_ sync: VBotEngineSync) -> some View {
+        VBotSurfaceGroup(title: "Synced agents") {
+            ForEach(Array(sync.bots.enumerated()), id: \.element.id) { index, bot in
+                HStack {
+                    Text(bot.label)
+                    Spacer()
+                    if bot.busy == true {
+                        Text("Working")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .frame(minHeight: VBotSurface.Hit.row)
+                if index < sync.bots.count - 1 {
+                    VBotHairline().padding(.leading, 16)
+                }
+            }
+        }
+    }
+
+    private func syncedGroups(_ sync: VBotEngineSync) -> some View {
+        VBotSurfaceGroup(title: "Synced groups") {
+            ForEach(Array(sync.groups.enumerated()), id: \.element.id) { index, group in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.label)
+                    if !group.memberIds.isEmpty {
+                        Text("\(group.memberIds.count) member\(group.memberIds.count == 1 ? "" : "s")")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(minHeight: VBotSurface.Hit.row)
+                if index < sync.groups.count - 1 {
+                    VBotHairline().padding(.leading, 16)
+                }
+            }
+        }
+    }
+
+    private func hostProvider(_ router: VBotRouterState) -> some View {
+        VBotSurfaceGroup(
+            title: "Host provider",
+            footer: "This selection is host-wide on Grok Reconstructed, not per agent."
+        ) {
+            Picker("Provider", selection: Binding(
+                get: { router.selected.provider },
+                set: { provider in Task { await saveRouter(provider: provider, modelId: nil) } }
+            )) {
+                ForEach(router.providers.filter(\.selectable)) { provider in
+                    Text(provider.label).tag(provider.id)
+                }
+                if router.providers.contains(where: { $0.id == router.selected.provider && $0.selectable }) == false {
+                    Text(router.selected.provider).tag(router.selected.provider)
+                }
+            }
+            .disabled(saving)
+            .padding(.horizontal, 16)
+            .frame(minHeight: VBotSurface.Hit.row)
+            if router.selected.provider == "cursor" {
+                VBotHairline().padding(.leading, 16)
+                cursorModelPicker(router: router)
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: VBotSurface.Hit.row)
+            } else {
+                VBotHairline().padding(.leading, 16)
+                Text("Only Cursor models can be changed here. Other providers keep their local model.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(16)
+            }
+        }
+    }
+
     private func load() async {
-        loading = true
+        let hadCache = sync != nil
+        if !hadCache { loading = true }
         defer { loading = false }
         guard session.connection != nil else {
-            error = "Connect to your computer to choose an engine."
-            sync = nil
+            if sync == nil {
+                error = "Connect to your computer to choose an engine."
+            }
             return
         }
         if let loaded = await session.loadEngineSync() {
             sync = loaded
             error = nil
-        } else {
+        } else if sync == nil {
             error = session.actionError ?? "Could not load engine status."
-            sync = nil
         }
     }
 

@@ -11,61 +11,53 @@ struct PinnedChatShelf: View {
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private static let columns = 3
-    private static let gutter: CGFloat = 10
-    private static let coverAvatar: CGFloat = 80
-    private static let cellPadding: CGFloat = 8
-    private static let nameBlock: CGFloat = 36
-
     var body: some View {
         GeometryReader { proxy in
-            let metrics = Self.metrics(for: proxy.size.width)
-            Group {
-                if summaries.count > Self.columns {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        tileRow(metrics: metrics)
-                            .padding(.horizontal, 16)
+            let layout = PinnedChatShelfLayout.metrics(paneWidth: proxy.size.width)
+            let overflowing = PinnedChatShelfLayout.overflows(pinCount: summaries.count)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: layout.spacing) {
+                    ForEach(summaries) { summary in
+                        Button { open(summary.chat) } label: {
+                            PinnedChatTile(
+                                chat: summary.chat,
+                                avatarSize: layout.avatar,
+                                tileWidth: layout.tile,
+                                animated: !reduceMotion && MausState.forChat(summary.chat, in: session.state).showsActivity
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .frame(minWidth: VBotSurface.Hit.minimum, minHeight: VBotSurface.Hit.minimum)
+                        .contextMenu {
+                            pinButton(for: summary)
+                        }
+                        .disabled(session.pendingPinnedChats.contains(summary.chat.stableID))
+                        .transition(tileTransition)
                     }
-                } else {
-                    tileRow(metrics: metrics)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.horizontal, 16)
                 }
+                .padding(.horizontal, PinnedChatShelfLayout.pagePadding)
+                .frame(
+                    minWidth: proxy.size.width,
+                    alignment: overflowing ? .leading : .center
+                )
             }
+            .scrollBounceBehavior(overflowing ? .always : .basedOnSize, axes: .horizontal)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(height: Self.coverAvatar + Self.nameBlock)
-        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: summaries.map(\.id))
+        .frame(height: PinnedChatShelfLayout.reservedHeight)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.28), value: summaries.map(\.id))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Pinned conversations")
     }
 
-    private static func metrics(for paneWidth: CGFloat) -> (avatar: CGFloat, tile: CGFloat, spacing: CGFloat) {
-        let inner = max(paneWidth - 32, 1)
-        let cell = max(0, inner / CGFloat(columns) - gutter * 2)
-        let avatar = min(coverAvatar, max(64, cell - cellPadding * 2))
-        let tile = max(avatar, cell)
-        return (avatar, tile, gutter * 2)
-    }
-
-    private func tileRow(metrics: (avatar: CGFloat, tile: CGFloat, spacing: CGFloat)) -> some View {
-        HStack(alignment: .top, spacing: metrics.spacing) {
-            ForEach(summaries) { summary in
-                Button { open(summary.chat) } label: {
-                    PinnedChatTile(
-                        chat: summary.chat,
-                        avatarSize: metrics.avatar,
-                        tileWidth: metrics.tile,
-                        animated: !reduceMotion && MausState.forChat(summary.chat, in: session.state).showsActivity
-                    )
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
-                    pinButton(for: summary)
-                }
-                .disabled(session.pendingPinnedChats.contains(summary.chat.stableID))
-            }
+    private var tileTransition: AnyTransition {
+        if reduceMotion {
+            return .opacity
         }
+        return .asymmetric(
+            insertion: .scale(scale: 0.92).combined(with: .opacity),
+            removal: .scale(scale: 0.92).combined(with: .opacity)
+        )
     }
 
     @ViewBuilder
@@ -95,7 +87,7 @@ private struct PinnedChatTile: View {
                         .controlSize(.mini)
                         .tint(.white)
                         .frame(width: 22, height: 22)
-                        .background(Circle().fill(Color.black.opacity(0.78)))
+                        .background(Circle().fill(VBotSurface.controlSurface.opacity(0.92)))
                         .overlay(Circle().stroke(VBotSurface.background, lineWidth: 2))
                 }
             }

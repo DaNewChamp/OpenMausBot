@@ -65,12 +65,17 @@ extension View {
     }
 
     /// A rounded sheet of glass.
-    func glassSheet(cornerRadius: CGFloat = 28, tint: Color? = nil) -> some View {
+    func glassSheet(cornerRadius: CGFloat = VBotSurface.Radius.sheet, tint: Color? = nil) -> some View {
         modifier(GlassSurface(
             shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),
             interactive: false,
             tint: tint
         ))
+    }
+
+    /// Card-sized glass, matching `VBotSurface.Radius.card`.
+    func glassCard(tint: Color? = nil) -> some View {
+        glassSheet(cornerRadius: VBotSurface.Radius.card, tint: tint)
     }
 }
 
@@ -107,6 +112,24 @@ struct GlassButton: View {
         }
         .buttonStyle(.plain)
         .glassCircle()
+        .frame(minWidth: VBotSurface.Hit.minimum, minHeight: VBotSurface.Hit.minimum)
+    }
+}
+
+/// Glass glyph for `Menu` labels — not a nested `Button`.
+struct GlassChromeGlyph: View {
+    let systemImage: String
+    var size: CGFloat = VBotSurface.Hit.minimum
+    var weight: Font.Weight = .semibold
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 17, weight: weight))
+            .foregroundStyle(Color.primary)
+            .frame(width: size, height: size)
+            .contentShape(Circle())
+            .glassCircle()
+            .accessibilityHidden(true)
     }
 }
 

@@ -12,6 +12,7 @@ struct GroupProfileView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var routines: [Routine] = []
+    @State private var routinesLoading = true
     @State private var showingInstructions = false
     @State private var showingResponderPicker = false
     @State private var draftInstructions = ""
@@ -33,12 +34,15 @@ struct GroupProfileView: View {
     }
 
     private var canEditSetup: Bool {
-        session.status == .live && session.connection != nil
+        CalmSurfacePolicy.canEditRemoteContent(
+            isLive: session.status == .live,
+            hasConnection: session.connection != nil
+        )
     }
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(spacing: VBotSurface.Space.section) {
                 groupMark
                     .padding(.top, 18)
 
@@ -47,15 +51,19 @@ struct GroupProfileView: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 18)
-                    .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .vbotCard()
                     .accessibilityAddTraits(.isHeader)
+
+                if !canEditSetup {
+                    ReconnectToEditBanner()
+                }
 
                 NavigationLink(value: Chat.room(currentRoom)) {
                     Label("Open chat", systemImage: "bubble.left.and.bubble.right.fill")
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity, minHeight: 52)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .frame(maxWidth: .infinity, minHeight: VBotSurface.Hit.row)
+                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: VBotSurface.Radius.button, style: .continuous))
                 }
                 .buttonStyle(.plain)
 
@@ -64,11 +72,11 @@ struct GroupProfileView: View {
                 defaultResponderCard
                 routinesCard
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, VBotSurface.Space.page)
             .padding(.bottom, 36)
         }
         .scrollIndicators(.hidden)
-        .background(GroupProfileStyle.canvas.ignoresSafeArea())
+        .vbotCanvas()
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
         .background {
@@ -78,7 +86,10 @@ struct GroupProfileView: View {
         .safeAreaInset(edge: .top, spacing: 0) { topBar }
         .task {
             let loaded = await session.loadRoutines()
-            routines = loaded.routines.filter { currentRoom.memberIds.contains($0.botId) }
+            let incoming = loaded.routines.filter { currentRoom.memberIds.contains($0.botId) }
+            let failed = session.status != .live && incoming.isEmpty && !routines.isEmpty
+            routines = CalmSurfacePolicy.selectCatalog(cached: routines, incoming: incoming, failed: failed)
+            routinesLoading = false
         }
         .sheet(isPresented: $showingInstructions) {
             instructionsEditor
@@ -90,7 +101,7 @@ struct GroupProfileView: View {
 
     private var topBar: some View {
         HStack {
-            ChromeCircleButton(systemImage: "chevron.left") {
+            GlassButton(systemImage: "chevron.left") {
                 Haptics.selection()
                 dismiss()
             }
@@ -100,7 +111,7 @@ struct GroupProfileView: View {
 
             Menu {
                 Button {
-                    UIPasteboard.general.string = currentRoom.id
+                    PlatformBridge.copyToPasteboard(currentRoom.id)
                 } label: {
                     Label("Copy ID", systemImage: "doc.on.doc")
                 }
@@ -111,16 +122,16 @@ struct GroupProfileView: View {
                 }
                 .disabled(session.pendingPinnedChats.contains("room:\(currentRoom.id)"))
             } label: {
-                ChromeCircleButton(systemImage: "ellipsis")
+                GlassChromeGlyph(systemImage: "ellipsis")
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Group actions")
         }
         .foregroundStyle(Color.primary)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, VBotSurface.Space.page)
         .padding(.top, 8)
         .padding(.bottom, 10)
-        .background(GroupProfileStyle.canvas)
+        .background(VBotSurface.background)
     }
 
     private var groupMark: some View {
@@ -153,7 +164,7 @@ struct GroupProfileView: View {
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(Color.primary)
                         .frame(width: 56, height: 56)
-                        .background(GroupProfileStyle.control, in: Circle())
+                        .background(VBotSurface.controlSurface, in: Circle())
                         .offset(markOffset(index: 3, count: 4))
                         .accessibilityHidden(true)
                 }
@@ -185,16 +196,16 @@ struct GroupProfileView: View {
                                 .foregroundStyle(Color.secondary)
                         }
                         .padding(.horizontal, 16)
-                        .frame(minHeight: 56)
+                        .frame(minHeight: VBotSurface.Hit.row)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Open 1:1 with \(bot.name)")
                     if index < members.count - 1 {
-                        Divider().overlay(GroupProfileStyle.divider).padding(.leading, 62)
+                        VBotHairline().padding(.leading, 62)
                     }
                 }
             }
-            .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .vbotCard()
 
             Text("Groups can have up to 6 members.")
                 .font(.footnote)
@@ -233,8 +244,8 @@ struct GroupProfileView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 16)
-            .frame(minHeight: 56, alignment: .leading)
-            .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .frame(minHeight: VBotSurface.Hit.row, alignment: .leading)
+            .vbotCard()
         }
         .buttonStyle(.plain)
         .disabled(!canEditSetup && currentRoom.bulletin.isEmpty)
@@ -280,8 +291,8 @@ struct GroupProfileView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 16)
-            .frame(minHeight: 56, alignment: .leading)
-            .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .frame(minHeight: VBotSurface.Hit.row, alignment: .leading)
+            .vbotCard()
         }
         .buttonStyle(.plain)
         .disabled(!canEditSetup)
@@ -311,7 +322,7 @@ struct GroupProfileView: View {
                     .font(.body)
                     .scrollContentBackground(.hidden)
                     .padding(12)
-                    .background(GroupProfileStyle.control, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .vbotControlSurface()
                     .padding(.horizontal, 20)
                     .onChange(of: draftInstructions) { _, value in
                         if value.count > 12_000 {
@@ -328,7 +339,7 @@ struct GroupProfileView: View {
                 Spacer(minLength: 0)
             }
             .padding(.top, 12)
-            .background(VBotSurface.background.ignoresSafeArea())
+            .vbotCanvas()
             .navigationTitle("Instructions")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -358,6 +369,7 @@ struct GroupProfileView: View {
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
+                    .vbotRowSurface()
 
                     if draftResponder.kind == "member" {
                         Picker("Lead bot", selection: leadBotBinding) {
@@ -365,13 +377,13 @@ struct GroupProfileView: View {
                                 Text(bot.name).tag(bot.id)
                             }
                         }
+                        .vbotRowSurface()
                     }
                 } footer: {
                     Text(GroupRouting.groupResponseHint(room: currentRoom, members: routingMembers))
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(VBotSurface.background.ignoresSafeArea())
+            .vbotGroupedChrome()
             .navigationTitle("Default responder")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -446,12 +458,14 @@ struct GroupProfileView: View {
                 .padding(.horizontal, 18)
 
             VStack(alignment: .leading, spacing: 0) {
-                if routines.isEmpty {
+                if CalmSurfacePolicy.showsSkeleton(isLoading: routinesLoading, hasCachedRows: !routines.isEmpty) {
+                    CalmSkeletonList(rows: 3, label: "Loading routines")
+                } else if routines.isEmpty {
                     Text("No routines yet")
                         .font(.body)
                         .foregroundStyle(Color.secondary)
                         .padding(.horizontal, 16)
-                        .frame(minHeight: 56, alignment: .leading)
+                        .frame(minHeight: VBotSurface.Hit.row, alignment: .leading)
                 } else {
                     ForEach(Array(routines.prefix(4).enumerated()), id: \.element.id) { index, routine in
                         NavigationLink {
@@ -460,7 +474,7 @@ struct GroupProfileView: View {
                             HStack(spacing: 12) {
                                 Image(systemName: "clock")
                                     .font(.system(size: 18, weight: .medium))
-                                    .foregroundStyle(Color(red: 0.58, green: 0.45, blue: 1))
+                                    .foregroundStyle(VBotSurface.routineIcon)
                                     .frame(width: 28)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(routine.name).font(.body).foregroundStyle(Color.primary)
@@ -474,16 +488,16 @@ struct GroupProfileView: View {
                                     .foregroundStyle(Color.secondary)
                             }
                             .padding(.horizontal, 16)
-                            .frame(minHeight: 58)
+                            .frame(minHeight: VBotSurface.Hit.row)
                         }
                         .buttonStyle(.plain)
                         if index < min(routines.count, 4) - 1 {
-                            Divider().overlay(GroupProfileStyle.divider).padding(.leading, 56)
+                            VBotHairline().padding(.leading, 56)
                         }
                     }
                 }
 
-                Divider().overlay(GroupProfileStyle.divider)
+                VBotHairline()
 
                 NavigationLink {
                     TasksRoutinesView()
@@ -492,10 +506,11 @@ struct GroupProfileView: View {
                         .font(.body)
                         .foregroundStyle(Color.accentColor)
                         .padding(.horizontal, 16)
-                        .frame(minHeight: 52, alignment: .leading)
+                        .frame(minHeight: VBotSurface.Hit.row, alignment: .leading)
                 }
+                .disabled(!canEditSetup)
             }
-            .background(GroupProfileStyle.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .vbotCard()
         }
     }
 
@@ -519,11 +534,4 @@ struct GroupProfileView: View {
             }
         }
     }
-}
-
-private enum GroupProfileStyle {
-    static let canvas = VBotSurface.background
-    static let card = VBotSurface.card
-    static let control = VBotSurface.controlSurface
-    static let divider = Color.primary.opacity(0.09)
 }

@@ -102,6 +102,12 @@ struct AgentProfileView: View {
         session.engineSync?.usesReconstructedMutations == true && pickedInstanceId != "cursor"
     }
     private var botRoutines: [Routine] { routines.filter { $0.botId == current.id } }
+    private var canEdit: Bool {
+        CalmSurfacePolicy.canEditRemoteContent(
+            isLive: session.status == .live,
+            hasConnection: session.connection != nil
+        )
+    }
     private var usesCustomAvatarPhoto: Bool {
         current.avatarUrl != nil && current.displayedAvatarCrop != .mascot
     }
@@ -122,6 +128,10 @@ struct AgentProfileView: View {
                 ScrollView {
                     VStack(spacing: 0) {
                         profileHero
+                        if !canEdit {
+                            ReconnectToEditBanner()
+                                .padding(.bottom, VBotSurface.Space.section)
+                        }
                         identityCard
                         characterSection
                         instructionsRow
@@ -129,12 +139,12 @@ struct AgentProfileView: View {
                         notificationsRow
                         secondaryControls
                     }
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, VBotSurface.Space.page)
                     .padding(.bottom, 36)
                 }
                 .scrollIndicators(.hidden)
             }
-            .background(AgentProfileStyle.canvas.ignoresSafeArea())
+            .vbotCanvas()
             .toolbar(.hidden, for: .navigationBar)
             .overlay {
                 if busy || savingModel {
@@ -142,7 +152,7 @@ struct AgentProfileView: View {
                         .controlSize(.large)
                         .tint(Color.primary)
                         .padding(22)
-                        .background(AgentProfileStyle.card, in: Circle())
+                        .background(VBotSurface.card, in: Circle())
                         .accessibilityLabel("Saving")
                 }
             }
@@ -193,7 +203,7 @@ struct AgentProfileView: View {
 
     private var profileTopBar: some View {
         HStack {
-            ChromeCircleButton(systemImage: "chevron.left") {
+            GlassButton(systemImage: "chevron.left") {
                 Haptics.selection()
                 leaveProfile()
             }
@@ -205,12 +215,13 @@ struct AgentProfileView: View {
                 Button("Save changes", systemImage: "checkmark") {
                     Task { await saveAll() }
                 }
-                .disabled(!hasUnsavedChanges || busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!canEdit || !hasUnsavedChanges || busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                 Button("Edit instructions", systemImage: "doc.text") {
                     instructionsBaseline = description
                     showingInstructions = true
                 }
+                .disabled(!canEdit)
                 Button("Tasks & routines", systemImage: "clock") {
                     showingRoutines = true
                 }
@@ -218,6 +229,7 @@ struct AgentProfileView: View {
                 Button("Media & avatar", systemImage: "photo") {
                     showingMedia = true
                 }
+                .disabled(!canEdit)
                 Button("Model & voice", systemImage: "slider.horizontal.3") {
                     showingModelAndVoice = true
                 }
@@ -230,13 +242,13 @@ struct AgentProfileView: View {
                 }
                 .disabled(session.pendingPinnedChats.contains("bot:\(current.id)"))
             } label: {
-                ChromeCircleButton(systemImage: "ellipsis")
+                GlassChromeGlyph(systemImage: "ellipsis")
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Profile actions")
         }
         .foregroundStyle(Color.primary)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, VBotSurface.Space.page)
         .padding(.top, 8)
         .padding(.bottom, 4)
     }
@@ -268,9 +280,10 @@ struct AgentProfileView: View {
                 .multilineTextAlignment(.center)
                 .textInputAutocapitalization(.words)
                 .padding(.horizontal, 18)
-                .frame(minHeight: 54)
+                .frame(minHeight: VBotSurface.Hit.row)
+                .disabled(!canEdit)
 
-            Divider().overlay(AgentProfileStyle.divider)
+            VBotHairline()
 
             TextField("Title (optional)", text: $title)
                 .font(.body)
@@ -278,8 +291,9 @@ struct AgentProfileView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 18)
                 .frame(minHeight: 48)
+                .disabled(!canEdit)
         }
-        .profileCard()
+        .vbotCard()
         .accessibilityElement(children: .contain)
     }
 
@@ -344,7 +358,7 @@ struct AgentProfileView: View {
                     .padding(.top, 16)
                     .padding(.bottom, 16)
 
-                    Divider().overlay(AgentProfileStyle.divider)
+                    VBotHairline()
 
                     HStack(spacing: 6) {
                         ForEach(MascotMark.allCases) { mark in
@@ -378,7 +392,7 @@ struct AgentProfileView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 14)
 
-                    Divider().overlay(AgentProfileStyle.divider)
+                    VBotHairline()
 
                     Button("Reset to default") {
                         Haptics.selection()
@@ -410,6 +424,7 @@ struct AgentProfileView: View {
             }
         }
         .padding(.top, 18)
+        .disabled(!canEdit)
     }
 
     private var photoCropBinding: Binding<AvatarCrop> {
@@ -484,27 +499,25 @@ struct AgentProfileView: View {
         VStack(alignment: .leading, spacing: 10) {
             profileSectionLabel("Routines")
             VStack(spacing: 0) {
-                if routinesLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 22)
+                if CalmSurfacePolicy.showsSkeleton(isLoading: routinesLoading, hasCachedRows: !botRoutines.isEmpty) {
+                    CalmSkeletonList(rows: 3, label: "Loading routines")
                 } else if botRoutines.isEmpty {
                     Text("No routines yet")
                         .font(.body)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 18)
-                        .frame(minHeight: 56, alignment: .leading)
+                        .frame(minHeight: VBotSurface.Hit.row, alignment: .leading)
                 } else {
                     ForEach(Array(botRoutines.prefix(4).enumerated()), id: \.element.id) { index, routine in
                         routineRow(routine)
                         if index < min(botRoutines.count, 4) - 1 {
-                            Divider().overlay(AgentProfileStyle.divider).padding(.leading, 58)
+                            VBotHairline().padding(.leading, 58)
                         }
                     }
                 }
 
-                Divider().overlay(AgentProfileStyle.divider)
+                VBotHairline()
 
                 Button {
                     showingRoutines = true
@@ -520,10 +533,11 @@ struct AgentProfileView: View {
                         Spacer()
                     }
                     .padding(.horizontal, 18)
-                    .frame(minHeight: 52)
+                    .frame(minHeight: VBotSurface.Hit.row)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .disabled(!canEdit)
             }
             .profileCard()
         }
@@ -537,7 +551,7 @@ struct AgentProfileView: View {
             HStack(spacing: 12) {
                 Image(systemName: "clock")
                     .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(Color(red: 0.58, green: 0.45, blue: 1))
+                    .foregroundStyle(VBotSurface.routineIcon)
                     .frame(width: 28)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(routine.name)
@@ -573,6 +587,7 @@ struct AgentProfileView: View {
                 Toggle("", isOn: $notifications)
                     .labelsHidden()
                     .tint(Color.green)
+                    .disabled(!canEdit)
                     .accessibilityLabel("Agent notifications")
             }
             .padding(.horizontal, 18)
@@ -621,32 +636,34 @@ struct AgentProfileView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .disabled(!canEdit)
 
                 HStack(spacing: 10) {
                     PhotosPicker(selection: $photo, matching: .images) {
                         Label("Upload image", systemImage: "photo.badge.plus")
                     }
                     .buttonStyle(.bordered)
-                    .disabled(busy)
+                    .disabled(!canEdit || busy)
 
                     if current.avatarUrl != nil {
                         Button("Use mascot", systemImage: "trash", role: .destructive) {
                             Task { await clearImage() }
                         }
                         .buttonStyle(.bordered)
-                        .disabled(busy)
+                        .disabled(!canEdit || busy)
                     }
                 }
 
                 TextField("Art direction", text: $prompt, axis: .vertical)
                     .lineLimit(2...5)
                     .padding(12)
-                    .background(AgentProfileStyle.control, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .vbotControlSurface()
+                    .disabled(!canEdit)
 
                 Button("Generate on computer", systemImage: "sparkles") {
                     Task { await generateImage() }
                 }
-                .disabled(busy || !imageGenerationReady || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!canEdit || busy || !imageGenerationReady || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding(18)
             .profileCard()
@@ -658,7 +675,7 @@ struct AgentProfileView: View {
             profileSectionLabel("Model & voice")
             VStack(alignment: .leading, spacing: 14) {
                 modelControls
-                Divider().overlay(AgentProfileStyle.divider)
+                VBotHairline()
                 voiceControls
             }
             .padding(18)
@@ -668,21 +685,17 @@ struct AgentProfileView: View {
 
     @ViewBuilder
     private var modelControls: some View {
-        if instancesLoading {
+        if CalmSurfacePolicy.showsSkeleton(isLoading: instancesLoading, hasCachedRows: !instances.isEmpty) {
             ModelPickerLoadingView()
                 .frame(maxWidth: .infinity, alignment: .leading)
-        } else if let instancesError {
-            ModelPickerErrorView(message: instancesError) {
-                Task { await loadInstances() }
-            }
-        } else {
+        } else if !advertisedInstances.isEmpty {
             ModelPickerView(
                 instances: instances,
                 selectedInstanceId: $pickedInstanceId,
                 selectedModelId: $pickedModel,
-                disabled: modelSwitchBlocked || advertisedInstances.isEmpty,
-                modelsDisabled: reconstructedModelDisabled,
-                footerHint: reconstructedHostHint
+                disabled: !canEdit || modelSwitchBlocked || advertisedInstances.isEmpty,
+                modelsDisabled: reconstructedModelDisabled || !canEdit,
+                footerHint: canEdit ? reconstructedHostHint : CalmSurfacePolicy.reconnectToEdit
             ) {
                 let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances)?.capabilities?.effortLevels ?? []
                 if let effort = pickedEffort, !levels.contains(effort) {
@@ -698,7 +711,7 @@ struct AgentProfileView: View {
                         Text(Self.effortLabel(level)).tag(Optional.some(level))
                     }
                 }
-                .disabled(modelSwitchBlocked)
+                .disabled(!canEdit || modelSwitchBlocked)
                 .accessibilityLabel("Reasoning")
                 .accessibilityValue(Self.effortLabel(pickedEffort))
                 .accessibilityHint(current.busy == true ? "Interrupt this agent before switching models" : "How hard this bot thinks")
@@ -712,7 +725,7 @@ struct AgentProfileView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .disabled(modelSwitchBlocked)
+            .disabled(!canEdit || modelSwitchBlocked)
             .onChange(of: fastMode) { _, enabled in
                 Task { _ = await session.updateFastMode(enabled, for: current) }
             }
@@ -726,6 +739,27 @@ struct AgentProfileView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+        } else if !canEdit {
+            ModelSelectionSummaryRow(
+                instanceTitle: currentProviderTitle,
+                modelTitle: currentModelTitle,
+                providerKey: pickedInstanceId,
+                subtitle: CalmSurfacePolicy.reconnectToEdit,
+                disabled: true
+            )
+        } else if let instancesError {
+            ModelPickerErrorView(message: instancesError) {
+                Task { await loadInstances() }
+            }
+        } else {
+            ModelPickerView(
+                instances: instances,
+                selectedInstanceId: $pickedInstanceId,
+                selectedModelId: $pickedModel,
+                disabled: true,
+                modelsDisabled: true,
+                footerHint: reconstructedHostHint
+            ) {}
         }
     }
 
@@ -754,7 +788,7 @@ struct AgentProfileView: View {
             Button("Preview voice", systemImage: "speaker.wave.2") {
                 Task { await previewVoice() }
             }
-            .disabled(busy || !selectedVoiceCanSpeak)
+            .disabled(!canEdit || busy || !selectedVoiceCanSpeak)
 
             if !hasWorkspaceDefaultVoice, voice.isEmpty {
                 Label("Pick a voice for this agent before enabling speech.", systemImage: "info.circle")
@@ -777,12 +811,13 @@ struct AgentProfileView: View {
     private var instructionsEditor: some View {
         NavigationStack {
             ZStack(alignment: .topLeading) {
-                AgentProfileStyle.canvas.ignoresSafeArea()
+                VBotSurface.background.ignoresSafeArea()
                 TextEditor(text: $description)
                     .font(.body)
                     .scrollContentBackground(.hidden)
+                    .disabled(!canEdit)
                     .padding(18)
-                    .background(AgentProfileStyle.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .vbotCard()
                     .padding(24)
                 if description.isEmpty {
                     Text("Tell this Bot how to work, what to prioritize, and when to ask for help.")
@@ -809,7 +844,7 @@ struct AgentProfileView: View {
                             showingInstructions = false
                         }
                     }
-                    .disabled(busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!canEdit || busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
@@ -864,21 +899,32 @@ struct AgentProfileView: View {
     }
 
     private func loadInstances() async {
-        instancesLoading = true
+        let hadCache = !instances.isEmpty
+        if !hadCache { instancesLoading = true }
         defer { instancesLoading = false }
+
+        func retainCacheOrFail(_ message: String) {
+            if hadCache {
+                instancesError = nil
+            } else {
+                instances = []
+                instancesError = message
+            }
+        }
+
         if session.engineSync == nil {
             await session.refreshEngineSync()
         }
         guard let sync = session.engineSync else {
-            instances = []
-            instancesError = session.actionError ?? "Engine status is not available yet. Try again in a moment."
+            retainCacheOrFail(session.actionError ?? "Engine status is not available yet. Try again in a moment.")
             return
         }
         if sync.usesReconstructedMutations {
             if sync.reconstructedMutationsReady != true {
-                instances = []
-                instancesError = sync.fallbackReason
-                    ?? "Grok Reconstructed is selected, so model changes cannot fall back to OpenMaus."
+                retainCacheOrFail(
+                    sync.fallbackReason
+                        ?? "Grok Reconstructed is selected, so model changes cannot fall back to OpenMaus."
+                )
                 return
             }
             let router: VBotRouterState?
@@ -899,15 +945,13 @@ struct AgentProfileView: View {
                 pickedEffort = nil
                 return
             }
-            instances = []
-            instancesError = session.actionError ?? "Could not load Grok Reconstructed providers."
+            retainCacheOrFail(session.actionError ?? "Could not load Grok Reconstructed providers.")
             return
         }
         switch await session.loadInstances() {
         case let .loaded(loaded):
             guard !loaded.isEmpty else {
-                instances = []
-                instancesError = "No models are advertised by the paired computer."
+                retainCacheOrFail("No models are advertised by the paired computer.")
                 return
             }
             instances = loaded
@@ -921,8 +965,7 @@ struct AgentProfileView: View {
             let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: loaded)?.capabilities?.effortLevels ?? []
             pickedEffort = current.modelSelection.effort.flatMap { levels.contains($0) ? $0 : nil }
         case let .failed(message):
-            instances = []
-            instancesError = message
+            retainCacheOrFail(message)
         case .cancelled:
             return
         }
@@ -1256,14 +1299,6 @@ private extension AvatarCrop {
     }
 }
 
-private enum AgentProfileStyle {
-    static let canvas = VBotSurface.background
-    static let card = VBotSurface.card
-    static let control = VBotSurface.controlSurface
-    static let divider = Color.primary.opacity(0.08)
-    static let mascotOrange = Color(red: 0.93, green: 0.38, blue: 0.05)
-}
-
 private struct ProfileColorChoice: Identifiable {
     let id: String
     let name: String
@@ -1310,10 +1345,7 @@ private enum MascotMark: String, CaseIterable, Identifiable {
 }
 
 private extension View {
-    func profileCard(cornerRadius: CGFloat = 20) -> some View {
-        background(
-            AgentProfileStyle.card,
-            in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        )
+    func profileCard(cornerRadius: CGFloat = VBotSurface.Radius.card) -> some View {
+        vbotCard(radius: cornerRadius)
     }
 }

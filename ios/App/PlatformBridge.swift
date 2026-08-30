@@ -84,10 +84,24 @@ public enum Haptics {
     public static func impact(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .medium) {
         #if os(iOS)
         guard CompanionPreferences.hapticsEnabled else { return }
-        let generator = UIImpactFeedbackGenerator(style: style)
+        let generator = UIImpactFeedbackGenerator(style: clamped(style))
         generator.prepare()
         generator.impactOccurred()
         #endif
+    }
+
+    /// Soft tap for chrome and shelf changes. Never a heavy impact.
+    public static func soft() {
+        #if os(iOS)
+        impact(.soft)
+        #endif
+    }
+
+    private static func clamped(_ style: UIImpactFeedbackGenerator.FeedbackStyle) -> UIImpactFeedbackGenerator.FeedbackStyle {
+        switch style {
+        case .heavy, .rigid: return .medium
+        default: return style
+        }
     }
 
     public static func notification(_ type: UINotificationFeedbackGenerator.FeedbackType) {
