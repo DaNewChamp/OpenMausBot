@@ -340,6 +340,7 @@ struct ChatTranscriptView: View {
                 }
 #endif
                 announceStreamPhase()
+                scrollToLatest(proxy)
             }
             .onChange(of: liveTail) { _, _ in
                 announceStreamPhase()
