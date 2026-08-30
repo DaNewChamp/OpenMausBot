@@ -561,6 +561,7 @@ private struct MentionMenuView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         )
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Mention a bot")
     }
 

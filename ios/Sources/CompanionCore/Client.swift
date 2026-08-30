@@ -58,6 +58,7 @@ public enum AttachmentPath {
         if let container = videoContainerKind(data) {
             switch (container, suggestedMIME) {
             case (.mp4, "video/mp4"): return "video/mp4"
+            case (.mp4, "video/quicktime"): return "video/quicktime"
             case (.quickTime, "video/quicktime"): return "video/quicktime"
             default: return nil
             }
@@ -84,7 +85,7 @@ public enum AttachmentPath {
         }
         if normalized.hasPrefix("video/") {
             switch (videoContainerKind(data), normalized) {
-            case (.mp4, "video/mp4"), (.quickTime, "video/quicktime"):
+            case (.mp4, "video/mp4"), (.mp4, "video/quicktime"), (.quickTime, "video/quicktime"):
                 break
             default:
                 throw APIError.transport("Choose a PNG, JPEG, GIF, WebP, MP4, or MOV file.")

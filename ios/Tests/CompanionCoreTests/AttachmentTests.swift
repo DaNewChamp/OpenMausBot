@@ -90,12 +90,20 @@ final class AttachmentTests: XCTestCase {
         XCTAssertEqual(AttachmentPath.sniffedMIME(data: jpeg, suggested: "image/png"), "image/jpeg")
         XCTAssertEqual(AttachmentPath.sniffedMIME(data: Self.minimalMP4, suggested: "video/mp4"), "video/mp4")
         XCTAssertEqual(AttachmentPath.sniffedMIME(data: Self.minimalQuickTime, suggested: "video/quicktime"), "video/quicktime")
-        XCTAssertNil(AttachmentPath.sniffedMIME(data: Self.minimalMP4, suggested: "video/quicktime"))
+        XCTAssertEqual(
+            AttachmentPath.sniffedMIME(data: Self.minimalISOMMOV, suggested: "video/quicktime"),
+            "video/quicktime"
+        )
+        XCTAssertEqual(
+            AttachmentPath.sniffedMIME(data: Self.minimalMP4, suggested: "video/quicktime"),
+            "video/quicktime"
+        )
         XCTAssertNil(AttachmentPath.sniffedMIME(data: Self.minimalQuickTime, suggested: "video/mp4"))
         XCTAssertNil(AttachmentPath.sniffedMIME(data: Self.minimalMP4, suggested: "image/png"))
         XCTAssertNil(AttachmentPath.sniffedMIME(data: Data([1, 2, 3, 4, 5, 6, 7, 8]), suggested: "video/mp4"))
         XCTAssertEqual(AttachmentPath.sniffedMIME(data: Data([1]), suggested: "image/png"), "image/png")
         XCTAssertThrowsError(try AttachmentPath.validate(data: jpeg, mime: "video/mp4"))
+        XCTAssertNoThrow(try AttachmentPath.validate(data: Self.minimalISOMMOV, mime: "video/quicktime"))
     }
 
     func testAttachmentPromptUsesFileTagForVideoPaths() {
@@ -221,6 +229,15 @@ final class AttachmentTests: XCTestCase {
         0x71, 0x74, 0x20, 0x20,
         0x00, 0x00, 0x00, 0x00,
         0x71, 0x74, 0x20, 0x20,
+    ])
+
+    private static let minimalISOMMOV = Data([
+        0x00, 0x00, 0x00, 0x18,
+        0x66, 0x74, 0x79, 0x70,
+        0x69, 0x73, 0x6F, 0x6D,
+        0x00, 0x00, 0x00, 0x00,
+        0x69, 0x73, 0x6F, 0x6D,
+        0x6D, 0x70, 0x34, 0x31,
     ])
 
     private static func body(from request: URLRequest) -> Data? {

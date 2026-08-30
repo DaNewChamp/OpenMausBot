@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 
 /// Receives Share-sheet content, writes it to the app group, and opens V Bot.
 final class ShareViewController: SLComposeServiceViewController {
+    private var openCoordinator: ShareExtensionOpenCoordinator?
+
     override func isContentValid() -> Bool { true }
 
     override func didSelectPost() {
@@ -46,13 +48,21 @@ final class ShareViewController: SLComposeServiceViewController {
 
         group.notify(queue: .main) {
             try? ShareInbox.save(text: text, url: url, imageData: imageData)
-            if let open = URL(string: "openmausbot://share") {
-                self.extensionContext?.open(open) { _ in
-                    self.extensionContext?.completeRequest(returningItems: nil)
-                }
-            } else {
+            guard let open = URL(string: "openmausbot://share") else {
                 self.extensionContext?.completeRequest(returningItems: nil)
+                return
             }
+            let coordinator = ShareExtensionOpenCoordinator(
+                open: { [weak self] completion in
+                    self?.extensionContext?.open(open, completionHandler: completion)
+                },
+                complete: { [weak self] in
+                    self?.openCoordinator = nil
+                    self?.extensionContext?.completeRequest(returningItems: nil)
+                }
+            )
+            self.openCoordinator = coordinator
+            coordinator.start()
         }
     }
 }

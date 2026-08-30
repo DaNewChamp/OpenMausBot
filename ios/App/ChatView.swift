@@ -1069,7 +1069,6 @@ private struct TranscriptAttachmentGallery: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var images: [String: UIImage] = [:]
     @State private var failed: Set<String> = []
-    @State private var videoURLs: [String: URL] = [:]
     @State private var previewItem: PreviewAttachmentItem?
 
     private struct PreviewAttachmentItem: Identifiable {
@@ -1085,8 +1084,24 @@ private struct TranscriptAttachmentGallery: View {
                 ForEach(paths, id: \.self) { path in
                     let isVideo = Self.isVideoPath(path)
                     Button {
-                        guard isVideo, let url = videoURLs[path] else { return }
-                        previewItem = PreviewAttachmentItem(url: url)
+                        guard isVideo, !failed.contains(path), images[path] != nil else { return }
+                        Task {
+                            guard let data = await session.attachmentData(path: path) else {
+                                failed.insert(path)
+                                return
+                            }
+                            let ext = URL(fileURLWithPath: path).pathExtension.isEmpty
+                                ? "mp4"
+                                : URL(fileURLWithPath: path).pathExtension
+                            do {
+                                let url = try await Task.detached(priority: .utility) {
+                                    try VideoPreviewFile.writeOnce(data, extension: ext)
+                                }.value
+                                previewItem = PreviewAttachmentItem(url: url)
+                            } catch {
+                                failed.insert(path)
+                            }
+                        }
                     } label: {
                         ZStack {
                             Group {
@@ -1112,7 +1127,7 @@ private struct TranscriptAttachmentGallery: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .disabled(!isVideo || failed.contains(path) || videoURLs[path] == nil)
+                    .disabled(!isVideo || failed.contains(path) || images[path] == nil)
                     .frame(width: 156, height: 116)
                     .background(Color.black.opacity(0.16))
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -1134,26 +1149,14 @@ private struct TranscriptAttachmentGallery: View {
             for path in paths {
                 guard images[path] == nil, !failed.contains(path), !Task.isCancelled else { continue }
                 if Self.isVideoPath(path) {
-                    if videoURLs[path] == nil {
-                        guard let data = await session.attachmentData(path: path) else {
-                            failed.insert(path)
-                            continue
-                        }
-                        let ext = URL(fileURLWithPath: path).pathExtension.isEmpty
-                            ? "mp4"
-                            : URL(fileURLWithPath: path).pathExtension
-                        do {
-                            let url = try await Task.detached(priority: .utility) {
-                                try VideoPreviewFile.writeOnce(data, extension: ext)
-                            }.value
-                            videoURLs[path] = url
-                        } catch {
-                            failed.insert(path)
-                            continue
-                        }
+                    guard let data = await session.attachmentData(path: path) else {
+                        failed.insert(path)
+                        continue
                     }
-                    guard let url = videoURLs[path] else { continue }
-                    if let thumbnail = await VideoAttachmentThumbnail.make(from: url, cacheKey: path) {
+                    let mime = URL(fileURLWithPath: path).pathExtension.lowercased() == "mov"
+                        ? "video/quicktime"
+                        : "video/mp4"
+                    if let thumbnail = await VideoAttachmentThumbnail.make(from: data, mime: mime, cacheKey: path) {
                         images[path] = thumbnail
                     } else {
                         failed.insert(path)
@@ -1166,17 +1169,17 @@ private struct TranscriptAttachmentGallery: View {
             }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: images.keys.sorted())
-        .sheet(item: $previewItem) { item in
-            AttachmentVideoPlayer(url: item.url)
+        .sheet(item: $previewItem, onDismiss: releasePreviewFile) { item in
+            AttachmentVideoPlayer(url: item.url, onTeardown: releasePreviewFile)
                 .ignoresSafeArea()
         }
-        .onDisappear {
-            previewItem = nil
-            for url in videoURLs.values {
-                VideoPreviewFile.remove(url)
-            }
-            videoURLs.removeAll()
+    }
+
+    private func releasePreviewFile() {
+        if let url = previewItem?.url {
+            VideoPreviewFile.remove(url)
         }
+        previewItem = nil
     }
 
     private static func isVideoPath(_ path: String) -> Bool {
@@ -1200,6 +1203,11 @@ private enum VideoPreviewFile {
 
 private struct AttachmentVideoPlayer: UIViewControllerRepresentable {
     let url: URL
+    var onTeardown: () -> Void = {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onTeardown: onTeardown)
+    }
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
@@ -1210,10 +1218,19 @@ private struct AttachmentVideoPlayer: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {}
 
-    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: ()) {
+    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Coordinator) {
         controller.player?.pause()
         controller.player?.replaceCurrentItem(with: nil)
         controller.player = nil
+        coordinator.onTeardown()
+    }
+
+    final class Coordinator {
+        let onTeardown: () -> Void
+
+        init(onTeardown: @escaping () -> Void) {
+            self.onTeardown = onTeardown
+        }
     }
 }
 
