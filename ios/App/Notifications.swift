@@ -6,7 +6,8 @@ import UniformTypeIdentifiers
 
 /// The on-device notification surface. Delivery comes from live or replayed
 /// companion frames; a future APNs relay can feed the same categories and
-/// userInfo without changing the rest of the app.
+/// userInfo without changing the rest of the app. See `PushRegistrationScaffold`
+/// and `docs/ios-push-apns.md` for the closed-app path (not enabled).
 final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationCoordinator()
     private let center = UNUserNotificationCenter.current()

@@ -11,7 +11,7 @@ struct BotActivityAttributes: ActivityAttributes {
     public struct ContentState: Codable, Hashable {
         /// `MausState.rawValue` — the face to wear.
         var face: String
-        /// "needsYou" | "working" | "toReview"
+        /// "needsYou" | "working" | "finished"
         var kind: String
         /// "Scout needs you", "Forge is working"
         var headline: String

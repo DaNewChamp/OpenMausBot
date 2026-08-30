@@ -1,7 +1,3 @@
-// The widget extension: the bot's Live Activity, in the Dynamic Island and
-// on the lock screen. The face is the mascot engine's resting face for the
-// state — the system renders a snapshot, so it cannot move here, but it
-// changes with every update.
 import ActivityKit
 import SwiftUI
 import WidgetKit
@@ -69,6 +65,12 @@ struct BotActivityWidget: Widget {
             Image(systemName: "circle.dotted")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.8))
+                .accessibilityLabel("Working")
+        case "finished":
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(MausPalette.color(context.attributes.color))
+                .accessibilityLabel("Finished")
         default:
             Circle().fill(MausPalette.color(context.attributes.color)).frame(width: 8, height: 8)
         }
@@ -91,11 +93,13 @@ private struct LockScreenView: View {
                     Text(context.state.headline)
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white)
+                        .accessibilityAddTraits(.isHeader)
                 }
                 Text(context.state.line)
                     .font(.system(size: 13))
                     .foregroundStyle(.white.opacity(0.7))
                     .lineLimit(2)
+                    .accessibilityLabel(context.state.line)
                 if context.state.kind == "needsYou", let requestId = context.state.requestId, !context.state.options.isEmpty {
                     AnswerButtons(context: context, requestId: requestId)
                         .padding(.top, 4)
@@ -125,7 +129,7 @@ private struct AnswerButtons: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 34)
+                        .frame(minHeight: 44)
                         .background(
                             Capsule().fill(
                                 option.caseInsensitiveCompare("Deny") == .orderedSame
@@ -135,6 +139,8 @@ private struct AnswerButtons: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(option)
+                .accessibilityHint("Answers from the lock screen")
             }
         }
     }
@@ -150,19 +156,22 @@ private struct OrbitingFace: View {
 
     var body: some View {
         ZStack {
-            ProgressView(timerInterval: context.state.since...context.state.since.addingTimeInterval(60), countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
-                .progressViewStyle(.circular)
-                .tint(AngularGradient(colors: [
-                    Color(hex: "#A855F7"), Color(hex: "#38BDF8"), Color(hex: "#34D399"),
-                    Color(hex: "#FACC15"), Color(hex: "#FB923C"), Color(hex: "#F43F5E"), Color(hex: "#A855F7"),
-                ], center: .center))
-                .frame(width: size + 4, height: size + 4)
+            if context.state.kind == "working" {
+                ProgressView(timerInterval: context.state.since...context.state.since.addingTimeInterval(60), countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
+                    .progressViewStyle(.circular)
+                    .tint(AngularGradient(colors: [
+                        Color(hex: "#A855F7"), Color(hex: "#38BDF8"), Color(hex: "#34D399"),
+                        Color(hex: "#FACC15"), Color(hex: "#FB923C"), Color(hex: "#F43F5E"), Color(hex: "#A855F7"),
+                    ], center: .center))
+                    .frame(width: size + 4, height: size + 4)
+                    .accessibilityHidden(true)
+            }
             MausFaceStill(
                 color: context.attributes.color,
                 state: MausState(rawValue: context.state.face) ?? .idle,
                 size: size,
                 shape: context.attributes.shape ?? "droplet",
-                comets: true,
+                comets: context.state.kind == "working",
                 at: Date()
             )
         }

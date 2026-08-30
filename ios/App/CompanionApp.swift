@@ -8,6 +8,7 @@
 import SwiftUI
 import CompanionCore
 import UserNotifications
+import UIKit
 
 @main
 struct CompanionApp: App {
@@ -23,6 +24,7 @@ struct CompanionApp: App {
                     session.setAppActive(true)
                     session.connect()
                     session.consumeShareInbox()
+                    liveActivities.setReduceMotion(UIAccessibility.isReduceMotionEnabled)
                     liveActivities.attach(to: session)
                 }
                 .onOpenURL { session.receivePairingURL($0) }
@@ -31,6 +33,7 @@ struct CompanionApp: App {
                     case .active:
                         session.setAppActive(true)
                         liveActivities.setBackground(false)
+                        liveActivities.setReduceMotion(UIAccessibility.isReduceMotionEnabled)
                         session.connect()
                         session.consumeShareInbox()
                         Task { await session.refreshNotificationAuthorization() }

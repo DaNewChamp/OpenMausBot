@@ -76,7 +76,7 @@ struct SettingsView: View {
 
     private var notificationsSection: some View {
         VBotSurfaceGroup(
-            footer: "Alerts arrive while V Bot is open or was recently in the background. Closed-app delivery is not available yet."
+            footer: "Alerts arrive while V Bot is open or was recently in the background (about two minutes while a bot is working). Closed-app delivery is not available yet."
         ) {
             Group {
                 if notificationsAreEnabled {

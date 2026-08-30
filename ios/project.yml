@@ -25,6 +25,7 @@ targets:
     sources:
       - path: App
       - path: Shared
+      - path: Push
     dependencies:
       - package: CompanionCore
         product: CompanionCore

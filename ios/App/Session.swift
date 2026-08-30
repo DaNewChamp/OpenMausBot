@@ -608,26 +608,39 @@ final class Session: ObservableObject {
     }
 
     private var lingerTask: UIBackgroundTaskIdentifier = .invalid
+    private var lingerSleepTask: Task<Void, Never>?
+    private var lingerGeneration = 0
 
     /// Leaving the screen: keep the stream alive for the grace period iOS
-    /// allows (~30 s) rather than cutting it at once, so an approval that
-    /// lands right after you swipe home still reaches the Live Activity and
-    /// the island. After that, iOS suspends us anyway; disconnect cleanly so
-    /// the cursor is written down at a known point.
+    /// allows rather than cutting it at once, so an approval that lands right
+    /// after you swipe home still reaches the Live Activity and the island.
+    /// After that, iOS suspends us anyway; disconnect cleanly so the cursor
+    /// is written down at a known point.
     func linger() {
-        guard streamTask != nil, lingerTask == .invalid else { disconnect(); return }
+        guard streamTask != nil else { return }
+        if lingerTask != .invalid {
+            disconnect()
+            return
+        }
+        let generation = streamGeneration
+        lingerGeneration = generation
+        let seconds = BackgroundPresencePolicy.streamLingerSeconds(isBackground: true)
         lingerTask = UIApplication.shared.beginBackgroundTask(withName: "companion.linger") { [weak self] in
-            // time is up before our own timer — the system wants us gone now
             self?.disconnect()
         }
-        Task { [weak self] in
-            try? await Task.sleep(for: .seconds(25))
-            guard let self, self.lingerTask != .invalid else { return }
+        lingerSleepTask?.cancel()
+        lingerSleepTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard let self, !Task.isCancelled else { return }
+            guard self.lingerGeneration == generation, self.lingerTask != .invalid else { return }
             self.disconnect()
         }
     }
 
     private func endLinger() {
+        lingerSleepTask?.cancel()
+        lingerSleepTask = nil
+        lingerGeneration = streamGeneration
         guard lingerTask != .invalid else { return }
         UIApplication.shared.endBackgroundTask(lingerTask)
         lingerTask = .invalid
