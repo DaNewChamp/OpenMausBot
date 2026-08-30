@@ -1,7 +1,5 @@
-V Bot build 55: smoother agent conversations and safer computer control.
+V Bot build 56: faster, softer composer interactions and reliable return from Computer.
 
-• Stream replies smoothly without duplicate or late text
-• Keep the conversation following new work while you remain near the bottom
-• Keep the composer visible above the keyboard
-• Switch agent models and reasoning from chat
-• Stop or steer active work and control supported Local VMs
+• Get an immediate soft haptic and visual response when sending
+• Use comfortable 44pt action hit targets for send, stop, and voice
+• Return from Computer with the composer restored above the keyboard
