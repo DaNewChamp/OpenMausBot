@@ -1,9 +1,7 @@
-V Bot build 59: W3 Local VM premium — viewer reliability, input, and screenshot polish.
+V Bot build 60: share staging, mentions, video attachments, model picker, and W2/W3 regressions.
 
-• Local VM create/start and viewer connect stay reliable across reconnects
-• Screenshot fallback when the live stream stalls
-• Viewer ticket refresh and rotation without forcing a full reload
-• Touch and Trackpad input modes switch without reloading the viewer
-• Save to Photos is add-only (no broad library read access)
-• Localized connection retry banner when the viewer drops
-• Return-to-chat composer restore regression check from builds 56–58
+• Share sheet staging for text, URLs, and images before send
+• Group @mentions and Return key behavior in composer
+• MP4/MOV video attachments up to 50MB
+• Provider-neutral model picker with safe busy/reconnect/catalog handling
+• W2/W3 keyboard and Local VM regression pass
