@@ -80,6 +80,8 @@ struct ChatModelPickerSheet: View {
         }
         .onChange(of: current.busy) { was, isBusy in
             if ModelSelectionPolicy.shouldRevertDraft(wasWorking: was == true, isWorking: isBusy == true) {
+                modelSaveRevision &+= 1
+                session.invalidateModelUpdates(for: current.id)
                 let selection = current.modelSelection
                 pickedInstanceId = selection.instanceId
                 pickedModel = selection.model
@@ -102,9 +104,7 @@ struct ChatModelPickerSheet: View {
             pickedInstanceId = preserved.instanceId
             pickedModel = preserved.model
         case let .failed(message):
-            if instances.isEmpty {
-                instancesError = message
-            }
+            instancesError = message
         case .cancelled:
             break
         }

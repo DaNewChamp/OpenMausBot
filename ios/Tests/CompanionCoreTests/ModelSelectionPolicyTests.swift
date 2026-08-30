@@ -78,7 +78,7 @@ final class ModelSelectionPolicyTests: XCTestCase {
         )
         XCTAssertEqual(
             ModelCatalogPresentation.surface(loading: true, error: nil, instances: catalog, canEdit: true),
-            .catalog(cachedOffline: false)
+            .catalog(cachedOffline: false, refreshError: nil)
         )
         XCTAssertEqual(
             ModelCatalogPresentation.surface(loading: false, error: "timeout", instances: [], canEdit: true),
@@ -90,7 +90,7 @@ final class ModelSelectionPolicyTests: XCTestCase {
         )
         XCTAssertEqual(
             ModelCatalogPresentation.surface(loading: false, error: "timeout", instances: catalog, canEdit: false),
-            .catalog(cachedOffline: true)
+            .catalog(cachedOffline: true, refreshError: nil)
         )
         XCTAssertTrue(
             ModelCatalogPresentation.surface(loading: false, error: nil, instances: catalog, canEdit: false)
@@ -100,6 +100,17 @@ final class ModelSelectionPolicyTests: XCTestCase {
             ModelCatalogPresentation.surface(loading: false, error: nil, instances: catalog, canEdit: true)
                 .selectionDisabled
         )
+
+        let stale = ModelCatalogPresentation.surface(
+            loading: false,
+            error: "timeout",
+            instances: catalog,
+            canEdit: true
+        )
+        XCTAssertEqual(stale, .catalog(cachedOffline: true, refreshError: "timeout"))
+        XCTAssertTrue(stale.selectionDisabled)
+        XCTAssertEqual(stale.refreshError, "timeout")
+        XCTAssertTrue(stale.showsCatalogRows)
     }
 
     func testModelsDisabledFollowsAdvertisedFlagNotVendorName() {

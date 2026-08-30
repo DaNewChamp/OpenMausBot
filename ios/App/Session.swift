@@ -25,6 +25,11 @@ enum LocalVmAction: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 }
 
+private struct ModelWriteIntent: Sendable {
+    var bot: Bot
+    var patch: BotModelPatch
+}
+
 @MainActor
 final class Session: ObservableObject {
     enum Status: Equatable {
@@ -114,6 +119,9 @@ final class Session: ObservableObject {
     private var engineSyncGeneration = 0
     private var modelCatalogGeneration = 0
     private var modelUpdateGenerations: [String: Int] = [:]
+    private var routerWriteGeneration = 0
+    private let modelWriter = SerializedLatestWriter<String, ModelWriteIntent, Bot>()
+    private let routerWriter = SerializedLatestWriter<String, VBotRouterPatch, VBotRouterState>()
     /// Token bursts land here and publish on a frame cadence, so SwiftUI does
     /// not rebuild the chat on every provider delta.
     private var streamCoalescer = StreamCoalescer()
@@ -349,6 +357,7 @@ final class Session: ObservableObject {
         self.modelCatalogError = nil
         engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
         modelCatalogGeneration = EngineSyncPolicy.nextGeneration(after: modelCatalogGeneration)
+        routerWriteGeneration = EngineSyncPolicy.nextGeneration(after: routerWriteGeneration)
         modelUpdateGenerations.removeAll()
         localVmStatuses.removeAll()
         localVmAccess = false
@@ -420,6 +429,7 @@ final class Session: ObservableObject {
         modelCatalogError = nil
         engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
         modelCatalogGeneration = EngineSyncPolicy.nextGeneration(after: modelCatalogGeneration)
+        routerWriteGeneration = EngineSyncPolicy.nextGeneration(after: routerWriteGeneration)
         modelUpdateGenerations.removeAll()
         rotation = CandidateRotation(hosts: [])
         resetStreamCoalescer()
@@ -1616,9 +1626,7 @@ final class Session: ObservableObject {
                 modelCatalog = instances
                 modelCatalogError = nil
             case let .failed(message):
-                if modelCatalog.isEmpty {
-                    modelCatalogError = message
-                }
+                modelCatalogError = message
                 if !quietly, modelCatalog.isEmpty {
                     actionError = message
                 }
@@ -1763,14 +1771,28 @@ final class Session: ObservableObject {
     }
 
     func setReconstructedRouter(provider: String?, modelId: String?) async -> VBotRouterState? {
+        routerWriteGeneration = EngineSyncPolicy.nextGeneration(after: routerWriteGeneration)
+        let generation = routerWriteGeneration
+        let patch = VBotRouterPatch(provider: provider, modelId: modelId)
+        let router = await routerWriter.submit(key: "router", intent: patch) { patch in
+            await self.sendReconstructedRouter(patch)
+        }
+        guard let router else { return nil }
+        guard EngineSyncPolicy.shouldApply(
+            startedGeneration: generation,
+            currentGeneration: routerWriteGeneration
+        ) else { return nil }
+        if var sync = engineSync {
+            sync.router = router
+            engineSync = sync
+        }
+        return router
+    }
+
+    private func sendReconstructedRouter(_ patch: VBotRouterPatch) async -> VBotRouterState? {
         guard let client else { return nil }
         do {
-            let router = try await client.setReconstructedRouter(VBotRouterPatch(provider: provider, modelId: modelId))
-            if var sync = engineSync {
-                sync.router = router
-                engineSync = sync
-            }
-            return router
+            return try await client.setReconstructedRouter(patch)
         } catch {
             if !Task.isCancelled { actionError = error.localizedDescription }
             return nil
@@ -1796,32 +1818,52 @@ final class Session: ObservableObject {
         )
     }
 
+    func invalidateModelUpdates(for botId: String) {
+        modelUpdateGenerations[botId] = EngineSyncPolicy.nextGeneration(
+            after: modelUpdateGenerations[botId] ?? 0
+        )
+        routerWriteGeneration = EngineSyncPolicy.nextGeneration(after: routerWriteGeneration)
+        Task {
+            await modelWriter.invalidate(key: botId)
+            await routerWriter.invalidate(key: "router")
+        }
+    }
+
     func updateModel(_ patch: BotModelPatch, for bot: Bot) async -> Bot? {
         let generation = EngineSyncPolicy.nextGeneration(after: modelUpdateGenerations[bot.id] ?? 0)
         modelUpdateGenerations[bot.id] = generation
+        let updated: Bot?
+        if VBotMutationRouting.target(for: engineSync) == .grokReconstructed {
+            guard let router = await setReconstructedRouter(
+                provider: patch.instanceId,
+                modelId: patch.model
+            ) else { return nil }
+            var next = state.bot(bot.id) ?? bot
+            next.modelSelection = ModelSelection(
+                instanceId: router.selected.provider,
+                model: router.selected.modelId
+            )
+            updated = next
+        } else {
+            let intent = ModelWriteIntent(bot: bot, patch: patch)
+            updated = await modelWriter.submit(key: bot.id, intent: intent) { intent in
+                await self.sendAdvertisedModelPatch(intent)
+            }
+        }
+        guard let updated else { return nil }
+        guard ModelSelectionPolicy.shouldApplyResponse(
+            requestRevision: generation,
+            currentRevision: modelUpdateGenerations[bot.id] ?? 0
+        ) else { return nil }
+        state.apply(.bot(updated))
+        return updated
+    }
+
+    private func sendAdvertisedModelPatch(_ intent: ModelWriteIntent) async -> Bot? {
         guard let client else { return nil }
         do {
-            let updated: Bot
-            if VBotMutationRouting.target(for: engineSync) == .grokReconstructed {
-                let router = try await client.setReconstructedRouter(
-                    VBotRouterPatch(provider: patch.instanceId, modelId: patch.model)
-                )
-                guard !Task.isCancelled else { return nil }
-                var next = state.bot(bot.id) ?? bot
-                next.modelSelection = ModelSelection(
-                    instanceId: router.selected.provider,
-                    model: router.selected.modelId
-                )
-                updated = next
-            } else {
-                updated = try await client.updateModel(botId: bot.id, patch: patch)
-            }
+            let updated = try await client.updateModel(botId: intent.bot.id, patch: intent.patch)
             guard !Task.isCancelled else { return nil }
-            guard ModelSelectionPolicy.shouldApplyResponse(
-                requestRevision: generation,
-                currentRevision: modelUpdateGenerations[bot.id] ?? 0
-            ) else { return nil }
-            state.apply(.bot(updated))
             return updated
         } catch {
             if !Task.isCancelled { actionError = error.localizedDescription }

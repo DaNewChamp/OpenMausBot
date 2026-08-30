@@ -132,7 +132,7 @@ private struct EffortChip: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .frame(minHeight: VBotSurface.Hit.minimum)
                 .background(
                     selected ? ModelPickerStyle.chipSelected : ModelPickerStyle.chip,
                     in: Capsule()
@@ -162,7 +162,7 @@ struct ModelPickerView: View {
     @State private var railInstanceId: String?
 
     private var railInstances: [Instance] {
-        AdvertisedModelCatalog.displayCatalog(
+        ModelPickerRailPolicy.displayInstances(
             advertised: instances,
             selection: ModelSelection(instanceId: selectedInstanceId, model: selectedModelId)
         )
@@ -172,18 +172,34 @@ struct ModelPickerView: View {
         railInstanceId ?? selectedInstanceId
     }
 
+    private var currentSelection: ModelSelection {
+        ModelSelection(instanceId: selectedInstanceId, model: selectedModelId)
+    }
+
     private var railInstance: Instance? {
-        AdvertisedModelCatalog.instance(id: activeRailId, in: instances)
-            ?? railInstances.first
+        ModelPickerRailPolicy.resolvedRail(
+            advertised: instances,
+            selection: currentSelection,
+            activeRailId: activeRailId
+        )
     }
 
     private var models: [ModelOption] {
         railInstance?.models.options ?? []
     }
 
+    private var rowsDisabled: Bool {
+        disabled || modelsDisabled || ModelPickerRailPolicy.modelsDisabled(
+            advertised: instances,
+            selection: currentSelection,
+            activeRailId: activeRailId,
+            hostWideEngine: false
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if AdvertisedModelCatalog.isEmpty(instances) {
+            if ModelPickerRailPolicy.isEmpty(advertised: instances, selection: currentSelection) {
                 ModelPickerEmptyView()
             } else {
                 engineRail
@@ -210,16 +226,15 @@ struct ModelPickerView: View {
                         disabled: disabled || (!instance.allowsInstanceChange && instance.instanceId != selectedInstanceId),
                         unavailable: !instance.snapshot.isAvailable || !instance.allowsInstanceChange
                     ) {
-                        guard !disabled else { return }
-                        guard instance.allowsInstanceChange || instance.instanceId == selectedInstanceId else { return }
+                        guard let next = ModelPickerRailPolicy.selectionAfterEngineTap(
+                            current: currentSelection,
+                            tapped: instance,
+                            advertised: instances
+                        ) else { return }
                         railInstanceId = instance.instanceId
-                        if instance.instanceId != selectedInstanceId {
-                            selectedInstanceId = instance.instanceId
-                            selectedModelId = AdvertisedModelCatalog.alignedModel(
-                                instanceId: instance.instanceId,
-                                currentModel: selectedModelId,
-                                in: instances
-                            )
+                        if next.instanceId != selectedInstanceId || next.model != selectedModelId {
+                            selectedInstanceId = next.instanceId
+                            selectedModelId = next.model
                             onSelectionChange()
                         }
                     }
@@ -254,11 +269,15 @@ struct ModelPickerView: View {
                                 label: option.label,
                                 selected: selectedInstanceId == railInstance.instanceId && selectedModelId == option.id,
                                 isDefault: option.id == railInstance.models.default,
-                                disabled: disabled || modelsDisabled
+                                disabled: rowsDisabled
                             ) {
-                                guard !disabled, !modelsDisabled else { return }
-                                selectedInstanceId = railInstance.instanceId
-                                selectedModelId = option.id
+                                guard let next = ModelPickerRailPolicy.selectionAfterModelTap(
+                                    current: currentSelection,
+                                    rail: railInstance,
+                                    modelId: option.id
+                                ) else { return }
+                                selectedInstanceId = next.instanceId
+                                selectedModelId = next.model
                                 onSelectionChange()
                             }
 
@@ -274,9 +293,13 @@ struct ModelPickerView: View {
                                 label: AdvertisedModelCatalog.displayModelLabel(selectedModelId),
                                 selected: true,
                                 isDefault: false,
-                                disabled: disabled || modelsDisabled
+                                disabled: rowsDisabled
                             ) {
-                                guard !disabled, !modelsDisabled else { return }
+                                guard ModelPickerRailPolicy.selectionAfterModelTap(
+                                    current: currentSelection,
+                                    rail: railInstance,
+                                    modelId: selectedModelId
+                                ) != nil else { return }
                                 onSelectionChange()
                             }
                         }
@@ -320,6 +343,7 @@ private struct EngineChip: View {
             .opacity(disabled ? 0.55 : unavailable ? 0.72 : 1)
         }
         .buttonStyle(.plain)
+        .disabled(disabled)
         .accessibilityLabel("\(instance.pickerTitle), \(instance.chipModelLabel(selectedInstanceId: selectedInstanceId, selectedModel: selectedModelId))")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -447,7 +471,11 @@ struct ModelPickerCatalogHost: View {
     }
 
     private var pickedInstance: Instance? {
-        AdvertisedModelCatalog.instance(id: selectedInstanceId, in: instances)
+        ModelPickerRailPolicy.resolvedRail(
+            advertised: instances,
+            selection: ModelSelection(instanceId: selectedInstanceId, model: selectedModelId),
+            activeRailId: selectedInstanceId
+        )
     }
 
     private var footer: String {
@@ -464,7 +492,10 @@ struct ModelPickerCatalogHost: View {
                 ModelPickerErrorView(message: message, retry: onRetry)
             case .empty:
                 ModelPickerEmptyView()
-            case let .catalog(cachedOffline):
+            case let .catalog(_, refreshError):
+                if let refreshError {
+                    ModelPickerErrorView(message: refreshError, retry: onRetry)
+                }
                 ModelPickerView(
                     instances: instances,
                     selectedInstanceId: $selectedInstanceId,
@@ -473,7 +504,7 @@ struct ModelPickerCatalogHost: View {
                     modelsDisabled: ModelSelectionPolicy.modelsDisabled(
                         for: pickedInstance,
                         hostWideEngine: hostWide
-                    ) || cachedOffline || !canEdit,
+                    ) || presentation.selectionDisabled,
                     footerHint: footer
                 ) {
                     onSelectionChange()

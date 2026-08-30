@@ -296,6 +296,20 @@ final class ModelClientTests: XCTestCase {
         XCTAssertEqual(AdvertisedModelCatalog.displayModelLabel("auto"), "Auto")
     }
 
+    func testAdvertisedInstancesWithoutSelectableFlagsStayChangeable() throws {
+        let instance = try decodeInstance("""
+        {
+          "instanceId":"plain","driverKind":"plainAgent",
+          "snapshot":{"state":"available"},
+          "models":{"default":"plain-1","options":[{"id":"plain-1","label":"Plain"}]}
+        }
+        """)
+        XCTAssertNil(instance.instanceSelectable)
+        XCTAssertNil(instance.modelSelectable)
+        XCTAssertTrue(instance.allowsInstanceChange)
+        XCTAssertTrue(instance.allowsModelChange)
+    }
+
     func testMissingInstanceStaysVisibleAsUnavailableOrphan() {
         let advertised = [
             Instance(

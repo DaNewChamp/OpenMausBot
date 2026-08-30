@@ -56,11 +56,84 @@ public enum ModelSelectionPolicy: Sendable {
     }
 }
 
+/// Rail resolution for chat/profile/settings pickers. Lookups use the display
+/// catalog (advertised + synthetic orphan) so a missing engine cannot show
+/// another engine's models or rewrite `instanceId` on a model tap.
+public enum ModelPickerRailPolicy: Sendable {
+    public static func displayInstances(advertised: [Instance], selection: ModelSelection) -> [Instance] {
+        AdvertisedModelCatalog.displayCatalog(advertised: advertised, selection: selection)
+    }
+
+    public static func isEmpty(advertised: [Instance], selection: ModelSelection) -> Bool {
+        AdvertisedModelCatalog.isEmpty(displayInstances(advertised: advertised, selection: selection))
+    }
+
+    public static func resolvedRail(
+        advertised: [Instance],
+        selection: ModelSelection,
+        activeRailId: String?
+    ) -> Instance? {
+        let rails = displayInstances(advertised: advertised, selection: selection)
+        let activeId = activeRailId ?? selection.instanceId
+        return AdvertisedModelCatalog.instance(id: activeId, in: rails)
+            ?? AdvertisedModelCatalog.instance(id: selection.instanceId, in: rails)
+            ?? rails.first
+    }
+
+    public static func modelsDisabled(
+        advertised: [Instance],
+        selection: ModelSelection,
+        activeRailId: String?,
+        hostWideEngine: Bool
+    ) -> Bool {
+        let rail = resolvedRail(advertised: advertised, selection: selection, activeRailId: activeRailId)
+        if ModelSelectionPolicy.modelsDisabled(for: rail, hostWideEngine: hostWideEngine) {
+            return true
+        }
+        guard let rail else { return hostWideEngine }
+        return rail.instanceId != selection.instanceId
+    }
+
+    /// Model rows never change `instanceId`. That only happens via an engine chip.
+    public static func selectionAfterModelTap(
+        current: ModelSelection,
+        rail: Instance?,
+        modelId: String
+    ) -> ModelSelection? {
+        guard let rail, rail.instanceId == current.instanceId, rail.allowsModelChange else {
+            return nil
+        }
+        return ModelSelection(instanceId: current.instanceId, model: modelId, effort: current.effort)
+    }
+
+    public static func selectionAfterEngineTap(
+        current: ModelSelection,
+        tapped: Instance,
+        advertised: [Instance]
+    ) -> ModelSelection? {
+        guard tapped.allowsInstanceChange || tapped.instanceId == current.instanceId else {
+            return nil
+        }
+        if tapped.instanceId == current.instanceId {
+            return current
+        }
+        return ModelSelection(
+            instanceId: tapped.instanceId,
+            model: AdvertisedModelCatalog.alignedModel(
+                instanceId: tapped.instanceId,
+                currentModel: current.model,
+                in: advertised
+            ),
+            effort: current.effort
+        )
+    }
+}
+
 public enum ModelCatalogPresentation: Equatable, Sendable {
     case loading
     case error(String)
     case empty
-    case catalog(cachedOffline: Bool)
+    case catalog(cachedOffline: Bool, refreshError: String?)
 
     public static func surface(
         loading: Bool,
@@ -73,25 +146,44 @@ public enum ModelCatalogPresentation: Equatable, Sendable {
             return .loading
         }
         if !canEdit {
-            if hasCache { return .catalog(cachedOffline: true) }
+            if hasCache { return .catalog(cachedOffline: true, refreshError: nil) }
             if let error { return .error(error) }
             return .empty
         }
         if let error, !hasCache {
             return .error(error)
         }
+        if let error, hasCache {
+            return .catalog(cachedOffline: true, refreshError: error)
+        }
         if !loading, error == nil, AdvertisedModelCatalog.isEmpty(instances) {
             return .empty
         }
-        return .catalog(cachedOffline: false)
+        return .catalog(cachedOffline: false, refreshError: nil)
     }
 
     public var selectionDisabled: Bool {
         switch self {
         case .loading, .error, .empty:
             return true
-        case let .catalog(cachedOffline):
-            return cachedOffline
+        case let .catalog(cachedOffline, refreshError):
+            return cachedOffline || refreshError != nil
         }
+    }
+
+    public var refreshError: String? {
+        switch self {
+        case let .error(message):
+            return message
+        case let .catalog(_, error):
+            return error
+        default:
+            return nil
+        }
+    }
+
+    public var showsCatalogRows: Bool {
+        if case .catalog = self { return true }
+        return false
     }
 }

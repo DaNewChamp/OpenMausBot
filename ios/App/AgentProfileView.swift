@@ -181,6 +181,7 @@ struct AgentProfileView: View {
                     pickedModel = selection.model
                     pickedEffort = selection.effort
                     modelSaveTask?.cancel()
+                    session.invalidateModelUpdates(for: current.id)
                     savingModel = false
                 }
             }
@@ -841,9 +842,7 @@ struct AgentProfileView: View {
             let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: loaded)?.capabilities?.effortLevels ?? []
             pickedEffort = current.modelSelection.effort.flatMap { levels.contains($0) ? $0 : nil }
         case let .failed(message):
-            if !hadCache {
-                instancesError = message
-            }
+            instancesError = message
         case .cancelled:
             break
         }
