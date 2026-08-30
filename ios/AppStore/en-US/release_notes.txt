@@ -1,7 +1,9 @@
-V Bot build 58: W2 chat reliability — reconnect tails, busy model safety, and VoiceOver fixes.
+V Bot build 59: W3 Local VM premium — viewer reliability, input, and screenshot polish.
 
-• Reconnect streaming tails dedupe so resumed tokens do not replay stale text
-• No stuck Working row after reconnect or catch-up replay
-• Busy model switching stays safe with Stop available while a turn is active
-• ChatView extraction for clearer transcript/composer structure
-• VoiceOver announces stream phases correctly on the first visible token
+• Local VM create/start and viewer connect stay reliable across reconnects
+• Screenshot fallback when the live stream stalls
+• Viewer ticket refresh and rotation without forcing a full reload
+• Touch and Trackpad input modes switch without reloading the viewer
+• Save to Photos is add-only (no broad library read access)
+• Localized connection retry banner when the viewer drops
+• Return-to-chat composer restore regression check from builds 56–58
