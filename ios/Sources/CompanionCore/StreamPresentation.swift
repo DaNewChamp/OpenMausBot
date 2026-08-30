@@ -239,6 +239,95 @@ public enum MarkdownReveal {
     }
 }
 
+/// Fold a live or replayed token into the held tail without duplicating it.
+/// Incremental tokens append; a reconnect that redelivers a prefix is
+/// ignored; a longer snapshot that starts with the held tail replaces it.
+public enum StreamDeltaMerge {
+    public static func combining(existing: String?, delta: String) -> String {
+        guard let existing, !existing.isEmpty else { return delta }
+        if existing == delta || existing.hasPrefix(delta) { return existing }
+        if delta.hasPrefix(existing) { return delta }
+        if existing.count > delta.count, delta.count > 1, existing.hasSuffix(delta) {
+            return existing
+        }
+        return existing + delta
+    }
+}
+
+public enum LiveTailKind: Equatable, Sendable {
+    case none
+    case working
+    case streaming(String)
+}
+
+/// Live bubble vs working row. A settled bot reply at the tail is the
+/// transcript; busy remaining true until the bot patch must not resurrect
+/// a second bubble or a stuck Working row.
+public enum LiveTailPolicy {
+    public static func presentation(
+        busy: Bool,
+        streaming: String?,
+        reasoning: String?,
+        lastMessage: Message?,
+        speakerBotId: String?
+    ) -> LiveTailKind {
+        let held = streaming ?? ""
+        let duplicateOfSettled = duplicatesSettledReply(
+            held,
+            lastMessage: lastMessage,
+            speakerBotId: speakerBotId
+        )
+        let effectiveStreaming = duplicateOfSettled ? nil : streaming
+        if let visible = MarkdownReveal.visiblePrefix(effectiveStreaming ?? ""), !visible.isEmpty {
+            return .streaming(visible)
+        }
+        if !(reasoning ?? "").isEmpty {
+            return .working
+        }
+        if showsWorking(
+            busy: busy,
+            streaming: effectiveStreaming,
+            lastMessage: lastMessage,
+            speakerBotId: speakerBotId
+        ) {
+            return .working
+        }
+        return .none
+    }
+
+    /// True when replayed live text is already the settled assistant bubble.
+    public static func duplicatesSettledReply(
+        _ streaming: String,
+        lastMessage: Message?,
+        speakerBotId: String?
+    ) -> Bool {
+        guard !streaming.isEmpty, isSettledReply(lastMessage, covering: speakerBotId),
+              let text = lastMessage?.text, !text.isEmpty
+        else { return false }
+        return text == streaming || text.hasPrefix(streaming)
+    }
+
+    /// Mirrors the desktop turn-tail rule: a settled bot text at the tail
+    /// means there is nothing to wait for until a new speaker or tool chip.
+    public static func showsWorking(
+        busy: Bool,
+        streaming: String?,
+        lastMessage: Message?,
+        speakerBotId: String?
+    ) -> Bool {
+        if !busy || !(streaming ?? "").isEmpty { return false }
+        guard let lastMessage else { return true }
+        if !isSettledReply(lastMessage, covering: nil) { return true }
+        return speakerBotId != nil && lastMessage.from?.botId != speakerBotId
+    }
+
+    private static func isSettledReply(_ message: Message?, covering speakerBotId: String?) -> Bool {
+        guard let message, message.role == .bot, message.kind == .text else { return false }
+        guard let speakerBotId, let from = message.from else { return true }
+        return from.botId == speakerBotId
+    }
+}
+
 public enum StreamAccessibilityPhase: Equatable, Sendable {
     case idle
     case working

@@ -59,6 +59,20 @@ public struct CompanionState: Sendable {
         messages[threadId] ?? []
     }
 
+    /// Live bubble vs working row for this thread, after reconnect and settle.
+    public func liveTailPresentation(forThread threadId: String) -> LiveTailKind {
+        let last = visibleTranscript(forThread: threadId).last
+        let group = room(forThread: threadId)
+        let owner = bot(forThread: threadId)
+        return LiveTailPolicy.presentation(
+            busy: owner?.busy == true || group?.busyBotId != nil,
+            streaming: streaming[threadId],
+            reasoning: reasoning[threadId],
+            lastMessage: last,
+            speakerBotId: group?.busyBotId
+        )
+    }
+
     /// The active branch of a bot conversation. Rooms and legacy linear
     /// threads return their full transcript.
     public func visibleTranscript(forThread threadId: String) -> [Message] {
@@ -344,15 +358,21 @@ public struct CompanionState: Sendable {
         switch event.type {
         case "content.delta":
             guard let delta = event.delta, !delta.isEmpty else { return }
-            guard shouldAcceptDelta(on: event.threadId) else { return }
             if let eventId = event.eventId, rememberDuplicate(eventId, thread: event.threadId) {
                 return
             }
+            guard shouldAcceptDelta(delta, on: event.threadId) else { return }
             switch event.streamKind {
             case "assistant_text":
-                streaming[event.threadId, default: ""] += delta
+                streaming[event.threadId] = StreamDeltaMerge.combining(
+                    existing: streaming[event.threadId],
+                    delta: delta
+                )
             case "reasoning_text":
-                reasoning[event.threadId, default: ""] += delta
+                reasoning[event.threadId] = StreamDeltaMerge.combining(
+                    existing: reasoning[event.threadId],
+                    delta: delta
+                )
             default:
                 // an unknown stream kind is not ours to guess at; dropping it
                 // is better than showing thinking as if it were the answer
@@ -384,16 +404,31 @@ public struct CompanionState: Sendable {
         reasoning.removeValue(forKey: threadId)
     }
 
-    private mutating func shouldAcceptDelta(on threadId: String) -> Bool {
-        if bot(forThread: threadId)?.busy == true {
+    private mutating func shouldAcceptDelta(_ delta: String, on threadId: String) -> Bool {
+        let busy = bot(forThread: threadId)?.busy == true
+            || room(forThread: threadId)?.busyBotId != nil
+        // Replayed tokens that already live in the settled bubble must not
+        // unseal the turn — that is the duplicate-tail reconnect bug.
+        if isReplayOfSettledReply(delta, on: threadId) {
+            return false
+        }
+        if streamSealed.contains(threadId) {
+            guard busy else { return false }
             streamSealed.remove(threadId)
             return true
         }
-        if room(forThread: threadId)?.busyBotId != nil {
-            streamSealed.remove(threadId)
-            return true
-        }
-        return !streamSealed.contains(threadId)
+        return true
+    }
+
+    /// Reconnect replay of a prefix already committed as a bot text message.
+    private func isReplayOfSettledReply(_ delta: String, on threadId: String) -> Bool {
+        let last = visibleTranscript(forThread: threadId).last
+        let speaker = room(forThread: threadId)?.busyBotId
+        return LiveTailPolicy.duplicatesSettledReply(
+            delta,
+            lastMessage: last,
+            speakerBotId: speaker
+        )
     }
 
     /// Returns true when this id has already been folded for the thread.

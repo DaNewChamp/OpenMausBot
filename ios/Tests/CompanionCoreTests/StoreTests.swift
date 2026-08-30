@@ -618,6 +618,99 @@ final class StreamingTests: XCTestCase {
         XCTAssertTrue(state.streaming.isEmpty)
         XCTAssertTrue(state.reasoning.isEmpty)
     }
+
+    func testReplayedDeltasWithoutEventIdsDoNotDuplicateTheLiveTail() {
+        var state = CompanionState()
+        state.apply(delta("Hello"))
+        state.apply(delta(" world"))
+        state.apply(delta("Hello"))
+        state.apply(delta(" world"))
+        XCTAssertEqual(state.streaming["t1"], "Hello world")
+    }
+
+    func testAReconnectSnapshotReplacesAHeldPrefix() {
+        var state = CompanionState()
+        state.apply(delta("Hello"))
+        state.apply(delta("Hello world"))
+        XCTAssertEqual(state.streaming["t1"], "Hello world")
+    }
+
+    func testHydrateWhileBusyReplacesTheLiveBubbleWithTheSettledReply() throws {
+        var bot = try XCTUnwrap(try Self.hydratedFixture().bots.first)
+        bot.busy = true
+        bot.messages = [Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi")]
+        var state = CompanionState()
+        state.hydrate(Fleet(bots: [bot], groups: []))
+        state.apply(.runtime(RuntimeEvent(type: "turn.started", threadId: bot.threadId)))
+        state.apply(delta("Hello world", thread: bot.threadId))
+        XCTAssertEqual(state.streaming[bot.threadId], "Hello world")
+
+        bot.messages = [
+            Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi"),
+            Message(id: "a1", role: .bot, kind: .text, at: 2, text: "Hello world")
+        ]
+        state.hydrate(Fleet(bots: [bot], groups: []))
+
+        XCTAssertNil(state.streaming[bot.threadId])
+        XCTAssertEqual(
+            state.visibleTranscript(forThread: bot.threadId).filter { $0.role == .bot && $0.kind == .text }.count,
+            1
+        )
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .none)
+    }
+
+    func testLateDeltasAfterASettledReplyStayDroppedEvenIfTheBotIsStillBusy() throws {
+        var bot = try XCTUnwrap(try Self.hydratedFixture().bots.first)
+        bot.busy = true
+        bot.messages = [Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi")]
+        var state = CompanionState()
+        state.hydrate(Fleet(bots: [bot], groups: []))
+        state.apply(.bot(bot))
+        state.apply(.runtime(RuntimeEvent(type: "turn.started", threadId: bot.threadId)))
+        state.apply(delta("Hello", thread: bot.threadId, id: "e1"))
+        state.apply(.message(
+            threadId: bot.threadId,
+            message: Message(id: "m1", role: .bot, kind: .text, at: 2, text: "Hello")
+        ))
+        XCTAssertNil(state.streaming[bot.threadId])
+
+        state.apply(delta("Hello", thread: bot.threadId, id: "replay-without-dup-id"))
+        XCTAssertNil(state.streaming[bot.threadId], "replayed tokens must not resurrect a second tail")
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .none)
+        XCTAssertEqual(
+            state.transcript(forThread: bot.threadId).filter { $0.role == .bot && $0.kind == .text }.map(\.id),
+            ["m1"]
+        )
+    }
+
+    func testANewTurnAfterSettleResumesTheLiveBubble() throws {
+        var bot = try XCTUnwrap(try Self.hydratedFixture().bots.first)
+        bot.busy = true
+        bot.messages = [Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi")]
+        var state = CompanionState()
+        state.hydrate(Fleet(bots: [bot], groups: []))
+        state.apply(.bot(bot))
+        state.apply(.runtime(RuntimeEvent(type: "turn.started", threadId: bot.threadId)))
+        state.apply(delta("Hello", thread: bot.threadId, id: "e1"))
+        state.apply(.message(
+            threadId: bot.threadId,
+            message: Message(id: "m1", role: .bot, kind: .text, at: 2, text: "Hello")
+        ))
+        state.apply(.runtime(RuntimeEvent(type: "turn.started", threadId: bot.threadId, eventId: "turn-2")))
+        state.apply(delta("Next word ", thread: bot.threadId, id: "e2"))
+        XCTAssertEqual(state.streaming[bot.threadId], "Next word ")
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .streaming("Next word "))
+    }
+
+    private static func hydratedFixture() throws -> CompanionState {
+        var state = CompanionState()
+        let url = try XCTUnwrap(
+            Bundle.module.url(forResource: "bots-paged", withExtension: "json", subdirectory: "Fixtures")
+                ?? Bundle.module.url(forResource: "bots-paged", withExtension: "json")
+        )
+        state.hydrate(try JSONDecoder().decode(Fleet.self, from: Data(contentsOf: url)))
+        return state
+    }
 }
 
 // MARK: - The computer panel

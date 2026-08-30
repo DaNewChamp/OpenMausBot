@@ -175,6 +175,33 @@ final class EventStreamTests: XCTestCase {
         }
     }
 
+    func testASecondConnectionCanResumeAfterTheFirstStreamEnds() async throws {
+        StreamingStub.chunks = [
+            "data: {\"kind\":\"hello\",\"cursor\":\"abc12345:0\",\"resumed\":false}\n\n",
+            "id: abc12345:1\ndata: {\"kind\":\"message\",\"seq\":1,\"threadId\":\"t1\",\"message\":{\"id\":\"m1\",\"role\":\"user\",\"kind\":\"text\",\"at\":1,\"text\":\"hi\"}}\n\n",
+        ]
+        let first = try await collect(limit: 2)
+        XCTAssertEqual(first.count, 2, "the first connection should deliver hello plus the gap")
+
+        StreamingStub.chunks = [
+            "data: {\"kind\":\"hello\",\"cursor\":\"abc12345:1\",\"resumed\":true}\n\n",
+            "id: abc12345:2\ndata: {\"kind\":\"message\",\"seq\":2,\"threadId\":\"t1\",\"message\":{\"id\":\"m2\",\"role\":\"bot\",\"kind\":\"text\",\"at\":2,\"text\":\"hello\"}}\n\n",
+        ]
+        let second = try await collect(limit: 2)
+        guard second.count == 2 else {
+            return XCTFail("expected a resumed hello and the next frame, got \(second.count)")
+        }
+        guard case let .hello(cursor, resumed) = second[0].frame else {
+            return XCTFail("reconnect must start with hello")
+        }
+        XCTAssertEqual(cursor, "abc12345:1")
+        XCTAssertTrue(resumed)
+        guard case .message = second[1].frame else {
+            return XCTFail("the resumed stream must keep delivering frames")
+        }
+        XCTAssertEqual(second[1].seq, 2)
+    }
+
     func testCancellingTheConsumerTearsDownTheRequest() async throws {
         StreamingStub.chunks = [
             "data: {\"kind\":\"hello\",\"cursor\":\"abc12345:0\",\"resumed\":false}\n\n",

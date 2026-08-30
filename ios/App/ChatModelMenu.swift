@@ -25,7 +25,9 @@ struct ChatModelMenu: View {
         return modelLabel
     }
 
-    private var blocked: Bool { current.busy == true || saving }
+    private var blocked: Bool {
+        !ModelSelectionPolicy.allowsSwitch(working: current.busy == true, saving: saving)
+    }
 
     var body: some View {
         Menu {
@@ -88,10 +90,14 @@ struct ChatModelMenu: View {
         .buttonStyle(.plain)
         .glassCapsule()
         .fixedSize()
-        .disabled(blocked && instances.isEmpty)
+        .disabled(blocked)
         .accessibilityLabel("Model and reasoning")
         .accessibilityValue(subtitle)
-        .accessibilityHint(current.busy == true ? "Interrupt this agent before switching models" : "Choose this agent's engine, model, and reasoning level")
+        .accessibilityHint(
+            current.busy == true
+                ? ModelSelectionPolicy.busyExplanation
+                : "Choose this agent's engine, model, and reasoning level"
+        )
         .task(id: current.id) {
             if case let .loaded(loaded) = await session.loadInstances() {
                 instances = loaded

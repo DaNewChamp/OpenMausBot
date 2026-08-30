@@ -90,7 +90,13 @@ struct AgentProfileView: View {
     private var showsEffortPicker: Bool {
         !effortLevels.isEmpty && session.engineSync?.usesReconstructedMutations != true
     }
-    private var modelSwitchBlocked: Bool { busy || savingModel || current.busy == true || instancesLoading }
+    private var modelSwitchBlocked: Bool {
+        busy || !ModelSelectionPolicy.allowsSwitch(
+            working: current.busy == true,
+            saving: savingModel,
+            catalogLoading: instancesLoading
+        )
+    }
     private var currentProviderTitle: String { pickedInstance?.pickerTitle ?? pickedInstanceId }
     private var currentModelTitle: String { pickedInstance?.modelLabel(for: pickedModel) ?? pickedModel }
     private var reconstructedHostHint: String {
@@ -720,7 +726,7 @@ struct AgentProfileView: View {
                 .disabled(!canEdit || modelSwitchBlocked)
                 .accessibilityLabel("Reasoning")
                 .accessibilityValue(Self.effortLabel(pickedEffort))
-                .accessibilityHint(current.busy == true ? "Interrupt this agent before switching models" : "How hard this bot thinks")
+                .accessibilityHint(current.busy == true ? ModelSelectionPolicy.busyExplanation : "How hard this bot thinks")
             }
 
             Toggle(isOn: $fastMode) {
@@ -741,7 +747,7 @@ struct AgentProfileView: View {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Saving model")
             } else if current.busy == true {
-                Label("Interrupt this agent before switching models.", systemImage: "info.circle")
+                Label(ModelSelectionPolicy.busyExplanation, systemImage: "info.circle")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -997,7 +1003,7 @@ struct AgentProfileView: View {
             pickedEffort = selection.effort
             savingModel = false
             modelSaveTask = nil
-            session.actionError = "Interrupt this agent before switching models."
+            session.actionError = ModelSelectionPolicy.busyExplanation
             return
         }
 

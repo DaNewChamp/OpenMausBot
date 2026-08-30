@@ -23,8 +23,6 @@ import UniformTypeIdentifiers
 struct ChatView: View {
     let chat: Chat
     @EnvironmentObject private var session: Session
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("conversationTextSize") private var conversationTextSize = ConversationTextSize.standard.rawValue
@@ -70,10 +68,6 @@ struct ChatView: View {
     /// SwiftUI can retain the destination's keyboard-safe-area transaction,
     /// leaving a focused field behind the keyboard on the next appearance.
     @State private var composerLayoutRevision = 0
-
-    /// The live bubble's scroll target. A constant because there is at most
-    /// one per chat and it has no message id to borrow.
-    static let liveBubbleId = "companion.live"
 
     /// The live chat record, so busy/unread stay current as frames land.
     private var current: Chat {
@@ -261,12 +255,66 @@ struct ChatView: View {
     /// nested safe-area inset that can retain a stale keyboard transaction.
     private var chatCanvas: some View {
         VStack(spacing: 0) {
-            transcriptPane
-            composer
-                .id(composerLayoutRevision)
+            ChatTranscriptView(
+                chat: current,
+                followingLatest: $followingLatest,
+                lastDistanceFromBottom: $lastDistanceFromBottom,
+                viewportHeight: $viewportHeight,
+                openedToolRuns: $openedToolRuns,
+                closedToolRuns: $closedToolRuns,
+                newAfterMessageId: $newAfterMessageId,
+                commRoom: $commRoom,
+                replyingTo: $replyingTo,
+                composerFocused: $composerFocused,
+                streamA11yPhase: $streamA11yPhase,
+                draftIsEmpty: draft.isEmpty,
+                onTranscriptChanged: { transcript in
+                    reconcilePendingQueue(in: transcript)
+                }
+            )
+            ChatComposerView(
+                chat: current,
+                plusActions: plusActions,
+                draft: $draft,
+                replyingTo: $replyingTo,
+                selectedAttachments: $selectedAttachments,
+                photoItems: $photoItems,
+                showingFileImporter: $showingFileImporter,
+                showingCamera: $showingCamera,
+                showingComputer: $showingComputer,
+                showingTasks: $showingTasks,
+                showCommandHUD: $showCommandHUD,
+                composerFocused: $composerFocused,
+                composerRequestGate: $composerRequestGate,
+                attachmentError: $attachmentError,
+                isUploadingAttachments: isUploadingAttachments,
+                pendingQueueCount: pendingQueueNotices.values.filter { $0.threadId == threadId }.count,
+                hasPendingApproval: hasPendingApproval,
+                dictation: dictation,
+                onSubmit: { text, mode in
+                    if let text {
+                        submit(text, mode: mode)
+                    } else {
+                        submit(mode: mode)
+                    }
+                },
+                onActivatePrimary: activatePrimaryAction,
+                onRemoveAttachment: removeAttachment
+            )
+            .id(composerLayoutRevision)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .overlay(alignment: .top) { chatTopChrome }
+        .overlay(alignment: .top) {
+            ChatChromeView(
+                chat: current,
+                unreadElsewhere: unreadElsewhere,
+                plusActions: plusActions,
+                showingProfile: $showingProfile,
+                showingModelPicker: $showingModelPicker,
+                showingComputer: $showingComputer,
+                groupProfileRoom: $groupProfileRoom
+            )
+        }
         .onAppear { recoverComposerAfterNavigation() }
         .onChange(of: showingComputer) { _, shown in
             composerFocused = false
@@ -292,445 +340,25 @@ struct ChatView: View {
         }
     }
 
-    private var transcriptPane: some View {
-        ScrollViewReader { proxy in
-            applyingTranscriptScrollEffects(
-                to: transcriptScrollView(proxy: proxy),
-                proxy: proxy
-            )
-        }
-        .id(threadId)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
 
-    private func transcriptScrollView(proxy: ScrollViewProxy) -> some View {
-        ScrollView {
-            transcriptStack(proxy: proxy)
-        }
-        // The transcript scrolls beneath the floating header chrome.
-        .contentMargins(.top, 56, for: .scrollContent)
-        .scrollClipDisabled()
-        .scrollDismissesKeyboard(.interactively)
-        // A conversation grows from the bottom: a transcript shorter
-        // than the screen rests at the bottom, and opening a chat
-        // starts on the newest message rather than the oldest.
-        .defaultScrollAnchor(.bottom)
-        .modifier(ChatFollowMonitor(
-            followingLatest: $followingLatest,
-            lastDistanceFromBottom: $lastDistanceFromBottom,
-            viewportHeight: $viewportHeight
-        ))
-    }
-
-    private func transcriptStack(proxy: ScrollViewProxy) -> some View {
-        // Read the transcript once for this render. Pagination changes the
-        // array as a unit; repeatedly reaching through ObservableObject for
-        // every row only recomputes the same value.
-        let transcript = messages
-        // VStack, not LazyVStack. A lazy stack does not know how
-        // tall it is until its rows have been built, so
-        // `.defaultScrollAnchor(.bottom)` anchors against an
-        // estimate and the chat opens somewhere in the middle of
-        // the conversation. Building all of it up front makes the
-        // height exact and the anchor land on the newest message.
-        // A thread holds 50 messages until you ask for more, so
-        // there is nothing here worth being lazy about.
-        return VStack(alignment: .leading, spacing: 10) {
-            if session.state.hasMore[threadId] == true {
-                Button("Load earlier messages") {
-                    // keep the reader where they were: after older
-                    // messages are prepended, sit back on the one
-                    // that used to be at the top
-                    let anchor = transcript.first?.id
-                    Task {
-                        await session.loadOlder(threadId: threadId)
-                        if let anchor { proxy.scrollTo(anchor, anchor: .top) }
-                    }
-                }
-                .font(.footnote)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-            }
-
-            ForEach(transcriptRows(in: transcript)) { row in
-                transcriptRow(row, in: transcript)
-            }
-
-            ChatLiveTail(
-                liveText: presentedLiveText,
-                showWorking: current.busy
-                    || !(session.state.reasoning[threadId] ?? "").isEmpty,
-                tintColor: streamingTintColor,
-                speaker: streamingSpeaker,
-                reduceMotion: reduceMotion,
-                accessibilityLabel: streamingAccessibilityLabel,
-                chat: current,
-                speakerBotId: workingBotId
-            )
-        }
-        .background(alignment: .bottom) {
-            ChatScrollOffsetReader()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    @ViewBuilder
-    private func transcriptRow(_ row: ChatTranscriptRow, in transcript: [Message]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // a gap in time is worth marking; a timestamp
-            // on every message is just noise
-            if !row.isRedundantCommNarration,
-               startsANewStretch(at: row.startIndex, in: transcript) {
-                Text(RelativeStamp.separator(row.firstMessage.date))
-                    .font(chatTypography.compact)
-                    .foregroundStyle(Color.secondary.opacity(0.58))
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 14)
-                    .padding(.bottom, 6)
-            }
-            if showsNewDivider(before: row, in: transcript) {
-                NewMessagesDivider()
-            }
-            switch row.segment {
-            case .message(let message):
-                if row.isRedundantCommNarration {
-                    // Keep the persisted message and its
-                    // scroll identity, but let the comm
-                    // activity row carry the visible and
-                    // accessible handoff affordance.
-                    Color.clear
-                        .frame(width: 0, height: 0)
-                        .accessibilityHidden(true)
-                } else {
-                    MessageRow(
-                        chat: current,
-                        message: message,
-                        endsRun: endsRun(at: row.startIndex, in: transcript),
-                        showsSpeaker: message.role != .user
-                            && startsSpeakerRun(at: row.startIndex, in: transcript),
-                        onOpenComm: { groupId in
-                            commRoom = session.state.rooms.first { $0.id == groupId }
-                        },
-                        onReply: { message in
-                            replyingTo = message
-                            composerFocused = true
-                        }
-                    )
-                }
-            case .toolRun(let run):
-                ToolRunDisclosure(
-                    run: run,
-                    isExpanded: ToolRunGrouping.isExpanded(
-                        run,
-                        opened: openedToolRuns,
-                        closed: closedToolRuns
-                    ),
-                    onToggle: { toggleToolRun(run) }
-                )
-            }
-        }
-        .id(row.id)
-        .overlay(alignment: .top) {
-            // Extra ids for chips absorbed into the run.
-            // The first id is the row itself, so search
-            // to any step still lands on this disclosure.
-            if case .toolRun(let run) = row.segment {
-                VStack(spacing: 0) {
-                    ForEach(Array(run.messageIds.dropFirst()), id: \.self) { id in
-                        Color.clear
-                            .frame(height: 1)
-                            .id(id)
-                    }
-                }
-                .frame(maxHeight: 1, alignment: .top)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
-            }
-        }
-    }
-
-    private func applyingTranscriptScrollEffects<Content: View>(
-        to content: Content,
-        proxy: ScrollViewProxy
-    ) -> some View {
-        applyingTranscriptFocusEffects(
-            to: applyingTranscriptFollowEffects(to: content, proxy: proxy),
-            proxy: proxy
-        )
-    }
-
-    private func applyingTranscriptFollowEffects<Content: View>(
-        to content: Content,
-        proxy: ScrollViewProxy
-    ) -> some View {
-        content
-            .onChange(of: messages.last?.id) { _, _ in
-                reconcilePendingQueue(in: messages)
-                guard let last = messages.last else { return }
-                if last.role != .user, last.kind == .text || last.kind == .options {
-                    SoundEffects.playReceived()
-                    Haptics.impact(.light)
-                }
-                scrollToLatest(proxy)
-            }
-            .onChange(of: messages.last?.text) { _, _ in
-                scrollToLatest(proxy, animated: false)
-            }
-            .onChange(of: presentedLiveText?.count ?? 0) { _, length in
-                guard length > 0 else { return }
-                scrollToLatest(proxy, animated: false)
-            }
-            .onChange(of: current.busy) { _, _ in
-                announceStreamPhase()
-                scrollToLatest(proxy)
-            }
-            .onChange(of: threadId) { _, _ in
-                followingLatest = true
-                lastDistanceFromBottom = 0
-                streamA11yPhase = .idle
-            }
-            .onAppear { announceStreamPhase() }
-            .onChange(of: presentedLiveText) { _, _ in
-                announceStreamPhase()
-            }
-    }
-
-    private func applyingTranscriptFocusEffects<Content: View>(
-        to content: Content,
-        proxy: ScrollViewProxy
-    ) -> some View {
-        content
-            .onChange(of: composerFocused) { _, _ in
-                scrollToLatest(proxy)
-            }
-            .onChange(of: draft.isEmpty) { _, _ in
-                scrollToLatest(proxy)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { _ in
-                scrollToLatest(proxy, animated: false)
-            }
-            .onChange(of: session.focusedMessageId) { _, messageId in
-                guard let messageId,
-                      messages.contains(where: { $0.id == messageId })
-                else { return }
-                if reduceMotion {
-                    proxy.scrollTo(messageId, anchor: .center)
-                } else {
-                    withAnimation { proxy.scrollTo(messageId, anchor: .center) }
-                }
-                session.consumeFocus(messageId)
-            }
-            .task {
-                guard let messageId = session.focusedMessageId,
-                      messages.contains(where: { $0.id == messageId })
-                else { return }
-                proxy.scrollTo(messageId, anchor: .center)
-                session.consumeFocus(messageId)
-            }
-    }
-
-    private var selectedConversationTextSize: ConversationTextSize {
-        ConversationTextSize(rawValue: conversationTextSize) ?? .standard
-    }
-
-    private var chatTypography: ConversationTypography {
-        ConversationTypography(size: selectedConversationTextSize, dynamicTypeSize: dynamicTypeSize)
-    }
-
-    // MARK: - Header
-
-    private var chatTopChrome: some View {
-        ScrollEdgeChrome {
-            headerBar
-        }
-    }
-
-    /// Back and the agent sit on the leading edge so the face never covers
-    /// the transcript. Chrome is liquid glass; the name is the title, not a
-    /// second pill competing with the face.
-    private var headerBar: some View {
-        HStack(spacing: 8) {
-            Button {
-                Haptics.selection()
-                dismiss()
-            } label: {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: "chevron.left")
-                        .font(.body.weight(.semibold))
-                        .frame(width: 40, height: 40)
-
-                    if unreadElsewhere > 0 {
-                        Text(unreadElsewhere > 99 ? "99+" : "\(unreadElsewhere)")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(Color(uiColor: .systemBackground))
-                            .padding(.horizontal, 4)
-                            .frame(minWidth: 17, minHeight: 17)
-                            .background(Capsule().fill(VBotSurface.unread))
-                            .offset(x: 4, y: -4)
-                    }
-                }
-                .foregroundStyle(Color.primary)
-                .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .glassCircle()
-            .fixedSize()
-            .accessibilityLabel("Back")
-            .accessibilityValue(unreadElsewhere > 0 ? "\(unreadElsewhere) unread elsewhere" : "")
-
-            Button {
-                Haptics.selection()
-                if current.isBot { showingProfile = true }
-                else if case let .room(room) = current { groupProfileRoom = room }
-            } label: {
-                HStack(spacing: 8) {
-                    ChatAvatarView(
-                        chat: current,
-                        size: 28,
-                        state: MausState.forChat(current, in: session.state),
-                        animated: !reduceMotion && MausState.forChat(current, in: session.state).showsActivity
-                    )
-                    Text(current.name)
-                        .font(.headline)
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .truncationMode(.tail)
-                }
-                .padding(.leading, 4)
-                .padding(.trailing, 12)
-                .frame(minHeight: 40)
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .glassCapsule()
-            .layoutPriority(1)
-            .contextMenu {
-                Button {
-                    session.togglePinned(current)
-                } label: {
-                    Label(
-                        current.pinned ? "Unpin" : "Pin",
-                        systemImage: current.pinned ? "pin.slash" : "pin"
-                    )
-                }
-                .disabled(session.pendingPinnedChats.contains(current.stableID))
-            }
-            .accessibilityLabel(current.isBot ? "Open \(current.name) profile" : "Open \(current.name) group profile")
-            .accessibilityHint(current.isBot ? "Edits this agent's identity, avatar, notifications, and voice" : "Shows group members, instructions, and routines")
-
-            Spacer(minLength: 8)
-
-            if case let .bot(bot) = current {
-                ChatModelPickerButton(bot: bot, showingPicker: $showingModelPicker)
-            }
-
-            if case .bot = current {
-                Button {
-                    Haptics.selection()
-                    showingComputer = true
-                } label: {
-                    Image(systemName: "display")
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(Color.primary)
-                        .frame(width: 40, height: 40)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .glassCircle()
-                .fixedSize()
-                .accessibilityLabel("Watch \(current.name)'s computer")
-            } else {
-                chatOverflowMenu
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 4)
-        .padding(.bottom, 8)
-    }
-
-    @ViewBuilder
-    private var chatOverflowMenu: some View {
-        Menu {
-            ForEach(plusActions) { action in
-                Button(role: action.destructive ? .destructive : nil) {
-                    action.run()
-                } label: {
-                    Label(action.title, systemImage: action.systemImage)
-                }
-                .disabled(action.disabled)
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(Color.primary)
-                .frame(width: 40, height: 40)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .glassCircle()
-        .fixedSize()
-        .accessibilityLabel("Open \(current.name) chat options")
-    }
-
-    @ViewBuilder
-    private var attachmentPickerMenuItems: some View {
-        PhotosPicker(
-            selection: $photoItems,
-            maxSelectionCount: max(1, Self.maxAttachmentCount - selectedAttachments.count),
-            matching: .images
-        ) {
-            Label("Photo library", systemImage: "photo.on.rectangle")
-        }
-        .disabled(selectedAttachments.count >= Self.maxAttachmentCount)
-
-        if UIImagePickerController.isSourceTypeAvailable(.camera) {
-            Button {
-                showingCamera = true
-            } label: {
-                Label("Take photo", systemImage: "camera")
-            }
-            .disabled(selectedAttachments.count >= Self.maxAttachmentCount)
-        }
-
-        Button {
-            showingFileImporter = true
-        } label: {
-            Label("Choose file", systemImage: "folder")
-        }
-        .disabled(selectedAttachments.count >= Self.maxAttachmentCount)
-    }
-
-    private struct PlusAction: Identifiable {
-        let id: String
-        let systemImage: String
-        let title: String
-        let subtitle: String
-        var destructive = false
-        var disabled = false
-        let run: () -> Void
-    }
-
-    private var plusActions: [PlusAction] {
-        var out: [PlusAction] = []
+    private var plusActions: [ChatPlusAction] {
+        var out: [ChatPlusAction] = []
         if case let .bot(bot) = current {
-            out.append(PlusAction(
+            out.append(ChatPlusAction(
                 id: "task", systemImage: "plus.square.on.square", title: "New task",
                 subtitle: "Start a fresh thread with \(bot.name)", disabled: bot.busy == true
             ) { Task { await session.createTask(for: bot, title: nil) } })
-            out.append(PlusAction(
+            out.append(ChatPlusAction(
                 id: "tasks", systemImage: "square.stack", title: "Tasks",
                 subtitle: "Switch, rename or remove one"
             ) { showingTasks = true })
-            out.append(PlusAction(
+            out.append(ChatPlusAction(
                 id: "computer", systemImage: "display", title: "Watch computer",
                 subtitle: "Live view of what \(bot.name) is doing"
             ) { showingComputer = true })
         }
         let pinned = current.pinned
-        out.append(PlusAction(
+        out.append(ChatPlusAction(
             id: "pin",
             systemImage: pinned ? "pin.slash" : "pin",
             title: pinned ? "Unpin" : "Pin",
@@ -739,7 +367,7 @@ struct ChatView: View {
         ) {
             session.togglePinned(current)
         })
-        out.append(PlusAction(
+        out.append(ChatPlusAction(
             id: "share", systemImage: "doc.plaintext", title: "Share transcript",
             subtitle: "This chat as Markdown"
         ) {
@@ -749,7 +377,7 @@ struct ChatView: View {
                 }
             }
         })
-        out.append(PlusAction(
+        out.append(ChatPlusAction(
             id: "share-json", systemImage: "curlybraces", title: "Share as JSON",
             subtitle: "Structured transcript data"
         ) {
@@ -760,7 +388,7 @@ struct ChatView: View {
             }
         })
         if current.busy, case let .bot(bot) = current {
-            out.append(PlusAction(
+            out.append(ChatPlusAction(
                 id: "stop", systemImage: "stop.fill", title: "Interrupt",
                 subtitle: "Stop the current turn", destructive: true
             ) { Task { await session.interrupt(bot: bot) } })
@@ -768,54 +396,6 @@ struct ChatView: View {
         return out
     }
 
-    private func transcriptRows(in messages: [Message]) -> [ChatTranscriptRow] {
-        var startIndex = 0
-        return ToolRunGrouping.segments(in: messages).map { segment in
-            let isRedundantCommNarration: Bool
-            if case .message(let message) = segment {
-                isRedundantCommNarration = CommActivityPresentation.shouldSuppressNarration(
-                    message,
-                    in: messages,
-                    at: startIndex
-                )
-            } else {
-                isRedundantCommNarration = false
-            }
-            let row = ChatTranscriptRow(
-                segment: segment,
-                startIndex: startIndex,
-                isRedundantCommNarration: isRedundantCommNarration
-            )
-            startIndex += row.messageCount
-            return row
-        }
-    }
-
-    private func toggleToolRun(_ run: ToolRun) {
-        Haptics.selection()
-        updateState(.easeInOut(duration: 0.22)) {
-            let expanded = ToolRunGrouping.isExpanded(
-                run,
-                opened: openedToolRuns,
-                closed: closedToolRuns
-            )
-            if expanded {
-                openedToolRuns.remove(run.id)
-                closedToolRuns.insert(run.id)
-            } else {
-                closedToolRuns.remove(run.id)
-                openedToolRuns.insert(run.id)
-            }
-        }
-    }
-
-    private func updateState(_ animation: Animation, _ updates: () -> Void) {
-        if reduceMotion {
-            updates()
-        } else {
-            withAnimation(animation, updates)
-        }
-    }
 
     // MARK: - Attachments
 
@@ -963,40 +543,6 @@ struct ChatView: View {
         if selectedAttachments.isEmpty { attachmentError = nil }
     }
 
-    /// True when this message opens a fresh stretch of conversation — the
-    /// first one, or one that follows a gap of half an hour or more.
-    private func startsANewStretch(at index: Int, in messages: [Message]) -> Bool {
-        guard index > 0 else { return true }
-        return messages[index].at - messages[index - 1].at > 30 * 60 * 1000
-    }
-
-    private func startsSpeakerRun(at index: Int, in messages: [Message]) -> Bool {
-        guard index > 0 else { return true }
-        let this = messages[index], prev = messages[index - 1]
-        if this.role != prev.role { return true }
-        if this.from?.botId != prev.from?.botId { return true }
-        return prev.kind != .text || this.kind != .text
-    }
-
-    private func showsNewDivider(before row: ChatTranscriptRow, in messages: [Message]) -> Bool {
-        guard let newAfterMessageId,
-              let newIndex = messages.firstIndex(where: { $0.id == newAfterMessageId })
-        else { return false }
-        return row.startIndex == newIndex + 1
-    }
-
-    /// True when the next message is from someone else (or there is none),
-    /// which is where a run of bubbles gets its tail — one per run, like
-    /// every messaging app, rather than one per bubble.
-    private func endsRun(at index: Int, in messages: [Message]) -> Bool {
-        guard index + 1 < messages.count else { return true }
-        let this = messages[index], next = messages[index + 1]
-        if this.role != next.role { return true }
-        if this.from?.name != next.from?.name { return true }
-        // a card or a tool chip between two texts breaks the run visually
-        return next.kind != .text
-    }
-
     private var selectedBusySendDefault: BusySendDefault {
         BusySendDefault(rawValue: busySendDefault)
     }
@@ -1005,84 +551,6 @@ struct ChatView: View {
         VBotMutationRouting.composerCapabilities(for: session.engineSync)
     }
 
-    private var roomMembers: [GroupRouting.Member] {
-        guard case let .room(room) = current else { return [] }
-        return room.memberIds.compactMap { id in
-            session.state.bot(id).map {
-                GroupRouting.Member(id: $0.id, name: $0.name, hidden: $0.hidden == true, color: $0.color)
-            }
-        }
-    }
-
-    /// Rooms attribute streaming text to whoever owns the active turn.
-    private var streamingSpeaker: (name: String, color: String)? {
-        guard case let .room(room) = current,
-              let botId = room.busyBotId,
-              let bot = session.state.bot(botId)
-        else { return nil }
-        return (bot.name, bot.color)
-    }
-
-    private var presentedLiveText: String? {
-        MarkdownReveal.visiblePrefix(session.state.streaming[threadId] ?? "")
-    }
-
-    private var streamingAccessibilityLabel: String {
-        let name = streamingSpeaker?.name ?? current.name
-        if presentedLiveText?.isEmpty == false {
-            return "\(name) is writing"
-        }
-        return "\(name) is working"
-    }
-
-    private func announceStreamPhase() {
-        let next = StreamAccessibility.phase(
-            isBusy: current.busy || !(session.state.reasoning[threadId] ?? "").isEmpty,
-            hasVisibleText: presentedLiveText?.isEmpty == false
-        )
-        let announcement = StreamAccessibility.announcement(
-            from: streamA11yPhase,
-            to: next,
-            speaker: streamingSpeaker?.name ?? current.name
-        )
-        streamA11yPhase = next
-        guard let announcement else { return }
-        UIAccessibility.post(notification: .announcement, argument: announcement)
-    }
-
-    private var streamingTintColor: String {
-        streamingSpeaker?.color ?? current.color
-    }
-
-    private var workingBotId: String? {
-        switch current {
-        case let .bot(bot): return bot.id
-        case let .room(room): return room.busyBotId
-        }
-    }
-
-    private var activeMentionQuery: String? {
-        guard case .room = current else { return nil }
-        return GroupRouting.activeMentionQuery(in: draft)
-    }
-
-    private var mentionCandidates: [GroupRouting.Member] {
-        guard let query = activeMentionQuery else { return [] }
-        return GroupRouting.mentionCandidates(query: query, members: roomMembers)
-    }
-
-    private var composerPlaceholder: String {
-        if dictation.isListening { return "Listening…" }
-        if case let .room(room) = current {
-            return GroupRouting.groupComposerHint(room: room, members: roomMembers)
-        }
-        return "Ask \(current.name)"
-    }
-
-    private func insertMention(_ name: String) {
-        draft = GroupRouting.applyingMention(name, to: draft)
-        Haptics.selection()
-    }
 
     private func replyAuthor(for message: Message, in chat: Chat) -> String {
         if message.role == .user { return "You" }
@@ -1116,42 +584,10 @@ struct ChatView: View {
         )
     }
 
-    private var canSend: Bool {
-        if case .send = primaryAction { return true }
-        return false
-    }
-
     private var hasPendingApproval: Bool {
         messages.contains { $0.card?.isPending == true }
     }
 
-    private func scrollToLatest(_ proxy: ScrollViewProxy, animated: Bool = true) {
-        guard ChatFollow.shouldScrollToLatest(following: followingLatest) else { return }
-        let streaming = presentedLiveText ?? ""
-        let thinking = session.state.reasoning[threadId] ?? ""
-        let target: String
-        if current.busy || !streaming.isEmpty || !thinking.isEmpty {
-            target = Self.liveBubbleId
-        } else if let last = messages.last {
-            target = last.id
-        } else {
-            return
-        }
-        func scroll(_ proxy: ScrollViewProxy) {
-            if reduceMotion || !animated {
-                proxy.scrollTo(target, anchor: .bottom)
-            } else {
-                withAnimation { proxy.scrollTo(target, anchor: .bottom) }
-            }
-        }
-        Task { @MainActor in
-            scroll(proxy)
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            scroll(proxy)
-            try? await Task.sleep(nanoseconds: 120_000_000)
-            scroll(proxy)
-        }
-    }
 
     private func submit(
         _ explicitText: String? = nil,
@@ -1250,440 +686,8 @@ struct ChatView: View {
         }
     }
 
-    // MARK: - Composer
-
-    /// A round + and a solid Grok-style pill with dictation and send inside it.
-    private var composer: some View {
-        VStack(spacing: 6) {
-            let pendingCount = pendingQueueNotices.values.filter { $0.threadId == threadId }.count
-            if let replyingTo {
-                replyBanner(for: replyingTo)
-            }
-            attachmentPreviewStrip
-
-            if pendingCount > 0 {
-                Label(
-                    pendingCount == 1
-                        ? "Queued · waiting for current work"
-                        : "\(pendingCount) queued · waiting for current work",
-                    systemImage: "clock.arrow.circlepath"
-                )
-                    .font(chatTypography.detail.weight(.medium))
-                    .foregroundStyle(Color.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 6)
-                    .accessibilityLabel("Message queued and waiting for current work")
-            }
-
-            if let error = dictation.error {
-                Text(error)
-                    .font(chatTypography.detail)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 4)
-            }
-
-            if let attachmentError {
-                Label(attachmentError, systemImage: "exclamationmark.triangle")
-                    .font(chatTypography.detail)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 4)
-                    .accessibilityLabel("Attachment error")
-            }
-
-            if let query = activeMentionQuery, case .room = current {
-                MentionMenuView(
-                    query: query,
-                    members: mentionCandidates,
-                    includeEveryone: "everyone".hasPrefix(query.lowercased()),
-                    accentColor: MausPalette.color(current.color)
-                ) { name in
-                    insertMention(name)
-                }
-            } else if showCommandHUD {
-                CommandSkillHUDView(
-                    text: $draft,
-                    isVisible: $showCommandHUD,
-                    commands: current.isBot
-                        ? CommandSkillHUDView.defaultCommands
-                        : CommandSkillHUDView.defaultCommands.filter { $0.id != "computer" && $0.id != "tasks" },
-                    accentColor: MausPalette.color(current.color)
-                ) { command in
-                    switch command.id {
-                    case "computer":
-                        draft = ""
-                        showingComputer = true
-                    case "tasks":
-                        draft = ""
-                        showingTasks = true
-                    default: submit(command.command)
-                    }
-                }
-                .transition(reduceMotion ? .identity : .move(edge: .bottom).combined(with: .opacity))
-            } else if draft.isEmpty && !current.busy && !hasPendingApproval {
-                PredictiveActionChipsView(accentColor: MausPalette.color(current.color)) { chip in
-                    submit(chip.prompt)
-                }
-                .transition(reduceMotion ? .identity : .opacity)
-            }
-
-            HStack(alignment: .center, spacing: 10) {
-                Menu {
-                    attachmentPickerMenuItems
-                    Divider()
-                    ForEach(plusActions) { action in
-                        Button(role: action.destructive ? .destructive : nil) {
-                            action.run()
-                        } label: {
-                            Label(action.title, systemImage: action.systemImage)
-                        }
-                        .disabled(action.disabled)
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(Color.primary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .background(VBotSurface.composerSurface, in: Circle())
-                .accessibilityLabel("More")
-
-                HStack(alignment: .center, spacing: 2) {
-                    if showCommandHUD || draft.hasPrefix("/") {
-                        Button {
-                            dictation.stop()
-                            updateState(.spring(response: 0.3, dampingFraction: 0.75)) {
-                                showCommandHUD.toggle()
-                            }
-                            Haptics.selection()
-                        } label: {
-                            Image(systemName: "command")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(showCommandHUD ? Color.primary : Color.secondary.opacity(0.72))
-                                .frame(width: 27, height: 34)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Slash commands")
-                        .padding(.leading, 5)
-                    }
-
-                    TextField(
-                        composerPlaceholder,
-                        text: $draft,
-                        axis: .vertical
-                    )
-                        .lineLimit(1...5)
-                        .font(chatTypography.composer)
-                        .foregroundStyle(Color.primary)
-                        .padding(.leading, showCommandHUD || draft.hasPrefix("/") ? 0 : 16)
-                        .padding(.vertical, 12)
-                        .focused($composerFocused)
-                        .submitLabel(.send)
-                        // Partial transcripts rebuild from a frozen base;
-                        // prevent competing edits without dimming the text.
-                        .allowsHitTesting(!dictation.isListening && !dictation.isStarting)
-                        .onChange(of: draft) { _, value in
-                            updateState(.easeInOut(duration: 0.15)) {
-                                showCommandHUD = value.hasPrefix("/")
-                            }
-                        }
-                        .onKeyPress(.return, phases: .down) { press in
-                            guard !press.modifiers.contains(.shift) else { return .ignored }
-                            activatePrimaryAction()
-                            return .handled
-                        }
-                        .onSubmit { activatePrimaryAction() }
-
-                    composerTrailingControl
-                }
-                .frame(minHeight: 44)
-                .background(VBotSurface.composerSurface, in: Capsule())
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
-        .padding(.bottom, 8)
-        .background(VBotSurface.background.ignoresSafeArea(.container, edges: .bottom))
-    }
-
-    private func replyBanner(for message: Message) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "arrowshape.turn.up.left.fill")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(MausPalette.color(current.color))
-                .frame(width: 24, height: 24)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Replying to \(replyAuthor(for: message, in: current))")
-                    .font(chatTypography.detail.weight(.semibold))
-                    .foregroundStyle(Color.primary)
-                Text(replySnippet(for: message))
-                    .font(chatTypography.detail)
-                    .foregroundStyle(Color.secondary)
-                    .lineLimit(2)
-            }
-
-            Spacer(minLength: 4)
-
-            Button {
-                replyingTo = nil
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Color.secondary)
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(Color.primary.opacity(0.08)))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Cancel reply")
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(VBotSurface.controlSurface)
-        )
-        .accessibilityElement(children: .contain)
-    }
-
-    @ViewBuilder
-    private var attachmentPreviewStrip: some View {
-        if !selectedAttachments.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(selectedAttachments) { attachment in
-                        ZStack(alignment: .topTrailing) {
-                            Group {
-                                if let image = UIImage(data: attachment.data) {
-                                    Image(uiImage: image)
-                                        .resizable()
-                                        .scaledToFill()
-                                } else {
-                                    Image(systemName: "photo")
-                                        .font(.system(size: 20, weight: .medium))
-                                        .foregroundStyle(Color.secondary)
-                                }
-                            }
-                            .frame(width: 64, height: 64)
-                            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                    .stroke(Color.primary.opacity(0.16), lineWidth: 1)
-                            }
-
-                            if isUploadingAttachments && attachment.uploaded == nil {
-                                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                    .fill(Color.black.opacity(0.35))
-                                    .frame(width: 64, height: 64)
-                                    .overlay { ProgressView().tint(.white) }
-                            }
-
-                            Button {
-                                removeAttachment(attachment.id)
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .frame(width: 22, height: 22)
-                                    .background(Circle().fill(Color.black.opacity(0.68)))
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(isUploadingAttachments)
-                            .accessibilityLabel("Remove (attachment.name)")
-                        }
-                        .accessibilityElement(children: .contain)
-                    }
-                }
-                .padding(.horizontal, 4)
-                .padding(.vertical, 3)
-            }
-            .frame(height: 74)
-            .accessibilityLabel("Selected images")
-        }
-    }
-
-    @ViewBuilder
-    private var composerTrailingControl: some View {
-        Group {
-            if dictation.isListening {
-                composerMicButton
-            } else {
-                switch primaryAction {
-                case .stop:
-                    composerStopButton
-                case .send(let mode):
-                    composerSendButton(mode: mode)
-                case .none:
-                    composerMicButton
-                }
-            }
-        }
-        .id(composerTrailingControlIdentity)
-        .frame(width: 44, height: 44)
-        .padding(.trailing, 6)
-    }
-
-    private var composerTrailingControlIdentity: String {
-        if dictation.isListening { return "mic-listening" }
-        switch primaryAction {
-        case .stop: return "stop"
-        case .send(let mode): return "send-\(mode.rawValue)"
-        case .none: return "mic-idle"
-        }
-    }
-
-    private var composerMicButton: some View {
-        Button {
-            composerFocused = false
-            dictation.toggle(capturing: draft)
-        } label: {
-            Image(systemName: dictation.isListening ? "mic.fill" : "mic")
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(dictation.isListening ? Color.red : Color.secondary)
-                .frame(width: 44, height: 44)
-                .symbolEffect(.pulse, isActive: dictation.isListening && !reduceMotion)
-        }
-        .buttonStyle(ComposerActionButtonStyle(reduceMotion: reduceMotion))
-        .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
-    }
-
-    private var composerStopButton: some View {
-        Button { activatePrimaryAction() } label: {
-            Image(systemName: "stop.fill")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(Color.white)
-                .frame(width: 34, height: 34)
-                .background(Circle().fill(Color.red))
-                .frame(width: 44, height: 44)
-        }
-        .buttonStyle(ComposerActionButtonStyle(reduceMotion: reduceMotion))
-        .disabled(composerRequestGate.isInFlight)
-        .accessibilityLabel(current.isBot ? "Stop current work" : "Stop active responder")
-        .accessibilityHint(
-            current.isBot
-                ? "Interrupts the active turn for this conversation"
-                : "Interrupts the active responder; queued messages remain"
-        )
-    }
-
-    private func composerSendButton(mode: MessageDeliveryMode) -> some View {
-        Button { submit(mode: mode) } label: {
-            Image(systemName: "arrow.up")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(Color.black)
-                .frame(width: 34, height: 34)
-                .background(Circle().fill(Color.white))
-                .frame(width: 44, height: 44)
-        }
-        .buttonStyle(ComposerActionButtonStyle(reduceMotion: reduceMotion))
-        .disabled(composerRequestGate.isInFlight)
-        .contextMenu {
-            if composerCapabilities.steer {
-                Button {
-                    submit(mode: .steer)
-                } label: {
-                    Label("Steer now", systemImage: "arrow.turn.up.right")
-                }
-            }
-            if composerCapabilities.queueing {
-                Button {
-                    submit(mode: .queue)
-                } label: {
-                    Label("Queue after current work", systemImage: "clock.arrow.circlepath")
-                }
-            }
-        }
-        .accessibilityLabel(mode == .steer ? "Send and steer" : mode == .queue ? "Send and queue" : "Send")
-        .accessibilityHint("Touch and hold for explicit steer or queue choices")
-    }
-}
-
-private struct ComposerActionButtonStyle: ButtonStyle {
-    let reduceMotion: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .contentShape(Circle())
-            .scaleEffect(configuration.isPressed ? 0.88 : 1)
-            .opacity(configuration.isPressed ? 0.86 : 1)
-            .animation(
-                reduceMotion ? nil : .snappy(duration: 0.16, extraBounce: 0.02),
-                value: configuration.isPressed
-            )
-    }
-}
-
-private struct MentionMenuView: View {
-    let query: String
-    let members: [GroupRouting.Member]
-    let includeEveryone: Bool
-    let accentColor: Color
-    let onPick: (String) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if includeEveryone {
-                mentionRow(title: "@everyone", subtitle: "Every bot in this chat", color: accentColor) {
-                    onPick("everyone")
-                }
-            }
-            ForEach(members, id: \.id) { member in
-                mentionRow(
-                    title: member.name,
-                    subtitle: "Bring \(member.name) in",
-                    color: MausPalette.color(member.color)
-                ) {
-                    onPick(member.name)
-                }
-            }
-            if members.isEmpty && !includeEveryone {
-                Text("No matching bot")
-                    .font(.footnote)
-                    .foregroundStyle(Color.secondary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-            }
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(VBotSurface.controlSurface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-        )
-        .accessibilityLabel("Mention a bot")
-    }
-
-    private func mentionRow(title: String, subtitle: String, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(color)
-                    .frame(width: 28, height: 28)
-                    .overlay {
-                        Text(String(title.drop(while: { $0 == "@" }).prefix(1)).uppercased())
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(MausPalette.faceInk(""))
-                    }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title.hasPrefix("@") ? title : "@\(title)")
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(color)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(Color.secondary)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+    private var selectedConversationTextSize: ConversationTextSize {
+        ConversationTextSize(rawValue: conversationTextSize) ?? .standard
     }
 }
 
@@ -1822,31 +826,12 @@ struct MessageRow: View {
     }
 }
 
-private struct ChatTranscriptRow: Identifiable {
-    let segment: TranscriptSegment
-    let startIndex: Int
-    let isRedundantCommNarration: Bool
-
-    var id: String { segment.id }
-
-    var messageCount: Int { segment.messageIds.count }
-
-    var firstMessage: Message {
-        switch segment {
-        case .message(let message):
-            return message
-        case .toolRun(let run):
-            return run.messages[0]
-        }
-    }
-}
-
 private struct ShareFile: Identifiable {
     let url: URL
     var id: String { url.path }
 }
 
-private struct PendingImageAttachment: Identifiable, Equatable {
+struct PendingImageAttachment: Identifiable, Equatable {
     let id: UUID
     let data: Data
     let mime: String
@@ -2141,7 +1126,7 @@ private struct TranscriptAttachmentGallery: View {
 /// quiet "Worked · N steps"; a single success is just its spoken label;
 /// live work is one updating row; failures start open. Raw names sit one
 /// tap deeper and are selectable.
-private struct ToolRunDisclosure: View {
+struct ToolRunDisclosure: View {
     let run: ToolRun
     let isExpanded: Bool
     let onToggle: () -> Void
@@ -2890,126 +1875,5 @@ struct StreamingBubble: View {
         // No `.textSelection` on purpose: selecting text that is still growing
         // fights the reader, and the settled bubble a frame later is
         // selectable anyway.
-    }
-}
-
-/// Live reply vs working indicator. Own typed body so the transcript
-/// stack does not type-check this branch together with every message row.
-private struct ChatLiveTail: View {
-    let liveText: String?
-    let showWorking: Bool
-    let tintColor: String
-    let speaker: (name: String, color: String)?
-    let reduceMotion: Bool
-    let accessibilityLabel: String
-    let chat: Chat
-    let speakerBotId: String?
-
-    var body: some View {
-        // The reply as it is typed. Coalesced deltas and a
-        // stable markdown prefix keep the bubble from
-        // jittering token-by-token; an empty prefix while
-        // busy is the working indicator, not a malformed
-        // one-character bubble.
-        if let live = liveText, !live.isEmpty {
-            StreamingBubble(
-                text: live,
-                color: tintColor,
-                speaker: speaker,
-                reduceMotion: reduceMotion
-            )
-            .id(ChatView.liveBubbleId)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(accessibilityLabel)
-        } else if showWorking {
-            WorkingTypingIndicatorView(
-                chat: chat,
-                speakerBotId: speakerBotId
-            )
-            .id(ChatView.liveBubbleId)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(accessibilityLabel)
-        }
-    }
-}
-
-private struct ChatFollowMonitor: ViewModifier {
-    @Binding var followingLatest: Bool
-    @Binding var lastDistanceFromBottom: CGFloat
-    @Binding var viewportHeight: CGFloat
-
-    func body(content: Content) -> some View {
-        content
-            .coordinateSpace(name: "chat-scroll")
-            .background { ChatViewportHeightReader() }
-            .onPreferenceChange(ChatViewportHeightKey.self) { height in
-                viewportHeight = height
-            }
-            .onPreferenceChange(ChatContentMaxYKey.self) { maxY in
-                guard viewportHeight > 1 else { return }
-                let distance = max(0, maxY - viewportHeight)
-                followingLatest = ChatFollow.updatedFollowing(
-                    following: followingLatest,
-                    previousDistanceFromBottom: lastDistanceFromBottom,
-                    distanceFromBottom: distance
-                )
-                lastDistanceFromBottom = distance
-            }
-    }
-}
-
-private struct ChatContentMaxYKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-private struct ChatViewportHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-private struct ChatViewportHeightReader: View {
-    var body: some View {
-        GeometryReader { viewport in
-            Color.clear.preference(
-                key: ChatViewportHeightKey.self,
-                value: viewport.size.height
-            )
-        }
-    }
-}
-
-private struct ChatScrollOffsetReader: View {
-    var body: some View {
-        GeometryReader { geo in
-            Color.clear.preference(
-                key: ChatContentMaxYKey.self,
-                value: geo.frame(in: .named("chat-scroll")).maxY
-            )
-        }
-        .frame(height: 0)
-        .accessibilityHidden(true)
-    }
-}
-
-private struct NewMessagesDivider: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            Rectangle()
-                .fill(VBotSurface.unread)
-                .frame(height: 1)
-            Text("NEW")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(VBotSurface.unread)
-            Rectangle()
-                .fill(VBotSurface.unread)
-                .frame(height: 1)
-        }
-        .padding(.vertical, 6)
-        .accessibilityLabel("New messages")
     }
 }

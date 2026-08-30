@@ -247,6 +247,143 @@ final class StreamAccessibilityTests: XCTestCase {
     }
 }
 
+final class StreamDeltaMergeTests: XCTestCase {
+    func testIncrementalTokensAppend() {
+        XCTAssertEqual(StreamDeltaMerge.combining(existing: nil, delta: "Hel"), "Hel")
+        XCTAssertEqual(StreamDeltaMerge.combining(existing: "Hel", delta: "lo"), "Hello")
+    }
+
+    func testASingleCharacterTokenStillAppends() {
+        XCTAssertEqual(StreamDeltaMerge.combining(existing: "Hel", delta: "l"), "Hell")
+    }
+
+    func testAReplayedPrefixDoesNotDuplicateTheHeldTail() {
+        XCTAssertEqual(StreamDeltaMerge.combining(existing: "Hello world", delta: "Hello"), "Hello world")
+        XCTAssertEqual(StreamDeltaMerge.combining(existing: "Hello world", delta: "Hello world"), "Hello world")
+    }
+
+    func testALongerSnapshotOnReconnectReplacesTheHeldPrefix() {
+        XCTAssertEqual(StreamDeltaMerge.combining(existing: "Hello", delta: "Hello world"), "Hello world")
+    }
+
+    func testAReplayedSuffixTokenDoesNotAppendAgain() {
+        XCTAssertEqual(StreamDeltaMerge.combining(existing: "Hello world", delta: " world"), "Hello world")
+    }
+}
+
+final class LiveTailPolicyTests: XCTestCase {
+    private func botText(_ text: String, from botId: String? = nil) -> Message {
+        var message = Message(id: "a1", role: .bot, kind: .text, at: 2, text: text)
+        if let botId {
+            message.from = Sender(botId: botId, name: "Scout", color: "green")
+        }
+        return message
+    }
+
+    func testBusyWithNoTranscriptShowsWorking() {
+        XCTAssertEqual(
+            LiveTailPolicy.presentation(
+                busy: true,
+                streaming: nil,
+                reasoning: nil,
+                lastMessage: nil,
+                speakerBotId: nil
+            ),
+            .working
+        )
+    }
+
+    func testVisibleLiveTextResumesTheBubble() {
+        XCTAssertEqual(
+            LiveTailPolicy.presentation(
+                busy: true,
+                streaming: "Hello world",
+                reasoning: nil,
+                lastMessage: Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi"),
+                speakerBotId: nil
+            ),
+            .streaming("Hello world")
+        )
+    }
+
+    func testSettledReplyHidesWorkingEvenWhileBusy() {
+        // The harness flips busy off after the settled message. Deriving the
+        // working row from busy alone re-shows it under the real bubble.
+        XCTAssertEqual(
+            LiveTailPolicy.presentation(
+                busy: true,
+                streaming: nil,
+                reasoning: nil,
+                lastMessage: botText("Hello world"),
+                speakerBotId: nil
+            ),
+            .none
+        )
+    }
+
+    func testADuplicateLivePrefixOfTheSettledReplyIsSuppressed() {
+        XCTAssertEqual(
+            LiveTailPolicy.presentation(
+                busy: true,
+                streaming: "Hello world",
+                reasoning: nil,
+                lastMessage: botText("Hello world"),
+                speakerBotId: nil
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            LiveTailPolicy.presentation(
+                busy: true,
+                streaming: "Hello",
+                reasoning: nil,
+                lastMessage: botText("Hello world"),
+                speakerBotId: nil
+            ),
+            .none
+        )
+    }
+
+    func testARoomStillShowsWorkingWhenAnotherMemberOwnsTheSettledTail() {
+        XCTAssertEqual(
+            LiveTailPolicy.presentation(
+                busy: true,
+                streaming: nil,
+                reasoning: nil,
+                lastMessage: botText("done", from: "bot-a"),
+                speakerBotId: "bot-b"
+            ),
+            .working
+        )
+    }
+
+    func testReasoningWithoutLiveTextStillShowsWorking() {
+        XCTAssertEqual(
+            LiveTailPolicy.presentation(
+                busy: false,
+                streaming: nil,
+                reasoning: "considering…",
+                lastMessage: Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi"),
+                speakerBotId: nil
+            ),
+            .working
+        )
+    }
+
+    func testIdleTranscriptHasNoTail() {
+        XCTAssertEqual(
+            LiveTailPolicy.presentation(
+                busy: false,
+                streaming: nil,
+                reasoning: nil,
+                lastMessage: botText("Hello world"),
+                speakerBotId: nil
+            ),
+            .none
+        )
+    }
+}
+
 final class ChatFollowTests: XCTestCase {
     func testAutoscrollOnlyWhileFollowing() {
         XCTAssertTrue(ChatFollow.shouldScrollToLatest(following: true))

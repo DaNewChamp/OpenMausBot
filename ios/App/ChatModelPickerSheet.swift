@@ -29,7 +29,13 @@ struct ChatModelPickerSheet: View {
     private var showsEffortPicker: Bool {
         !effortLevels.isEmpty && session.engineSync?.usesReconstructedMutations != true
     }
-    private var modelSwitchBlocked: Bool { savingModel || current.busy == true || instancesLoading }
+    private var modelSwitchBlocked: Bool {
+        !ModelSelectionPolicy.allowsSwitch(
+            working: current.busy == true,
+            saving: savingModel,
+            catalogLoading: instancesLoading
+        )
+    }
     private var reconstructedModelDisabled: Bool {
         session.engineSync?.usesReconstructedMutations == true && pickedInstanceId != "cursor"
     }
@@ -52,9 +58,7 @@ struct ChatModelPickerSheet: View {
                             selectedModelId: $pickedModel,
                             disabled: modelSwitchBlocked || advertisedInstances.isEmpty,
                             modelsDisabled: reconstructedModelDisabled,
-                            footerHint: current.busy == true
-                                ? "Interrupt this agent before switching models."
-                                : "Changes apply to the next message."
+                            footerHint: ModelSelectionPolicy.footerHint(working: current.busy == true)
                         ) {
                             alignEffort()
                             Task { await saveModel() }
@@ -180,6 +184,8 @@ struct ChatModelPickerButton: View {
         return id.split(separator: "-").prefix(2).map { $0.capitalized }.joined(separator: " ")
     }
 
+    private var working: Bool { current.busy == true }
+
     var body: some View {
         Button {
             Haptics.selection()
@@ -199,11 +205,13 @@ struct ChatModelPickerButton: View {
         .buttonStyle(.plain)
         .glassCapsuleBackdrop()
         .fixedSize()
+        .opacity(working ? 0.55 : 1)
         .accessibilityLabel("Model, \(instanceTitle), \(modelTitle)")
         .accessibilityHint(
-            current.busy == true
-                ? "Opens model picker; interrupt this agent before switching models"
+            working
+                ? ModelSelectionPolicy.busyExplanation
                 : "Opens model picker"
         )
+        .accessibilityValue(working ? "Unavailable while this agent is working" : modelTitle)
     }
 }
