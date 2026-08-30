@@ -242,7 +242,6 @@ struct ChatTranscriptView: View {
                 scrollToLatest(proxy, animated: false)
             }
             .onChange(of: current.busy) { _, _ in
-                announceStreamPhase()
                 scrollToLatest(proxy)
             }
             .onChange(of: threadId) { _, _ in
@@ -251,7 +250,7 @@ struct ChatTranscriptView: View {
                 streamA11yPhase = .idle
             }
             .onAppear { announceStreamPhase() }
-            .onChange(of: presentedLiveText) { _, _ in
+            .onChange(of: liveTail) { _, _ in
                 announceStreamPhase()
             }
     }
@@ -365,10 +364,7 @@ struct ChatTranscriptView: View {
     }
 
     private func announceStreamPhase() {
-        let next = StreamAccessibility.phase(
-            isBusy: showsWorkingRow,
-            hasVisibleText: presentedLiveText?.isEmpty == false
-        )
+        let next = StreamAccessibility.phase(for: liveTail)
         let announcement = StreamAccessibility.announcement(
             from: streamA11yPhase,
             to: next,

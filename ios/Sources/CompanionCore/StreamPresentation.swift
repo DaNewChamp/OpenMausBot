@@ -335,6 +335,17 @@ public enum StreamAccessibilityPhase: Equatable, Sendable {
 
 /// VoiceOver must not speak the growing reply. Announce phase changes only.
 public enum StreamAccessibility {
+    public static func phase(for tail: LiveTailKind) -> StreamAccessibilityPhase {
+        switch tail {
+        case .none:
+            return .idle
+        case .working:
+            return .working
+        case .streaming:
+            return .streaming
+        }
+    }
+
     public static func phase(isBusy: Bool, hasVisibleText: Bool) -> StreamAccessibilityPhase {
         if hasVisibleText && !isBusy { return .complete }
         if hasVisibleText { return .streaming }

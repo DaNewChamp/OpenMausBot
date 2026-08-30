@@ -199,12 +199,13 @@ struct ChatModelPickerButton: View {
             }
             .foregroundStyle(Color.primary)
             .padding(.horizontal, 10)
-            .frame(minHeight: 40)
+            .frame(minWidth: 44, minHeight: 44)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .glassCapsuleBackdrop()
         .fixedSize()
+        .disabled(working)
         .opacity(working ? 0.55 : 1)
         .accessibilityLabel("Model, \(instanceTitle), \(modelTitle)")
         .accessibilityHint(

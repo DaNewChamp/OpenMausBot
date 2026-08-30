@@ -772,6 +772,78 @@ final class StreamingTests: XCTestCase {
         XCTAssertEqual(state.streaming["t1"], "Hello world")
     }
 
+    func testAReasoningDeltaDoesNotEndAssistantNoIdCatchUp() {
+        var state = CompanionState()
+        state.apply(delta("Hello"))
+        state.apply(delta(" world"))
+        state.apply(.hello(cursor: "abc12345:3", resumed: true))
+        state.apply(delta("considering", kind: "reasoning_text"))
+        state.apply(delta(" world"))
+        XCTAssertEqual(state.streaming["t1"], "Hello world")
+        XCTAssertEqual(state.reasoning["t1"], "considering")
+    }
+
+    func testCatchUpEndsAfterTheHeldTailIsReplayedSoALaterIdenticalFragmentAppends() {
+        var state = CompanionState()
+        state.apply(delta("Hello"))
+        state.apply(delta(" world"))
+        state.apply(.hello(cursor: "abc12345:2", resumed: true))
+        state.apply(delta("Hello"))
+        state.apply(delta(" world"))
+        state.apply(delta(" world"))
+        XCTAssertEqual(state.streaming["t1"], "Hello world world")
+    }
+
+    func testCatchUpEndsAfterADroppedLastTokenSoALaterIdenticalFragmentAppends() {
+        var state = CompanionState()
+        state.apply(delta("Hello"))
+        state.apply(delta(" world"))
+        state.apply(.hello(cursor: "abc12345:2", resumed: true))
+        state.apply(delta(" world"))
+        state.apply(delta(" world"))
+        XCTAssertEqual(state.streaming["t1"], "Hello world world")
+    }
+
+    func testANewTurnSuffixTokenBeforeTurnStartedIsNotDroppedAsSettledReplay() throws {
+        var bot = try XCTUnwrap(try Self.hydratedFixture().bots.first)
+        bot.busy = true
+        bot.messages = [Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi")]
+        var state = CompanionState()
+        state.hydrate(Fleet(bots: [bot], groups: []))
+        state.apply(.bot(bot))
+        state.apply(.runtime(RuntimeEvent(type: "turn.started", threadId: bot.threadId)))
+        state.apply(delta("Hello", thread: bot.threadId))
+        state.apply(delta(" world", thread: bot.threadId))
+        state.apply(.message(
+            threadId: bot.threadId,
+            message: Message(id: "m1", role: .bot, kind: .text, at: 2, text: "Hello world")
+        ))
+        XCTAssertNil(state.streaming[bot.threadId])
+
+        state.apply(delta(" world", thread: bot.threadId))
+        XCTAssertEqual(state.streaming[bot.threadId], " world")
+    }
+
+    func testReconnectSuffixReplayAfterSettleStillDrops() throws {
+        var bot = try XCTUnwrap(try Self.hydratedFixture().bots.first)
+        bot.busy = true
+        bot.messages = [Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi")]
+        var state = CompanionState()
+        state.hydrate(Fleet(bots: [bot], groups: []))
+        state.apply(.bot(bot))
+        state.apply(.runtime(RuntimeEvent(type: "turn.started", threadId: bot.threadId)))
+        state.apply(delta("Hello", thread: bot.threadId))
+        state.apply(delta(" world", thread: bot.threadId))
+        state.apply(.message(
+            threadId: bot.threadId,
+            message: Message(id: "m1", role: .bot, kind: .text, at: 2, text: "Hello world")
+        ))
+        state.apply(.hello(cursor: "abc12345:9", resumed: true))
+        state.apply(delta(" world", thread: bot.threadId))
+        XCTAssertNil(state.streaming[bot.threadId])
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .none)
+    }
+
     private static func hydratedFixture() throws -> CompanionState {
         var state = CompanionState()
         let url = try XCTUnwrap(

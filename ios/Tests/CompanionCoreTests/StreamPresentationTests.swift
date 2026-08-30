@@ -245,6 +245,62 @@ final class StreamAccessibilityTests: XCTestCase {
             .complete
         )
     }
+
+    func testPhaseFollowsLiveTailNotTheWorkingRow() {
+        XCTAssertEqual(StreamAccessibility.phase(for: .working), .working)
+        XCTAssertEqual(StreamAccessibility.phase(for: .streaming("Hello world")), .streaming)
+        XCTAssertEqual(StreamAccessibility.phase(for: .streaming("Hello world more")), .streaming)
+        XCTAssertEqual(StreamAccessibility.phase(for: .none), .idle)
+    }
+
+    func testWorkingThenStreamingThenIdleAnnouncesOnceEach() {
+        var phase = StreamAccessibility.phase(for: .none)
+        var heard: [String] = []
+        func advance(_ tail: LiveTailKind) {
+            let next = StreamAccessibility.phase(for: tail)
+            if let announcement = StreamAccessibility.announcement(
+                from: phase,
+                to: next,
+                speaker: "Scout"
+            ) {
+                heard.append(announcement)
+            }
+            phase = next
+        }
+        advance(.working)
+        advance(.streaming("Hello world"))
+        advance(.streaming("Hello world more"))
+        advance(.none)
+        XCTAssertEqual(heard, [
+            "Scout is working",
+            "Scout finished their reply"
+        ])
+    }
+
+    func testASettledTailDoesNotResurrectWorking() {
+        // LiveTailPolicy reports .none under a settled bubble even while the
+        // harness is still busy. Mapping that as working would re-announce.
+        XCTAssertEqual(StreamAccessibility.phase(for: .none), .idle)
+        XCTAssertNil(
+            StreamAccessibility.announcement(from: .idle, to: .idle, speaker: "Scout")
+        )
+        XCTAssertNil(
+            StreamAccessibility.announcement(from: .streaming, to: .streaming, speaker: "Scout")
+        )
+    }
+
+    func testWorkingRowAsBusyIsNotTheLiveTailMapping() {
+        // App used to pass showsWorkingRow as isBusy. During .streaming that
+        // flag is false, so the busy mapping announces complete too early.
+        XCTAssertEqual(
+            StreamAccessibility.phase(isBusy: false, hasVisibleText: true),
+            .complete
+        )
+        XCTAssertEqual(
+            StreamAccessibility.phase(for: .streaming("Hello world")),
+            .streaming
+        )
+    }
 }
 
 final class StreamDeltaMergeTests: XCTestCase {

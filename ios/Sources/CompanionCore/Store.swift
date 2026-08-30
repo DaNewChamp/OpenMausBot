@@ -58,7 +58,8 @@ public struct CompanionState: Sendable {
     /// Set by `hello(resumed: true)`. Catch-up replay of the live tail is
     /// otherwise the same bytes as live tokens when event ids are missing.
     var reconnectReplayActive = false
-    /// Threads that have accepted new live text since the last resumed hello.
+    /// Per thread+kind: catch-up for that stream has been consumed, or a
+    /// live token was accepted. Keyed like `lastStreamDelta`.
     var liveCaughtUp: Set<String> = []
     /// Prefix of the held tail already matched during reconnect catch-up.
     var replayedStreamPrefix: [String: String] = [:]
@@ -444,14 +445,15 @@ public struct CompanionState: Sendable {
         lastStreamDelta.removeValue(forKey: Self.streamFoldKey(threadId, "reasoning_text"))
         replayedStreamPrefix.removeValue(forKey: Self.streamFoldKey(threadId, "assistant_text"))
         replayedStreamPrefix.removeValue(forKey: Self.streamFoldKey(threadId, "reasoning_text"))
-        liveCaughtUp.remove(threadId)
+        liveCaughtUp.remove(Self.streamFoldKey(threadId, "assistant_text"))
+        liveCaughtUp.remove(Self.streamFoldKey(threadId, "reasoning_text"))
     }
 
     private mutating func recordAcceptedLiveDelta(_ delta: String, on threadId: String, kind: String?) {
         let key = Self.streamFoldKey(threadId, kind)
         lastStreamDelta[key] = delta
         replayedStreamPrefix.removeValue(forKey: key)
-        liveCaughtUp.insert(threadId)
+        liveCaughtUp.insert(key)
     }
 
     private static func streamFoldKey(_ threadId: String, _ kind: String?) -> String {
@@ -480,6 +482,11 @@ public struct CompanionState: Sendable {
     /// Catch-up without event ids. A resumed hello is the only signal that
     /// an isolated last-token repeat is replay rather than a real consecutive
     /// increment. Prefix restart of the held tail is the same catch-up.
+    ///
+    /// Full-tail identity (`held == delta`) is a global drop, live or replay:
+    /// that is snapshot reconnect (one delta that is the whole tail), not a
+    /// consecutive fragment. Consecutive identical *fragments* still append
+    /// once this kind's catch-up has been consumed.
     private mutating func isReconnectReplayOfLiveTail(
         _ delta: String,
         on threadId: String,
@@ -495,6 +502,9 @@ public struct CompanionState: Sendable {
         }
 
         if !held.isEmpty, held == delta {
+            if isCatchingUp(key) {
+                markStreamCaughtUp(key)
+            }
             return true
         }
 
@@ -503,6 +513,7 @@ public struct CompanionState: Sendable {
             if !held.isEmpty, held.hasPrefix(next) {
                 if next == held {
                     replayedStreamPrefix.removeValue(forKey: key)
+                    markStreamCaughtUp(key)
                 } else {
                     replayedStreamPrefix[key] = next
                 }
@@ -511,20 +522,31 @@ public struct CompanionState: Sendable {
             replayedStreamPrefix.removeValue(forKey: key)
         }
 
-        let catchingUp = reconnectReplayActive && !liveCaughtUp.contains(threadId)
-        guard catchingUp else { return false }
+        guard isCatchingUp(key) else { return false }
 
         if !held.isEmpty, held.hasPrefix(delta), held != delta {
             replayedStreamPrefix[key] = delta
             return true
         }
         if lastStreamDelta[key] == delta {
+            markStreamCaughtUp(key)
             return true
         }
         return false
     }
 
+    private func isCatchingUp(_ key: String) -> Bool {
+        reconnectReplayActive && !liveCaughtUp.contains(key)
+    }
+
+    private mutating func markStreamCaughtUp(_ key: String) {
+        liveCaughtUp.insert(key)
+    }
+
     /// Reconnect replay of a prefix already committed as a bot text message.
+    /// Suffix matches are reconnect-only: a new-turn token emitted before
+    /// `turn.started` can suffix the previous settled reply without being
+    /// a replay of it.
     private func isReplayOfSettledReply(_ delta: String, on threadId: String) -> Bool {
         guard settledReplayGuard.contains(threadId) else { return false }
         let last = visibleTranscript(forThread: threadId).last
@@ -536,7 +558,8 @@ public struct CompanionState: Sendable {
         ) {
             return true
         }
-        guard (streaming[threadId] ?? "").isEmpty,
+        guard reconnectReplayActive,
+              (streaming[threadId] ?? "").isEmpty,
               last?.role == .bot,
               last?.kind == .text,
               let text = last?.text,
