@@ -365,4 +365,155 @@ final class LocalVmDesktopPolicyTests: XCTestCase {
         XCTAssertFalse(LocalVmDesktopPolicy.encodedObjectIsPhoneSafe(["viewer_url": "http://127.0.0.1:6080/vnc.html"]))
         XCTAssertFalse(LocalVmDesktopPolicy.encodedObjectIsPhoneSafe(["viewerPath": "/api/bots/b/local-computer/viewer/vnc.html"]))
     }
+
+    func testStatusErrorBannerHiddenUnlessLocalVmHasErrorAndAccess() {
+        let visible = LocalVmStatusErrorBanner.presentation(
+            isLocalVm: true,
+            statusError: "The request timed out.",
+            accessDenied: false,
+            statusPollingActive: true
+        )
+        XCTAssertTrue(visible.isVisible)
+        XCTAssertEqual(visible.message, LocalVmStatusErrorBanner.message)
+        XCTAssertFalse(visible.showsRetry)
+        XCTAssertEqual(visible.accessibilityEpisode, "The request timed out.")
+
+        XCTAssertFalse(
+            LocalVmStatusErrorBanner.presentation(
+                isLocalVm: false,
+                statusError: "The request timed out.",
+                accessDenied: false,
+                statusPollingActive: true
+            ).isVisible
+        )
+        XCTAssertFalse(
+            LocalVmStatusErrorBanner.presentation(
+                isLocalVm: true,
+                statusError: "The request timed out.",
+                accessDenied: true,
+                statusPollingActive: false
+            ).isVisible
+        )
+        XCTAssertFalse(
+            LocalVmStatusErrorBanner.presentation(
+                isLocalVm: true,
+                statusError: nil,
+                accessDenied: false,
+                statusPollingActive: true
+            ).isVisible
+        )
+        XCTAssertFalse(
+            LocalVmStatusErrorBanner.presentation(
+                isLocalVm: true,
+                statusError: "  ",
+                accessDenied: false,
+                statusPollingActive: true
+            ).isVisible
+        )
+    }
+
+    func testStatusErrorBannerRetryOnlyWhenPollingStopped() {
+        let polling = LocalVmStatusErrorBanner.presentation(
+            isLocalVm: true,
+            statusError: "Offline.",
+            accessDenied: false,
+            statusPollingActive: true
+        )
+        XCTAssertFalse(polling.showsRetry)
+
+        let stopped = LocalVmStatusErrorBanner.presentation(
+            isLocalVm: true,
+            statusError: "Offline.",
+            accessDenied: false,
+            statusPollingActive: false
+        )
+        XCTAssertTrue(stopped.showsRetry)
+    }
+
+    func testStatusPollingActiveRequiresLiveConnection() {
+        XCTAssertTrue(
+            LocalVmDesktopPolicy.statusPollingActive(
+                isLocalVm: true,
+                accessDenied: false,
+                connectionLive: true
+            )
+        )
+        XCTAssertFalse(
+            LocalVmDesktopPolicy.statusPollingActive(
+                isLocalVm: true,
+                accessDenied: false,
+                connectionLive: false
+            )
+        )
+        XCTAssertFalse(
+            LocalVmDesktopPolicy.statusPollingActive(
+                isLocalVm: true,
+                accessDenied: true,
+                connectionLive: true
+            )
+        )
+    }
+
+    func testStatusErrorBannerAccessibilityAnnouncesOncePerEpisode() {
+        let first = LocalVmStatusErrorBanner.presentation(
+            isLocalVm: true,
+            statusError: "The request timed out.",
+            accessDenied: false,
+            statusPollingActive: true
+        )
+        XCTAssertEqual(
+            LocalVmStatusErrorBanner.accessibilityAnnouncement(
+                lastAnnouncedEpisode: nil,
+                presentation: first
+            ),
+            LocalVmStatusErrorBanner.message
+        )
+        XCTAssertNil(
+            LocalVmStatusErrorBanner.accessibilityAnnouncement(
+                lastAnnouncedEpisode: first.accessibilityEpisode,
+                presentation: first
+            )
+        )
+
+        let changed = LocalVmStatusErrorBanner.presentation(
+            isLocalVm: true,
+            statusError: "The Internet connection appears to be offline.",
+            accessDenied: false,
+            statusPollingActive: true
+        )
+        XCTAssertEqual(
+            LocalVmStatusErrorBanner.accessibilityAnnouncement(
+                lastAnnouncedEpisode: first.accessibilityEpisode,
+                presentation: changed
+            ),
+            LocalVmStatusErrorBanner.message
+        )
+
+        let cleared = LocalVmStatusErrorBanner.presentation(
+            isLocalVm: true,
+            statusError: nil,
+            accessDenied: false,
+            statusPollingActive: true
+        )
+        XCTAssertNil(
+            LocalVmStatusErrorBanner.accessibilityAnnouncement(
+                lastAnnouncedEpisode: first.accessibilityEpisode,
+                presentation: cleared
+            )
+        )
+
+        let resumed = LocalVmStatusErrorBanner.presentation(
+            isLocalVm: true,
+            statusError: "The request timed out.",
+            accessDenied: false,
+            statusPollingActive: true
+        )
+        XCTAssertEqual(
+            LocalVmStatusErrorBanner.accessibilityAnnouncement(
+                lastAnnouncedEpisode: nil,
+                presentation: resumed
+            ),
+            LocalVmStatusErrorBanner.message
+        )
+    }
 }

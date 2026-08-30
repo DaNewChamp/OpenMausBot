@@ -74,6 +74,7 @@ struct ComputerView: View {
     @State private var viewerFailureCount = 0
     @State private var showingPhotoSettings = false
     @State private var vmTypeDraft = ""
+    @State private var announcedLocalVmStatusEpisode: String?
     @FocusState private var vmKeyboardFocused: Bool
     @AppStorage("vmPointerMode") private var vmPointerModeRaw = VmPointerMode.trackpad.rawValue
 
@@ -202,6 +203,23 @@ struct ComputerView: View {
 
     private var isLocalVm: Bool { destination == "vm" }
 
+    private var localVmStatusPollingActive: Bool {
+        LocalVmDesktopPolicy.statusPollingActive(
+            isLocalVm: isLocalVm,
+            accessDenied: session.localVmAccessDenied,
+            connectionLive: session.status == .live
+        )
+    }
+
+    private var localVmStatusErrorPresentation: LocalVmStatusErrorBanner.Presentation {
+        LocalVmStatusErrorBanner.presentation(
+            isLocalVm: isLocalVm,
+            statusError: session.localVmStatusError,
+            accessDenied: session.localVmAccessDenied,
+            statusPollingActive: localVmStatusPollingActive
+        )
+    }
+
     private var wantsScreenPreview: Bool {
         if isLocalVm { return LocalVmDesktopPolicy.usesLiveScreenStreamTimeout() }
         return current.busy == true
@@ -235,11 +253,109 @@ struct ComputerView: View {
     }
 
     var body: some View {
+        withComputerLifecycle(computerSheetsAndAlerts)
+    }
+
+    private var computerSheetsAndAlerts: some View {
+        computerStack
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationBarBackButtonHidden(true)
+            .background {
+                InteractivePopGestureEnabler()
+                    .frame(width: 0, height: 0)
+            }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: presentationState)
+            .onChange(of: localVmStatusErrorPresentation.accessibilityEpisode) { _, episode in
+                syncLocalVmStatusErrorAnnouncement(episode: episode)
+            }
+            .safeAreaInset(edge: .bottom) {
+                if showsLocalVmBottomChrome {
+                    VStack(spacing: 0) {
+                        if vmKeyboardFocused && localVmInteractive {
+                            VmKeyboardBar(
+                                text: $vmTypeDraft,
+                                isFocused: $vmKeyboardFocused,
+                                onSend: { Task { await submitVmTypedText() } }
+                            )
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
+                        localVmChrome
+                    }
+                } else if case .watching = presentationState, image != nil {
+                    VStack(spacing: 0) {
+                        clipboardPasteBar
+                        watchingControls
+                    }
+                }
+            }
+            .alert("Local VM", isPresented: Binding(
+                get: { localVmSurfaceError != nil },
+                set: { if !$0 { localVmSurfaceError = nil } }
+            )) {
+                Button("OK", role: .cancel) { localVmSurfaceError = nil }
+            } message: {
+                Text(localVmSurfaceError ?? "")
+            }
+            .alert("Photos", isPresented: $showingPhotoSettings) {
+                Button(PhotoLibrarySavePolicy.settingsActionTitle) {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(PhotoLibrarySavePolicy.deniedMessage)
+            }
+            .sheet(isPresented: $showingHelp) {
+                computerHelpSheet
+            }
+            .sheet(isPresented: $showingControls) {
+                computerControlsSheet
+            }
+            .onChange(of: vmKeyboardFocused) { _, focused in
+                if !focused { vmTypeDraft = "" }
+            }
+            .alert("Open live cloud desktop?", isPresented: $confirmingDesktop) {
+                Button("Cancel", role: .cancel) {}
+                Button("Open desktop") { Task { await openDesktop() } }
+            } message: {
+                Text("This gives this phone full control of the cloud computer, including anything signed in inside it.")
+            }
+            .sheet(
+                isPresented: Binding(
+                    get: { desktopURL != nil },
+                    set: { if !$0 { desktopURL = nil } }
+                )
+            ) {
+                if let desktopURL {
+                    CloudDesktopBrowser(url: desktopURL)
+                        .ignoresSafeArea()
+                }
+            }
+            .alert(item: $confirmingLocalVmAction) { action in
+                Alert(
+                    title: Text(action.confirmationTitle),
+                    message: Text(action.confirmationMessage),
+                    primaryButton: .default(Text(action.buttonTitle)) {
+                        Task { await runLocalVmAction(action) }
+                    },
+                    secondaryButton: .cancel()
+                )
+            }
+    }
+
+    private var computerStack: some View {
         ZStack(alignment: .top) {
             VBotSurface.background.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 header
+                if localVmStatusErrorPresentation.isVisible {
+                    LocalVmStatusErrorBannerView(presentation: localVmStatusErrorPresentation) {
+                        Haptics.selection()
+                        Task { await session.refreshLocalVm(for: current) }
+                    }
+                }
                 content
             }
 
@@ -254,211 +370,135 @@ struct ComputerView: View {
                     .allowsHitTesting(false)
             }
         }
-        .toolbar(.hidden, for: .navigationBar)
-        .navigationBarBackButtonHidden(true)
-        .background {
-            InteractivePopGestureEnabler()
-                .frame(width: 0, height: 0)
-        }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: presentationState)
-        .safeAreaInset(edge: .bottom) {
-            if showsLocalVmBottomChrome {
-                VStack(spacing: 0) {
-                    if vmKeyboardFocused && localVmInteractive {
-                        VmKeyboardBar(
-                            text: $vmTypeDraft,
-                            isFocused: $vmKeyboardFocused,
-                            onSend: { Task { await submitVmTypedText() } }
-                        )
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                    localVmChrome
-                }
-            } else if case .watching = presentationState, image != nil {
-                VStack(spacing: 0) {
-                    clipboardPasteBar
-                    watchingControls
-                }
+    }
+
+    @ViewBuilder
+    private func withComputerLifecycle<C: View>(_ content: C) -> some View {
+        content
+            .onAppear {
+                syncScreenWatch(resetFrame: false)
             }
-        }
-        .alert("Local VM", isPresented: Binding(
-            get: { localVmSurfaceError != nil },
-            set: { if !$0 { localVmSurfaceError = nil } }
-        )) {
-            Button("OK", role: .cancel) { localVmSurfaceError = nil }
-        } message: {
-            Text(localVmSurfaceError ?? "")
-        }
-        .alert("Photos", isPresented: $showingPhotoSettings) {
-            Button(PhotoLibrarySavePolicy.settingsActionTitle) {
-                if let url = URL(string: UIApplication.openSettingsURLString) {
-                    UIApplication.shared.open(url)
-                }
-            }
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(PhotoLibrarySavePolicy.deniedMessage)
-        }
-        .sheet(isPresented: $showingHelp) {
-            computerHelpSheet
-        }
-        .sheet(isPresented: $showingControls) {
-            computerControlsSheet
-        }
-        .onChange(of: vmKeyboardFocused) { _, focused in
-            if !focused { vmTypeDraft = "" }
-        }
-        .alert("Open live cloud desktop?", isPresented: $confirmingDesktop) {
-            Button("Cancel", role: .cancel) {}
-            Button("Open desktop") { Task { await openDesktop() } }
-        } message: {
-            Text("This gives this phone full control of the cloud computer, including anything signed in inside it.")
-        }
-        .sheet(
-            isPresented: Binding(
-                get: { desktopURL != nil },
-                set: { if !$0 { desktopURL = nil } }
-            )
-        ) {
-            if let desktopURL {
-                CloudDesktopBrowser(url: desktopURL)
-                    .ignoresSafeArea()
-            }
-        }
-        .alert(item: $confirmingLocalVmAction) { action in
-            Alert(
-                title: Text(action.confirmationTitle),
-                message: Text(action.confirmationMessage),
-                primaryButton: .default(Text(action.buttonTitle)) {
-                    Task { await runLocalVmAction(action) }
-                },
-                secondaryButton: .cancel()
-            )
-        }
-        .onAppear {
-            syncScreenWatch(resetFrame: false)
-        }
-        .onDisappear {
-            localVmViewerURL = nil
-            viewerReady = false
-            viewerLoadFailed = false
-            stopScreenWatch()
-        }
-        .onChange(of: frame?.png) { _, png in
-            guard let png else { return }
-            let next = ScreenFrame(png: png, mime: frame?.mime ?? "image/png")
-            if next.data.flatMap(UIImage.init(data:)) != nil {
-                screenWatch.receivedFrame()
-            } else {
-                screenWatch.failed("The latest screen frame could not be decoded.")
-            }
-        }
-        .onChange(of: session.status) { _, status in
-            switch status {
-            case let .offline(message):
-                session.clearScreen(of: bot.id)
-                screenWatch.failed(message)
-            case .unauthorized:
-                session.clearScreen(of: bot.id)
-                screenWatch.failed("This phone is no longer paired with the computer.")
-            case .unpaired:
-                session.clearScreen(of: bot.id)
-                screenWatch.failed("Pair this phone with a computer to watch the screen.")
-            case .connecting:
-                if screenWatch.phase == .watching {
-                    session.clearScreen(of: bot.id)
-                    screenWatch.retry()
-                }
-            case .live:
-                guard ComputerPresentationState.hasKnownComputer(current) else { return }
-                if wantsScreenPreview, screenWatch.failureMessage != nil {
-                    session.clearScreen(of: bot.id)
-                    screenWatch.retry()
-                } else if !wantsScreenPreview, screenWatch.phase != .idle {
-                    screenWatch.reset()
-                }
-            }
-        }
-        .onChange(of: current.computer) { _, newValue in
-            let mode = newValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if mode == "vm" {
-                resetLiveViewerSession()
-            } else {
+            .onDisappear {
                 localVmViewerURL = nil
                 viewerReady = false
                 viewerLoadFailed = false
+                stopScreenWatch()
             }
-            syncScreenWatch(resetFrame: mode != "vm")
-        }
-        .onChange(of: current.cloudBackend) { _, _ in
-            syncScreenWatch(resetFrame: true)
-        }
-        .onChange(of: current.busy) { _, busy in
-            guard ComputerPresentationState.hasKnownComputer(current) else { return }
-            if !isLocalVm {
-                session.clearScreen(of: bot.id)
-                screenWatch.reset()
-            }
-            if busy == true || isLocalVm {
-                screenWatch.begin()
-            }
-        }
-        .task(id: "local-vm-\(current.id)-\(current.computer ?? "")") {
-            guard isLocalVm else { return }
-            while !Task.isCancelled {
-                await session.refreshLocalVm(for: current)
-                if !LocalVmDesktopPolicy.continueStatusPolling(
-                    isLocalVm: true,
-                    accessDenied: session.localVmAccessDenied
-                ) {
-                    break
+            .onChange(of: frame?.png) { _, png in
+                guard let png else { return }
+                let next = ScreenFrame(png: png, mime: frame?.mime ?? "image/png")
+                if next.data.flatMap(UIImage.init(data:)) != nil {
+                    screenWatch.receivedFrame()
+                } else {
+                    screenWatch.failed("The latest screen frame could not be decoded.")
                 }
-                try? await Task.sleep(for: LocalVmDesktopPolicy.statusPollInterval)
             }
-        }
-        .task(id: "local-vm-preview-\(current.id)-\(current.computer ?? "")-\(session.localVmAccess)-\(viewerReady)") {
-            guard isLocalVm else { return }
-            guard LocalVmDesktopPolicy.shouldPollScreenshot(bot: current, snapshot: localVmSnapshot) else { return }
-            while !Task.isCancelled {
-                await session.refreshLocalVmPreview(for: current)
-                if !LocalVmDesktopPolicy.shouldPollScreenshot(bot: current, snapshot: localVmSnapshot) {
-                    break
+            .onChange(of: session.status) { _, status in
+                switch status {
+                case let .offline(message):
+                    session.clearScreen(of: bot.id)
+                    screenWatch.failed(message)
+                case .unauthorized:
+                    session.clearScreen(of: bot.id)
+                    screenWatch.failed("This phone is no longer paired with the computer.")
+                case .unpaired:
+                    session.clearScreen(of: bot.id)
+                    screenWatch.failed("Pair this phone with a computer to watch the screen.")
+                case .connecting:
+                    if screenWatch.phase == .watching {
+                        session.clearScreen(of: bot.id)
+                        screenWatch.retry()
+                    }
+                case .live:
+                    guard ComputerPresentationState.hasKnownComputer(current) else { return }
+                    if wantsScreenPreview, screenWatch.failureMessage != nil {
+                        session.clearScreen(of: bot.id)
+                        screenWatch.retry()
+                    } else if !wantsScreenPreview, screenWatch.phase != .idle {
+                        screenWatch.reset()
+                    }
                 }
-                try? await Task.sleep(for: LocalVmDesktopPolicy.screenshotPollInterval)
             }
-        }
-        .task(id: "local-vm-viewer-\(current.id)-\(destination)-\(localVmStatus?.ready == true)-\(session.localVmAccess)-\(viewerGeneration)") {
-            guard isLocalVm else {
-                resetLiveViewerSession()
-                return
+            .onChange(of: current.computer) { _, newValue in
+                let mode = newValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if mode == "vm" {
+                    resetLiveViewerSession()
+                } else {
+                    localVmViewerURL = nil
+                    viewerReady = false
+                    viewerLoadFailed = false
+                }
+                syncScreenWatch(resetFrame: mode != "vm")
             }
-            guard LocalVmDesktopPolicy.shouldJoinViewer(bot: current, snapshot: localVmSnapshot) else { return }
-            viewerReady = false
-            let joined = await session.localVmViewerURL(for: current)
-            guard !Task.isCancelled else { return }
-            localVmViewerURL = joined.url
-            if joined.url == nil {
-                let reason: LocalVmDesktopPolicy.ViewerFailure = joined.staleTicket ? .staleTicket : .joinFailed
-                handleViewerFailure(joined.error ?? LocalVmDesktopPolicy.viewerConnectFailureMessage, reason: reason)
+            .onChange(of: current.cloudBackend) { _, _ in
+                syncScreenWatch(resetFrame: true)
             }
-        }
-        .task(id: "instances-\(current.id)") {
-            let hadCache = !instances.isEmpty
-            if !hadCache { instancesLoading = true }
-            defer { instancesLoading = false }
+            .onChange(of: current.busy) { _, busy in
+                guard ComputerPresentationState.hasKnownComputer(current) else { return }
+                if !isLocalVm {
+                    session.clearScreen(of: bot.id)
+                    screenWatch.reset()
+                }
+                if busy == true || isLocalVm {
+                    screenWatch.begin()
+                }
+            }
+            .task(id: "local-vm-\(current.id)-\(current.computer ?? "")") {
+                guard isLocalVm else { return }
+                while !Task.isCancelled {
+                    await session.refreshLocalVm(for: current)
+                    if !LocalVmDesktopPolicy.continueStatusPolling(
+                        isLocalVm: true,
+                        accessDenied: session.localVmAccessDenied
+                    ) {
+                        break
+                    }
+                    try? await Task.sleep(for: LocalVmDesktopPolicy.statusPollInterval)
+                }
+            }
+            .task(id: "local-vm-preview-\(current.id)-\(current.computer ?? "")-\(session.localVmAccess)-\(viewerReady)") {
+                guard isLocalVm else { return }
+                guard LocalVmDesktopPolicy.shouldPollScreenshot(bot: current, snapshot: localVmSnapshot) else { return }
+                while !Task.isCancelled {
+                    await session.refreshLocalVmPreview(for: current)
+                    if !LocalVmDesktopPolicy.shouldPollScreenshot(bot: current, snapshot: localVmSnapshot) {
+                        break
+                    }
+                    try? await Task.sleep(for: LocalVmDesktopPolicy.screenshotPollInterval)
+                }
+            }
+            .task(id: "local-vm-viewer-\(current.id)-\(destination)-\(localVmStatus?.ready == true)-\(session.localVmAccess)-\(viewerGeneration)") {
+                guard isLocalVm else {
+                    resetLiveViewerSession()
+                    return
+                }
+                guard LocalVmDesktopPolicy.shouldJoinViewer(bot: current, snapshot: localVmSnapshot) else { return }
+                viewerReady = false
+                let joined = await session.localVmViewerURL(for: current)
+                guard !Task.isCancelled else { return }
+                localVmViewerURL = joined.url
+                if joined.url == nil {
+                    let reason: LocalVmDesktopPolicy.ViewerFailure = joined.staleTicket ? .staleTicket : .joinFailed
+                    handleViewerFailure(joined.error ?? LocalVmDesktopPolicy.viewerConnectFailureMessage, reason: reason)
+                }
+            }
+            .task(id: "instances-\(current.id)") {
+                let hadCache = !instances.isEmpty
+                if !hadCache { instancesLoading = true }
+                defer { instancesLoading = false }
 #if DEBUG
-            if let preview = session.storePreviewInstance(matching: current) {
-                instances = [preview]
-                return
-            }
+                if let preview = session.storePreviewInstance(matching: current) {
+                    instances = [preview]
+                    return
+                }
 #endif
-            if case let .loaded(loaded) = await session.loadInstances() {
-                instances = loaded
+                if case let .loaded(loaded) = await session.loadInstances() {
+                    instances = loaded
+                }
             }
-        }
-        .task(id: "\(computerSignature)-\(screenWatch.attempt)-\(wantsScreenPreview)") {
-            await runScreenWatchTimeoutTask()
-        }
+            .task(id: "\(computerSignature)-\(screenWatch.attempt)-\(wantsScreenPreview)") {
+                await runScreenWatchTimeoutTask()
+            }
     }
 
     private var header: some View {
@@ -1148,6 +1188,20 @@ struct ComputerView: View {
         case .unavailable: return "Unavailable"
         case .unknown, nil: return "Checking…"
         }
+    }
+
+    @MainActor
+    private func syncLocalVmStatusErrorAnnouncement(episode: String?) {
+        if episode == nil {
+            announcedLocalVmStatusEpisode = nil
+            return
+        }
+        guard let announcement = LocalVmStatusErrorBanner.accessibilityAnnouncement(
+            lastAnnouncedEpisode: announcedLocalVmStatusEpisode,
+            presentation: localVmStatusErrorPresentation
+        ) else { return }
+        UIAccessibility.post(notification: .announcement, argument: announcement)
+        announcedLocalVmStatusEpisode = episode
     }
 
     @MainActor

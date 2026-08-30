@@ -249,6 +249,36 @@ struct ReconnectToEditBanner: View {
     }
 }
 
+/// Slim graphite banner for transient Local VM status-poll failures on the
+/// Computer screen. Sits under the header so it never covers the viewer.
+struct LocalVmStatusErrorBannerView: View {
+    let presentation: LocalVmStatusErrorBanner.Presentation
+    var onRetry: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Label(presentation.message, systemImage: "wifi.exclamationmark")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if presentation.showsRetry {
+                Button(LocalVmStatusErrorBanner.retryTitle, action: onRetry)
+                    .font(.footnote.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .frame(minHeight: VBotSurface.Hit.minimum)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .vbotControlSurface()
+        .padding(.horizontal, VBotSurface.Space.page)
+        .padding(.bottom, 6)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 #if DEBUG
 #Preview("Skeleton list") {
     CalmSkeletonList()

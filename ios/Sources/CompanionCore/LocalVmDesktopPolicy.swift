@@ -193,6 +193,17 @@ public enum LocalVmDesktopPolicy: Sendable {
         continueStatusPolling(isLocalVm: isLocalVm(bot), accessDenied: accessDenied)
     }
 
+    /// Automatic status polling is active only while the Computer screen can
+    /// reach the paired companion. Offline gaps stop the poll loop from
+    /// recovering on its own, so the banner may offer an explicit Retry.
+    public static func statusPollingActive(
+        isLocalVm: Bool,
+        accessDenied: Bool,
+        connectionLive: Bool
+    ) -> Bool {
+        continueStatusPolling(isLocalVm: isLocalVm, accessDenied: accessDenied) && connectionLive
+    }
+
     public static func shouldPollScreenshot(bot: Bot, snapshot: Snapshot) -> Bool {
         guard isLocalVm(bot), snapshot.accessGranted else { return false }
         if snapshot.viewerReady {
@@ -294,5 +305,64 @@ public enum LocalVmDesktopPolicy: Sendable {
         case .blankTimeout, .navigationError, .joinFailed: return viewerConnectFailureMessage
         case .explicitRetry: return openingLiveDesktopMessage
         }
+    }
+}
+
+/// Localized Computer-surface banner for transient Local VM status-poll
+/// failures. Keeps stale desktop content honest without routing through chat
+/// `actionError` or re-announcing on every two-second poll tick.
+public enum LocalVmStatusErrorBanner: Sendable {
+    public static let message = "Connection interrupted. Retrying…"
+    public static let retryTitle = "Retry"
+
+    public struct Presentation: Equatable, Sendable {
+        public var isVisible: Bool
+        public var message: String
+        public var showsRetry: Bool
+        /// Stable identity for VoiceOver; nil while hidden.
+        public var accessibilityEpisode: String?
+    }
+
+    public static func normalizedError(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    public static func presentation(
+        isLocalVm: Bool,
+        statusError: String?,
+        accessDenied: Bool,
+        statusPollingActive: Bool
+    ) -> Presentation {
+        guard isLocalVm,
+              !accessDenied,
+              let episode = normalizedError(statusError)
+        else {
+            return Presentation(
+                isVisible: false,
+                message: message,
+                showsRetry: false,
+                accessibilityEpisode: nil
+            )
+        }
+        return Presentation(
+            isVisible: true,
+            message: message,
+            showsRetry: !statusPollingActive,
+            accessibilityEpisode: episode
+        )
+    }
+
+    /// Returns the banner copy when a new accessibility episode begins.
+    public static func accessibilityAnnouncement(
+        lastAnnouncedEpisode: String?,
+        presentation: Presentation
+    ) -> String? {
+        guard presentation.isVisible,
+              let episode = presentation.accessibilityEpisode,
+              episode != lastAnnouncedEpisode
+        else { return nil }
+        return presentation.message
     }
 }
