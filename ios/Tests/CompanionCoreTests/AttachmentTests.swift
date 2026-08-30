@@ -73,11 +73,25 @@ final class AttachmentTests: XCTestCase {
         XCTAssertEqual(parsed.paths, [path])
     }
 
-    func testAttachmentValidationHonorsMimeAndTenMegabyteCeiling() {
+    func testAttachmentValidationHonorsMimeAndSizeCeilings() {
         XCTAssertNoThrow(try AttachmentPath.validate(data: Data([1]), mime: "image/png; charset=binary"))
+        XCTAssertNoThrow(try AttachmentPath.validate(data: Data([1]), mime: "video/mp4"))
         XCTAssertThrowsError(try AttachmentPath.validate(data: Data([1]), mime: "image/heic"))
         XCTAssertThrowsError(try AttachmentPath.validate(data: Data(), mime: "image/png"))
         XCTAssertThrowsError(try AttachmentPath.validate(data: Data(repeating: 0, count: AttachmentPath.maxBytes + 1), mime: "image/png"))
+        XCTAssertThrowsError(try AttachmentPath.validate(data: Data(repeating: 0, count: AttachmentPath.maxVideoBytes + 1), mime: "video/mp4"))
+    }
+
+    func testAttachmentPromptUsesFileTagForVideoPaths() {
+        let path = "/Users/test/.openmausbot/attachments/abc-123.mp4"
+        let prompt = AttachmentPrompt.compose(
+            text: "look",
+            attachments: [AttachmentPrompt.Item(path: path, mime: "video/mp4")]
+        )
+        XCTAssertEqual(prompt, "look\n\n<attached-file path=\"/Users/test/.openmausbot/attachments/abc-123.mp4\" />")
+        let parsed = AttachmentPrompt.splitAll(prompt)
+        XCTAssertEqual(parsed.filePaths, [path])
+        XCTAssertTrue(parsed.imagePaths.isEmpty)
     }
 
     func testUploadAttachmentUsesRawImageBytesAndReturnsServerPath() async throws {
@@ -100,7 +114,7 @@ final class AttachmentTests: XCTestCase {
             _ = try await client.uploadAttachment(data: Data([1]), mime: "image/png")
             XCTFail("unsafe attachment path should be rejected")
         } catch let error as APIError {
-            XCTAssertEqual(error.localizedDescription, "The uploaded image could not be used.")
+            XCTAssertEqual(error.localizedDescription, "The uploaded attachment could not be used.")
         } catch {
             XCTFail("unexpected error: \(error)")
         }

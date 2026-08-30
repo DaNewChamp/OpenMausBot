@@ -10,14 +10,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 const DATA_ROOT = mkdtempSync(join(tmpdir(), "omb-attachments-"));
 process.env.OMB_DATA_DIR = join(DATA_ROOT, "data");
 
-const { ATTACHMENTS_DIR, IMAGE_MAX_BYTES, extensionForMime, readAttachment, saveImage } = await import("./attachments.ts");
+const { ATTACHMENTS_DIR, IMAGE_MAX_BYTES, VIDEO_MAX_BYTES, extensionForMime, readAttachment, saveAttachment } = await import("./attachments.ts");
 
 describe("extensionForMime", () => {
-  it("maps the accepted image mimes to extensions", () => {
+  it("maps the accepted image and video mimes to extensions", () => {
     expect(extensionForMime("image/png")).toBe(".png");
     expect(extensionForMime("image/jpeg")).toBe(".jpg");
     expect(extensionForMime("image/gif")).toBe(".gif");
     expect(extensionForMime("image/webp")).toBe(".webp");
+    expect(extensionForMime("video/mp4")).toBe(".mp4");
+    expect(extensionForMime("video/quicktime")).toBe(".mov");
   });
 
   it("tolerates parameters and casing", () => {
@@ -32,7 +34,7 @@ describe("extensionForMime", () => {
   });
 });
 
-describe("saveImage", () => {
+describe("saveAttachment", () => {
   beforeEach(() => {
     rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
   });
@@ -41,7 +43,7 @@ describe("saveImage", () => {
   });
 
   it("persists bytes under the attachments dir with a generated name", () => {
-    const saved = saveImage(Buffer.from("png-bytes"), "image/png");
+    const saved = saveAttachment(Buffer.from("png-bytes"), "image/png");
     expect(saved.path.startsWith(ATTACHMENTS_DIR)).toBe(true);
     expect(saved.path.endsWith(".png")).toBe(true);
     expect(saved.bytes).toBe(9);
@@ -53,7 +55,7 @@ describe("saveImage", () => {
   });
 
   it("round-trips through readAttachment with the right mime", () => {
-    const saved = saveImage(Buffer.from("gif!"), "image/gif");
+    const saved = saveAttachment(Buffer.from("gif!"), "image/gif");
     const name = saved.path.split(/[\\/]/).pop()!;
     const back = readAttachment(name);
     expect(back?.bytes.toString()).toBe("gif!");
@@ -61,9 +63,16 @@ describe("saveImage", () => {
   });
 
   it("rejects unsupported mimes, empty bodies, and oversize bodies", () => {
-    expect(() => saveImage(Buffer.from("x"), "image/svg+xml")).toThrow(/unsupported image type/);
-    expect(() => saveImage(Buffer.alloc(0), "image/png")).toThrow(/empty/);
-    expect(() => saveImage(Buffer.alloc(IMAGE_MAX_BYTES + 1), "image/png")).toThrow(/exceeds/);
+    expect(() => saveAttachment(Buffer.from("x"), "image/svg+xml")).toThrow(/unsupported attachment type/);
+    expect(() => saveAttachment(Buffer.alloc(0), "image/png")).toThrow(/empty/);
+    expect(() => saveAttachment(Buffer.alloc(IMAGE_MAX_BYTES + 1), "image/png")).toThrow(/exceeds/);
+    expect(() => saveAttachment(Buffer.alloc(VIDEO_MAX_BYTES + 1), "video/mp4")).toThrow(/exceeds/);
+  });
+
+  it("persists mp4 and mov videos under the attachments dir", () => {
+    const saved = saveAttachment(Buffer.from("ftyp"), "video/mp4");
+    expect(saved.path.endsWith(".mp4")).toBe(true);
+    expect(saved.mime).toBe("video/mp4");
   });
 });
 

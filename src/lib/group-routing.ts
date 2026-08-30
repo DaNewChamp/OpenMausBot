@@ -31,7 +31,7 @@ export function groupComposerHint(group: Group, members: Bot[]): string {
   if (group.dm) return "continue the conversation";
   const value = effectiveDefaultResponder(group, members);
   if (value.kind === "everyone") return "everyone responds";
-  if (value.kind === "mentions") return "@ to bring a bot in";
+  if (value.kind === "mentions") return "@mention a bot";
   return `${defaultResponderName(group, members) ?? "Lead"} responds`;
 }
 

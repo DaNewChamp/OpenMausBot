@@ -1,3 +1,4 @@
+import CompanionCore
 import Social
 import UIKit
 import UniformTypeIdentifiers
@@ -7,7 +8,6 @@ final class ShareViewController: SLComposeServiceViewController {
     override func isContentValid() -> Bool { true }
 
     override func didSelectPost() {
-        defer { extensionContext?.completeRequest(returningItems: nil) }
         var text = contentText?.trimmingCharacters(in: .whitespacesAndNewlines)
         var url: String?
         var imageData: Data?
@@ -49,6 +49,7 @@ final class ShareViewController: SLComposeServiceViewController {
             if let open = URL(string: "openmausbot://share") {
                 self.extensionContext?.open(open, completionHandler: nil)
             }
+            self.extensionContext?.completeRequest(returningItems: nil)
         }
     }
 }

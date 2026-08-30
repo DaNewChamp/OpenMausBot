@@ -46,7 +46,7 @@ public enum GroupRouting {
         case "everyone":
             return "everyone responds"
         case "mentions":
-            return "@ to bring a bot in"
+            return "@mention a bot"
         default:
             let name = members.first { $0.id == value.botId }?.name ?? "Lead"
             return "\(name) responds"
@@ -103,8 +103,22 @@ public enum GroupRouting {
     public static func mentionCandidates(query: String, members: [Member]) -> [Member] {
         let available = visible(members)
         let needle = query.lowercased()
-        if needle.isEmpty { return available }
-        return available.filter { $0.name.lowercased().hasPrefix(needle) }
+        let filtered: [Member]
+        if needle.isEmpty {
+            filtered = available
+        } else {
+            filtered = available.filter { $0.name.lowercased().hasPrefix(needle) }
+        }
+        return filtered.sorted { lhs, rhs in
+            let left = lhs.name.lowercased()
+            let right = rhs.name.lowercased()
+            if left == needle, right != needle { return true }
+            if right == needle, left != needle { return false }
+            if left.hasPrefix(needle), !right.hasPrefix(needle) { return true }
+            if right.hasPrefix(needle), !left.hasPrefix(needle) { return false }
+            if left != right { return left < right }
+            return lhs.id < rhs.id
+        }
     }
 
     public static func applyingMention(_ name: String, to draft: String) -> String {

@@ -175,6 +175,13 @@ struct ChatListView: View {
                             return
                         }
                     }
+                    if let spec = arguments.first(where: { $0.hasPrefix("-open-group=") }) {
+                        let id = String(spec.dropFirst("-open-group=".count))
+                        if let room = session.state.rooms.first(where: { $0.id == id }) {
+                            path.append(Chat.room(room))
+                            return
+                        }
+                    }
                     if let first = chats.first {
                         path.append(first.chat)
                     }

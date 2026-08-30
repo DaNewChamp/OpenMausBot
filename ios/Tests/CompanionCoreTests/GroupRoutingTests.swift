@@ -64,6 +64,16 @@ final class GroupRoutingTests: XCTestCase {
         XCTAssertEqual(GroupRouting.applyingMention("everyone", to: "@"), "@everyone ")
     }
 
+    func testMentionCandidatesRankPrefixMatchesAlphabetically() {
+        let members = [
+            GroupRouting.Member(id: "milind", name: "Milind", color: "orange"),
+            GroupRouting.Member(id: "atlas", name: "Atlas", color: "purple"),
+            GroupRouting.Member(id: "mira", name: "Mira", color: "cyan"),
+        ]
+        XCTAssertEqual(GroupRouting.mentionCandidates(query: "Mi", members: members).map(\.id), ["milind", "mira"])
+        XCTAssertEqual(GroupRouting.mentionCandidates(query: "", members: members).map(\.id), ["atlas", "milind", "mira"])
+    }
+
     func testMentionCandidatesKeepBotColor() {
         let colored = [
             GroupRouting.Member(id: "atlas", name: "Atlas", color: "purple"),
@@ -83,6 +93,6 @@ final class GroupRoutingTests: XCTestCase {
                 """.utf8
             )
         )
-        XCTAssertEqual(GroupRouting.groupComposerHint(room: room, members: members), "@ to bring a bot in")
+        XCTAssertEqual(GroupRouting.groupComposerHint(room: room, members: members), "@mention a bot")
     }
 }

@@ -888,6 +888,21 @@ describe("harness HTTP API", () => {
       body: Buffer.alloc(IMAGE_MAX_BYTES + 1),
     });
     expect(tooBig.status).toBe(413);
+
+    const video = await fetch(`${BASE}/api/attachments`, {
+      method: "POST",
+      headers: { "content-type": "video/mp4" },
+      body: new Uint8Array(Buffer.from("ftyp")),
+    });
+    expect(video.status).toBe(201);
+    const videoBody = (await video.json()) as { path: string; mime: string };
+    expect(videoBody.mime).toBe("video/mp4");
+    const rejectedVideo = await fetch(`${BASE}/api/attachments`, {
+      method: "POST",
+      headers: { "content-type": "video/webm" },
+      body: new Uint8Array(Buffer.from("webm")),
+    });
+    expect(rejectedVideo.status).toBe(400);
   });
 
   it("persists only app-owned bot avatars and supported crop shapes", async () => {

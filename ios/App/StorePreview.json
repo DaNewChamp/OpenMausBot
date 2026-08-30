@@ -146,7 +146,7 @@
       "threadId": "preview-thread-lab",
       "name": "Launch room",
       "memberIds": ["preview-scout", "preview-pixel", "preview-forge"],
-      "defaultResponder": { "kind": "lead", "botId": "preview-scout" },
+      "defaultResponder": { "kind": "mentions" },
       "bulletin": "Synthetic preview room for visual QA.",
       "unread": false,
       "pinned": true,

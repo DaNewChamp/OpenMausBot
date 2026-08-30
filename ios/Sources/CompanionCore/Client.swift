@@ -95,21 +95,57 @@ public enum AttachmentPath {
 /// engine can open the path, while the iOS transcript can remove the tag and
 /// render the same attachment through the authenticated serving route.
 public enum AttachmentPrompt {
-    public static func compose(text: String, paths: [String]) -> String {
-        let parts = [text.trimmingCharacters(in: .whitespacesAndNewlines)] + paths.compactMap { path in
-            guard AttachmentPath.servingPath(from: path) != nil else { return nil }
-            return "<attached-image path=\"\(escapeAttribute(path))\" />"
+    public struct Item: Equatable, Sendable {
+        public let path: String
+        public let mime: String
+
+        public init(path: String, mime: String) {
+            self.path = path
+            self.mime = mime
+        }
+    }
+
+    public static func compose(text: String, attachments: [Item]) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = [trimmed] + attachments.compactMap { item in
+            guard AttachmentPath.servingPath(from: item.path) != nil else { return nil }
+            let tag = item.mime.hasPrefix("video/") ? "attached-file" : "attached-image"
+            return "<\(tag) path=\"\(escapeAttribute(item.path))\" />"
         }
         return parts.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
+    public static func compose(text: String, paths: [String]) -> String {
+        compose(
+            text: text,
+            attachments: paths.map { Item(path: $0, mime: "image/png") }
+        )
+    }
+
     public static func split(_ text: String) -> (display: String, paths: [String]) {
-        let pattern = #"<attached-image\s+path="([^"]*)"\s*/?>"#
-        guard let expression = try? NSRegularExpression(pattern: pattern) else {
-            return (text, [])
-        }
+        let parsed = splitAll(text)
+        return (parsed.display, parsed.imagePaths + parsed.filePaths)
+    }
+
+    public static func splitAll(_ text: String) -> (display: String, imagePaths: [String], filePaths: [String]) {
+        var imagePaths: [String] = []
+        var filePaths: [String] = []
+        var display = extractTags(
+            pattern: #"<attached-image\s+path="([^"]*)"\s*/?>"#,
+            from: text,
+            into: &imagePaths
+        )
+        display = extractTags(
+            pattern: #"<attached-file\s+path="([^"]*)"\s*/?>"#,
+            from: display,
+            into: &filePaths
+        )
+        return (display.trimmingCharacters(in: .whitespacesAndNewlines), imagePaths, filePaths)
+    }
+
+    private static func extractTags(pattern: String, from text: String, into paths: inout [String]) -> String {
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return text }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        var paths: [String] = []
         let matches = expression.matches(in: text, range: range)
         for match in matches {
             guard match.numberOfRanges > 1,
@@ -118,8 +154,7 @@ public enum AttachmentPrompt {
             let path = decodeAttribute(String(text[pathRange]))
             if !path.isEmpty { paths.append(path) }
         }
-        let display = expression.stringByReplacingMatches(in: text, range: range, withTemplate: "")
-        return (display.trimmingCharacters(in: .whitespacesAndNewlines), paths)
+        return expression.stringByReplacingMatches(in: text, range: range, withTemplate: "")
     }
 
     public static func escapeAttribute(_ value: String) -> String {
@@ -1178,19 +1213,20 @@ public struct CompanionClient: Sendable {
     /// of a ten-megabyte photo in memory.
     public func uploadAttachment(data: Data, mime: String) async throws -> UploadedAttachment {
         guard let normalized = AttachmentPath.normalizedMIME(mime) else {
-            throw APIError.transport("Choose a PNG, JPEG, GIF, or WebP image.")
+            throw APIError.transport("Choose a PNG, JPEG, GIF, WebP, MP4, or MOV file.")
         }
         try AttachmentPath.validate(data: data, mime: normalized)
         var request = try makeRequest("POST", "/api/attachments")
         request.setValue(normalized, forHTTPHeaderField: "Content-Type")
         request.httpBody = data
         let response = try await send(request, as: AttachmentResponse.self)
+        let byteLimit = normalized.hasPrefix("video/") ? AttachmentPath.maxVideoBytes : AttachmentPath.maxBytes
         guard AttachmentPath.servingPath(from: response.path) != nil,
               response.bytes > 0,
-              response.bytes <= AttachmentPath.maxBytes,
+              response.bytes <= byteLimit,
               AttachmentPath.normalizedMIME(response.mime) != nil
         else {
-            throw APIError.transport("The uploaded image could not be used.")
+            throw APIError.transport("The uploaded attachment could not be used.")
         }
         return UploadedAttachment(path: response.path, mime: response.mime, bytes: response.bytes)
     }

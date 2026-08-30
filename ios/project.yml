@@ -150,7 +150,9 @@ targets:
     platform: iOS
     sources:
       - path: Share
-      - path: Shared/ShareInbox.swift
+    dependencies:
+      - package: CompanionCore
+        product: CompanionCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.posival.openmausmobile.share

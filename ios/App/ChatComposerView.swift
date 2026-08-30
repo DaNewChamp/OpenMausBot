@@ -2,6 +2,7 @@ import CompanionCore
 import PhotosUI
 import SwiftUI
 import UIKit
+import AVFoundation
 import UniformTypeIdentifiers
 
 /// Composer: attachments, mentions, slash HUD, dictation, send/stop.
@@ -313,7 +314,7 @@ struct ChatComposerView: View {
         PhotosPicker(
             selection: $photoItems,
             maxSelectionCount: max(1, Self.maxAttachmentCount - selectedAttachments.count),
-            matching: .images
+            matching: .any(of: [.images, .videos])
         ) {
             Label("Photo library", systemImage: "photo.on.rectangle")
         }
@@ -344,12 +345,22 @@ struct ChatComposerView: View {
                     ForEach(selectedAttachments) { attachment in
                         ZStack(alignment: .topTrailing) {
                             Group {
-                                if let image = UIImage(data: attachment.data) {
+                                if attachment.isVideo,
+                                   let thumbnail = VideoAttachmentThumbnail.sync(from: attachment.data, mime: attachment.mime) {
+                                    ZStack {
+                                        Image(uiImage: thumbnail)
+                                            .resizable()
+                                            .scaledToFill()
+                                        Image(systemName: "play.circle.fill")
+                                            .font(.system(size: 24, weight: .semibold))
+                                            .foregroundStyle(.white.opacity(0.92))
+                                    }
+                                } else if let image = UIImage(data: attachment.data) {
                                     Image(uiImage: image)
                                         .resizable()
                                         .scaledToFill()
                                 } else {
-                                    Image(systemName: "photo")
+                                    Image(systemName: attachment.isVideo ? "video" : "photo")
                                         .font(.system(size: 20, weight: .medium))
                                         .foregroundStyle(Color.secondary)
                                 }
@@ -389,7 +400,7 @@ struct ChatComposerView: View {
                 .padding(.vertical, 3)
             }
             .frame(height: 74)
-            .accessibilityLabel("Selected images")
+            .accessibilityLabel("Selected attachments")
         }
     }
 

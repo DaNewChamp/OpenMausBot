@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { roomRespondersForComposer } from "./group-routing";
+import { groupComposerHint, roomRespondersForComposer } from "./group-routing";
 
 describe("roomRespondersForComposer", () => {
   const members = [
@@ -25,6 +25,10 @@ describe("roomRespondersForComposer", () => {
     expect(roomRespondersForComposer("hello", members, { defaultResponder: { kind: "mentions" } })).toEqual([]);
     expect(roomRespondersForComposer("@everyone hello", members, { defaultResponder: { kind: "mentions" } })).toEqual(
       members,
+    );
+  it("mentions-only rooms use the composer hint copy", () => {
+    expect(groupComposerHint({ dm: false, defaultResponder: { kind: "mentions" } }, members)).toBe(
+      "@mention a bot",
     );
   });
 });

@@ -17,6 +17,8 @@ import CompanionCore
 // lives.
 import UIKit
 import AVFoundation
+import AVKit
+import QuickLook
 import PhotosUI
 import UniformTypeIdentifiers
 
@@ -115,7 +117,7 @@ struct ChatView: View {
             }
             .fileImporter(
                 isPresented: $showingFileImporter,
-                allowedContentTypes: [.image],
+                allowedContentTypes: Self.importerContentTypes,
                 allowsMultipleSelection: true
             ) { result in
                 switch result {
@@ -400,6 +402,9 @@ struct ChatView: View {
     // MARK: - Attachments
 
     private static let maxAttachmentCount = 10
+    private static let importerContentTypes: [UTType] = [
+        .image, .png, .jpeg, .gif, .mpeg4Movie, .quickTimeMovie,
+    ] + [UTType(filenameExtension: "webp")].compactMap { $0 }
 
     private func appendSharedImage(_ data: Data) async {
         appendAttachment(data: data, mime: "image/jpeg", name: "Shared photo")
@@ -438,8 +443,8 @@ struct ChatView: View {
                     throw APIError.transport("That photo could not be read.")
                 }
                 let suggested = item.supportedContentTypes.first?.preferredMIMEType
-                guard let mime = Self.imageMIME(data, suggested: suggested) else {
-                    throw APIError.transport("Choose a PNG, JPEG, GIF, or WebP image.")
+                guard let mime = Self.attachmentMIME(data, suggested: suggested) else {
+                    throw APIError.transport("Choose a PNG, JPEG, GIF, WebP, MP4, or MOV file.")
                 }
                 appendAttachment(data: data, mime: mime, name: "Photo")
             } catch {
@@ -461,8 +466,8 @@ struct ChatView: View {
             do {
                 let data = try Data(contentsOf: url, options: [.mappedIfSafe])
                 let suggested = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-                guard let mime = Self.imageMIME(data, suggested: suggested) else {
-                    throw APIError.transport("Choose a PNG, JPEG, GIF, or WebP image.")
+                guard let mime = Self.attachmentMIME(data, suggested: suggested) else {
+                    throw APIError.transport("Choose a PNG, JPEG, GIF, WebP, MP4, or MOV file.")
                 }
                 appendAttachment(data: data, mime: mime, name: url.deletingPathExtension().lastPathComponent)
             } catch {
@@ -477,6 +482,16 @@ struct ChatView: View {
             return
         }
         appendAttachment(data: data, mime: "image/jpeg", name: "Camera photo")
+    }
+
+    private static func attachmentMIME(_ data: Data, suggested: String? = nil) -> String? {
+        imageMIME(data, suggested: suggested) ?? videoMIME(suggested: suggested)
+    }
+
+    private static func videoMIME(suggested: String?) -> String? {
+        guard let mime = AttachmentPath.normalizedMIME(suggested ?? ""),
+              mime.hasPrefix("video/") else { return nil }
+        return mime
     }
 
     private static func imageMIME(_ data: Data, suggested: String? = nil) -> String? {
@@ -505,16 +520,18 @@ struct ChatView: View {
         return AttachmentPath.normalizedMIME(suggested ?? "")
     }
 
-    private func uploadSelectedAttachments() async -> [String]? {
+    private func uploadSelectedAttachments() async -> [AttachmentPrompt.Item]? {
         guard !selectedAttachments.isEmpty else { return [] }
         isUploadingAttachments = true
         defer { isUploadingAttachments = false }
         let ids = selectedAttachments.map(\.id)
-        var paths: [String] = []
+        var items: [AttachmentPrompt.Item] = []
         for id in ids {
             guard let index = selectedAttachments.firstIndex(where: { $0.id == id }) else { continue }
             if let uploaded = selectedAttachments[index].uploaded {
-                paths.append(uploaded.path)
+                items.append(
+                    AttachmentPrompt.Item(path: uploaded.path, mime: selectedAttachments[index].mime)
+                )
                 continue
             }
             do {
@@ -525,7 +542,9 @@ struct ChatView: View {
                 guard let currentIndex = selectedAttachments.firstIndex(where: { $0.id == id }) else { continue }
                 selectedAttachments[currentIndex].uploaded = uploaded
                 selectedAttachments[currentIndex].error = nil
-                paths.append(uploaded.path)
+                items.append(
+                    AttachmentPrompt.Item(path: uploaded.path, mime: selectedAttachments[currentIndex].mime)
+                )
             } catch {
                 if let currentIndex = selectedAttachments.firstIndex(where: { $0.id == id }) {
                     selectedAttachments[currentIndex].error = error.localizedDescription
@@ -534,13 +553,16 @@ struct ChatView: View {
                 return nil
             }
         }
-        return paths
+        return items
     }
 
     private func removeAttachment(_ id: UUID) {
         guard !isUploadingAttachments else { return }
         selectedAttachments.removeAll { $0.id == id }
-        if selectedAttachments.isEmpty { attachmentError = nil }
+        if selectedAttachments.isEmpty {
+            attachmentError = nil
+            session.discardShareStaging()
+        }
     }
 
     private var selectedBusySendDefault: BusySendDefault {
@@ -612,8 +634,8 @@ struct ChatView: View {
             let prompt: String
             if selectedAttachments.isEmpty {
                 prompt = textWithReply
-            } else if let paths = await uploadSelectedAttachments() {
-                prompt = AttachmentPrompt.compose(text: textWithReply, paths: paths)
+            } else if let items = await uploadSelectedAttachments() {
+                prompt = AttachmentPrompt.compose(text: textWithReply, attachments: items)
             } else {
                 composerRequestGate.end()
                 return
@@ -839,6 +861,8 @@ struct PendingImageAttachment: Identifiable, Equatable {
     var uploaded: UploadedAttachment?
     var error: String?
 
+    var isVideo: Bool { mime.hasPrefix("video/") }
+
     init(data: Data, mime: String, name: String) {
         self.id = UUID()
         self.data = data
@@ -910,10 +934,10 @@ struct TextBubble: View {
     @Environment(\.conversationTypography) private var typography
     @EnvironmentObject private var session: Session
 
-    private var parsedAttachments: (display: String, paths: [String])? {
+    private var parsedAttachments: (display: String, imagePaths: [String], filePaths: [String])? {
         guard message.role == .user, let text = message.text else { return nil }
-        let parsed = AttachmentPrompt.split(text)
-        return parsed.paths.isEmpty ? nil : parsed
+        let parsed = AttachmentPrompt.splitAll(text)
+        return parsed.imagePaths.isEmpty && parsed.filePaths.isEmpty ? nil : parsed
     }
 
     private var parsedDiff: (filename: String, diff: String)? {
@@ -1016,7 +1040,10 @@ struct TextBubble: View {
                     SQLResultTableView(columns: table.headers, rows: table.rows)
                 } else if mine {
                     if let parsedAttachments {
-                        TranscriptAttachmentGallery(paths: parsedAttachments.paths)
+                        TranscriptAttachmentGallery(
+                            imagePaths: parsedAttachments.imagePaths,
+                            filePaths: parsedAttachments.filePaths
+                        )
                         if !parsedAttachments.display.isEmpty {
                             Text(parsedAttachments.display)
                                 .font(typography.body)
@@ -1071,30 +1098,55 @@ struct TextBubble: View {
 /// phone never loads those paths as URLs. Each one is resolved by Session
 /// through the authenticated, same-origin attachment route.
 private struct TranscriptAttachmentGallery: View {
-    let paths: [String]
+    let imagePaths: [String]
+    let filePaths: [String]
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var images: [String: UIImage] = [:]
     @State private var failed: Set<String> = []
+    @State private var previewItem: PreviewAttachmentItem?
+
+    private struct PreviewAttachmentItem: Identifiable {
+        let id = UUID()
+        let url: URL
+    }
+
+    private var paths: [String] { imagePaths + filePaths }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(paths, id: \.self) { path in
-                    Group {
-                        if let image = images[path] {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                        } else if failed.contains(path) {
-                            Image(systemName: "photo.badge.exclamationmark")
-                                .font(.system(size: 22, weight: .medium))
-                                .foregroundStyle(Color.secondary)
-                        } else {
-                            ProgressView()
-                                .controlSize(.small)
+                    let isVideo = Self.isVideoPath(path)
+                    Button {
+                        guard isVideo else { return }
+                        Task { await openVideo(path: path) }
+                    } label: {
+                        ZStack {
+                            Group {
+                                if let image = images[path] {
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .scaledToFill()
+                                } else if failed.contains(path) {
+                                    Image(systemName: isVideo ? "video.slash" : "photo.badge.exclamationmark")
+                                        .font(.system(size: 22, weight: .medium))
+                                        .foregroundStyle(Color.secondary)
+                                } else {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+                            }
+                            if isVideo, images[path] != nil {
+                                Image(systemName: "play.circle.fill")
+                                    .font(.system(size: 34, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.92))
+                                    .shadow(radius: 4)
+                            }
                         }
                     }
+                    .buttonStyle(.plain)
+                    .disabled(!isVideo || failed.contains(path))
                     .frame(width: 156, height: 116)
                     .background(Color.black.opacity(0.16))
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -1102,7 +1154,11 @@ private struct TranscriptAttachmentGallery: View {
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .stroke(Color.primary.opacity(0.14), lineWidth: 1)
                     }
-                    .accessibilityLabel(failed.contains(path) ? "Attachment unavailable" : "Attached image")
+                    .accessibilityLabel(
+                        failed.contains(path)
+                            ? "Attachment unavailable"
+                            : isVideo ? "Attached video" : "Attached image"
+                    )
                 }
             }
             .padding(.vertical, 2)
@@ -1111,14 +1167,104 @@ private struct TranscriptAttachmentGallery: View {
         .task(id: paths) {
             for path in paths {
                 guard images[path] == nil, !failed.contains(path), !Task.isCancelled else { continue }
-                guard let data = await session.attachmentData(path: path), let image = UIImage(data: data) else {
+                guard let data = await session.attachmentData(path: path) else {
                     failed.insert(path)
                     continue
                 }
-                images[path] = image
+                if Self.isVideoPath(path) {
+                    if let thumbnail = await VideoAttachmentThumbnail.make(from: data, path: path) {
+                        images[path] = thumbnail
+                    } else {
+                        failed.insert(path)
+                    }
+                } else if let image = UIImage(data: data) {
+                    images[path] = image
+                } else {
+                    failed.insert(path)
+                }
             }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: images.keys.sorted())
+        .sheet(item: $previewItem) { item in
+            AttachmentQuickLookPreview(url: item.url)
+        }
+    }
+
+    private func openVideo(path: String) async {
+        guard let data = await session.attachmentData(path: path) else { return }
+        let ext = URL(fileURLWithPath: path).pathExtension.isEmpty ? "mp4" : URL(fileURLWithPath: path).pathExtension
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vbot-preview-\(UUID().uuidString).\(ext)")
+        do {
+            try data.write(to: url, options: .atomic)
+            previewItem = PreviewAttachmentItem(url: url)
+        } catch {
+            failed.insert(path)
+        }
+    }
+
+    private static func isVideoPath(_ path: String) -> Bool {
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+        return ext == "mp4" || ext == "mov"
+    }
+}
+
+private struct AttachmentQuickLookPreview: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> QLPreviewController {
+        let controller = QLPreviewController()
+        controller.dataSource = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ controller: QLPreviewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
+
+    final class Coordinator: NSObject, QLPreviewControllerDataSource {
+        let url: URL
+        init(url: URL) { self.url = url }
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
+            url as NSURL
+        }
+    }
+}
+
+enum VideoAttachmentThumbnail {
+    static func sync(from data: Data, mime: String) -> UIImage? {
+        let ext = mime.contains("quicktime") ? "mov" : "mp4"
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vbot-thumb-\(UUID().uuidString).\(ext)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        do {
+            try data.write(to: url, options: .atomic)
+            let asset = AVURLAsset(url: url)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            let cgImage = try generator.copyCGImage(at: .zero, actualTime: nil)
+            return UIImage(cgImage: cgImage)
+        } catch {
+            return nil
+        }
+    }
+
+    static func make(from data: Data, path: String) async -> UIImage? {
+        let ext = URL(fileURLWithPath: path).pathExtension.isEmpty ? "mp4" : URL(fileURLWithPath: path).pathExtension
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vbot-thumb-\(UUID().uuidString).\(ext)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        do {
+            try data.write(to: url, options: .atomic)
+            let asset = AVURLAsset(url: url)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            let cgImage = try generator.copyCGImage(at: .zero, actualTime: nil)
+            return UIImage(cgImage: cgImage)
+        } catch {
+            return nil
+        }
     }
 }
 

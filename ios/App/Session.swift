@@ -86,6 +86,9 @@ final class Session: ObservableObject {
     /// next opened chat composer to absorb.
     @Published var stagedComposerText: String?
     @Published var stagedShareImageData: Data?
+    /// Prevents duplicate staging when `onAppear`, `scenePhase`, and
+    /// `openmausbot://share` all fire during one foreground activation.
+    private var shareInboxReadyForActivation = true
 
     private var client: CompanionClient?
     /// The device token, kept in memory so the client can be rebuilt when the
@@ -1354,8 +1357,19 @@ final class Session: ObservableObject {
         stagedComposerText = trimmed
     }
 
+    func resetShareInboxActivation() {
+        shareInboxReadyForActivation = true
+    }
+
+    func discardShareStaging() {
+        stagedShareImageData = nil
+        ShareInbox.clearPending()
+    }
+
     func consumeShareInbox() {
+        guard shareInboxReadyForActivation else { return }
         guard let consumed = ShareInbox.consume() else { return }
+        shareInboxReadyForActivation = false
         if let text = consumed.payload.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
             stageComposerText(text)
         } else if let url = consumed.payload.url?.trimmingCharacters(in: .whitespacesAndNewlines), !url.isEmpty {

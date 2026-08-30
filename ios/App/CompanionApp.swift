@@ -36,6 +36,7 @@ struct CompanionApp: App {
                         Task { await session.refreshNotificationAuthorization() }
                     case .background:
                         session.setAppActive(false)
+                        session.resetShareInboxActivation()
                         liveActivities.setBackground(true)
                         session.linger()
                     case .inactive:
