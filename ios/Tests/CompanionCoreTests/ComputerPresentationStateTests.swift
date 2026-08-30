@@ -259,9 +259,9 @@ final class ComputerPresentationStateTests: XCTestCase {
         let idleVps = bot(computer: "cloud", cloudBackend: "vps", busy: false)
         XCTAssertEqual(
             ComputerPresentationState(bot: idleVps),
-            .unavailable(message: ComputerPresentationState.idleWaitingMessage)
+            .unavailable(message: "Cloud runs on your VPS. Send a message to start a turn, then watch the desktop here.")
         )
-        XCTAssertTrue(ComputerPresentationState(bot: idleVps).isIdleWaiting)
+        XCTAssertFalse(ComputerPresentationState(bot: idleVps).isIdleWaiting)
     }
 
     func testStreamLoadFailureIgnoresWatchTimeoutWhenIdle() {
@@ -283,7 +283,7 @@ final class ComputerPresentationStateTests: XCTestCase {
                     wantsScreenPreview: false
                 )
             ),
-            .unavailable(message: ComputerPresentationState.idleWaitingMessage)
+            .unavailable(message: "Cloud runs on your VPS. Send a message to start a turn, then watch the desktop here.")
         )
     }
 

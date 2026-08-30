@@ -1,7 +1,7 @@
-V Bot build 35: group setup, hidden chats, haptics, and computer paste.
+V Bot build 55: smoother agent conversations and safer computer control.
 
-• Edit group instructions and choose who responds by default
-• Hide chats from the roster and manage them under Hidden chats
-• Mark chats unread from the list; haptics and sounds toggles in Settings
-• Save computer frames to Photos; paste iPhone clipboard into the composer
-• Live Activities linger honestly while the app was recently open
+• Stream replies smoothly without duplicate or late text
+• Keep the conversation following new work while you remain near the bottom
+• Keep the composer visible above the keyboard
+• Switch agent models and reasoning from chat
+• Stop or steer active work and control supported Local VMs
