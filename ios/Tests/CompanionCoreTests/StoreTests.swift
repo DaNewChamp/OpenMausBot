@@ -620,12 +620,31 @@ final class StreamingTests: XCTestCase {
     }
 
     func testReplayedDeltasWithoutEventIdsDoNotDuplicateTheLiveTail() {
+        // Without event ids, a reconnect replay is the same bytes as live
+        // tokens. The resumed hello is the catch-up signal — not a suffix
+        // match on the held string, which would also swallow "baa"+"aa".
         var state = CompanionState()
         state.apply(delta("Hello"))
         state.apply(delta(" world"))
+        state.apply(.hello(cursor: "abc12345:2", resumed: true))
         state.apply(delta("Hello"))
         state.apply(delta(" world"))
         XCTAssertEqual(state.streaming["t1"], "Hello world")
+    }
+
+    func testASuffixShapedIncrementAppendsDuringALiveTurn() {
+        var state = CompanionState()
+        state.apply(delta("baa"))
+        state.apply(delta("aa"))
+        XCTAssertEqual(state.streaming["t1"], "baaaa")
+    }
+
+    func testASuffixShapedIncrementStillAppendsAfterAResumedHello() {
+        var state = CompanionState()
+        state.apply(delta("baa"))
+        state.apply(.hello(cursor: "abc12345:1", resumed: true))
+        state.apply(delta("aa"))
+        XCTAssertEqual(state.streaming["t1"], "baaaa")
     }
 
     func testAReconnectSnapshotReplacesAHeldPrefix() {
@@ -734,10 +753,21 @@ final class StreamingTests: XCTestCase {
         XCTAssertEqual(state.liveTailPresentation(forThread: "t1"), .none)
     }
 
-    func testReconnectReplayDropsAnExactRepeatedTokenDuringStreaming() {
+    func testIdenticalConsecutiveTokensAppendWhenNotReplaying() {
+        // The same token twice is a real increment until a resumed hello
+        // (or event id) says the second copy is catch-up.
         var state = CompanionState()
         state.apply(delta("Hello"))
         state.apply(delta(" world"))
+        state.apply(delta(" world"))
+        XCTAssertEqual(state.streaming["t1"], "Hello world world")
+    }
+
+    func testAResumedHelloDropsAReplayedLastTokenWithoutEventIds() {
+        var state = CompanionState()
+        state.apply(delta("Hello"))
+        state.apply(delta(" world"))
+        state.apply(.hello(cursor: "abc12345:2", resumed: true))
         state.apply(delta(" world"))
         XCTAssertEqual(state.streaming["t1"], "Hello world")
     }

@@ -51,8 +51,17 @@ public struct CompanionState: Sendable {
     /// Threads where reconnect replay of the settled tail must be dropped.
     /// Cleared on `turn.started` so a new turn can reuse the same prefix.
     var settledReplayGuard: Set<String> = []
-    /// Last accepted delta per thread for exact token replay without event ids.
+    /// Last accepted delta per thread+kind. Used only while a resumed hello
+    /// is catching up — an isolated repeat of the last token is otherwise a
+    /// real consecutive increment (`" world"` + `" world"`).
     var lastStreamDelta: [String: String] = [:]
+    /// Set by `hello(resumed: true)`. Catch-up replay of the live tail is
+    /// otherwise the same bytes as live tokens when event ids are missing.
+    var reconnectReplayActive = false
+    /// Threads that have accepted new live text since the last resumed hello.
+    var liveCaughtUp: Set<String> = []
+    /// Prefix of the held tail already matched during reconnect catch-up.
+    var replayedStreamPrefix: [String: String] = [:]
 
     public init() {}
 
@@ -166,6 +175,9 @@ public struct CompanionState: Sendable {
         seenStreamEventIds.removeAll()
         settledReplayGuard.removeAll()
         lastStreamDelta.removeAll()
+        replayedStreamPrefix.removeAll()
+        liveCaughtUp.removeAll()
+        reconnectReplayActive = false
         streamSealed.removeAll()
         for bot in bots where bot.busy != true {
             streamSealed.insert(bot.threadId)
@@ -211,11 +223,15 @@ public struct CompanionState: Sendable {
 
     public mutating func apply(_ frame: Frame) {
         switch frame {
-        case .hello:
+        case let .hello(_, resumed):
             // A hello describes the server's latest position, not one this
-            // client has folded. Session commits it only after a cold
-            // hydration succeeds; resumed streams advance frame by frame.
-            break
+            // client has folded. Session commits the cursor only after a
+            // cold hydration succeeds; resumed streams advance frame by
+            // frame. The resumed flag is still folded: without event ids,
+            // catch-up tokens are indistinguishable from live increments.
+            reconnectReplayActive = resumed
+            liveCaughtUp.removeAll()
+            replayedStreamPrefix.removeAll()
 
         case let .message(threadId, message):
             append(message, to: threadId)
@@ -237,7 +253,7 @@ public struct CompanionState: Sendable {
                 streamSealed.remove(threadId)
                 settledReplayGuard.remove(threadId)
                 seenStreamEventIds[threadId] = []
-                lastStreamDelta.removeValue(forKey: threadId)
+                clearLiveFold(for: threadId)
             }
 
         case let .messagePatch(threadId, message):
@@ -304,7 +320,7 @@ public struct CompanionState: Sendable {
                 streamSealed.remove(threadId)
                 settledReplayGuard.remove(threadId)
                 seenStreamEventIds.removeValue(forKey: threadId)
-                lastStreamDelta.removeValue(forKey: threadId)
+                clearLiveFold(for: threadId)
                 pinnedOverrides.remove(for: "bot:\(botId)")
                 appearanceOverrides.remove(for: "bot:\(botId)")
                 bots.remove(at: index)
@@ -338,7 +354,7 @@ public struct CompanionState: Sendable {
                 streamSealed.remove(threadId)
                 settledReplayGuard.remove(threadId)
                 seenStreamEventIds.removeValue(forKey: threadId)
-                lastStreamDelta.removeValue(forKey: threadId)
+                clearLiveFold(for: threadId)
                 pinnedOverrides.remove(for: "room:\(groupId)")
                 rooms.remove(at: index)
             }
@@ -376,15 +392,16 @@ public struct CompanionState: Sendable {
             if let eventId = event.eventId, rememberDuplicate(eventId, thread: event.threadId) {
                 return
             }
-            guard shouldAcceptDelta(delta, on: event.threadId) else { return }
-            lastStreamDelta[event.threadId] = delta
+            guard shouldAcceptDelta(delta, on: event.threadId, kind: event.streamKind) else { return }
             switch event.streamKind {
             case "assistant_text":
+                recordAcceptedLiveDelta(delta, on: event.threadId, kind: event.streamKind)
                 streaming[event.threadId] = StreamDeltaMerge.combining(
                     existing: streaming[event.threadId],
                     delta: delta
                 )
             case "reasoning_text":
+                recordAcceptedLiveDelta(delta, on: event.threadId, kind: event.streamKind)
                 reasoning[event.threadId] = StreamDeltaMerge.combining(
                     existing: reasoning[event.threadId],
                     delta: delta
@@ -398,7 +415,6 @@ public struct CompanionState: Sendable {
             streamSealed.remove(event.threadId)
             settledReplayGuard.remove(event.threadId)
             seenStreamEventIds[event.threadId] = []
-            lastStreamDelta.removeValue(forKey: event.threadId)
             clearStream(event.threadId)
         case "turn.completed", "turn.failed", "turn.aborted":
             clearStream(event.threadId)
@@ -420,18 +436,37 @@ public struct CompanionState: Sendable {
     public mutating func clearStream(_ threadId: String) {
         streaming.removeValue(forKey: threadId)
         reasoning.removeValue(forKey: threadId)
-        lastStreamDelta.removeValue(forKey: threadId)
+        clearLiveFold(for: threadId)
     }
 
-    private mutating func shouldAcceptDelta(_ delta: String, on threadId: String) -> Bool {
+    private mutating func clearLiveFold(for threadId: String) {
+        lastStreamDelta.removeValue(forKey: Self.streamFoldKey(threadId, "assistant_text"))
+        lastStreamDelta.removeValue(forKey: Self.streamFoldKey(threadId, "reasoning_text"))
+        replayedStreamPrefix.removeValue(forKey: Self.streamFoldKey(threadId, "assistant_text"))
+        replayedStreamPrefix.removeValue(forKey: Self.streamFoldKey(threadId, "reasoning_text"))
+        liveCaughtUp.remove(threadId)
+    }
+
+    private mutating func recordAcceptedLiveDelta(_ delta: String, on threadId: String, kind: String?) {
+        let key = Self.streamFoldKey(threadId, kind)
+        lastStreamDelta[key] = delta
+        replayedStreamPrefix.removeValue(forKey: key)
+        liveCaughtUp.insert(threadId)
+    }
+
+    private static func streamFoldKey(_ threadId: String, _ kind: String?) -> String {
+        "\(threadId)\u{1e}\(kind ?? "")"
+    }
+
+    private mutating func shouldAcceptDelta(_ delta: String, on threadId: String, kind: String?) -> Bool {
         let busy = bot(forThread: threadId)?.busy == true
             || room(forThread: threadId)?.busyBotId != nil
-        if lastStreamDelta[threadId] == delta {
-            return false
-        }
         // Replayed tokens that already live in the settled bubble must not
         // unseal the turn — that is the duplicate-tail reconnect bug.
         if isReplayOfSettledReply(delta, on: threadId) {
+            return false
+        }
+        if isReconnectReplayOfLiveTail(delta, on: threadId, kind: kind) {
             return false
         }
         if streamSealed.contains(threadId) {
@@ -440,6 +475,53 @@ public struct CompanionState: Sendable {
             return true
         }
         return true
+    }
+
+    /// Catch-up without event ids. A resumed hello is the only signal that
+    /// an isolated last-token repeat is replay rather than a real consecutive
+    /// increment. Prefix restart of the held tail is the same catch-up.
+    private mutating func isReconnectReplayOfLiveTail(
+        _ delta: String,
+        on threadId: String,
+        kind: String?
+    ) -> Bool {
+        let key = Self.streamFoldKey(threadId, kind)
+        let held: String
+        switch kind {
+        case "reasoning_text":
+            held = reasoning[threadId] ?? ""
+        default:
+            held = streaming[threadId] ?? ""
+        }
+
+        if !held.isEmpty, held == delta {
+            return true
+        }
+
+        if let walked = replayedStreamPrefix[key] {
+            let next = walked + delta
+            if !held.isEmpty, held.hasPrefix(next) {
+                if next == held {
+                    replayedStreamPrefix.removeValue(forKey: key)
+                } else {
+                    replayedStreamPrefix[key] = next
+                }
+                return true
+            }
+            replayedStreamPrefix.removeValue(forKey: key)
+        }
+
+        let catchingUp = reconnectReplayActive && !liveCaughtUp.contains(threadId)
+        guard catchingUp else { return false }
+
+        if !held.isEmpty, held.hasPrefix(delta), held != delta {
+            replayedStreamPrefix[key] = delta
+            return true
+        }
+        if lastStreamDelta[key] == delta {
+            return true
+        }
+        return false
     }
 
     /// Reconnect replay of a prefix already committed as a bot text message.

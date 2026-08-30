@@ -557,6 +557,9 @@ final class Session: ObservableObject {
                             state.resetCursor(cursor)
                             recordHydration(resumed: resumed)
                         }
+                        var next = state
+                        next.apply(frame.frame)
+                        state = next
                         status = .live
                         // Remember what actually carried the stream for
                         // display and legacy ordering. Typed routes retain
