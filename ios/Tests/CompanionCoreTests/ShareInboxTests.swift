@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import CompanionCore
 
@@ -11,11 +12,13 @@ final class ShareInboxTests: XCTestCase {
         try? FileManager.default.createDirectory(at: testRoot, withIntermediateDirectories: true)
         ShareInbox.testRootURL = testRoot
         ShareInbox.testDefaultsSuite = "ShareInboxTests.\(UUID().uuidString)"
-        ShareInbox.clearPending()
+        ShareInbox.testForceLockUnavailable = false
+        try? ShareInbox.clearPending()
     }
 
     override func tearDown() {
-        ShareInbox.clearPending()
+        ShareInbox.testForceLockUnavailable = false
+        try? ShareInbox.clearPending()
         ShareInbox.testRootURL = nil
         ShareInbox.testDefaultsSuite = nil
         try? FileManager.default.removeItem(at: testRoot)
@@ -26,29 +29,29 @@ final class ShareInboxTests: XCTestCase {
         let image = Data([0xFF, 0xD8, 0xFF, 0xD9])
         try ShareInbox.save(text: "hello", url: "https://example.com", imageData: image)
 
-        XCTAssertTrue(ShareInbox.hasPending())
+        XCTAssertTrue(try ShareInbox.hasPending())
 
-        let consumed = try XCTUnwrap(ShareInbox.consume())
+        let consumed = try XCTUnwrap(try ShareInbox.consume())
         XCTAssertEqual(consumed.payload.text, "hello")
         XCTAssertEqual(consumed.payload.url, "https://example.com")
         XCTAssertEqual(consumed.imageData, image)
-        XCTAssertFalse(ShareInbox.hasPending())
-        XCTAssertNil(ShareInbox.consume())
+        XCTAssertFalse(try ShareInbox.hasPending())
+        XCTAssertNil(try ShareInbox.consume())
         XCTAssertEqual(inboxJPEGNames(), [])
     }
 
     func testClearPendingRemovesPayloadWithoutConsumingIntoApp() throws {
         try ShareInbox.save(text: "draft", imageData: Data([1, 2, 3]))
-        ShareInbox.clearPending()
-        XCTAssertFalse(ShareInbox.hasPending())
-        XCTAssertNil(ShareInbox.consume())
+        try ShareInbox.clearPending()
+        XCTAssertFalse(try ShareInbox.hasPending())
+        XCTAssertNil(try ShareInbox.consume())
         XCTAssertEqual(inboxJPEGNames(), [])
     }
 
     func testSecondSaveReplacesFirstPayload() throws {
         try ShareInbox.save(text: "first")
         try ShareInbox.save(url: "https://replaced.test")
-        let consumed = try XCTUnwrap(ShareInbox.consume())
+        let consumed = try XCTUnwrap(try ShareInbox.consume())
         XCTAssertNil(consumed.payload.text)
         XCTAssertEqual(consumed.payload.url, "https://replaced.test")
     }
@@ -58,7 +61,7 @@ final class ShareInboxTests: XCTestCase {
         XCTAssertEqual(inboxJPEGNames().count, 1)
         try ShareInbox.save(url: "https://replaced.test")
         XCTAssertEqual(inboxJPEGNames(), [])
-        let consumed = try XCTUnwrap(ShareInbox.consume())
+        let consumed = try XCTUnwrap(try ShareInbox.consume())
         XCTAssertNil(consumed.payload.text)
         XCTAssertNil(consumed.imageData)
         XCTAssertEqual(consumed.payload.url, "https://replaced.test")
@@ -73,7 +76,7 @@ final class ShareInboxTests: XCTestCase {
         try Data([9]).write(to: outside)
         defer { try? FileManager.default.removeItem(at: outside) }
 
-        let consumed = try XCTUnwrap(ShareInbox.consume())
+        let consumed = try XCTUnwrap(try ShareInbox.consume())
         XCTAssertEqual(consumed.payload.text, "hi")
         XCTAssertNil(consumed.imageData)
         XCTAssertEqual(try Data(contentsOf: outside), Data([9]))
@@ -98,8 +101,31 @@ final class ShareInboxTests: XCTestCase {
         }
         XCTAssertEqual(group.wait(timeout: .now() + 5), .success)
         XCTAssertLessThanOrEqual(inboxJPEGNames().count, 1)
-        _ = ShareInbox.consume()
+        _ = try ShareInbox.consume()
         XCTAssertEqual(inboxJPEGNames(), [])
+    }
+
+    func testSaveThrowsWhenLockUnavailableFlagSet() {
+        ShareInbox.testForceLockUnavailable = true
+        XCTAssertThrowsError(try ShareInbox.save(text: "blocked")) { error in
+            XCTAssertEqual(error as? ShareInboxError, .lockUnavailable)
+        }
+    }
+
+    func testSaveThrowsWhenCrossProcessLockHeld() throws {
+        let lockURL = testRoot.appendingPathComponent(".share-inbox.lock")
+        FileManager.default.createFile(atPath: lockURL.path, contents: nil)
+        let fd = open(lockURL.path, O_RDWR)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        XCTAssertEqual(flock(fd, LOCK_EX | LOCK_NB), 0)
+        defer {
+            flock(fd, LOCK_UN)
+            close(fd)
+        }
+
+        XCTAssertThrowsError(try ShareInbox.save(text: "blocked")) { error in
+            XCTAssertEqual(error as? ShareInboxError, .lockUnavailable)
+        }
     }
 
     private func inboxJPEGNames() -> [String] {

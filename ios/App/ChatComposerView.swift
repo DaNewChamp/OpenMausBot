@@ -136,7 +136,8 @@ struct ChatComposerView: View {
                     .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 4)
-                    .accessibilityLabel("Attachment error")
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(AttachmentComposerCopy.errorAccessibilityLabel(attachmentError))
             }
 
             if let query = activeMentionQuery, case .room = current {

@@ -155,7 +155,7 @@ final class AttachmentTests: XCTestCase {
     func testAttachmentComposerCopyInterpolatesCountsAndNames() {
         XCTAssertEqual(
             AttachmentComposerCopy.tooMany(),
-            "You can attach up to 10 images per message."
+            "You can attach up to 10 attachments per message."
         )
         XCTAssertFalse(AttachmentComposerCopy.tooMany().contains("Self.maxAttachmentCount"))
         XCTAssertEqual(
@@ -163,6 +163,30 @@ final class AttachmentTests: XCTestCase {
             "clip.mp4: That attachment is too large."
         )
         XCTAssertEqual(AttachmentComposerCopy.removeLabel(name: "Shared photo"), "Remove Shared photo")
+    }
+
+    func testAttachmentErrorAccessibilityUsesInlineCopyAndRedactsPaths() {
+        XCTAssertEqual(
+            AttachmentComposerCopy.errorAccessibilityLabel("You can attach up to 10 attachments per message."),
+            "You can attach up to 10 attachments per message."
+        )
+        XCTAssertEqual(
+            AttachmentComposerCopy.errorAccessibilityLabel("clip.mp4: That attachment is too large."),
+            "clip.mp4: That attachment is too large."
+        )
+        XCTAssertEqual(
+            AttachmentComposerCopy.errorAccessibilityLabel("/Users/test/secret.png: unreadable"),
+            "Attachment could not be added."
+        )
+        XCTAssertEqual(
+            AttachmentComposerCopy.errorAccessibilityLabel("C:\\Users\\test\\secret.png failed"),
+            "Attachment could not be added."
+        )
+        XCTAssertEqual(AttachmentComposerCopy.errorAccessibilityLabel("   "), "Attachment could not be added.")
+        XCTAssertFalse(
+            AttachmentComposerCopy.errorAccessibilityLabel("Choose a PNG, JPEG, GIF, or WebP image.")
+                .localizedCaseInsensitiveContains("Attachment error")
+        )
     }
 
     func testAttachmentPromptUsesFileTagForVideoPaths() {

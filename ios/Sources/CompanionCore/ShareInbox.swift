@@ -1,6 +1,17 @@
 import Darwin
 import Foundation
 
+public enum ShareInboxError: Error, Equatable, Sendable, LocalizedError {
+    case lockUnavailable
+
+    public var errorDescription: String? {
+        switch self {
+        case .lockUnavailable:
+            "Shared content is busy. Try again."
+        }
+    }
+}
+
 /// Handoff from the share extension into the main app via the app group.
 public enum ShareInbox {
     public static let appGroup = "group.com.posival.openmausmobile"
@@ -23,6 +34,7 @@ public enum ShareInbox {
     #if DEBUG
     public static var testRootURL: URL?
     public static var testDefaultsSuite: String?
+    public static var testForceLockUnavailable = false
     #endif
 
     public static func isValidImageFilename(_ name: String) -> Bool {
@@ -50,8 +62,8 @@ public enum ShareInbox {
         }
     }
 
-    public static func consume() -> (payload: Payload, imageData: Data?)? {
-        withLock {
+    public static func consume() throws -> (payload: Payload, imageData: Data?)? {
+        try withLock {
             guard let data = defaults().data(forKey: payloadKey),
                   let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return nil }
             defaults().removeObject(forKey: payloadKey)
@@ -65,8 +77,8 @@ public enum ShareInbox {
         }
     }
 
-    public static func clearPending() {
-        withLock {
+    public static func clearPending() throws {
+        try withLock {
             guard let data = defaults().data(forKey: payloadKey),
                   let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
                 defaults().removeObject(forKey: payloadKey)
@@ -79,8 +91,8 @@ public enum ShareInbox {
         }
     }
 
-    public static func hasPending() -> Bool {
-        withLock {
+    public static func hasPending() throws -> Bool {
+        try withLock {
             defaults().data(forKey: payloadKey) != nil
         }
     }
@@ -95,9 +107,14 @@ public enum ShareInbox {
         try? FileManager.default.removeItem(at: containerURL().appendingPathComponent(name))
     }
 
-    private static func withLock<T>(_ body: () throws -> T) rethrows -> T {
+    private static func withLock<T>(_ body: () throws -> T) throws -> T {
         processLock.lock()
         defer { processLock.unlock() }
+        #if DEBUG
+        if testForceLockUnavailable {
+            throw ShareInboxError.lockUnavailable
+        }
+        #endif
         let lockURL = containerURL().appendingPathComponent(".share-inbox.lock")
         if !FileManager.default.fileExists(atPath: lockURL.path) {
             FileManager.default.createFile(
@@ -107,13 +124,15 @@ public enum ShareInbox {
             )
         }
         let fd = open(lockURL.path, O_RDWR)
-        if fd >= 0 {
-            flock(fd, LOCK_EX)
-            defer {
-                flock(fd, LOCK_UN)
-                close(fd)
-            }
-            return try body()
+        guard fd >= 0 else {
+            throw ShareInboxError.lockUnavailable
+        }
+        defer {
+            flock(fd, LOCK_UN)
+            close(fd)
+        }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            throw ShareInboxError.lockUnavailable
         }
         return try body()
     }

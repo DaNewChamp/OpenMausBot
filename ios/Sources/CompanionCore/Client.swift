@@ -275,7 +275,7 @@ public enum AttachmentComposerCopy: Sendable {
     public static let maxCount = 10
 
     public static func tooMany(_ count: Int = maxCount) -> String {
-        "You can attach up to \(count) images per message."
+        "You can attach up to \(count) attachments per message."
     }
 
     public static func importFailure(name: String, message: String) -> String {
@@ -284,6 +284,24 @@ public enum AttachmentComposerCopy: Sendable {
 
     public static func removeLabel(name: String) -> String {
         "Remove \(name)"
+    }
+
+    public static func errorAccessibilityLabel(_ message: String) -> String {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Attachment could not be added." }
+        guard !containsPrivatePath(trimmed) else { return "Attachment could not be added." }
+        return trimmed
+    }
+
+    private static func containsPrivatePath(_ message: String) -> Bool {
+        if message.contains("/Users/") || message.contains("/private/") || message.contains("file://") {
+            return true
+        }
+        let bytes = Array(message.utf8)
+        return bytes.count >= 3
+            && ((48...57).contains(bytes[0]) || (65...90).contains(bytes[0]) || (97...122).contains(bytes[0]))
+            && bytes[1] == 58
+            && (bytes[2] == 47 || bytes[2] == 92)
     }
 }
 

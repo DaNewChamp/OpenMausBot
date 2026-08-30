@@ -1507,7 +1507,7 @@ final class Session: ObservableObject {
     func discardShareStaging() {
         stagedComposerText = nil
         stagedShareImageData = nil
-        ShareInbox.clearPending()
+        try? ShareInbox.clearPending()
     }
 
     func takeShareStaging() -> ShareStaging {
@@ -1520,7 +1520,7 @@ final class Session: ObservableObject {
 
     func consumeShareInbox() {
         guard shareInboxReadyForActivation else { return }
-        guard let consumed = ShareInbox.consume() else { return }
+        guard let consumed = try? ShareInbox.consume() else { return }
         shareInboxReadyForActivation = false
         if let text = consumed.payload.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
             stageComposerText(text)
