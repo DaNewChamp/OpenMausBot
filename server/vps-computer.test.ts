@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   BASE_IMAGE,
@@ -27,6 +27,7 @@ import {
   vpsDockerArgs,
   vpsDriverError,
   vpsSshTunnelArgs,
+  resetVpsComputerCachesForTests,
   reuseVps,
   type VpsCommandRunner,
 } from "./vps-computer.ts";
@@ -230,6 +231,13 @@ function fixture({
 }
 
 describe("VPS computer", () => {
+  // Every test shares BOT_ID/CONFIG, so the turn-ready cache written by one
+  // successful provision would otherwise satisfy the next test's provision
+  // without touching Docker at all.
+  beforeEach(() => {
+    resetVpsComputerCachesForTests();
+  });
+
   it("uses a deterministic, bot-id-derived managed container name", () => {
     expect(vpsContainerName(BOT_ID)).toBe(vpsContainerName(BOT_ID));
     expect(vpsContainerName(BOT_ID)).not.toBe(vpsContainerName("another-bot"));

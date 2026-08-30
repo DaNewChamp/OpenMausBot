@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+
+import { it } from "vitest";
 
 import { buildManifest } from "./backup-openmausbot-cloud.mjs";
 
-test("buildManifest captures bot hierarchy", () => {
+it("buildManifest captures bot hierarchy", () => {
   const dir = mkdtempSync(join(tmpdir(), "omb-backup-"));
   const bots = [
     { id: "chief", name: "Chief Keef", title: "Chief of Staff", chiefOfStaff: true, section: "Work" },

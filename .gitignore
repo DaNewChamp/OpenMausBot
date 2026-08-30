@@ -1,6 +1,8 @@
 node_modules
 .worktrees/
 build/*.xcarchive
+build/*.log
+release-artifacts/
 ios/build/
 dist-bridge/
 shared/local-vm-target.js

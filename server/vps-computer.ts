@@ -80,6 +80,14 @@ function getTurnReady(key: string): VpsComputerStatus | null {
 function invalidateTurnReady(key: string): void {
   turnReadyCache.delete(key);
 }
+
+/** Both caches are module state keyed by alias + container name, so tests
+ * that reuse one bot id would otherwise leak a verified-ready snapshot from
+ * one test into the next test's provision. */
+export function resetVpsComputerCachesForTests(): void {
+  statusCache.clear();
+  turnReadyCache.clear();
+}
 const viewerConnections = new Map<string, { privateIp: string; password: string }>();
 const desktopTunnels = new Map<
   string,
