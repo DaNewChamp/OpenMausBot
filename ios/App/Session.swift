@@ -684,7 +684,7 @@ final class Session: ObservableObject {
                             resetStreamCoalescer()
                         }
                         if commit.hydrateFleet, let fleet = preparedFleet {
-                            await applyPreparedHydrate(fleet, streamGeneration: generation)
+                            await applyPreparedHydrate(fleet, requiredGeneration: generation)
                             let afterHydrate = StreamTransactionPolicy.hello(
                                 startedGeneration: generation,
                                 currentGeneration: streamGeneration,
@@ -773,12 +773,8 @@ final class Session: ObservableObject {
         }
     }
 
-    private func streamAllows(_ requiredGeneration: Int?) -> Bool {
-        guard let requiredGeneration else { return true }
-        return StreamTransactionPolicy.shouldCommit(
-            startedGeneration: requiredGeneration,
-            currentGeneration: streamGeneration
-        )
+    private func streamAllows(_ authority: StreamTransactionPolicy.Authority) -> Bool {
+        StreamTransactionPolicy.allows(authority, currentGeneration: streamGeneration)
     }
 
     private func fetchFleet() async throws -> Fleet? {
@@ -786,27 +782,57 @@ final class Session: ObservableObject {
         return try await client.fleet(messages: 50)
     }
 
-    private func applyPreparedHydrate(_ fleet: Fleet, streamGeneration requiredGeneration: Int?) async {
-        guard streamAllows(requiredGeneration) else { return }
+    private func applyPreparedHydrate(_ fleet: Fleet, requiredGeneration: Int) async {
+        let authority = StreamTransactionPolicy.Authority.requiredGeneration(requiredGeneration)
+        var commit = StreamTransactionPolicy.helperHydrate(
+            startedGeneration: requiredGeneration,
+            currentGeneration: streamGeneration
+        )
+        guard commit.applyFleet else { return }
         log.info("hydrated \(fleet.bots.count, privacy: .public) bots, \(fleet.groups.count, privacy: .public) rooms")
         resetStreamCoalescer()
         let previousAppearanceOverrides = state.appearanceOverrides
         state.hydrate(fleet)
-        persistPinnedOverrides()
-        if state.appearanceOverrides != previousAppearanceOverrides { persistAppearanceOverrides() }
-        if let client, streamAllows(requiredGeneration) {
-            await retryPendingAppearanceOverrides(using: client)
+        if commit.persistPins { persistPinnedOverrides() }
+        if commit.persistAppearance, state.appearanceOverrides != previousAppearanceOverrides {
+            persistAppearanceOverrides()
         }
-        guard streamAllows(requiredGeneration) else { return }
+        commit = StreamTransactionPolicy.helperHydrate(
+            startedGeneration: requiredGeneration,
+            currentGeneration: streamGeneration
+        )
+        if commit.retryAppearance, let client, streamAllows(authority) {
+            await retryPendingAppearanceOverrides(using: client, authority: authority)
+        }
+        commit = StreamTransactionPolicy.helperHydrate(
+            startedGeneration: requiredGeneration,
+            currentGeneration: streamGeneration
+        )
+        guard commit.shouldApply, streamAllows(authority) else { return }
         NotificationCoordinator.shared.setBadge(state.unreadCount)
-        await refreshEngineSync(quietly: true, requiredStreamGeneration: requiredGeneration)
-        guard streamAllows(requiredGeneration) else { return }
-        _ = await loadModelCatalog(quietly: true, requiredStreamGeneration: requiredGeneration)
+        if commit.refreshEngineCatalog {
+            await refreshEngineSync(quietly: true, authority: authority)
+            guard streamAllows(authority) else { return }
+            _ = await loadModelCatalog(quietly: true, authority: authority)
+        }
     }
 
-    private func hydrate() async throws {
-        guard let fleet = try await fetchFleet() else { return }
-        await applyPreparedHydrate(fleet, streamGeneration: nil)
+    /// Snapshot the current stream generation, fetch, then apply only if that
+    /// generation is still authoritative. Returns whether unconfirmed model
+    /// writes may be cleared.
+    @discardableResult
+    private func hydrate() async throws -> Bool {
+        let generation = streamGeneration
+        guard let fleet = try await fetchFleet() else { return false }
+        guard StreamTransactionPolicy.helperHydrate(
+            startedGeneration: generation,
+            currentGeneration: streamGeneration
+        ).applyFleet else { return false }
+        await applyPreparedHydrate(fleet, requiredGeneration: generation)
+        return StreamTransactionPolicy.shouldClearUnconfirmedWrites(
+            startedGeneration: generation,
+            currentGeneration: streamGeneration
+        )
     }
 
     private var hydrationRevision = HydrationRevision()
@@ -1675,6 +1701,7 @@ final class Session: ObservableObject {
         do {
             let result = try await client.updateProfileWithCompatibility(botId: bot.id, patch: patch)
             guard !Task.isCancelled else { return nil }
+            guard streamAllows(.explicit) else { return nil }
             switch result {
             case let .updated(updated):
                 state.apply(.bot(updated))
@@ -1708,6 +1735,7 @@ final class Session: ObservableObject {
             case .clear, nil: override.avatarUrl = nil
             }
         }
+        guard streamAllows(.explicit) else { return }
         state.setLocalAppearance(override, for: "bot:\(botID)")
         persistAppearanceOverrides()
     }
@@ -1724,11 +1752,21 @@ final class Session: ObservableObject {
     /// which reconciles and removes each matching local field.
     func retryPendingAppearanceOverrides() async {
         guard let client else { return }
-        await retryPendingAppearanceOverrides(using: client)
+        await retryPendingAppearanceOverrides(
+            using: client,
+            authority: .requiredGeneration(streamGeneration)
+        )
     }
 
-    private func retryPendingAppearanceOverrides(using client: CompanionClient) async {
+    private func retryPendingAppearanceOverrides(
+        using client: CompanionClient,
+        authority: StreamTransactionPolicy.Authority
+    ) async {
         for (stableID, override) in state.appearanceOverrides.entries {
+            guard StreamTransactionPolicy.shouldApplyAppearanceRetry(
+                authority: authority,
+                currentGeneration: streamGeneration
+            ) else { return }
             guard stableID.hasPrefix("bot:"),
                   let botID = stableID.split(separator: ":", maxSplits: 1).last,
                   let bot = state.bot(String(botID))
@@ -1736,6 +1774,10 @@ final class Session: ObservableObject {
             let patch = BotProfilePatch(color: override.color, mascotShape: override.mascotShape)
             do {
                 let result = try await client.updateProfileWithCompatibility(botId: bot.id, patch: patch)
+                guard StreamTransactionPolicy.shouldApplyAppearanceRetry(
+                    authority: authority,
+                    currentGeneration: streamGeneration
+                ) else { return }
                 guard !Task.isCancelled else { return }
                 switch result {
                 case let .updated(updated), let .updatedWithPendingAppearance(updated, fields: _):
@@ -1748,6 +1790,10 @@ final class Session: ObservableObject {
                 // profile open will retry once the route is available.
             }
         }
+        guard StreamTransactionPolicy.shouldApplyAppearanceRetry(
+            authority: authority,
+            currentGeneration: streamGeneration
+        ) else { return }
         persistAppearanceOverrides()
     }
 
@@ -1780,9 +1826,9 @@ final class Session: ObservableObject {
     /// Single catalog load used by chat, profile, and settings pickers.
     func loadModelCatalog(
         quietly: Bool = false,
-        requiredStreamGeneration: Int? = nil
+        authority: StreamTransactionPolicy.Authority = .explicit
     ) async -> ModelCatalogLoadResult {
-        guard streamAllows(requiredStreamGeneration) else { return .cancelled }
+        guard streamAllows(authority) else { return .cancelled }
         let generation = modelCatalogGate.beginLoad()
         modelCatalogRefreshing = modelCatalogGate.refreshing
 
@@ -1796,7 +1842,7 @@ final class Session: ObservableObject {
         func publish(_ result: ModelCatalogLoadResult) -> ModelCatalogLoadResult {
             guard modelCatalogGate.finishLoad(startedGeneration: generation) else { return .cancelled }
             modelCatalogRefreshing = modelCatalogGate.refreshing
-            guard streamAllows(requiredStreamGeneration) else { return .cancelled }
+            guard streamAllows(authority) else { return .cancelled }
             switch result {
             case let .loaded(instances):
                 modelCatalog = instances
@@ -1813,9 +1859,9 @@ final class Session: ObservableObject {
         }
 
         if engineSync == nil {
-            await refreshEngineSync(quietly: true, requiredStreamGeneration: requiredStreamGeneration)
+            await refreshEngineSync(quietly: true, authority: authority)
         }
-        guard isCurrent(), streamAllows(requiredStreamGeneration) else { return publish(.cancelled) }
+        guard isCurrent(), streamAllows(authority) else { return publish(.cancelled) }
 
         switch EngineSyncPolicy.catalogSource(for: engineSync) {
         case .unknown:
@@ -1829,7 +1875,7 @@ final class Session: ObservableObject {
             } else {
                 router = await reconstructedRouter()
             }
-            guard isCurrent(), streamAllows(requiredStreamGeneration) else { return publish(.cancelled) }
+            guard isCurrent(), streamAllows(authority) else { return publish(.cancelled) }
             guard let router else {
                 return publish(.failed(actionError ?? "Could not load providers for the selected engine."))
             }
@@ -1889,8 +1935,8 @@ final class Session: ObservableObject {
         }
     }
 
-    func refreshEngineSync(quietly: Bool = false, requiredStreamGeneration: Int? = nil) async {
-        guard streamAllows(requiredStreamGeneration) else { return }
+    func refreshEngineSync(quietly: Bool = false, authority: StreamTransactionPolicy.Authority = .explicit) async {
+        guard streamAllows(authority) else { return }
         engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
         let generation = engineSyncGeneration
         guard let client else { return }
@@ -1899,13 +1945,13 @@ final class Session: ObservableObject {
             guard EngineSyncPolicy.shouldApply(
                 startedGeneration: generation,
                 currentGeneration: engineSyncGeneration
-            ), streamAllows(requiredStreamGeneration) else { return }
+            ), streamAllows(authority) else { return }
             engineSync = loaded
         } catch let APIError.status(code, _) where code == 404 {
             guard EngineSyncPolicy.shouldApply(
                 startedGeneration: generation,
                 currentGeneration: engineSyncGeneration
-            ), streamAllows(requiredStreamGeneration) else { return }
+            ), streamAllows(authority) else { return }
             engineSync = .openMausOnly
         } catch {
             if !quietly, !Task.isCancelled { actionError = error.localizedDescription }
@@ -2115,7 +2161,8 @@ final class Session: ObservableObject {
             return true
         }
         do {
-            try await hydrate()
+            let committed = try await hydrate()
+            guard committed else { return false }
             if case let .bot(bot) = chat {
                 unconfirmedModelWrites.remove(bot.id)
             }
@@ -2339,14 +2386,31 @@ final class Session: ObservableObject {
         }
         pendingNotification = nil
         do {
+            let generation = streamGeneration
             var bot = state.bot(target.botId)
             if bot == nil {
-                let fleet = try await client.fleet(messages: 50)
-                resetStreamCoalescer()
-                state.hydrate(fleet)
-                recordHydration(resumed: false)
+                guard let fleet = try await fetchFleet() else { return }
+                let hydrate = StreamTransactionPolicy.helperHydrate(
+                    startedGeneration: generation,
+                    currentGeneration: streamGeneration
+                )
+                if hydrate.applyFleet {
+                    await applyPreparedHydrate(fleet, requiredGeneration: generation)
+                }
+                let note = StreamTransactionPolicy.notification(
+                    startedGeneration: generation,
+                    currentGeneration: streamGeneration
+                )
+                guard note.continueNavigation else { return }
+                if note.bumpAuthoritativeRevision {
+                    recordHydration(resumed: false)
+                }
                 bot = state.bot(target.botId)
             }
+            guard StreamTransactionPolicy.notification(
+                startedGeneration: generation,
+                currentGeneration: streamGeneration
+            ).continueNavigation else { return }
             // A room's approval/question notification carries the asker bot
             // with the ROOM's thread id — open the room rather than asking
             // the bot to switch to a thread it does not own (a 404).
@@ -2358,6 +2422,10 @@ final class Session: ObservableObject {
             if target.requiresTaskSwitch(activeThreadId: selected.threadId) {
                 do {
                     selected = try await client.switchTask(botId: selected.id, threadId: target.threadId)
+                    guard StreamTransactionPolicy.notification(
+                        startedGeneration: generation,
+                        currentGeneration: streamGeneration
+                    ).continueNavigation else { return }
                     state.apply(.bot(selected))
                 } catch {
                     // The thread may be gone (task deleted, stale payload).
@@ -2365,6 +2433,10 @@ final class Session: ObservableObject {
                     // banner and no navigation at all.
                 }
             }
+            guard StreamTransactionPolicy.notification(
+                startedGeneration: generation,
+                currentGeneration: streamGeneration
+            ).continueNavigation else { return }
             notificationChat = .bot(selected)
         } catch { actionError = error.localizedDescription }
     }

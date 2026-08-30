@@ -4,6 +4,16 @@ import Foundation
 /// session. Fetch may run on a stale task; live mutations apply only when
 /// `shouldCommit` is true after that work returns.
 public enum StreamTransactionPolicy: Sendable {
+    /// How a live mutation is authorized relative to the SSE generation.
+    /// There is no optional generation: stream work names a snapshot, and
+    /// user-initiated writes name `.explicit`.
+    public enum Authority: Equatable, Sendable {
+        /// Apply only while this stream generation is still current.
+        case requiredGeneration(Int)
+        /// Non-stream user write (explicit profile save, picker catalog load).
+        case explicit
+    }
+
     public struct HelloCommit: Equatable, Sendable {
         public var hydrateFleet: Bool
         public var persistPins: Bool
@@ -17,8 +27,90 @@ public enum StreamTransactionPolicy: Sendable {
         public var shouldApply: Bool { applyHello }
     }
 
+    /// Helper hydrate after `fetchFleet` (interrupted model-write reconcile).
+    /// Does not bump the authoritative revision; that belongs to hello and
+    /// notification commits that replace the live session snapshot.
+    public struct HelperHydrateCommit: Equatable, Sendable {
+        public var applyFleet: Bool
+        public var persistPins: Bool
+        public var persistAppearance: Bool
+        public var retryAppearance: Bool
+        public var refreshEngineCatalog: Bool
+
+        public var shouldApply: Bool { applyFleet }
+    }
+
+    public struct NotificationCommit: Equatable, Sendable {
+        public var applyFleet: Bool
+        public var bumpAuthoritativeRevision: Bool
+        public var continueNavigation: Bool
+    }
+
     public static func shouldCommit(startedGeneration: Int, currentGeneration: Int) -> Bool {
         ConnectionResiliencePolicy.shouldApply(
+            startedGeneration: startedGeneration,
+            currentGeneration: currentGeneration
+        )
+    }
+
+    public static func allows(_ authority: Authority, currentGeneration: Int) -> Bool {
+        switch authority {
+        case let .requiredGeneration(started):
+            return shouldCommit(
+                startedGeneration: started,
+                currentGeneration: currentGeneration
+            )
+        case .explicit:
+            return true
+        }
+    }
+
+    /// Snapshot `startedGeneration` before `fetchFleet`; apply only if it is
+    /// still current when the response returns.
+    public static func helperHydrate(
+        startedGeneration: Int,
+        currentGeneration: Int
+    ) -> HelperHydrateCommit {
+        let live = shouldCommit(
+            startedGeneration: startedGeneration,
+            currentGeneration: currentGeneration
+        )
+        return HelperHydrateCommit(
+            applyFleet: live,
+            persistPins: live,
+            persistAppearance: live,
+            retryAppearance: live,
+            refreshEngineCatalog: live
+        )
+    }
+
+    public static func notification(
+        startedGeneration: Int,
+        currentGeneration: Int
+    ) -> NotificationCommit {
+        let live = shouldCommit(
+            startedGeneration: startedGeneration,
+            currentGeneration: currentGeneration
+        )
+        return NotificationCommit(
+            applyFleet: live,
+            bumpAuthoritativeRevision: live,
+            continueNavigation: live
+        )
+    }
+
+    public static func shouldApplyAppearanceRetry(
+        authority: Authority,
+        currentGeneration: Int
+    ) -> Bool {
+        allows(authority, currentGeneration: currentGeneration)
+    }
+
+    public static func shouldClearUnconfirmedWrites(
+        startedGeneration: Int,
+        currentGeneration: Int
+    ) -> Bool {
+        shouldCommit(
             startedGeneration: startedGeneration,
             currentGeneration: currentGeneration
         )
