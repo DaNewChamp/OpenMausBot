@@ -108,9 +108,9 @@ struct ChatModelPickerSheet: View {
         ) {
             instances = session.modelCatalog
             if !instances.isEmpty {
-                let preserved = AdvertisedModelCatalog.preservedSelection(current.modelSelection, in: instances)
-                pickedInstanceId = preserved.instanceId
-                pickedModel = preserved.model
+                let resolved = ProviderCatalogPolicy.resolveSelection(current.modelSelection, in: instances)
+                pickedInstanceId = resolved.instanceId
+                pickedModel = resolved.model
             }
         }
         instancesError = session.modelCatalogError
@@ -128,9 +128,9 @@ struct ChatModelPickerSheet: View {
         case let .loaded(loaded):
             instances = loaded
             instancesError = nil
-            let preserved = AdvertisedModelCatalog.preservedSelection(current.modelSelection, in: loaded)
-            pickedInstanceId = preserved.instanceId
-            pickedModel = preserved.model
+            let resolved = ProviderCatalogPolicy.resolveSelection(current.modelSelection, in: loaded)
+            pickedInstanceId = resolved.instanceId
+            pickedModel = resolved.model
             instancesLoading = false
         case let .failed(message):
             instancesError = message

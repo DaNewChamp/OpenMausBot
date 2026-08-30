@@ -72,6 +72,34 @@ describe("scrub", () => {
     }
   });
 
+  it("withholds provider secrets, CLI paths, and install recipes from instance payloads", () => {
+    const cleaned = scrub({
+      instanceId: "cursor",
+      driverKind: "cursorAgent",
+      displayName: "Cursor",
+      snapshot: { state: "available" },
+      models: { default: "auto", options: [{ id: "auto", label: "Auto" }] },
+      cli: "/usr/local/bin/cursor-agent",
+      cliDefault: "cursor-agent",
+      cliCandidates: ["/opt/cursor/cursor-agent"],
+      install: { signInCommand: "cursor-agent login" },
+      apiKey: "sk-secret",
+      api_key: "also-secret",
+      environment: { OPENAI_API_KEY: "sk-env" },
+    });
+    expect(JSON.stringify(cleaned)).not.toContain("sk-secret");
+    expect(JSON.stringify(cleaned)).not.toContain("/usr/local/bin");
+    expect(JSON.stringify(cleaned)).not.toContain("cliCandidates");
+    expect(JSON.stringify(cleaned)).not.toContain("signInCommand");
+    expect(cleaned).toEqual({
+      instanceId: "cursor",
+      driverKind: "cursorAgent",
+      displayName: "Cursor",
+      snapshot: { state: "available" },
+      models: { default: "auto", options: [{ id: "auto", label: "Auto" }] },
+    });
+  });
+
   it("leaves values it does not own alone", () => {
     expect(scrub(null)).toBe(null);
     expect(scrub(42)).toBe(42);

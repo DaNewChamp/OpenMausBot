@@ -592,6 +592,15 @@ public struct ProviderSnapshot: Codable, Hashable, Sendable {
 public struct ModelOption: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var label: String
+    /// Present on provider-grouped catalogs so a model row can switch the
+    /// real harness `instanceId` without using the provider tab as identity.
+    public var instanceId: String? = nil
+
+    public init(id: String, label: String, instanceId: String? = nil) {
+        self.id = id
+        self.label = label
+        self.instanceId = instanceId
+    }
 }
 
 public struct ModelCatalog: Codable, Hashable, Sendable {
@@ -743,7 +752,7 @@ public enum AdvertisedModelCatalog {
     public static func displayModelLabel(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return raw }
-        if trimmed.lowercased() == "auto" { return "Auto" }
+        if trimmed.lowercased() == "auto" { return "Cursor Auto" }
         if trimmed.contains(where: { $0.isWhitespace }) { return trimmed }
         return trimmed.split(whereSeparator: { $0 == "-" || $0 == "_" })
             .map { $0.prefix(1).uppercased() + $0.dropFirst() }
@@ -800,6 +809,7 @@ public enum AdvertisedModelCatalog {
 
 public struct InstanceList: Codable, Sendable {
     public var instances: [Instance]
+    public var providerCatalog: MobileProviderCatalog? = nil
 }
 
 public enum VBotPrimaryEngine: String, Codable, CaseIterable, Sendable, Identifiable {

@@ -510,6 +510,9 @@ describe("harness HTTP API", () => {
       driverKind: "claudeAgent",
       displayName: "Fixture Claude",
     }));
+    expect(body.providerCatalog?.managedBy).toBe("Managed by your V Bot server.");
+    expect(JSON.stringify(body.providerCatalog)).not.toMatch(/api[_-]?key/i);
+    expect(JSON.stringify(body.providerCatalog)).not.toContain("cliCandidates");
   });
 
   it("searches transcripts and exports a conversation", async () => {

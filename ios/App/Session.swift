@@ -306,7 +306,10 @@ final class Session: ObservableObject {
             localVmAccess = previewAccess
             localVmAccessDenied = previewDenied
             localVmStatuses = previewStatuses
-            modelCatalog = state.bots.compactMap { storePreviewInstance(matching: $0) }
+            if let index = state.bots.firstIndex(where: { $0.id == "preview-parity" }) {
+                state.bots[index].modelSelection = ModelSelection(instanceId: "cursor", model: "auto")
+            }
+            modelCatalog = Self.storePreviewProviderCatalog()
             recordHydration(resumed: false)
             status = .live
             previouslyLive = true
@@ -1889,6 +1892,59 @@ final class Session: ObservableObject {
          "capabilities":{"computerMcp":true}}
         """.utf8)
         return try? JSONDecoder().decode(Instance.self, from: payload)
+    }
+
+    static func storePreviewProviderCatalog() -> [Instance] {
+        let json = """
+        [
+          {
+            "instanceId":"codex","driverKind":"codex","displayName":"Codex",
+            "snapshot":{"state":"available"},
+            "models":{"default":"gpt-5.6-sol","options":[
+              {"id":"gpt-5.6-sol","label":"GPT-5.6 Sol"},
+              {"id":"gpt-5.4","label":"GPT-5.4"}
+            ]}
+          },
+          {
+            "instanceId":"claude","driverKind":"claudeAgent","displayName":"Claude",
+            "snapshot":{"state":"available"},
+            "models":{"default":"claude-sonnet-5","options":[
+              {"id":"claude-sonnet-5","label":"Claude Sonnet 5"},
+              {"id":"claude-haiku-4-5","label":"Claude Haiku 4.5"}
+            ]}
+          },
+          {
+            "instanceId":"cursor","driverKind":"cursorAgent","displayName":"Cursor",
+            "snapshot":{"state":"available"},
+            "models":{"default":"auto","options":[
+              {"id":"auto","label":"Auto"},
+              {"id":"composer-2.5","label":"Composer 2.5"}
+            ]}
+          },
+          {
+            "instanceId":"openai-compat","driverKind":"openai-compat","displayName":"OpenRouter",
+            "snapshot":{"state":"available"},
+            "models":{"default":"meta-llama/llama-3.3-70b-instruct","options":[
+              {"id":"meta-llama/llama-3.3-70b-instruct","label":"Llama 3.3 70B"}
+            ]}
+          },
+          {
+            "instanceId":"grok","driverKind":"grokAgent","displayName":"Grok",
+            "snapshot":{"state":"available"},
+            "models":{"default":"grok-4.6","options":[
+              {"id":"grok-4.6","label":"Grok 4.6"}
+            ]}
+          },
+          {
+            "instanceId":"gemini","driverKind":"geminiAgent","displayName":"Gemini",
+            "snapshot":{"state":"available"},
+            "models":{"default":"gemini-3.5-flash","options":[
+              {"id":"gemini-3.5-flash","label":"Gemini 3.5 Flash"}
+            ]}
+          }
+        ]
+        """
+        return (try? JSONDecoder().decode([Instance].self, from: Data(json.utf8))) ?? []
     }
 #endif
 

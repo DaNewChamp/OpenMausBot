@@ -11,8 +11,10 @@ enum ProviderMarks {
         let normalized = normalize(key)
         switch normalized {
         case "grok", "grokgent", "grokreconstructed": return "Grok"
+        case "grokauth": return "Grok Auth"
         case "claude", "claudeagent", "claudecode": return "Claude"
         case "codex": return "Codex"
+        case "openai": return "OpenAI"
         case "cursor", "cursoragent": return "Cursor"
         case "kimi", "kimiagent": return "Kimi"
         case "droid", "droidagent": return "Droid"
@@ -54,13 +56,13 @@ struct ProviderMarkView: View {
         let normalized = ProviderMarks.normalize(providerKey)
         ZStack {
             switch normalized {
-            case "grok":
+            case "grok", "grokauth":
                 SVGIconShape(path: Self.grokPath, viewBox: CGSize(width: 24, height: 24))
                     .fill(Color.primary)
             case "claude", "claudecode":
                 SVGIconShape(path: Self.claudePath, viewBox: CGSize(width: 256, height: 257))
                     .fill(Color(red: 0.85, green: 0.47, blue: 0.34))
-            case "codex":
+            case "codex", "openai":
                 SVGIconShape(path: Self.codexPath, viewBox: CGSize(width: 256, height: 260))
                     .fill(Color.primary)
             case "cursor":

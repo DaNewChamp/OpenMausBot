@@ -61,49 +61,15 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            switch route {
-            case .welcome:
-                CompanionWelcomeView(
-                    onConnect: startPairing,
-                    onSkip: {
-                        hasSeenWelcome = true
-                        pairingRequested = false
-                    }
-                )
-            case .pairing:
-                PairingView {
-                    hasSeenWelcome = true
-                    pairingRequested = false
-                }
-                .onAppear {
-                    hasSeenWelcome = true
-                    pairingRequested = true
-                }
-            case .unpairedHome:
-                UnpairedHomeView(onConnect: startPairing)
-            case .notificationPrompt:
-                NotificationOnboardingView {
-                    hasSeenNotificationPrompt = true
-                    notificationOnboardingPending = false
-                    pairingRequested = false
-                }
-                .onAppear { hasSeenWelcome = true }
-            case .chats:
-                ChatListView()
-                    .onAppear {
-                        hasSeenWelcome = true
-                        // This is either an existing pairing or a new pairing
-                        // which needed no notification education. Do not let
-                        // a later voluntary unpair reopen Pairing by itself.
-                        pairingRequested = false
-                        reconcileNotificationOnboarding()
-                    }
-            case .revoked:
-                UnpairedView {
-                    session.signOut()
-                    startPairing()
-                }
+#if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-open-provider-settings") {
+                ProviderSettingsPreviewHost()
+            } else {
+                routedRoot
             }
+#else
+            routedRoot
+#endif
         }
         .onChange(of: session.pairingInvite) { _, invite in
             guard invite != nil else { return }
@@ -131,6 +97,53 @@ struct RootView: View {
             Button("OK", role: .cancel) { session.actionError = nil }
         } message: { message in
             Text(message)
+        }
+    }
+
+    @ViewBuilder
+    private var routedRoot: some View {
+        switch route {
+        case .welcome:
+            CompanionWelcomeView(
+                onConnect: startPairing,
+                onSkip: {
+                    hasSeenWelcome = true
+                    pairingRequested = false
+                }
+            )
+        case .pairing:
+            PairingView {
+                hasSeenWelcome = true
+                pairingRequested = false
+            }
+            .onAppear {
+                hasSeenWelcome = true
+                pairingRequested = true
+            }
+        case .unpairedHome:
+            UnpairedHomeView(onConnect: startPairing)
+        case .notificationPrompt:
+            NotificationOnboardingView {
+                hasSeenNotificationPrompt = true
+                notificationOnboardingPending = false
+                pairingRequested = false
+            }
+            .onAppear { hasSeenWelcome = true }
+        case .chats:
+            ChatListView()
+                .onAppear {
+                    hasSeenWelcome = true
+                    // This is either an existing pairing or a new pairing
+                    // which needed no notification education. Do not let
+                    // a later voluntary unpair reopen Pairing by itself.
+                    pairingRequested = false
+                    reconcileNotificationOnboarding()
+                }
+        case .revoked:
+            UnpairedView {
+                session.signOut()
+                startPairing()
+            }
         }
     }
 

@@ -162,14 +162,19 @@ struct ModelPickerView: View {
     @State private var railInstanceId: String?
 
     private var railInstances: [Instance] {
-        ModelPickerRailPolicy.displayInstances(
+        ProviderCatalogPolicy.groupedInstances(
             advertised: instances,
             selection: ModelSelection(instanceId: selectedInstanceId, model: selectedModelId)
         )
     }
 
     private var activeRailId: String {
-        railInstanceId ?? selectedInstanceId
+        if let railInstanceId { return railInstanceId }
+        return ProviderCatalogPolicy.resolvedRail(
+            advertised: instances,
+            selection: currentSelection,
+            activeRailId: nil
+        )?.instanceId ?? selectedInstanceId
     }
 
     private var currentSelection: ModelSelection {
@@ -177,7 +182,7 @@ struct ModelPickerView: View {
     }
 
     private var railInstance: Instance? {
-        ModelPickerRailPolicy.resolvedRail(
+        ProviderCatalogPolicy.resolvedRail(
             advertised: instances,
             selection: currentSelection,
             activeRailId: activeRailId
@@ -189,7 +194,7 @@ struct ModelPickerView: View {
     }
 
     private var rowsDisabled: Bool {
-        disabled || modelsDisabled || ModelPickerRailPolicy.modelsDisabled(
+        disabled || modelsDisabled || ProviderCatalogPolicy.modelsDisabled(
             advertised: instances,
             selection: currentSelection,
             activeRailId: activeRailId,
@@ -197,9 +202,13 @@ struct ModelPickerView: View {
         )
     }
 
+    private func optionIsSelected(_ option: ModelOption, rail: Instance) -> Bool {
+        (option.instanceId ?? rail.instanceId) == selectedInstanceId && selectedModelId == option.id
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if ModelPickerRailPolicy.isEmpty(advertised: instances, selection: currentSelection) {
+            if ProviderCatalogPolicy.isEmpty(advertised: instances, selection: currentSelection) {
                 ModelPickerEmptyView()
             } else {
                 engineRail
@@ -223,10 +232,10 @@ struct ModelPickerView: View {
                         selected: instance.instanceId == activeRailId,
                         selectedInstanceId: selectedInstanceId,
                         selectedModelId: selectedModelId,
-                        disabled: disabled || (!instance.allowsInstanceChange && instance.instanceId != selectedInstanceId),
+                        disabled: disabled || (!instance.allowsInstanceChange && instance.instanceId != activeRailId),
                         unavailable: !instance.snapshot.isAvailable || !instance.allowsInstanceChange
                     ) {
-                        guard let next = ModelPickerRailPolicy.selectionAfterEngineTap(
+                        guard let next = ProviderCatalogPolicy.selectionAfterProviderTap(
                             current: currentSelection,
                             tapped: instance,
                             advertised: instances
@@ -267,11 +276,11 @@ struct ModelPickerView: View {
                         ForEach(Array(models.enumerated()), id: \.element.id) { index, option in
                             ModelRow(
                                 label: option.label,
-                                selected: selectedInstanceId == railInstance.instanceId && selectedModelId == option.id,
+                                selected: optionIsSelected(option, rail: railInstance),
                                 isDefault: option.id == railInstance.models.default,
                                 disabled: rowsDisabled
                             ) {
-                                guard let next = ModelPickerRailPolicy.selectionAfterModelTap(
+                                guard let next = ProviderCatalogPolicy.selectionAfterModelTap(
                                     current: currentSelection,
                                     rail: railInstance,
                                     modelId: option.id
@@ -286,8 +295,12 @@ struct ModelPickerView: View {
                             }
                         }
 
-                        if models.contains(where: { $0.id == selectedModelId }) == false,
-                           selectedInstanceId == railInstance.instanceId {
+                        if models.contains(where: { optionIsSelected($0, rail: railInstance) }) == false,
+                           ProviderCatalogPolicy.resolvedRail(
+                            advertised: instances,
+                            selection: currentSelection,
+                            activeRailId: railInstance.instanceId
+                           )?.instanceId == railInstance.instanceId {
                             Divider().overlay(ModelPickerStyle.divider).padding(.leading, 14)
                             ModelRow(
                                 label: AdvertisedModelCatalog.displayModelLabel(selectedModelId),
@@ -295,7 +308,7 @@ struct ModelPickerView: View {
                                 isDefault: false,
                                 disabled: rowsDisabled
                             ) {
-                                guard ModelPickerRailPolicy.selectionAfterModelTap(
+                                guard ProviderCatalogPolicy.selectionAfterModelTap(
                                     current: currentSelection,
                                     rail: railInstance,
                                     modelId: selectedModelId
@@ -324,7 +337,7 @@ private struct EngineChip: View {
         Button(action: action) {
             VStack(spacing: 6) {
                 ProviderMarks.mark(for: instance.markKey, size: 20)
-                Text(instance.chipModelLabel(selectedInstanceId: selectedInstanceId, selectedModel: selectedModelId))
+                Text(instance.pickerTitle)
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(selected ? Color.primary : Color.secondary)
                     .lineLimit(1)
@@ -344,7 +357,7 @@ private struct EngineChip: View {
         }
         .buttonStyle(.plain)
         .disabled(disabled)
-        .accessibilityLabel("\(instance.pickerTitle), \(instance.chipModelLabel(selectedInstanceId: selectedInstanceId, selectedModel: selectedModelId))")
+        .accessibilityLabel(instance.pickerTitle)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
@@ -508,7 +521,7 @@ struct ModelPickerCatalogHost: View {
                     selectedInstanceId: $selectedInstanceId,
                     selectedModelId: $selectedModelId,
                     disabled: switchBlocked,
-                    modelsDisabled: ModelPickerRailPolicy.modelsDisabled(
+                    modelsDisabled: ProviderCatalogPolicy.modelsDisabled(
                         advertised: instances,
                         selection: currentSelection,
                         activeRailId: selectedInstanceId,
@@ -517,6 +530,14 @@ struct ModelPickerCatalogHost: View {
                     footerHint: footer
                 ) {
                     onSelectionChange()
+                }
+
+                if canEdit, !loading {
+                    Button(ModelSelectionPolicy.refreshModels) {
+                        onRetry()
+                    }
+                    .font(.footnote.weight(.medium))
+                    .disabled(presentation.selectionDisabled && !presentation.isRefreshing)
                 }
 
                 if showsEffort {
@@ -612,6 +633,39 @@ struct ReconstructedProviderPicker: View {
 }
 
 #if DEBUG
+/// Debug-only screenshot host. Launch with `-open-provider-settings`.
+struct ProviderSettingsPreviewHost: View {
+    @State private var instanceId = "cursor"
+    @State private var modelId = "auto"
+    @State private var effort: String?
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                ModelPickerCatalogHost(
+                    instances: Session.storePreviewProviderCatalog(),
+                    loading: false,
+                    error: nil,
+                    canEdit: true,
+                    working: false,
+                    saving: false,
+                    selectedInstanceId: $instanceId,
+                    selectedModelId: $modelId,
+                    selectedEffort: $effort,
+                    onRetry: {},
+                    onSelectionChange: {}
+                )
+                .padding(.horizontal, VBotSurface.Space.page)
+                .padding(.top, VBotSurface.Space.section)
+                .padding(.bottom, VBotSurface.Space.section)
+            }
+            .navigationTitle("Bot Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .vbotCanvas()
+        }
+    }
+}
+
 private enum ModelPickerPreviewData {
     static let instances: [Instance] = {
         let json = """
@@ -629,6 +683,14 @@ private enum ModelPickerPreviewData {
             "snapshot":{"state":"available"},
             "models":{"default":"gpt-5.6-sol","options":[
               {"id":"gpt-5.6-sol","label":"GPT 5.6 Sol"}
+            ]}
+          },
+          {
+            "instanceId":"cursor","driverKind":"cursorAgent","displayName":"Cursor",
+            "snapshot":{"state":"available"},
+            "models":{"default":"auto","options":[
+              {"id":"auto","label":"Auto"},
+              {"id":"composer-2.5","label":"Composer 2.5"}
             ]}
           }
         ]

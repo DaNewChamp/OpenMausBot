@@ -28,6 +28,15 @@ const WITHHELD_KEYS = new Set([
   "gatewayToken",
   "reconstructedHost",
   "reconstructedPort",
+  // Provider credentials, CLI paths, and install recipes stay on the
+  // computer. The phone only needs display metadata plus the selected model.
+  "apiKey",
+  "api_key",
+  "cli",
+  "cliDefault",
+  "cliCandidates",
+  "install",
+  "environment",
 ]);
 
 /** Recursively drop the withheld keys, wherever they appear. */

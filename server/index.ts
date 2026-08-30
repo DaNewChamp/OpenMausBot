@@ -42,6 +42,7 @@ import {
   snapshotAvatarGenerationState,
 } from "./avatar-image.ts";
 import { guardedBotModelSwitch, parseBotModelPatch, resolveBotModelSelection } from "./bot-model.ts";
+import { sanitizeMobileProviderCatalog } from "./provider-catalog.ts";
 import { defaultModelSelection } from "./default-selection.ts";
 import { resolveFastDispatch } from "./fast-routing.ts";
 import { parseChatPin } from "./chat-pin.ts";
@@ -6654,7 +6655,11 @@ const server = createServer(async (req, res) => {
       // Windows never pushes PATH changes into a live process, so without
       // this the answer is frozen at boot and "check again" is a no-op.
       resetPathCache();
-      return json(res, 200, { instances: await registry.describe() });
+      const instances = await registry.describe();
+      return json(res, 200, {
+        instances,
+        providerCatalog: sanitizeMobileProviderCatalog(instances),
+      });
     }
 
     const vbotOpenMausSnapshot = () => ({
@@ -6824,7 +6829,11 @@ const server = createServer(async (req, res) => {
         // from the memoized PATH, so resetting after would answer this request
         // with the pre-reset cache
         resetPathCache();
-        return json(res, 200, { instances: await registry.describe() });
+        const instances = await registry.describe();
+        return json(res, 200, {
+          instances,
+          providerCatalog: sanitizeMobileProviderCatalog(instances),
+        });
       } finally {
         providerConfigBusy = false;
       }

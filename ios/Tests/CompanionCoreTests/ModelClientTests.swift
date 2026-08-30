@@ -338,7 +338,7 @@ final class ModelClientTests: XCTestCase {
             "Claude Sonnet 5"
         )
         XCTAssertEqual(AdvertisedModelCatalog.displayModelLabel("gpt-5.6-sol"), "Gpt 5.6 Sol")
-        XCTAssertEqual(AdvertisedModelCatalog.displayModelLabel("auto"), "Auto")
+        XCTAssertEqual(AdvertisedModelCatalog.displayModelLabel("auto"), "Cursor Auto")
     }
 
     func testAdvertisedInstancesWithoutSelectableFlagsStayChangeable() throws {

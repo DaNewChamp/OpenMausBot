@@ -9,6 +9,8 @@ public enum ModelSelectionPolicy: Sendable {
     public static let emptyCatalogExplanation = "No models on computer"
     public static let refreshingExplanation = "Refreshing models."
     public static let engineEmptyExplanation = "No models advertised for this engine."
+    public static let managedByServer = ProviderCatalogPolicy.managedByServer
+    public static let refreshModels = ProviderCatalogPolicy.refreshModels
     public static let hostWideHint =
         "This engine uses one provider and model for every agent on this computer."
     public static let providerKeepsLocalModel = "This provider keeps its local model."
@@ -35,7 +37,7 @@ public enum ModelSelectionPolicy: Sendable {
         if !canEdit { return CalmSurfacePolicy.reconnectToEdit }
         if working { return busyExplanation }
         if hostWide { return hostWideHint }
-        return idleHint
+        return "\(idleHint) \(managedByServer)"
     }
 
     public static func shouldApplyResponse(requestRevision: Int, currentRevision: Int) -> Bool {

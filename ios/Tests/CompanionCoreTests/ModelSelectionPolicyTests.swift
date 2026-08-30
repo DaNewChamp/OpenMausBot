@@ -37,6 +37,8 @@ final class ModelSelectionPolicyTests: XCTestCase {
             ModelSelectionPolicy.fastModeHint,
             ModelSelectionPolicy.providerKeepsLocalModel,
             ModelSelectionPolicy.refreshingExplanation,
+            ModelSelectionPolicy.managedByServer,
+            ModelSelectionPolicy.refreshModels,
         ] {
             XCTAssertFalse(copy.localizedCaseInsensitiveContains("codex"))
             XCTAssertFalse(copy.localizedCaseInsensitiveContains("claude"))
@@ -67,7 +69,7 @@ final class ModelSelectionPolicyTests: XCTestCase {
         )
         XCTAssertEqual(
             ModelSelectionPolicy.footerHint(working: false, canEdit: true, hostWide: false),
-            ModelSelectionPolicy.idleHint
+            "\(ModelSelectionPolicy.idleHint) \(ModelSelectionPolicy.managedByServer)"
         )
     }
 
