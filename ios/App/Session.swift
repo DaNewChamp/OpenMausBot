@@ -2685,6 +2685,7 @@ private enum StorePreviewHarness {
 
     static func apply(arguments: [String], to state: inout CompanionState) {
         applyConversation(arguments: arguments, to: &state)
+        applyRoster(arguments: arguments, to: &state)
         guard let argument = arguments.first(where: { $0.hasPrefix("-preview-computer=") }) else { return }
         let scenario = String(argument.dropFirst("-preview-computer=".count))
         guard let target = targetBotID(arguments: arguments, state: state),
@@ -2744,6 +2745,49 @@ private enum StorePreviewHarness {
         var bot = state.bots[index]
         bot.busy = true
         state.bots[index] = bot
+    }
+
+    static func applyRoster(arguments: [String], to state: inout CompanionState) {
+        guard arguments.contains("-preview-single-pin") else { return }
+        let target = targetBotID(arguments: arguments, state: state)
+            ?? state.bots.first(where: { $0.pinned == true })?.id
+            ?? state.bots.first?.id
+        guard let target else { return }
+        for index in state.bots.indices {
+            state.bots[index].pinned = state.bots[index].id == target
+        }
+        for index in state.rooms.indices {
+            state.rooms[index].pinned = false
+        }
+        resolvePendingApprovals(in: &state)
+    }
+
+    static func resolvePendingApprovals(in state: inout CompanionState) {
+        for threadId in state.messages.keys {
+            guard var messages = state.messages[threadId] else { continue }
+            var changed = false
+            for messageIndex in messages.indices {
+                guard var card = messages[messageIndex].card, card.isPending else { continue }
+                card.answered = card.options.first ?? "Allow"
+                messages[messageIndex].card = card
+                changed = true
+            }
+            if changed {
+                state.messages[threadId] = messages
+            }
+        }
+        for botIndex in state.bots.indices {
+            let threadId = state.bots[botIndex].threadId
+            if let messages = state.messages[threadId] {
+                state.bots[botIndex].messages = messages
+            }
+        }
+        for roomIndex in state.rooms.indices {
+            let threadId = state.rooms[roomIndex].threadId
+            if let messages = state.messages[threadId] {
+                state.rooms[roomIndex].messages = messages
+            }
+        }
     }
 
     static func applyLocalVm(

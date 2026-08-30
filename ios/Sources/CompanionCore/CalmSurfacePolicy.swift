@@ -50,7 +50,16 @@ public struct PinnedChatShelfLayout: Equatable, Sendable {
     public static let columns = 3
     public static let heroPinLimit = 3
     public static let gutter: CGFloat = 10
-    public static let heroAvatar: CGFloat = 123
+    /// Single-pin hero diameter as a fraction of pane width (~88pt on 402pt).
+    public static let heroAvatarWidthFraction: CGFloat = 0.22
+    public static let referencePhonePaneWidth: CGFloat = 402
+    public static var heroAvatar: CGFloat {
+        heroAvatarSize(paneWidth: referencePhonePaneWidth)
+    }
+
+    public static func heroAvatarSize(paneWidth: CGFloat) -> CGFloat {
+        paneWidth * heroAvatarWidthFraction
+    }
     public static let compactCoverAvatar: CGFloat = 72
     public static let cellPadding: CGFloat = 8
     public static let nameBlock: CGFloat = 28
@@ -115,24 +124,25 @@ public struct PinnedChatShelfLayout: Equatable, Sendable {
     }
 
     private static func heroMetrics(paneWidth: CGFloat, pinCount: Int) -> PinnedChatShelfLayout {
+        let hero = heroAvatarSize(paneWidth: paneWidth)
         if pinCount <= 1 {
             return PinnedChatShelfLayout(
-                avatar: heroAvatar,
-                tile: heroAvatar,
+                avatar: hero,
+                tile: hero,
                 spacing: 0,
                 mode: .hero
             )
         }
         let inner = max(paneWidth - pagePadding * 2, 1)
         var spacing = heroTileSpacing
-        var tile = heroAvatar
+        var tile = hero
         let needed = CGFloat(pinCount) * tile + CGFloat(pinCount - 1) * spacing
         if needed > inner {
             let spacingBudget = CGFloat(pinCount - 1) * spacing
             if spacingBudget + CGFloat(pinCount) <= inner {
                 tile = (inner - spacingBudget) / CGFloat(pinCount)
             } else {
-                tile = min(heroAvatar, inner / CGFloat(pinCount))
+                tile = min(hero, inner / CGFloat(pinCount))
                 spacing = pinCount > 1
                     ? max(0, (inner - tile * CGFloat(pinCount)) / CGFloat(pinCount - 1))
                     : 0

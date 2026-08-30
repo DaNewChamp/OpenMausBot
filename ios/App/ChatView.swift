@@ -1050,6 +1050,8 @@ struct TextBubble: View {
             }
             .padding(.horizontal, customCard ? 0 : bubbleHorizontalPadding)
             .padding(.vertical, customCard ? 0 : 12)
+            .frame(maxWidth: maxBubbleWidth, alignment: mine ? .trailing : .leading)
+            .fixedSize(horizontal: !customCard, vertical: false)
             .background {
                 if !customCard {
                     if mine {
@@ -1065,6 +1067,7 @@ struct TextBubble: View {
 
             if !mine { Spacer(minLength: edgeReserve) }
         }
+        .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
     }
 
     @ViewBuilder

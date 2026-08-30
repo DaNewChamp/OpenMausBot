@@ -83,6 +83,15 @@ public enum ConversationLayoutPolicy: Sendable {
         )
     }
 
+    /// Prose bubbles shrink to intrinsic width; cards and attachment rows keep
+    /// the policy max so diff/table layouts and galleries stay readable.
+    public static func bubbleShrinkWrapsHorizontally(
+        isCustomCard: Bool,
+        hasAttachmentGallery: Bool
+    ) -> Bool {
+        !isCustomCard && !hasAttachmentGallery
+    }
+
     public static func showsScrollToBottomButton(
         followingLatest: Bool,
         hasTranscript: Bool

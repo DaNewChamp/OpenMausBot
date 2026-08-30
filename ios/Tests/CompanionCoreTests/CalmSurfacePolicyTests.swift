@@ -57,7 +57,7 @@ final class CalmSurfacePolicyTests: XCTestCase {
     func testPinnedShelfHeroMetricsOnPhoneWidth() {
         let layout = PinnedChatShelfLayout.metrics(paneWidth: 390, pinCount: 1)
         XCTAssertEqual(layout.mode, .hero)
-        XCTAssertEqual(layout.avatar, PinnedChatShelfLayout.heroAvatar)
+        XCTAssertEqual(layout.avatar, PinnedChatShelfLayout.heroAvatarSize(paneWidth: 390), accuracy: 0.5)
         XCTAssertEqual(layout.spacing, 0)
     }
 
@@ -102,6 +102,6 @@ final class CalmSurfacePolicyTests: XCTestCase {
             nameBlockHeight: PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: 44)
         )
         XCTAssertGreaterThan(extraLarge, compact)
-        XCTAssertEqual(extraLarge, 123 + 7 + 44, accuracy: 0.5)
+        XCTAssertEqual(extraLarge, PinnedChatShelfLayout.heroAvatar + 7 + 44, accuracy: 0.5)
     }
 }

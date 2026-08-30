@@ -46,6 +46,38 @@ final class ConversationLayoutPolicyTests: XCTestCase {
         XCTAssertEqual(long, maxBubble, accuracy: 0.5)
     }
 
+    func testProseBubblesShrinkWrapWhileCardsUsePolicyMax() {
+        XCTAssertTrue(
+            ConversationLayoutPolicy.bubbleShrinkWrapsHorizontally(
+                isCustomCard: false,
+                hasAttachmentGallery: false
+            )
+        )
+        XCTAssertFalse(
+            ConversationLayoutPolicy.bubbleShrinkWrapsHorizontally(
+                isCustomCard: true,
+                hasAttachmentGallery: false
+            )
+        )
+        XCTAssertFalse(
+            ConversationLayoutPolicy.bubbleShrinkWrapsHorizontally(
+                isCustomCard: false,
+                hasAttachmentGallery: true
+            )
+        )
+    }
+
+    func testShortProseBubbleStaysWellBelowPolicyMaxOnPhoneWidth() {
+        let pane: CGFloat = 402
+        let maxBubble = ConversationLayoutPolicy.bubbleMaxWidth(paneWidth: pane)
+        let hey = ConversationLayoutPolicy.contentSizedBubbleWidth(textWidth: 30, paneWidth: pane)
+        let thanks = ConversationLayoutPolicy.contentSizedBubbleWidth(textWidth: 52, paneWidth: pane)
+        let long = ConversationLayoutPolicy.contentSizedBubbleWidth(textWidth: 900, paneWidth: pane)
+        XCTAssertLessThan(hey, maxBubble * 0.35)
+        XCTAssertLessThan(thanks, maxBubble * 0.4)
+        XCTAssertEqual(long, maxBubble, accuracy: 0.5)
+    }
+
     func testBotChatsSuppressInlineSpeakerAttribution() {
         XCTAssertFalse(
             ConversationLayoutPolicy.showsBubbleSpeakerAttribution(
