@@ -702,6 +702,46 @@ final class StreamingTests: XCTestCase {
         XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .streaming("Next word "))
     }
 
+    func testANewTurnAcceptsTheFirstDeltaWhenItMatchesTheSettledTail() throws {
+        var bot = try XCTUnwrap(try Self.hydratedFixture().bots.first)
+        bot.busy = true
+        bot.messages = [Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi")]
+        var state = CompanionState()
+        state.hydrate(Fleet(bots: [bot], groups: []))
+        state.apply(.bot(bot))
+        state.apply(.runtime(RuntimeEvent(type: "turn.started", threadId: bot.threadId)))
+        state.apply(delta("Hello", thread: bot.threadId, id: "e1"))
+        state.apply(.message(
+            threadId: bot.threadId,
+            message: Message(id: "m1", role: .bot, kind: .text, at: 2, text: "Hello")
+        ))
+        state.apply(.runtime(RuntimeEvent(type: "turn.started", threadId: bot.threadId, eventId: "turn-2")))
+        state.apply(delta("Hello ", thread: bot.threadId, id: "e2"))
+        XCTAssertEqual(state.streaming[bot.threadId], "Hello ")
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .streaming("Hello "))
+    }
+
+    func testReconnectReplayAfterSettleStillDropsWithoutEventIds() {
+        var state = CompanionState()
+        state.apply(delta("Hello"))
+        state.apply(delta(" world"))
+        state.apply(.message(threadId: "t1", message: Message(
+            id: "m1", role: .bot, kind: .text, at: 1, text: "Hello world"
+        )))
+        state.apply(delta("Hello"))
+        state.apply(delta(" world"))
+        XCTAssertNil(state.streaming["t1"])
+        XCTAssertEqual(state.liveTailPresentation(forThread: "t1"), .none)
+    }
+
+    func testReconnectReplayDropsAnExactRepeatedTokenDuringStreaming() {
+        var state = CompanionState()
+        state.apply(delta("Hello"))
+        state.apply(delta(" world"))
+        state.apply(delta(" world"))
+        XCTAssertEqual(state.streaming["t1"], "Hello world")
+    }
+
     private static func hydratedFixture() throws -> CompanionState {
         var state = CompanionState()
         let url = try XCTUnwrap(

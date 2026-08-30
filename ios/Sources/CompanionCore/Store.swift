@@ -48,6 +48,11 @@ public struct CompanionState: Sendable {
     /// Recent provider event ids per thread, so a replayed reconnect cannot
     /// append the same token twice.
     var seenStreamEventIds: [String: [String]] = [:]
+    /// Threads where reconnect replay of the settled tail must be dropped.
+    /// Cleared on `turn.started` so a new turn can reuse the same prefix.
+    var settledReplayGuard: Set<String> = []
+    /// Last accepted delta per thread for exact token replay without event ids.
+    var lastStreamDelta: [String: String] = [:]
 
     public init() {}
 
@@ -69,7 +74,8 @@ public struct CompanionState: Sendable {
             streaming: streaming[threadId],
             reasoning: reasoning[threadId],
             lastMessage: last,
-            speakerBotId: group?.busyBotId
+            speakerBotId: group?.busyBotId,
+            suppressSettledReplay: settledReplayGuard.contains(threadId)
         )
     }
 
@@ -158,6 +164,8 @@ public struct CompanionState: Sendable {
         streaming.removeAll()
         reasoning.removeAll()
         seenStreamEventIds.removeAll()
+        settledReplayGuard.removeAll()
+        lastStreamDelta.removeAll()
         streamSealed.removeAll()
         for bot in bots where bot.busy != true {
             streamSealed.insert(bot.threadId)
@@ -223,10 +231,13 @@ public struct CompanionState: Sendable {
             if message.role == .bot, message.kind == .text {
                 clearStream(threadId)
                 streamSealed.insert(threadId)
+                settledReplayGuard.insert(threadId)
             }
             if message.role == .user {
                 streamSealed.remove(threadId)
+                settledReplayGuard.remove(threadId)
                 seenStreamEventIds[threadId] = []
+                lastStreamDelta.removeValue(forKey: threadId)
             }
 
         case let .messagePatch(threadId, message):
@@ -291,7 +302,9 @@ public struct CompanionState: Sendable {
                 clearStream(threadId)
                 clearScreen(botId)
                 streamSealed.remove(threadId)
+                settledReplayGuard.remove(threadId)
                 seenStreamEventIds.removeValue(forKey: threadId)
+                lastStreamDelta.removeValue(forKey: threadId)
                 pinnedOverrides.remove(for: "bot:\(botId)")
                 appearanceOverrides.remove(for: "bot:\(botId)")
                 bots.remove(at: index)
@@ -323,7 +336,9 @@ public struct CompanionState: Sendable {
                 // half-written reply streaming into it has nowhere to land.
                 clearStream(threadId)
                 streamSealed.remove(threadId)
+                settledReplayGuard.remove(threadId)
                 seenStreamEventIds.removeValue(forKey: threadId)
+                lastStreamDelta.removeValue(forKey: threadId)
                 pinnedOverrides.remove(for: "room:\(groupId)")
                 rooms.remove(at: index)
             }
@@ -362,6 +377,7 @@ public struct CompanionState: Sendable {
                 return
             }
             guard shouldAcceptDelta(delta, on: event.threadId) else { return }
+            lastStreamDelta[event.threadId] = delta
             switch event.streamKind {
             case "assistant_text":
                 streaming[event.threadId] = StreamDeltaMerge.combining(
@@ -380,7 +396,9 @@ public struct CompanionState: Sendable {
             }
         case "turn.started":
             streamSealed.remove(event.threadId)
+            settledReplayGuard.remove(event.threadId)
             seenStreamEventIds[event.threadId] = []
+            lastStreamDelta.removeValue(forKey: event.threadId)
             clearStream(event.threadId)
         case "turn.completed", "turn.failed", "turn.aborted":
             clearStream(event.threadId)
@@ -402,11 +420,15 @@ public struct CompanionState: Sendable {
     public mutating func clearStream(_ threadId: String) {
         streaming.removeValue(forKey: threadId)
         reasoning.removeValue(forKey: threadId)
+        lastStreamDelta.removeValue(forKey: threadId)
     }
 
     private mutating func shouldAcceptDelta(_ delta: String, on threadId: String) -> Bool {
         let busy = bot(forThread: threadId)?.busy == true
             || room(forThread: threadId)?.busyBotId != nil
+        if lastStreamDelta[threadId] == delta {
+            return false
+        }
         // Replayed tokens that already live in the settled bubble must not
         // unseal the turn — that is the duplicate-tail reconnect bug.
         if isReplayOfSettledReply(delta, on: threadId) {
@@ -422,13 +444,24 @@ public struct CompanionState: Sendable {
 
     /// Reconnect replay of a prefix already committed as a bot text message.
     private func isReplayOfSettledReply(_ delta: String, on threadId: String) -> Bool {
+        guard settledReplayGuard.contains(threadId) else { return false }
         let last = visibleTranscript(forThread: threadId).last
         let speaker = room(forThread: threadId)?.busyBotId
-        return LiveTailPolicy.duplicatesSettledReply(
+        if LiveTailPolicy.duplicatesSettledReply(
             delta,
             lastMessage: last,
             speakerBotId: speaker
-        )
+        ) {
+            return true
+        }
+        guard (streaming[threadId] ?? "").isEmpty,
+              last?.role == .bot,
+              last?.kind == .text,
+              let text = last?.text,
+              !delta.isEmpty,
+              text.hasSuffix(delta)
+        else { return false }
+        return true
     }
 
     /// Returns true when this id has already been folded for the thread.

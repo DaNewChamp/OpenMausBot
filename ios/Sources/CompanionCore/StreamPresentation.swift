@@ -247,9 +247,6 @@ public enum StreamDeltaMerge {
         guard let existing, !existing.isEmpty else { return delta }
         if existing == delta || existing.hasPrefix(delta) { return existing }
         if delta.hasPrefix(existing) { return delta }
-        if existing.count > delta.count, delta.count > 1, existing.hasSuffix(delta) {
-            return existing
-        }
         return existing + delta
     }
 }
@@ -269,10 +266,11 @@ public enum LiveTailPolicy {
         streaming: String?,
         reasoning: String?,
         lastMessage: Message?,
-        speakerBotId: String?
+        speakerBotId: String?,
+        suppressSettledReplay: Bool = true
     ) -> LiveTailKind {
         let held = streaming ?? ""
-        let duplicateOfSettled = duplicatesSettledReply(
+        let duplicateOfSettled = suppressSettledReplay && duplicatesSettledReply(
             held,
             lastMessage: lastMessage,
             speakerBotId: speakerBotId

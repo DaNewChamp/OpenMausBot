@@ -266,8 +266,14 @@ final class StreamDeltaMergeTests: XCTestCase {
         XCTAssertEqual(StreamDeltaMerge.combining(existing: "Hello", delta: "Hello world"), "Hello world")
     }
 
-    func testAReplayedSuffixTokenDoesNotAppendAgain() {
-        XCTAssertEqual(StreamDeltaMerge.combining(existing: "Hello world", delta: " world"), "Hello world")
+    func testASuffixShapedIncrementalTokenStillAppends() {
+        XCTAssertEqual(StreamDeltaMerge.combining(existing: "baa", delta: "aa"), "baaaa")
+        XCTAssertEqual(StreamDeltaMerge.combining(existing: "banana", delta: "na"), "bananana")
+    }
+
+    func testReconnectSuffixReplayIsHandledOutsideMerge() {
+        // Exact-token replay dedup lives in Store; merge must not guess from suffix shape.
+        XCTAssertEqual(StreamDeltaMerge.combining(existing: "Hello world", delta: " world"), "Hello world world")
     }
 }
 
@@ -328,7 +334,8 @@ final class LiveTailPolicyTests: XCTestCase {
                 streaming: "Hello world",
                 reasoning: nil,
                 lastMessage: botText("Hello world"),
-                speakerBotId: nil
+                speakerBotId: nil,
+                suppressSettledReplay: true
             ),
             .none
         )
@@ -338,9 +345,24 @@ final class LiveTailPolicyTests: XCTestCase {
                 streaming: "Hello",
                 reasoning: nil,
                 lastMessage: botText("Hello world"),
-                speakerBotId: nil
+                speakerBotId: nil,
+                suppressSettledReplay: true
             ),
             .none
+        )
+    }
+
+    func testANewTurnCanShowStreamingThatPrefixesTheSettledReply() {
+        XCTAssertEqual(
+            LiveTailPolicy.presentation(
+                busy: true,
+                streaming: "Hello ",
+                reasoning: nil,
+                lastMessage: botText("Hello"),
+                speakerBotId: nil,
+                suppressSettledReplay: false
+            ),
+            .streaming("Hello ")
         )
     }
 
