@@ -1,7 +1,7 @@
-V Bot build 57: premium W1 surface cohesion — unified graphite UI, calmer loading, and safer offline.
+V Bot build 58: W2 chat reliability — reconnect tails, busy model safety, and VoiceOver fixes.
 
-• See consistent premium graphite surfaces across Home, Settings, and Computer
-• Get calmer loading and offline empty states instead of harsh spinners
-• Use a stable pinned chat shelf with smoother pin/unpin motion
-• Read more comfortably with accessibility and Dynamic Type improvements
-• Keep cached profile and settings safe when you are offline
+• Reconnect streaming tails dedupe so resumed tokens do not replay stale text
+• No stuck Working row after reconnect or catch-up replay
+• Busy model switching stays safe with Stop available while a turn is active
+• ChatView extraction for clearer transcript/composer structure
+• VoiceOver announces stream phases correctly on the first visible token
