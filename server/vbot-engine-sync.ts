@@ -16,6 +16,7 @@ import {
   ReconstructedVbotError,
   sessionsToCatalog,
   setVbotRouter,
+  submitStableReconstructedPrompt,
   stopVbotBot,
   submitVbotTurn,
   type PublicVbotActivity,
@@ -58,6 +59,24 @@ export interface VBotModelCapabilities {
   readonly attachments: boolean;
 }
 
+/** Capabilities of the selected desktop engine itself. Unlike the per-model
+ * flags above this is intentionally explicit about the reconstructed
+ * adapter's narrow, verified surface so clients can disable unsupported
+ * affordances without guessing from an absent field. */
+export interface VBotEngineCapabilities {
+  readonly roster: boolean;
+  readonly sendPrompt: boolean;
+  readonly transcriptTail: boolean;
+  readonly events: boolean;
+  readonly attachments: boolean;
+  readonly queueing: boolean;
+  readonly steer: boolean;
+  readonly stop: boolean;
+  readonly mcp: boolean;
+  readonly computer: boolean;
+  readonly localVm: boolean;
+}
+
 export interface VBotEngineStatus {
   readonly id: VBotPrimaryEngine;
   readonly displayName: string;
@@ -77,6 +96,7 @@ export interface VBotEngineSync {
   readonly bots: readonly VBotSyncedBot[];
   readonly groups: readonly VBotSyncedGroup[];
   readonly modelCapabilities: VBotModelCapabilities | null;
+  readonly engineCapabilities: VBotEngineCapabilities;
   readonly providers: PublicVbotProviderCatalog | null;
   readonly router: PublicVbotRouterState | null;
 }
@@ -192,6 +212,40 @@ function reconstructedModelCapabilities(
   };
 }
 
+function reconstructedEngineCapabilities(
+  probe: Extract<ReconstructedProbe, { ok: true }>,
+): VBotEngineCapabilities {
+  return {
+    roster: probe.capabilities.listAgents,
+    sendPrompt: probe.capabilities.sendPrompt,
+    transcriptTail: probe.capabilities.transcriptTail,
+    events: probe.capabilities.events,
+    attachments: false,
+    queueing: false,
+    steer: probe.capabilities.steer,
+    stop: probe.capabilities.stop,
+    mcp: false,
+    computer: false,
+    localVm: false,
+  };
+}
+
+function openMausEngineCapabilities(): VBotEngineCapabilities {
+  return {
+    roster: true,
+    sendPrompt: true,
+    transcriptTail: true,
+    events: true,
+    attachments: true,
+    queueing: true,
+    steer: true,
+    stop: true,
+    mcp: true,
+    computer: true,
+    localVm: true,
+  };
+}
+
 function openMausModelCapabilities(): VBotModelCapabilities {
   return {
     defaultModel: "",
@@ -230,6 +284,7 @@ export function buildVBotEngineSync(input: {
       bots: reconstructedBots(input.reconstructed),
       groups: reconstructedGroups(input.reconstructed),
       modelCapabilities: reconstructedModelCapabilities(input.reconstructed, catalog),
+      engineCapabilities: reconstructedEngineCapabilities(input.reconstructed),
       providers: null,
       router: null,
     };
@@ -245,6 +300,7 @@ export function buildVBotEngineSync(input: {
     bots: openMausBots(input.openmaus),
     groups: openMausGroups(input.openmaus),
     modelCapabilities: openMausModelCapabilities(),
+    engineCapabilities: openMausEngineCapabilities(),
     providers: null,
     router: null,
   };
@@ -278,6 +334,18 @@ export function requireReconstructedRead(
   return reconstructed;
 }
 
+function requireReconstructedRuntime(
+  reconstructed: ReconstructedProbe,
+): Extract<ReconstructedProbe, { ok: true }> {
+  if (!reconstructed.ok) {
+    throw new ReconstructedVbotError(
+      "reconstructed-unavailable",
+      publicDisabledReason(reconstructed.code),
+    );
+  }
+  return reconstructed;
+}
+
 export function requireReconstructedMutation(
   primaryEngine: VBotPrimaryEngine,
   reconstructed: ReconstructedProbe,
@@ -292,12 +360,6 @@ export function requireReconstructedMutation(
     throw new ReconstructedVbotError(
       "engine-mutation-blocked",
       publicDisabledReason(reconstructed.code),
-    );
-  }
-  if (!reconstructed.capabilities.vbotInterop) {
-    throw new ReconstructedVbotError(
-      "vbot-interop-unavailable",
-      publicVbotErrorReason("vbot-interop-unavailable"),
     );
   }
   return reconstructed;
@@ -326,7 +388,16 @@ export async function readReconstructedVbotBots(
   reconstructed: ReconstructedProbe,
   host: ReconstructedRuntimeHost = defaultReconstructedHost(),
 ): Promise<VBotSyncedBot[]> {
-  const runtime = requireReconstructedRead(reconstructed);
+  const runtime = requireReconstructedRuntime(reconstructed);
+  if (!runtime.capabilities.vbotInterop) {
+    return runtime.roster.bots.map((bot) => ({
+      id: bot.id,
+      label: bot.label,
+      isActive: bot.isActive,
+      isRunning: bot.isRunning,
+      busy: bot.isRunning === true,
+    }));
+  }
   const bots = await fetchVbotBots(host, runtime);
   return bots.map((bot) => ({
     id: bot.id,
@@ -341,7 +412,15 @@ export async function readReconstructedVbotGroups(
   reconstructed: ReconstructedProbe,
   host: ReconstructedRuntimeHost = defaultReconstructedHost(),
 ): Promise<VBotSyncedGroup[]> {
-  const runtime = requireReconstructedRead(reconstructed);
+  const runtime = requireReconstructedRuntime(reconstructed);
+  if (!runtime.capabilities.vbotInterop) {
+    return runtime.roster.groups.map((group) => ({
+      id: group.id,
+      label: group.label,
+      memberIds: [...group.memberIds],
+      busyBotId: null,
+    }));
+  }
   const groups = await fetchVbotGroups(host, runtime);
   return groups.map((group) => ({
     id: group.id,
@@ -426,6 +505,16 @@ export async function mutateReconstructedVbotTurn(
       "Steering is unavailable on Grok Reconstructed.",
       { action: "per_bot_router" },
     );
+  }
+  if (!runtime.capabilities.vbotInterop) {
+    if (steered) {
+      throw new ReconstructedVbotError(
+        "unsupported_action",
+        "Steering is unavailable on the stable reconstructed gateway.",
+        { action: "per_bot_router" },
+      );
+    }
+    return submitStableReconstructedPrompt(host, runtime, botId, parsed);
   }
   return submitVbotTurn(host, runtime, botId, parsed, steered);
 }

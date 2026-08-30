@@ -122,6 +122,19 @@ describe("vbot engine sync projection", () => {
         steer: true,
         stop: true,
       },
+      engineCapabilities: {
+        roster: true,
+        sendPrompt: true,
+        transcriptTail: true,
+        events: true,
+        attachments: true,
+        queueing: true,
+        steer: true,
+        stop: true,
+        mcp: true,
+        computer: true,
+        localVm: true,
+      },
     });
     expect(sync.engines.map((engine) => engine.id)).toEqual(["openmaus", "grokReconstructed"]);
     expect(sync.engines[1]).toMatchObject({
@@ -154,6 +167,19 @@ describe("vbot engine sync projection", () => {
         queueing: false,
         steer: false,
         stop: false,
+      },
+      engineCapabilities: {
+        roster: true,
+        sendPrompt: false,
+        transcriptTail: false,
+        events: false,
+        attachments: false,
+        queueing: false,
+        steer: false,
+        stop: false,
+        mcp: false,
+        computer: false,
+        localVm: false,
       },
     });
     const wire = JSON.stringify(sync);

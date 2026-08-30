@@ -124,6 +124,15 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const selectedInstance = state.instances.find(
     (instance) => instance.instanceId === bot.modelSelection.instanceId,
   );
+  const reconstructedEngine = selectedInstance?.driverKind === "grokReconstructed";
+  const reconstructedComputerNotice =
+    "Grok Reconstructed supports chat, roster, and transcript history only. Computer control, Local VM, attachments, queueing, and connected tools stay off for this engine.";
+  const openNativeEnginePicker = () => {
+    // The model picker in Bot settings is the single source of truth for
+    // moving this bot back to the native V Bot/OpenMaus harness. Opening it
+    // avoids silently changing a user's provider or model selection.
+    dispatch({ type: "toggleSettings", open: true });
+  };
 
   // Pause the screenshot poll while this bot's viewer is open; seed from the
   // live viewer so a remount/switch mid-session doesn't wrongly resume it.
@@ -196,16 +205,23 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       setPhase("off");
       return;
     }
+    if (reconstructedEngine) {
+      // Reconstructed has no MCP/computer integration. Do not even inspect
+      // Box/VPS/Local VM state for Auto: doing so could provision a desktop
+      // that this engine can never use and leaves a confusing blank panel.
+      setPhase("error");
+      return;
+    }
     if (bot.computer === "local") {
       if (!providerSupportsLocal) {
-        setError("This model engine cannot control this computer. Choose Claude or an ACP engine.");
+        setError(reconstructedEngine ? null : "This model engine cannot control this computer. Choose Claude or an ACP engine.");
       }
       setPhase(capabilitiesReady && localAvailable && providerSupportsLocal ? "local" : "local-unavailable");
       return;
     }
     if (bot.computer === "vm") {
       if (!vmSupported) {
-        setError("This model engine cannot use the Local VM. Choose Claude or an ACP engine.");
+        setError(reconstructedEngine ? null : "This model engine cannot use the Local VM. Choose Claude or an ACP engine.");
         setPhase("vm-unavailable");
         return;
       }
@@ -257,7 +273,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       };
     }
     if (bot.computer === "cloud" && !cloudSupported) {
-      setError("This model engine cannot use cloud computer tools. Choose Claude, an ACP engine, or the Computer engine.");
+      setError(reconstructedEngine ? null : "This model engine cannot use cloud computer tools. Choose Claude, an ACP engine, or the Computer engine.");
       setPhase("error");
       return;
     }
@@ -376,6 +392,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     localSelectable,
     isLinux,
     providerSupportsLocal,
+    reconstructedEngine,
     vmSupported,
     cloudSupported,
     vpsSupported,
@@ -682,10 +699,10 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     "vps-unconfigured": "No managed VPS computer is configured for this bot",
     "vps-incompatible": "This VPS computer belongs to an earlier V Bot version",
     "vps-stopped": "The managed VPS computer is stopped",
-    "local-unavailable": localDisabledReason ?? "Local computer control isn't ready.",
-    "vm-unavailable": "The Local VM isn't available for this bot",
+    "local-unavailable": reconstructedEngine ? reconstructedComputerNotice : localDisabledReason ?? "Local computer control isn't ready.",
+    "vm-unavailable": reconstructedEngine ? reconstructedComputerNotice : "The Local VM isn't available for this bot",
     off: "This bot's computer is off",
-    error: "Couldn't reach the computer",
+    error: reconstructedEngine ? reconstructedComputerNotice : "Couldn't reach the computer",
   } satisfies Record<Exclude<Phase, "ready" | "local" | "vm">, string>;
 
   return (
@@ -800,7 +817,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                   Open Settings
                 </button>
               )}
-              {phase === "vm-unavailable" && (
+              {phase === "vm-unavailable" && !reconstructedEngine && (
                 vmStatus?.mode === "per-bot" && vmStatus.image && vmStatus.create_supported ? (
                   <button
                     onClick={() => void runVmAction(vmStatus.container === "missing" ? "vm-create" : "vm-recreate")}
@@ -821,7 +838,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                   </button>
                 )
               )}
-              {(phase === "vps-unconfigured" || phase === "vps-stopped") && (
+              {(phase === "vps-unconfigured" || phase === "vps-stopped") && !reconstructedEngine && (
                 <button
                   onClick={openConnectionSettings}
                   className="mt-1 rounded-lg bg-control px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover"
@@ -829,7 +846,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                   Open VPS settings
                 </button>
               )}
-              {(phase === "vps-stopped" || (phase === "vps-unconfigured" && vpsStatus?.configured)) &&
+              {(phase === "vps-stopped" || (phase === "vps-unconfigured" && vpsStatus?.configured)) && !reconstructedEngine &&
                 (bot.computer === "cloud" || bot.autoStartVps) && (
                 <button
                   onClick={() => run("provision")}
@@ -840,7 +857,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                   {phase === "vps-stopped" ? "Start VPS computer" : "Prepare VPS computer"}
                 </button>
               )}
-              {phase === "vps-incompatible" && vpsStatus?.managed &&
+              {phase === "vps-incompatible" && !reconstructedEngine && vpsStatus?.managed &&
                 (bot.computer === "cloud" || bot.autoStartVps) && (
                 <button
                   onClick={() => void replaceVpsComputer()}
@@ -858,6 +875,19 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           {conversationTitle(bot.name, bot.modelSelection)}'s screen
         </div>
         <ShellHealth bot={bot} />
+
+        {reconstructedEngine && (
+          <div className="mt-3 rounded-xl border border-warning/25 bg-warning/10 p-3">
+            <div className="text-[12px] leading-relaxed text-warning">{reconstructedComputerNotice}</div>
+            <button
+              type="button"
+              onClick={openNativeEnginePicker}
+              className="mt-2 rounded-lg bg-control px-3 py-1.5 text-[12px] font-medium text-ink hover:bg-raised-hover"
+            >
+              Choose V Bot / OpenMaus engine
+            </button>
+          </div>
+        )}
 
         <div className="mt-2">
           <div className="flex items-center justify-between gap-2">
@@ -921,9 +951,9 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                 (mode === "local" && !localSelectable);
               const unavailableTitle =
                 mode === "vm" && !vmSupported
-                  ? "This model engine cannot use the Local VM"
+                  ? reconstructedEngine ? "Grok Reconstructed does not provide Local VM control" : "This model engine cannot use the Local VM"
                   : mode === "cloud" && !cloudSupported
-                    ? "This model engine cannot use cloud computer tools"
+                    ? reconstructedEngine ? "Grok Reconstructed does not provide computer control" : "This model engine cannot use cloud computer tools"
                     : mode === "local" && !localSelectable
                       ? localDisabledReason ?? "Local computer control isn't ready"
                       : undefined;
@@ -1103,11 +1133,11 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           </div>
         )}
 
-        <LocalScreenPreview />
-        <LinuxLocalControl />
-        <MacLocalControl />
+        {!reconstructedEngine && <LocalScreenPreview />}
+        {!reconstructedEngine && <LinuxLocalControl />}
+        {!reconstructedEngine && <MacLocalControl />}
 
-        {(!bot.computer || bot.computer === "cloud") && !isDesktopDemoMode() && (
+          {(!bot.computer || bot.computer === "cloud") && !isDesktopDemoMode() && !reconstructedEngine && (
             <>
               <CloudBackendPicker
                 value={cloudBackend}

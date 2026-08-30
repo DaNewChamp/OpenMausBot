@@ -1030,6 +1030,30 @@ export async function submitVbotTurn(
   };
 }
 
+/** Stable reconstructed builds expose only the local sendPrompt route. Keep
+ * the public V Bot route useful for those builds without pretending that the
+ * richer /vbot/v1 interop surface exists. */
+export async function submitStableReconstructedPrompt(
+  host: ReconstructedRuntimeHost,
+  runtime: Extract<ReconstructedProbe, { ok: true }>,
+  botId: string,
+  body: { readonly prompt: string; readonly clientNonce?: string },
+): Promise<PublicVbotTurnResult> {
+  if (!isVbotBotId(botId)) {
+    throw new ReconstructedVbotError("invalid_request", "bot id is invalid");
+  }
+  const value = asRecord(
+    await vbotRequest(host, runtime, "POST", `${GATEWAY_API_PREFIX}/sendPrompt`, {
+      prompt: body.prompt,
+      agentId: botId,
+    }),
+  );
+  if (value?.accepted !== true) {
+    throw new ReconstructedVbotError("internal", "The reconstructed host did not accept the prompt.");
+  }
+  return { accepted: true, botId, steered: false };
+}
+
 export async function stopVbotBot(
   host: ReconstructedRuntimeHost,
   runtime: Extract<ReconstructedProbe, { ok: true }>,
@@ -1093,17 +1117,44 @@ export async function probeReconstructedGateway(
       return { ok: false, code: "list-agents-unsupported" };
     }
 
-    let interopCaps = emptyVbotCapabilities();
+    // Transcript tail is part of the stable adapter contract. Probe it once
+    // rather than advertising a capability because a route merely exists in
+    // documentation; a missing route must become a calm unsupported state,
+    // not a blank conversation after a send.
+    const firstAgentId = sanitizeAgentSessions(listed.value)[0]?.id ?? ACTIVE_SESSION_ID;
+    let transcriptTail = false;
+    try {
+      const tail = await readJson(host, `${origin}${GATEWAY_API_PREFIX}/getAgentTranscriptTail`, {
+        method: "POST",
+        headers: requestHeaders(discovery.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ id: firstAgentId, limit: 1 }),
+        signal: AbortSignal.timeout(COMMAND_TIMEOUT_MS),
+      });
+      const tailValue = asRecord(tail.value);
+      transcriptTail = tail.ok && tailValue != null && Array.isArray(tailValue.entries);
+    } catch {
+      transcriptTail = false;
+    }
+
+    // The three original gateway routes are the stable reconstructed
+    // contract. A missing optional /vbot/v1 descriptor must not make the
+    // known sendPrompt route disappear from the capability payload.
+    let interopCaps = { ...emptyVbotCapabilities(), sendPrompt: true };
+    let interopDetected = false;
     try {
       const interop = await readJson(host, `${origin}${VBOT_INTEROP_PATH_PREFIX}`, {
         method: "GET",
         headers: requestHeaders(discovery.token),
         signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
       });
-      if (interop.ok) interopCaps = vbotCapabilitiesFrom(interop.value);
+      if (interop.ok) {
+        interopDetected = true;
+        interopCaps = vbotCapabilitiesFrom(interop.value);
+      }
     } catch {
-      interopCaps = emptyVbotCapabilities();
+      interopCaps = { ...emptyVbotCapabilities(), sendPrompt: true };
     }
+    if (!interopDetected) interopCaps.sendPrompt = true;
 
     return {
       ok: true,
@@ -1116,6 +1167,7 @@ export async function probeReconstructedGateway(
         health: true,
         listAgents: true,
         ...interopCaps,
+        transcriptTail,
       },
     };
   } catch (error) {

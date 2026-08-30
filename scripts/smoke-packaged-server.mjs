@@ -74,6 +74,16 @@ while (Date.now() < deadline) {
   await new Promise((resolve) => setTimeout(resolve, 300));
 }
 
+let engineSyncReport = null;
+if (listening) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/vbot/engine-sync`);
+    engineSyncReport = { status: response.status, body: await response.json() };
+  } catch (error) {
+    engineSyncReport = { error: String(error) };
+  }
+}
+
 // Serving /api/health is necessary but nowhere near sufficient. Bundling
 // relocates import.meta.url, so a module that used to sit in drivers/ resolves
 // its sibling paths from the bundle's directory instead — one level too high.
@@ -109,6 +119,30 @@ if (!listening) {
   process.exit(1);
 }
 
+const engineCapabilities = engineSyncReport?.body?.engineCapabilities;
+const requiredEngineCapabilityKeys = [
+  "roster",
+  "sendPrompt",
+  "transcriptTail",
+  "events",
+  "attachments",
+  "queueing",
+  "steer",
+  "stop",
+  "mcp",
+  "computer",
+  "localVm",
+];
+if (
+  engineSyncReport?.status !== 200 ||
+  !engineCapabilities ||
+  requiredEngineCapabilityKeys.some((key) => typeof engineCapabilities[key] !== "boolean")
+) {
+  console.error("packaged server returned an incomplete /api/vbot/engine-sync capability payload:");
+  console.error(JSON.stringify(engineSyncReport, null, 2));
+  process.exit(1);
+}
+
 if (!proxyReport || proxyReport.error || proxyReport.missing.length > 0) {
   console.error("spawned proxy paths do not resolve inside the packaged server dir:");
   console.error(JSON.stringify(proxyReport, null, 2));
@@ -120,3 +154,4 @@ if (!proxyReport || proxyReport.error || proxyReport.missing.length > 0) {
 const count = Object.keys(proxyReport.resolved).length;
 console.log(`packaged server started with no node_modules in reach (port ${port}) ✓`);
 console.log(`all ${count} spawned proxy paths resolve inside the packaged server dir ✓`);
+console.log("engine capability payload is explicit and complete ✓");

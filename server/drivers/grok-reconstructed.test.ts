@@ -33,6 +33,7 @@ import {
   sessionsToCatalog,
   setVbotRouter,
   stopVbotBot,
+  submitStableReconstructedPrompt,
   submitVbotTurn,
   type ReconstructedRuntimeHost,
 } from "./grok-reconstructed.ts";
@@ -1048,16 +1049,21 @@ describe("reconstructed provider adapter", () => {
     expect(probe.capabilities).toEqual({
       health: true,
       listAgents: true,
-      sendPrompt: false,
+      sendPrompt: true,
       events: false,
-      transcriptTail: false,
+      transcriptTail: true,
       vbotInterop: false,
       steer: false,
       stop: false,
       selectHostRouter: false,
     });
     expect(probe.origin).toBe(gateway.origin);
-    expect(gateway.seen.paths).toEqual(["GET /health", "POST /api/listAgents", "GET /vbot/v1"]);
+    expect(gateway.seen.paths).toEqual([
+      "GET /health",
+      "POST /api/listAgents",
+      "POST /api/getAgentTranscriptTail",
+      "GET /vbot/v1",
+    ]);
     expect(JSON.stringify(probe.sessions)).not.toContain(".grokbot");
   });
 
@@ -1203,6 +1209,22 @@ describe("reconstructed vbot interop client", () => {
     if (!probe.ok) throw new Error("expected reconstructed runtime");
     return { host, runtime: probe };
   }
+
+  it("keeps the stable send route usable when optional interop is absent", async () => {
+    const gateway = await startFakeGateway({ vbot: false });
+    servers.push(gateway);
+    const { host, runtime } = await liveRuntime(gateway);
+    expect(runtime.capabilities).toMatchObject({
+      listAgents: true,
+      sendPrompt: true,
+      transcriptTail: true,
+      events: false,
+      vbotInterop: false,
+    });
+    const result = await submitStableReconstructedPrompt(host, runtime, "bot-alpha", { prompt: "hello stable" });
+    expect(result).toEqual({ accepted: true, botId: "bot-alpha", steered: false });
+    expect(gateway.seen.sendPrompts).toEqual([{ prompt: "hello stable", agentId: "bot-alpha" }]);
+  });
 
   it("reads bots, groups, providers, router, and activity without leaking secrets", async () => {
     const gateway = await startFakeGateway({ vbot: true });
