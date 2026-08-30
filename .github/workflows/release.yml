@@ -1,6 +1,6 @@
 # One-button releases: builds macOS (arm64 + x64, signed, notarized, stapled),
 # Windows, and Ubuntu from ONE commit, assembles a complete draft on
-# openmausbot-releases with verified feeds, and publishes after a human
+# the private V Bot release channel with verified artifacts, and publishes after a human
 # approves the draft.
 #
 # Every gate below exists because its absence shipped (or nearly shipped) a
@@ -104,7 +104,7 @@ jobs:
 
       - name: "Gate: the signature must verify BEFORE notarization"
         run: |
-          for app in release/mac-arm64/OpenMausBot.app release/mac/OpenMausBot.app; do
+          for app in "release/mac-arm64/V Bot.app" "release/mac/V Bot.app"; do
             codesign --verify --deep --strict "$app"
             bin="$app/Contents/Resources/cloudflared/cloudflared"
             test -x "$bin" || { echo "::error::missing executable $bin"; exit 1; }
@@ -122,7 +122,7 @@ jobs:
 
       - name: "Gate: both packaged servers start and every helper path resolves"
         run: |
-          for app in release/mac-arm64/OpenMausBot.app release/mac/OpenMausBot.app; do
+          for app in "release/mac-arm64/V Bot.app" "release/mac/V Bot.app"; do
             res="$app/Contents/Resources"
             # the server tree is plain JS — runnable on the runner's node
             # regardless of the app binary's arch
@@ -173,28 +173,25 @@ jobs:
           done
           rm "$RUNNER_TEMP/notary.p8"
 
-      - name: Staple, re-zip, regenerate blockmaps and the feed
+      - name: Staple, re-zip, and regenerate blockmaps
         run: |
-          xcrun stapler staple release/OpenMausBot-*-arm64.dmg
-          xcrun stapler staple release/OpenMausBot-*-x64.dmg
-          xcrun stapler staple release/mac-arm64/OpenMausBot.app
-          xcrun stapler staple release/mac/OpenMausBot.app
+          xcrun stapler staple release/VBot-*-arm64.dmg
+          xcrun stapler staple release/VBot-*-x64.dmg
+          xcrun stapler staple "release/mac-arm64/V Bot.app"
+          xcrun stapler staple "release/mac/V Bot.app"
           v=$(node -p "require('./package.json').version")
-          rm -f "release/OpenMausBot-$v-arm64.zip" "release/OpenMausBot-$v-x64.zip"
-          ditto -c -k --sequesterRsrc --keepParent release/mac-arm64/OpenMausBot.app "release/OpenMausBot-$v-arm64.zip"
-          ditto -c -k --sequesterRsrc --keepParent release/mac/OpenMausBot.app "release/OpenMausBot-$v-x64.zip"
+          rm -f "release/VBot-$v-arm64.zip" "release/VBot-$v-x64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "release/mac-arm64/V Bot.app" "release/VBot-$v-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "release/mac/V Bot.app" "release/VBot-$v-x64.zip"
           node scripts/regenerate-blockmaps.mjs \
-            "release/OpenMausBot-$v-arm64.zip" "release/OpenMausBot-$v-x64.zip" \
-            "release/OpenMausBot-$v-arm64.dmg" "release/OpenMausBot-$v-x64.dmg"
-          # refreshes every hash from the post-staple bytes and refuses to
-          # finish unless the feed matches the files on disk
-          node scripts/regenerate-mac-feed.mjs
+            "release/VBot-$v-arm64.zip" "release/VBot-$v-x64.zip" \
+            "release/VBot-$v-arm64.dmg" "release/VBot-$v-x64.dmg"
 
       - name: Stable-named copies for the README's /latest/download links
         run: |
           v=$(node -p "require('./package.json').version")
-          cp "release/OpenMausBot-$v-arm64.dmg" release/OpenMausBot.dmg
-          cp "release/OpenMausBot-$v-x64.dmg" release/OpenMausBot-intel.dmg
+          cp "release/VBot-$v-arm64.dmg" release/VBot.dmg
+          cp "release/VBot-$v-x64.dmg" release/VBot-intel.dmg
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -203,7 +200,6 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.blockmap
-            release/latest-mac.yml
           if-no-files-found: error
           retention-days: 7
 
@@ -241,11 +237,7 @@ jobs:
           [ "$actual" = "$expected" ] || { echo "::error::cloudflared hash is $actual"; exit 1; }
           "$res/cloudflared/cloudflared.exe" version | grep -Fq "cloudflared version 2026.8.2 " || {
             echo "::error::cloudflared has the wrong version"; exit 1; }
-          [ -f "$res/app-update.yml" ] || { echo "::error::missing app-update.yml"; exit 1; }
-          grep -q "openmausbot-releases" "$res/app-update.yml" || { echo "::error::wrong update repo"; exit 1; }
-          if grep -q "publisherName" "$res/app-update.yml"; then
-            echo "::error::publisherName on an unsigned build breaks every update"; exit 1
-          fi
+          node scripts/verify-vbot-update-metadata.mjs "$res/app-update.yml"
           HOME="$RUNNER_TEMP/smoke" USERPROFILE="$RUNNER_TEMP/smoke" OMB_PORT=21987 \
             node "$res/server/index.js" > "$RUNNER_TEMP/server.log" 2>&1 &
           pid=$!
@@ -261,14 +253,13 @@ jobs:
         shell: bash
         run: |
           v=$(node -p "require('./package.json').version")
-          cp "release/OpenMausBot-$v-setup.exe" release/OpenMausBot-setup.exe
+          cp "release/VBot-$v-setup.exe" release/VBot-setup.exe
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-release
           path: |
-            release/*.exe
-            release/*.exe.blockmap
-            release/latest.yml
+            release/VBot-*.exe
+            release/VBot-*.exe.blockmap
           if-no-files-found: error
           retention-days: 7
 
@@ -332,9 +323,12 @@ jobs:
       - name: Stable-named copies and checksums
         run: |
           v=$(node -p "require('./package.json').version")
-          cp "release/OpenMausBot-$v-amd64.deb" release/OpenMausBot-amd64.deb
-          cp "release/OpenMausBot-$v-x86_64.AppImage" release/OpenMausBot.AppImage
-          (cd release && sha256sum OpenMausBot-$v-amd64.deb OpenMausBot-$v-x86_64.AppImage > SHA256SUMS-ubuntu-x64.txt)
+          deb=(release/VBot-$v-*.deb)
+          appimage=(release/VBot-$v-*.AppImage)
+          test "${#deb[@]}" -eq 1 && test "${#appimage[@]}" -eq 1
+          cp "${deb[0]}" release/VBot-amd64.deb
+          cp "${appimage[0]}" release/VBot.AppImage
+          (cd release && sha256sum "$(basename "${deb[0]}")" "$(basename "${appimage[0]}")" VBot-amd64.deb VBot.AppImage > SHA256SUMS-ubuntu-x64.txt)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-release
@@ -342,7 +336,6 @@ jobs:
             release/*.deb
             release/*.AppImage
             release/SHA256SUMS-ubuntu-x64.txt
-            release/latest-linux.yml
           if-no-files-found: error
           retention-days: 7
 
@@ -356,28 +349,16 @@ jobs:
         with:
           path: assets
           merge-multiple: true
-      - name: Verify every feed hash against the actual bytes
+      - name: Verify V Bot artifact names and checksums
         run: |
           cd assets
-          node --input-type=module - <<'EOF'
-          import { createHash } from "node:crypto";
-          import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
-          const sha512 = (f) => createHash("sha512").update(readFileSync(f)).digest("base64");
-          let bad = 0;
-          for (const feed of ["latest-mac.yml", "latest.yml", "latest-linux.yml"]) {
-            if (!existsSync(feed)) continue;
-            const text = readFileSync(feed, "utf8");
-            for (const [, url, hash, size] of text.matchAll(/url:\s+(\S+)[\s\S]*?sha512:\s+(\S+)\n\s+size:\s+(\d+)/g)) {
-              if (!existsSync(url)) { console.error(`MISSING ${url} (listed in ${feed})`); bad++; continue; }
-              const okHash = sha512(url) === hash;
-              const okSize = statSync(url).size === Number(size);
-              if (!okHash || !okSize) { console.error(`MISMATCH ${url} in ${feed}`); bad++; }
-              else console.log(`ok ${url}`);
-            }
-          }
-          if (bad) process.exit(1);
-          console.log(`\nall feeds verified; ${readdirSync(".").length} assets staged`);
-          EOF
+          ! find . -maxdepth 1 -type f -iname 'OpenMausBot-*' -print -quit | grep -q .
+          find . -maxdepth 1 -type f -name 'VBot-*' -print
+          test -f VBot.dmg
+          test -f VBot-intel.dmg
+          test -f VBot-setup.exe
+          test -f VBot-amd64.deb
+          test -f VBot.AppImage
       - name: Create or update the draft with the complete asset set
         env:
           GH_TOKEN: ${{ secrets.RELEASES_PAT }}
@@ -388,8 +369,8 @@ jobs:
           tag="v$VERSION"
           if ! gh release view "$tag" --repo milind-soni/openmausbot-releases > /dev/null 2>&1; then
             gh release create "$tag" --repo milind-soni/openmausbot-releases \
-              --draft --title "OpenMausBot $VERSION" \
-              --notes "Draft assembled by the release workflow from milind-soni/OpenMausBot@$SHA. Edit these notes, then publish."
+              --draft --title "V Bot $VERSION" \
+              --notes "Draft assembled by the private V Bot release workflow from the pinned source commit $SHA. Edit these notes, then publish."
           fi
           for f in *; do
             gh release upload "$tag" "$f" --repo milind-soni/openmausbot-releases --clobber

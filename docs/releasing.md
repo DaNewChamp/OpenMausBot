@@ -3,9 +3,9 @@
 One workflow builds everything: **Actions → Release → Run workflow**. It
 builds macOS (arm64 + x64, signed, notarized, stapled), Windows, and Ubuntu
 from a single pinned commit and verifies every artifact the way a user would
-receive it. V Bot artifacts are staged for a private release channel; the
-desktop updater remains disabled until `VBOT_UPDATE_FEED_URL` is explicitly
-configured to the channel's HTTPS feed.
+receive it. Artifacts are named `VBot-*` and staged in the private release
+repository. The desktop updater remains disabled until `VBOT_UPDATE_FEED_URL`
+is explicitly configured to a private HTTPS generic feed.
 
 The workflow refuses to overwrite an already-published version, so the only
 prerequisite per release is that `package.json`'s version is bumped on the
@@ -63,10 +63,17 @@ reminder.
 The hand-cut path still works when Actions is down or a release needs
 surgery: `pnpm package:mac`, gate with `codesign --verify --deep --strict`,
 notarize with the local keychain profile (`xcrun notarytool submit …
---keychain-profile AC_PASSWORD`), staple, re-zip, regenerate blockmaps and
-`node scripts/regenerate-mac-feed.mjs`, upload to the private channel, and
-always verify the published bytes against its feed by downloading them back.
+--keychain-profile AC_PASSWORD`), staple, re-zip, and regenerate blockmaps.
+Upload the `VBot-*` artifacts to the private channel only after review. If
+you deliberately operate a generic feed, generate its metadata from the
+post-staple bytes and verify the published bytes against that feed.
 
-Never point a V Bot build at the public OpenMausBot release feed. Update checks
-stay off until `VBOT_UPDATE_FEED_URL` is deliberately configured to a private
-HTTPS feed.
+### Update feed contract
+
+The package config deliberately has `publish: []`, so no GitHub provider or
+feed URL is baked into a desktop artifact. A packaging lane may include an
+`app-update.yml` only when it contains `provider: generic` and an explicit
+HTTPS URL without credentials, ports, query strings, or fragments. The
+workflow rejects GitHub/OpenMausBot feed URLs and unsigned `publisherName`
+metadata. At runtime, `VBOT_UPDATE_FEED_URL` is the only opt-in and is
+validated again by the app before `electron-updater` is started.

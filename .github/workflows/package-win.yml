@@ -47,7 +47,7 @@ jobs:
         run: |
           echo "version: $(node -p "require('./package.json').version")"
           echo "commit:  $(git rev-parse HEAD)"
-          ls -lh release/*.exe release/*.yml 2>/dev/null || true
+          ls -lh release/VBot-*.exe 2>/dev/null || true
       # Three things silently produce an installer that builds fine and is
       # broken in the field, and none of them can be checked from the Mac the
       # release is cut on — the artifact carries only the .exe. So assert them
@@ -77,17 +77,7 @@ jobs:
             "$res/cloudflared/cloudflared.exe" version | grep -Fq "cloudflared version 2026.8.2 " || {
               echo "::error::packaged cloudflared has the wrong version"; fail=1; }
           fi
-          [ -f "$res/app-update.yml" ] || { echo "::error::missing $res/app-update.yml"; fail=1; }
-          if [ -f "$res/app-update.yml" ]; then
-            grep -q "openmausbot-releases" "$res/app-update.yml" || {
-              echo "::error::app-update.yml does not point at openmausbot-releases"; fail=1; }
-            # while the build is unsigned, a publisherName makes
-            # electron-updater reject every update as untrusted
-            if grep -q "publisherName" "$res/app-update.yml"; then
-              echo "::error::app-update.yml carries publisherName on an unsigned build"; fail=1
-            fi
-          fi
-          echo "--- app-update.yml ---"; cat "$res/app-update.yml" 2>/dev/null || true
+          node scripts/verify-vbot-update-metadata.mjs "$res/app-update.yml" || fail=1
           exit $fail
 
       # index.js EXISTING is not the same as index.js RUNNING. 0.1.24 shipped a
@@ -120,8 +110,7 @@ jobs:
         with:
           name: windows-installer
           path: |
-            release/*.exe
-            release/*.exe.blockmap
-            release/latest.yml
+            release/VBot-*.exe
+            release/VBot-*.exe.blockmap
           if-no-files-found: error
           retention-days: 14
