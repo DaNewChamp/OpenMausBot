@@ -18,7 +18,6 @@ import CompanionCore
 import UIKit
 import AVFoundation
 import AVKit
-import QuickLook
 import PhotosUI
 import UniformTypeIdentifiers
 
@@ -317,28 +316,29 @@ struct ChatView: View {
                 groupProfileRoom: $groupProfileRoom
             )
         }
-        .onAppear { recoverComposerAfterNavigation() }
+        .onAppear {
+            recoverComposerAfterNavigation()
+            absorbShareStaging()
+        }
         .onChange(of: showingComputer) { _, shown in
             composerFocused = false
             if !shown { recoverComposerAfterNavigation() }
         }
-        .onChange(of: session.stagedComposerText) { _, text in
-            guard let text, !text.isEmpty else { return }
-            if draft.isEmpty {
-                draft = text
-            } else if draft.hasSuffix(" ") {
-                draft += text
-            } else {
-                draft += " \(text)"
-            }
-            session.stagedComposerText = nil
+        .onChange(of: session.stagedComposerText, initial: true) { _, _ in
+            absorbShareStaging()
         }
-        .onChange(of: session.stagedShareImageData) { _, data in
-            guard let data else { return }
-            Task {
-                await appendSharedImage(data)
-                session.stagedShareImageData = nil
-            }
+        .onChange(of: session.stagedShareImageData, initial: true) { _, _ in
+            absorbShareStaging()
+        }
+    }
+
+    private func absorbShareStaging() {
+        let taken = session.takeShareStaging()
+        if let text = taken.text {
+            draft = ShareStagingPolicy.merging(text, into: draft)
+        }
+        if let data = taken.imageData {
+            appendSharedImage(data)
         }
     }
 
@@ -406,7 +406,7 @@ struct ChatView: View {
         .image, .png, .jpeg, .gif, .mpeg4Movie, .quickTimeMovie,
     ] + [UTType(filenameExtension: "webp")].compactMap { $0 }
 
-    private func appendSharedImage(_ data: Data) async {
+    private func appendSharedImage(_ data: Data) {
         appendAttachment(data: data, mime: "image/jpeg", name: "Shared photo")
     }
 
@@ -443,7 +443,7 @@ struct ChatView: View {
                     throw APIError.transport("That photo could not be read.")
                 }
                 let suggested = item.supportedContentTypes.first?.preferredMIMEType
-                guard let mime = Self.attachmentMIME(data, suggested: suggested) else {
+                guard let mime = AttachmentPath.sniffedMIME(data: data, suggested: suggested) else {
                     throw APIError.transport("Choose a PNG, JPEG, GIF, WebP, MP4, or MOV file.")
                 }
                 appendAttachment(data: data, mime: mime, name: "Photo")
@@ -466,7 +466,7 @@ struct ChatView: View {
             do {
                 let data = try Data(contentsOf: url, options: [.mappedIfSafe])
                 let suggested = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-                guard let mime = Self.attachmentMIME(data, suggested: suggested) else {
+                guard let mime = AttachmentPath.sniffedMIME(data: data, suggested: suggested) else {
                     throw APIError.transport("Choose a PNG, JPEG, GIF, WebP, MP4, or MOV file.")
                 }
                 appendAttachment(data: data, mime: mime, name: url.deletingPathExtension().lastPathComponent)
@@ -482,42 +482,6 @@ struct ChatView: View {
             return
         }
         appendAttachment(data: data, mime: "image/jpeg", name: "Camera photo")
-    }
-
-    private static func attachmentMIME(_ data: Data, suggested: String? = nil) -> String? {
-        imageMIME(data, suggested: suggested) ?? videoMIME(suggested: suggested)
-    }
-
-    private static func videoMIME(suggested: String?) -> String? {
-        guard let mime = AttachmentPath.normalizedMIME(suggested ?? ""),
-              mime.hasPrefix("video/") else { return nil }
-        return mime
-    }
-
-    private static func imageMIME(_ data: Data, suggested: String? = nil) -> String? {
-        if data.count >= 8,
-           data[data.startIndex] == 0x89,
-           data[data.startIndex + 1] == 0x50,
-           data[data.startIndex + 2] == 0x4E,
-           data[data.startIndex + 3] == 0x47 {
-            return "image/png"
-        }
-        if data.count >= 3,
-           data[data.startIndex] == 0xFF,
-           data[data.startIndex + 1] == 0xD8,
-           data[data.startIndex + 2] == 0xFF {
-            return "image/jpeg"
-        }
-        if data.count >= 4,
-           String(data: data.prefix(4), encoding: .ascii) == "GIF8" {
-            return "image/gif"
-        }
-        if data.count >= 12,
-           String(data: data.prefix(4), encoding: .ascii) == "RIFF",
-           String(data: data.dropFirst(8).prefix(4), encoding: .ascii) == "WEBP" {
-            return "image/webp"
-        }
-        return AttachmentPath.normalizedMIME(suggested ?? "")
     }
 
     private func uploadSelectedAttachments() async -> [AttachmentPrompt.Item]? {
@@ -558,6 +522,7 @@ struct ChatView: View {
 
     private func removeAttachment(_ id: UUID) {
         guard !isUploadingAttachments else { return }
+        VideoAttachmentThumbnail.evict(id.uuidString)
         selectedAttachments.removeAll { $0.id == id }
         if selectedAttachments.isEmpty {
             attachmentError = nil
@@ -1104,6 +1069,7 @@ private struct TranscriptAttachmentGallery: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var images: [String: UIImage] = [:]
     @State private var failed: Set<String> = []
+    @State private var videoURLs: [String: URL] = [:]
     @State private var previewItem: PreviewAttachmentItem?
 
     private struct PreviewAttachmentItem: Identifiable {
@@ -1119,8 +1085,8 @@ private struct TranscriptAttachmentGallery: View {
                 ForEach(paths, id: \.self) { path in
                     let isVideo = Self.isVideoPath(path)
                     Button {
-                        guard isVideo else { return }
-                        Task { await openVideo(path: path) }
+                        guard isVideo, let url = videoURLs[path] else { return }
+                        previewItem = PreviewAttachmentItem(url: url)
                     } label: {
                         ZStack {
                             Group {
@@ -1146,7 +1112,7 @@ private struct TranscriptAttachmentGallery: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .disabled(!isVideo || failed.contains(path))
+                    .disabled(!isVideo || failed.contains(path) || videoURLs[path] == nil)
                     .frame(width: 156, height: 116)
                     .background(Color.black.opacity(0.16))
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -1167,17 +1133,32 @@ private struct TranscriptAttachmentGallery: View {
         .task(id: paths) {
             for path in paths {
                 guard images[path] == nil, !failed.contains(path), !Task.isCancelled else { continue }
-                guard let data = await session.attachmentData(path: path) else {
-                    failed.insert(path)
-                    continue
-                }
                 if Self.isVideoPath(path) {
-                    if let thumbnail = await VideoAttachmentThumbnail.make(from: data, path: path) {
+                    if videoURLs[path] == nil {
+                        guard let data = await session.attachmentData(path: path) else {
+                            failed.insert(path)
+                            continue
+                        }
+                        let ext = URL(fileURLWithPath: path).pathExtension.isEmpty
+                            ? "mp4"
+                            : URL(fileURLWithPath: path).pathExtension
+                        do {
+                            let url = try await Task.detached(priority: .utility) {
+                                try VideoPreviewFile.writeOnce(data, extension: ext)
+                            }.value
+                            videoURLs[path] = url
+                        } catch {
+                            failed.insert(path)
+                            continue
+                        }
+                    }
+                    guard let url = videoURLs[path] else { continue }
+                    if let thumbnail = await VideoAttachmentThumbnail.make(from: url, cacheKey: path) {
                         images[path] = thumbnail
                     } else {
                         failed.insert(path)
                     }
-                } else if let image = UIImage(data: data) {
+                } else if let data = await session.attachmentData(path: path), let image = UIImage(data: data) {
                     images[path] = image
                 } else {
                     failed.insert(path)
@@ -1186,20 +1167,15 @@ private struct TranscriptAttachmentGallery: View {
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: images.keys.sorted())
         .sheet(item: $previewItem) { item in
-            AttachmentQuickLookPreview(url: item.url)
+            AttachmentVideoPlayer(url: item.url)
+                .ignoresSafeArea()
         }
-    }
-
-    private func openVideo(path: String) async {
-        guard let data = await session.attachmentData(path: path) else { return }
-        let ext = URL(fileURLWithPath: path).pathExtension.isEmpty ? "mp4" : URL(fileURLWithPath: path).pathExtension
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("vbot-preview-\(UUID().uuidString).\(ext)")
-        do {
-            try data.write(to: url, options: .atomic)
-            previewItem = PreviewAttachmentItem(url: url)
-        } catch {
-            failed.insert(path)
+        .onDisappear {
+            previewItem = nil
+            for url in videoURLs.values {
+                VideoPreviewFile.remove(url)
+            }
+            videoURLs.removeAll()
         }
     }
 
@@ -1209,61 +1185,106 @@ private struct TranscriptAttachmentGallery: View {
     }
 }
 
-private struct AttachmentQuickLookPreview: UIViewControllerRepresentable {
+private enum VideoPreviewFile {
+    static func writeOnce(_ data: Data, extension ext: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vbot-preview-\(UUID().uuidString).\(ext)")
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    static func remove(_ url: URL) {
+        try? FileManager.default.removeItem(at: url)
+    }
+}
+
+private struct AttachmentVideoPlayer: UIViewControllerRepresentable {
     let url: URL
 
-    func makeUIViewController(context: Context) -> QLPreviewController {
-        let controller = QLPreviewController()
-        controller.dataSource = context.coordinator
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = AVPlayer(url: url)
+        controller.player?.play()
         return controller
     }
 
-    func updateUIViewController(_ controller: QLPreviewController, context: Context) {}
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {}
 
-    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
-
-    final class Coordinator: NSObject, QLPreviewControllerDataSource {
-        let url: URL
-        init(url: URL) { self.url = url }
-        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
-        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
-            url as NSURL
-        }
+    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: ()) {
+        controller.player?.pause()
+        controller.player?.replaceCurrentItem(with: nil)
+        controller.player = nil
     }
 }
 
 enum VideoAttachmentThumbnail {
-    static func sync(from data: Data, mime: String) -> UIImage? {
+    private static let cache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 10
+        cache.totalCostLimit = 10 * 128 * 128 * 4
+        return cache
+    }()
+
+    static func evict(_ cacheKey: String) {
+        cache.removeObject(forKey: cacheKey as NSString)
+    }
+
+    static func make(from data: Data, mime: String, cacheKey: String) async -> UIImage? {
+        if let cached = cache.object(forKey: cacheKey as NSString) { return cached }
+        guard !Task.isCancelled else { return nil }
         let ext = mime.contains("quicktime") ? "mov" : "mp4"
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("vbot-thumb-\(UUID().uuidString).\(ext)")
-        defer { try? FileManager.default.removeItem(at: url) }
         do {
-            try data.write(to: url, options: .atomic)
-            let asset = AVURLAsset(url: url)
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            let cgImage = try generator.copyCGImage(at: .zero, actualTime: nil)
-            return UIImage(cgImage: cgImage)
+            try await write(data, to: url)
+            guard !Task.isCancelled else {
+                try? FileManager.default.removeItem(at: url)
+                return nil
+            }
+            let image = await generate(from: url)
+            try? FileManager.default.removeItem(at: url)
+            return store(image, cacheKey: cacheKey)
         } catch {
+            try? FileManager.default.removeItem(at: url)
             return nil
         }
     }
 
-    static func make(from data: Data, path: String) async -> UIImage? {
-        let ext = URL(fileURLWithPath: path).pathExtension.isEmpty ? "mp4" : URL(fileURLWithPath: path).pathExtension
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("vbot-thumb-\(UUID().uuidString).\(ext)")
-        defer { try? FileManager.default.removeItem(at: url) }
-        do {
+    static func make(from url: URL, cacheKey: String) async -> UIImage? {
+        if let cached = cache.object(forKey: cacheKey as NSString) { return cached }
+        guard !Task.isCancelled else { return nil }
+        return store(await generate(from: url), cacheKey: cacheKey)
+    }
+
+    private static func store(_ image: UIImage?, cacheKey: String) -> UIImage? {
+        guard let image, !Task.isCancelled else { return image }
+        cache.setObject(image, forKey: cacheKey as NSString, cost: 128 * 128 * 4)
+        return image
+    }
+
+    private static func write(_ data: Data, to url: URL) async throws {
+        try await Task.detached(priority: .utility) {
             try data.write(to: url, options: .atomic)
-            let asset = AVURLAsset(url: url)
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            let cgImage = try generator.copyCGImage(at: .zero, actualTime: nil)
-            return UIImage(cgImage: cgImage)
-        } catch {
-            return nil
+        }.value
+    }
+
+    private static func generate(from url: URL) async -> UIImage? {
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 128, height: 128)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                generator.generateCGImageAsynchronously(for: .zero) { cgImage, _, _ in
+                    if let cgImage {
+                        continuation.resume(returning: UIImage(cgImage: cgImage))
+                    } else {
+                        continuation.resume(returning: nil)
+                    }
+                }
+            }
+        } onCancel: {
+            generator.cancelAllCGImageGeneration()
         }
     }
 }

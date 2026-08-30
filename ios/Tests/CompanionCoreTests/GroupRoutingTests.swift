@@ -74,6 +74,28 @@ final class GroupRoutingTests: XCTestCase {
         XCTAssertEqual(GroupRouting.mentionCandidates(query: "", members: members).map(\.id), ["atlas", "milind", "mira"])
     }
 
+    func testMentionCandidatesPreferExactNameOverLongerPrefix() {
+        let members = [
+            GroupRouting.Member(id: "miracle", name: "Miracle"),
+            GroupRouting.Member(id: "mira", name: "Mira"),
+        ]
+        XCTAssertEqual(
+            GroupRouting.mentionCandidates(query: "mira", members: members).map(\.id),
+            ["mira", "miracle"]
+        )
+    }
+
+    func testMentionReturnAcceptsTopCandidateInsteadOfSending() {
+        let members = [
+            GroupRouting.Member(id: "mira", name: "Mira"),
+            GroupRouting.Member(id: "miracle", name: "Miracle"),
+        ]
+        let ranked = GroupRouting.mentionCandidates(query: "mira", members: members)
+        XCTAssertEqual(GroupRouting.mentionReturnAction(query: "mira", candidates: ranked), .accept("Mira"))
+        XCTAssertEqual(GroupRouting.mentionReturnAction(query: "e", candidates: ranked), .accept("everyone"))
+        XCTAssertEqual(GroupRouting.mentionReturnAction(query: "z", candidates: []), .ignore)
+    }
+
     func testMentionCandidatesKeepBotColor() {
         let colored = [
             GroupRouting.Member(id: "atlas", name: "Atlas", color: "purple"),

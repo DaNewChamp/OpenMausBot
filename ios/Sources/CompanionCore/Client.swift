@@ -31,6 +31,9 @@ public struct UploadedAttachment: Codable, Equatable, Sendable {
 public enum AttachmentPath {
     public static let maxBytes = 10 * 1_024 * 1_024
     public static let maxVideoBytes = 50 * 1_024 * 1_024
+    /// Bounded idle timeout for a 50MB LTE POST. Does not change the shared
+    /// `URLSession` — only this request's `timeoutInterval`.
+    public static let videoUploadTimeoutInterval: TimeInterval = 150
     public static let supportedMIMEs = [
         "image/png", "image/jpeg", "image/gif", "image/webp",
         "video/mp4", "video/quicktime",
@@ -44,6 +47,27 @@ public enum AttachmentPath {
         return value
     }
 
+    /// Magic-byte sniff plus suggested MIME/extension. Image signatures never
+    /// become video. Video requires both a container signature and a matching
+    /// mp4/mov suggestion; mismatches are rejected.
+    public static func sniffedMIME(data: Data, suggested: String? = nil) -> String? {
+        if let image = imageMagicMIME(data) {
+            return image
+        }
+        let suggestedMIME = normalizedSuggestedMIME(suggested)
+        if let container = videoContainerKind(data) {
+            switch (container, suggestedMIME) {
+            case (.mp4, "video/mp4"): return "video/mp4"
+            case (.quickTime, "video/quicktime"): return "video/quicktime"
+            default: return nil
+            }
+        }
+        if let suggestedMIME, suggestedMIME.hasPrefix("image/") {
+            return suggestedMIME
+        }
+        return nil
+    }
+
     public static func validate(data: Data, mime: String) throws {
         guard let normalized = normalizedMIME(mime) else {
             throw APIError.transport("Choose a PNG, JPEG, GIF, WebP, MP4, or MOV file.")
@@ -54,6 +78,86 @@ public enum AttachmentPath {
         let limit = normalized.hasPrefix("video/") ? maxVideoBytes : maxBytes
         guard data.count <= limit else {
             throw APIError.transport("That attachment is too large.")
+        }
+        if imageMagicMIME(data) != nil, normalized.hasPrefix("video/") {
+            throw APIError.transport("Choose a PNG, JPEG, GIF, WebP, MP4, or MOV file.")
+        }
+        if normalized.hasPrefix("video/") {
+            switch (videoContainerKind(data), normalized) {
+            case (.mp4, "video/mp4"), (.quickTime, "video/quicktime"):
+                break
+            default:
+                throw APIError.transport("Choose a PNG, JPEG, GIF, WebP, MP4, or MOV file.")
+            }
+        }
+    }
+
+    private enum VideoContainer {
+        case mp4
+        case quickTime
+    }
+
+    private static func imageMagicMIME(_ data: Data) -> String? {
+        if data.count >= 8,
+           data[data.startIndex] == 0x89,
+           data[data.startIndex + 1] == 0x50,
+           data[data.startIndex + 2] == 0x4E,
+           data[data.startIndex + 3] == 0x47 {
+            return "image/png"
+        }
+        if data.count >= 3,
+           data[data.startIndex] == 0xFF,
+           data[data.startIndex + 1] == 0xD8,
+           data[data.startIndex + 2] == 0xFF {
+            return "image/jpeg"
+        }
+        if data.count >= 4,
+           String(data: data.prefix(4), encoding: .ascii) == "GIF8" {
+            return "image/gif"
+        }
+        if data.count >= 12,
+           String(data: data.prefix(4), encoding: .ascii) == "RIFF",
+           String(data: data.dropFirst(8).prefix(4), encoding: .ascii) == "WEBP" {
+            return "image/webp"
+        }
+        return nil
+    }
+
+    private static func videoContainerKind(_ data: Data) -> VideoContainer? {
+        guard data.count >= 8 else { return nil }
+        let typeStart = data.index(data.startIndex, offsetBy: 4)
+        let typeEnd = data.index(typeStart, offsetBy: 4)
+        let type = String(data: data[typeStart..<typeEnd], encoding: .ascii) ?? ""
+        if type == "ftyp" {
+            guard data.count >= 12 else { return nil }
+            let brandStart = typeEnd
+            let brandEnd = data.index(brandStart, offsetBy: 4)
+            let brand = String(data: data[brandStart..<brandEnd], encoding: .ascii) ?? ""
+            return brand == "qt  " ? .quickTime : .mp4
+        }
+        if ["moov", "mdat", "free", "skip", "wide", "pnot"].contains(type) {
+            return .quickTime
+        }
+        return nil
+    }
+
+    private static func normalizedSuggestedMIME(_ suggested: String?) -> String? {
+        guard let suggested, !suggested.isEmpty else { return nil }
+        if let mime = normalizedMIME(suggested) { return mime }
+        let ext: String
+        if let dot = suggested.lastIndex(of: ".") {
+            ext = suggested[suggested.index(after: dot)...].lowercased()
+        } else {
+            ext = suggested.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+        switch ext {
+        case "png": return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif": return "image/gif"
+        case "webp": return "image/webp"
+        case "mp4", "m4v": return "video/mp4"
+        case "mov", "qt": return "video/quicktime"
+        default: return nil
         }
     }
 
@@ -1219,16 +1323,23 @@ public struct CompanionClient: Sendable {
         var request = try makeRequest("POST", "/api/attachments")
         request.setValue(normalized, forHTTPHeaderField: "Content-Type")
         request.httpBody = data
-        let response = try await send(request, as: AttachmentResponse.self)
-        let byteLimit = normalized.hasPrefix("video/") ? AttachmentPath.maxVideoBytes : AttachmentPath.maxBytes
-        guard AttachmentPath.servingPath(from: response.path) != nil,
-              response.bytes > 0,
-              response.bytes <= byteLimit,
-              AttachmentPath.normalizedMIME(response.mime) != nil
-        else {
-            throw APIError.transport("The uploaded attachment could not be used.")
+        if normalized.hasPrefix("video/") {
+            request.timeoutInterval = AttachmentPath.videoUploadTimeoutInterval
         }
-        return UploadedAttachment(path: response.path, mime: response.mime, bytes: response.bytes)
+        do {
+            let response = try await send(request, as: AttachmentResponse.self)
+            let byteLimit = normalized.hasPrefix("video/") ? AttachmentPath.maxVideoBytes : AttachmentPath.maxBytes
+            guard AttachmentPath.servingPath(from: response.path) != nil,
+                  response.bytes > 0,
+                  response.bytes <= byteLimit,
+                  AttachmentPath.normalizedMIME(response.mime) != nil
+            else {
+                throw APIError.transport("The uploaded attachment could not be used.")
+            }
+            return UploadedAttachment(path: response.path, mime: response.mime, bytes: response.bytes)
+        } catch let error as APIError {
+            throw AttachmentUploadErrorPolicy.remap(error, mime: normalized)
+        }
     }
 
     public func generateAvatar(botId: String, prompt: String) async throws -> Bot {

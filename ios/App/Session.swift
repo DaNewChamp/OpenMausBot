@@ -912,16 +912,7 @@ final class Session: ObservableObject {
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
             throw error
-        } catch let error as APIError {
-            if case let .status(code, message) = error,
-               code == 404,
-               message == "no route: POST /api/attachments" {
-                let unavailable = APIError.transport(
-                    "This computer does not support image attachments yet. Update V Bot on the computer."
-                )
-                if !Task.isCancelled { actionError = unavailable.localizedDescription }
-                throw unavailable
-            }
+        }         catch let error as APIError {
             if !Task.isCancelled { actionError = error.localizedDescription }
             throw error
         } catch {
@@ -1362,8 +1353,17 @@ final class Session: ObservableObject {
     }
 
     func discardShareStaging() {
+        stagedComposerText = nil
         stagedShareImageData = nil
         ShareInbox.clearPending()
+    }
+
+    func takeShareStaging() -> ShareStaging {
+        var staging = ShareStaging(text: stagedComposerText, imageData: stagedShareImageData)
+        let taken = staging.take()
+        stagedComposerText = staging.text
+        stagedShareImageData = staging.imageData
+        return taken
     }
 
     func consumeShareInbox() {

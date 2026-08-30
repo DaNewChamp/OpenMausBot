@@ -47,9 +47,12 @@ final class ShareViewController: SLComposeServiceViewController {
         group.notify(queue: .main) {
             try? ShareInbox.save(text: text, url: url, imageData: imageData)
             if let open = URL(string: "openmausbot://share") {
-                self.extensionContext?.open(open, completionHandler: nil)
+                self.extensionContext?.open(open) { _ in
+                    self.extensionContext?.completeRequest(returningItems: nil)
+                }
+            } else {
+                self.extensionContext?.completeRequest(returningItems: nil)
             }
-            self.extensionContext?.completeRequest(returningItems: nil)
         }
     }
 }

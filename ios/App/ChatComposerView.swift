@@ -2,7 +2,6 @@ import CompanionCore
 import PhotosUI
 import SwiftUI
 import UIKit
-import AVFoundation
 import UniformTypeIdentifiers
 
 /// Composer: attachments, mentions, slash HUD, dictation, send/stop.
@@ -227,10 +226,14 @@ struct ChatComposerView: View {
                         }
                         .onKeyPress(.return, phases: .down) { press in
                             guard !press.modifiers.contains(.shift) else { return .ignored }
+                            if acceptTopMentionIfNeeded() { return .handled }
                             onActivatePrimary()
                             return .handled
                         }
-                        .onSubmit { onActivatePrimary() }
+                        .onSubmit {
+                            if acceptTopMentionIfNeeded() { return }
+                            onActivatePrimary()
+                        }
 
                     composerTrailingControl
                 }
@@ -247,6 +250,18 @@ struct ChatComposerView: View {
     private func insertMention(_ name: String) {
         draft = GroupRouting.applyingMention(name, to: draft)
         Haptics.selection()
+    }
+
+    @discardableResult
+    private func acceptTopMentionIfNeeded() -> Bool {
+        guard let query = activeMentionQuery else { return false }
+        switch GroupRouting.mentionReturnAction(query: query, candidates: mentionCandidates) {
+        case let .accept(name):
+            insertMention(name)
+            return true
+        case .ignore:
+            return true
+        }
     }
 
     private func updateState(_ animation: Animation, _ updates: () -> Void) {
@@ -345,22 +360,14 @@ struct ChatComposerView: View {
                     ForEach(selectedAttachments) { attachment in
                         ZStack(alignment: .topTrailing) {
                             Group {
-                                if attachment.isVideo,
-                                   let thumbnail = VideoAttachmentThumbnail.sync(from: attachment.data, mime: attachment.mime) {
-                                    ZStack {
-                                        Image(uiImage: thumbnail)
-                                            .resizable()
-                                            .scaledToFill()
-                                        Image(systemName: "play.circle.fill")
-                                            .font(.system(size: 24, weight: .semibold))
-                                            .foregroundStyle(.white.opacity(0.92))
-                                    }
+                                if attachment.isVideo {
+                                    ComposerVideoThumbnail(attachment: attachment)
                                 } else if let image = UIImage(data: attachment.data) {
                                     Image(uiImage: image)
                                         .resizable()
                                         .scaledToFill()
                                 } else {
-                                    Image(systemName: attachment.isVideo ? "video" : "photo")
+                                    Image(systemName: "photo")
                                         .font(.system(size: 20, weight: .medium))
                                         .foregroundStyle(Color.secondary)
                                 }
@@ -579,9 +586,41 @@ private struct MentionMenuView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title.hasPrefix("@") ? title : "@\(title)")
+        .accessibilityHint(subtitle)
+    }
+}
+
+private struct ComposerVideoThumbnail: View {
+    let attachment: PendingImageAttachment
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "video")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(Color.secondary)
+            }
+            Image(systemName: "play.circle.fill")
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.92))
+        }
+        .task(id: attachment.id) {
+            image = await VideoAttachmentThumbnail.make(
+                from: attachment.data,
+                mime: attachment.mime,
+                cacheKey: attachment.id.uuidString
+            )
+        }
     }
 }

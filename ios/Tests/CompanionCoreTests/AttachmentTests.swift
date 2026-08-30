@@ -35,6 +35,7 @@ final class AttachmentTests: XCTestCase {
     override func setUp() {
         super.setUp()
         AttachmentRequestStub.responseBody = Data(#"{"path":"/Users/test/.openmausbot/attachments/abc-123.png","mime":"image/png","bytes":4}"#.utf8)
+        AttachmentRequestStub.statusCode = 201
         AttachmentRequestStub.capturedRequest = nil
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [AttachmentRequestStub.self]
@@ -75,11 +76,26 @@ final class AttachmentTests: XCTestCase {
 
     func testAttachmentValidationHonorsMimeAndSizeCeilings() {
         XCTAssertNoThrow(try AttachmentPath.validate(data: Data([1]), mime: "image/png; charset=binary"))
-        XCTAssertNoThrow(try AttachmentPath.validate(data: Data([1]), mime: "video/mp4"))
+        XCTAssertNoThrow(try AttachmentPath.validate(data: Self.minimalMP4, mime: "video/mp4"))
+        XCTAssertThrowsError(try AttachmentPath.validate(data: Data([1]), mime: "video/mp4"))
         XCTAssertThrowsError(try AttachmentPath.validate(data: Data([1]), mime: "image/heic"))
         XCTAssertThrowsError(try AttachmentPath.validate(data: Data(), mime: "image/png"))
         XCTAssertThrowsError(try AttachmentPath.validate(data: Data(repeating: 0, count: AttachmentPath.maxBytes + 1), mime: "image/png"))
         XCTAssertThrowsError(try AttachmentPath.validate(data: Data(repeating: 0, count: AttachmentPath.maxVideoBytes + 1), mime: "video/mp4"))
+    }
+
+    func testAttachmentMIMESniffRejectsMismatches() {
+        let jpeg = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10])
+        XCTAssertEqual(AttachmentPath.sniffedMIME(data: jpeg, suggested: "video/mp4"), "image/jpeg")
+        XCTAssertEqual(AttachmentPath.sniffedMIME(data: jpeg, suggested: "image/png"), "image/jpeg")
+        XCTAssertEqual(AttachmentPath.sniffedMIME(data: Self.minimalMP4, suggested: "video/mp4"), "video/mp4")
+        XCTAssertEqual(AttachmentPath.sniffedMIME(data: Self.minimalQuickTime, suggested: "video/quicktime"), "video/quicktime")
+        XCTAssertNil(AttachmentPath.sniffedMIME(data: Self.minimalMP4, suggested: "video/quicktime"))
+        XCTAssertNil(AttachmentPath.sniffedMIME(data: Self.minimalQuickTime, suggested: "video/mp4"))
+        XCTAssertNil(AttachmentPath.sniffedMIME(data: Self.minimalMP4, suggested: "image/png"))
+        XCTAssertNil(AttachmentPath.sniffedMIME(data: Data([1, 2, 3, 4, 5, 6, 7, 8]), suggested: "video/mp4"))
+        XCTAssertEqual(AttachmentPath.sniffedMIME(data: Data([1]), suggested: "image/png"), "image/png")
+        XCTAssertThrowsError(try AttachmentPath.validate(data: jpeg, mime: "video/mp4"))
     }
 
     func testAttachmentPromptUsesFileTagForVideoPaths() {
@@ -107,6 +123,55 @@ final class AttachmentTests: XCTestCase {
         XCTAssertEqual(Self.body(from: request), Data([1, 2, 3, 4]))
     }
 
+    func testUploadVideoUsesALongerBoundedTimeout() async throws {
+        AttachmentRequestStub.responseBody = Data(
+            #"{"path":"/Users/test/.openmausbot/attachments/abc-123.mp4","mime":"video/mp4","bytes":24}"#.utf8
+        )
+        _ = try await client.uploadAttachment(data: Self.minimalMP4, mime: "video/mp4")
+        let videoRequest = try XCTUnwrap(AttachmentRequestStub.capturedRequest)
+        XCTAssertEqual(videoRequest.timeoutInterval, AttachmentPath.videoUploadTimeoutInterval)
+        XCTAssertGreaterThan(videoRequest.timeoutInterval, 20)
+        XCTAssertLessThanOrEqual(videoRequest.timeoutInterval, 180)
+
+        AttachmentRequestStub.capturedRequest = nil
+        AttachmentRequestStub.responseBody = Data(#"{"path":"/Users/test/.openmausbot/attachments/abc-123.png","mime":"image/png","bytes":4}"#.utf8)
+        _ = try await client.uploadAttachment(data: Data([1, 2, 3, 4]), mime: "image/png")
+        let imageRequest = try XCTUnwrap(AttachmentRequestStub.capturedRequest)
+        XCTAssertEqual(imageRequest.timeoutInterval, 20)
+    }
+
+    func testOldHarnessVideoErrorsRemapToUpdateComputer() async {
+        AttachmentRequestStub.statusCode = 400
+        AttachmentRequestStub.responseBody = Data(#"{"error":"content-type must be an image type"}"#.utf8)
+        await assertVideoUploadMessage("This computer does not support video attachments yet. Update V Bot on the computer.")
+
+        AttachmentRequestStub.statusCode = 400
+        AttachmentRequestStub.responseBody = Data(#"{"error":"unsupported type"}"#.utf8)
+        await assertVideoUploadMessage("This computer does not support video attachments yet. Update V Bot on the computer.")
+
+        AttachmentRequestStub.statusCode = 413
+        AttachmentRequestStub.responseBody = Data(#"{"error":"attachment exceeds 10485760 bytes"}"#.utf8)
+        await assertVideoUploadMessage("This computer does not support video attachments yet. Update V Bot on the computer.")
+    }
+
+    func testMissingAttachmentRouteSaysAttachmentsNotImage() async {
+        AttachmentRequestStub.statusCode = 404
+        AttachmentRequestStub.responseBody = Data(#"{"error":"no route: POST /api/attachments"}"#.utf8)
+        await assertVideoUploadMessage("This computer does not support attachments yet. Update V Bot on the computer.")
+
+        do {
+            _ = try await client.uploadAttachment(data: Data([1]), mime: "image/png")
+            XCTFail("404 should be remapped")
+        } catch let error as APIError {
+            XCTAssertEqual(
+                error.localizedDescription,
+                "This computer does not support attachments yet. Update V Bot on the computer."
+            )
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
     func testUploadAttachmentRejectsUnsafeServerPathBeforeItCanBeUsed() async {
         AttachmentRequestStub.responseBody = Data(#"{"path":"/Users/test/.openmausbot/attachments/../secret.png","mime":"image/png","bytes":4}"#.utf8)
 
@@ -129,6 +194,34 @@ final class AttachmentTests: XCTestCase {
         XCTAssertEqual(request.url?.path, "/api/attachments/abc-123.png")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer paired-token")
     }
+
+    private func assertVideoUploadMessage(_ expected: String) async {
+        do {
+            _ = try await client.uploadAttachment(data: Self.minimalMP4, mime: "video/mp4")
+            XCTFail("upload should fail")
+        } catch let error as APIError {
+            XCTAssertEqual(error.localizedDescription, expected)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    private static let minimalMP4 = Data([
+        0x00, 0x00, 0x00, 0x18,
+        0x66, 0x74, 0x79, 0x70,
+        0x69, 0x73, 0x6F, 0x6D,
+        0x00, 0x00, 0x00, 0x00,
+        0x69, 0x73, 0x6F, 0x6D,
+        0x61, 0x76, 0x63, 0x31,
+    ])
+
+    private static let minimalQuickTime = Data([
+        0x00, 0x00, 0x00, 0x14,
+        0x66, 0x74, 0x79, 0x70,
+        0x71, 0x74, 0x20, 0x20,
+        0x00, 0x00, 0x00, 0x00,
+        0x71, 0x74, 0x20, 0x20,
+    ])
 
     private static func body(from request: URLRequest) -> Data? {
         if let body = request.httpBody { return body }

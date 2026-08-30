@@ -121,6 +121,24 @@ public enum GroupRouting {
         }
     }
 
+    public enum MentionReturnAction: Equatable, Sendable {
+        case accept(String)
+        case ignore
+    }
+
+    /// Hardware Return and the software send label accept the top mention
+    /// row instead of sending while `@query` is still open. `@everyone` is
+    /// listed first whenever it matches the query.
+    public static func mentionReturnAction(query: String, candidates: [Member]) -> MentionReturnAction {
+        if "everyone".hasPrefix(query.lowercased()) {
+            return .accept("everyone")
+        }
+        if let first = candidates.first {
+            return .accept(first.name)
+        }
+        return .ignore
+    }
+
     public static func applyingMention(_ name: String, to draft: String) -> String {
         guard let at = draft.lastIndex(of: "@") else {
             return draft.hasSuffix(" ") || draft.isEmpty ? draft + "@\(name) " : draft + " @\(name) "
