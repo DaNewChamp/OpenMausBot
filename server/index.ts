@@ -42,6 +42,7 @@ import {
   snapshotAvatarGenerationState,
 } from "./avatar-image.ts";
 import { guardedBotModelSwitch, parseBotModelPatch, resolveBotModelSelection } from "./bot-model.ts";
+import { defaultModelSelection } from "./default-selection.ts";
 import { resolveFastDispatch } from "./fast-routing.ts";
 import { parseChatPin } from "./chat-pin.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
@@ -423,17 +424,11 @@ function askBotAndWait(
   });
 }
 
-// default selection for new bots: first available instance, claude preferred
+// default selection for new bots: first available instance, Codex preferred.
+// Cursor stays on the fleet as the tool layer; it is not the chat engine.
 async function defaultSelection() {
   const described = await registry.describe();
-  const available = described.filter((d) => d.snapshot.state === "available");
-  // Deliberately NO fallback to described[0]. Handing a bot an engine whose
-  // CLI isn't installed makes it look ready and then fail on send with a raw
-  // spawn ENOENT — the single worst first-run experience, and the one every
-  // user with no CLIs used to get. An empty selection is honest: the UI shows
-  // the setup path instead of a bot that cannot answer.
-  const pick = available.find((d) => d.driverKind === "claudeAgent") ?? available[0];
-  return { instanceId: pick?.instanceId ?? "", model: pick?.models.default ?? "" };
+  return defaultModelSelection(described);
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = new Store(() => bootSelection);

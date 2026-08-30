@@ -13,10 +13,12 @@ way out when the network itself is the problem.
 | Stage | Needs |
 |---|---|
 | 1 — core tests | a Mac with Xcode command line tools (`xcode-select --install`) |
-| 2 — desktop half | + Node 24+, pnpm, and one agent CLI (`claude`, `codex`, or `grok`) signed in |
+| 2 — desktop half | + Node 24+, pnpm, and Codex signed in (`codex login`) |
 | 3 — simulator | + full Xcode and XcodeGen |
 | 4 — end to end | + an iPhone on the same Wi-Fi as the Mac |
 | 5 — off this network | + Tailscale on both, same account |
+
+V Bot chat inference is the Mac harness **Codex** driver (`codex login`, ChatGPT login — not an API key). Cursor (`cursor-agent`) is the app/tool layer and is not the chat engine. Do not use or renew Claude OAuth for this path. A bot created before this default still keeps its picker selection: switch that bot to Codex in the model picker if it still shows Claude.
 
 Stages 1 and 2 are worth doing even if you never get to a phone: stage 1 is
 where the Swift errors are, and stage 2 exercises the companion listener the
