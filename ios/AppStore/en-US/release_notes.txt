@@ -1,5 +1,7 @@
-V Bot build 56: faster, softer composer interactions and reliable return from Computer.
+V Bot build 57: premium W1 surface cohesion — unified graphite UI, calmer loading, and safer offline.
 
-• Get an immediate soft haptic and visual response when sending
-• Use comfortable 44pt action hit targets for send, stop, and voice
-• Return from Computer with the composer restored above the keyboard
+• See consistent premium graphite surfaces across Home, Settings, and Computer
+• Get calmer loading and offline empty states instead of harsh spinners
+• Use a stable pinned chat shelf with smoother pin/unpin motion
+• Read more comfortably with accessibility and Dynamic Type improvements
+• Keep cached profile and settings safe when you are offline
