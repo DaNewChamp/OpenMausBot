@@ -615,8 +615,19 @@ public struct Instance: Codable, Hashable, Identifiable, Sendable {
     public var snapshot: ProviderSnapshot
     public var models: ModelCatalog
     public var capabilities: InstanceCapabilities? = nil
+    /// Omitted on `GET /api/instances`. Reconstructed routers set this from
+    /// the advertised provider so the picker does not hardcode a vendor.
+    public var instanceSelectable: Bool? = nil
+    public var modelSelectable: Bool? = nil
 
     public var id: String { instanceId }
+
+    public var allowsInstanceChange: Bool { instanceSelectable ?? true }
+    public var allowsModelChange: Bool { modelSelectable ?? true }
+
+    public var markKey: String {
+        driverKind.isEmpty ? instanceId : driverKind
+    }
 
     /// What the profile picker shows for this advertised engine.
     public var pickerTitle: String {
@@ -650,14 +661,33 @@ public struct Instance: Codable, Hashable, Identifiable, Sendable {
     }
 
     public func modelLabel(for modelId: String) -> String {
-        models.options.first(where: { $0.id == modelId })?.label ?? modelId
+        if let label = models.options.first(where: { $0.id == modelId })?.label,
+           !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return label
+        }
+        return AdvertisedModelCatalog.displayModelLabel(modelId)
+    }
+
+    public func chipModelLabel(selectedInstanceId: String, selectedModel: String) -> String {
+        let modelId: String
+        if instanceId == selectedInstanceId, !selectedModel.isEmpty {
+            modelId = selectedModel
+        } else if !models.default.isEmpty {
+            modelId = models.default
+        } else {
+            modelId = models.options.first?.id ?? ""
+        }
+        if modelId.isEmpty { return pickerTitle }
+        return modelLabel(for: modelId)
     }
 }
 
 extension VBotProviderCatalog {
     public var asInstances: [Instance] {
         providers.map { provider in
-            let options = provider.models.filter(\.selectable).map { ModelOption(id: $0.id, label: $0.id) }
+            let options = provider.models
+                .filter { $0.selectable || $0.current }
+                .map { ModelOption(id: $0.id, label: $0.id) }
             let selected = provider.models.first(where: { $0.current })?.id
                 ?? (provider.current ? currentModelId : options.first?.id)
                 ?? currentModelId
@@ -666,17 +696,29 @@ extension VBotProviderCatalog {
                 driverKind: provider.id,
                 displayName: provider.label,
                 snapshot: ProviderSnapshot(state: "available", reason: nil, authenticated: true, version: nil),
-                models: ModelCatalog(default: selected, options: options)
+                models: ModelCatalog(default: selected, options: options),
+                instanceSelectable: provider.selectable,
+                modelSelectable: provider.modelSelectable
             )
         }
     }
 }
 
-/// Helpers over `GET /api/instances` so the profile picker only offers
-/// currently advertised catalogs, matching the paired-safe model route.
+/// Helpers over `GET /api/instances` so pickers show every advertised engine
+/// and only rewrite a model when the user switches instances.
 public enum AdvertisedModelCatalog {
+    public static func advertisedInstances(from instances: [Instance]) -> [Instance] {
+        instances
+    }
+
+    /// Engines the user can switch onto. Empty catalogs still appear on the
+    /// rail via `advertisedInstances`; they just cannot be a destination.
     public static func selectableInstances(from instances: [Instance]) -> [Instance] {
-        instances.filter { !$0.models.options.isEmpty }
+        instances.filter { $0.allowsInstanceChange && !$0.models.options.isEmpty }
+    }
+
+    public static func isEmpty(_ instances: [Instance]) -> Bool {
+        instances.isEmpty || instances.allSatisfy { $0.models.options.isEmpty }
     }
 
     public static func instance(id: String, in instances: [Instance]) -> Instance? {
@@ -690,6 +732,72 @@ public enum AdvertisedModelCatalog {
             return instance.models.default
         }
         return instance.models.options.first?.id ?? currentModel
+    }
+
+    /// Catalog refresh must not rewrite the persisted selection. Missing
+    /// instances/models stay visible as unavailable/orphan rows.
+    public static func preservedSelection(
+        _ selection: ModelSelection,
+        in instances: [Instance]
+    ) -> ModelSelection {
+        selection
+    }
+
+    public static func displayModelLabel(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return raw }
+        if trimmed.lowercased() == "auto" { return "Auto" }
+        if trimmed.contains(where: { $0.isWhitespace }) { return trimmed }
+        return trimmed.split(whereSeparator: { $0 == "-" || $0 == "_" })
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+
+    public static func humanModelLabel(
+        selection: ModelSelection,
+        instances: [Instance]
+    ) -> String {
+        if let instance = instance(id: selection.instanceId, in: instances) {
+            return instance.modelLabel(for: selection.model)
+        }
+        return displayModelLabel(selection.model)
+    }
+
+    public static func providerMarkKey(
+        instanceId: String,
+        instances: [Instance]
+    ) -> String {
+        instance(id: instanceId, in: instances)?.markKey ?? instanceId
+    }
+
+    public static func displayCatalog(
+        advertised: [Instance],
+        selection: ModelSelection
+    ) -> [Instance] {
+        if instance(id: selection.instanceId, in: advertised) != nil {
+            return advertised
+        }
+        return advertised + [orphanInstance(selection: selection)]
+    }
+
+    public static func orphanInstance(selection: ModelSelection) -> Instance {
+        Instance(
+            instanceId: selection.instanceId,
+            driverKind: selection.instanceId,
+            displayName: displayModelLabel(selection.instanceId),
+            snapshot: ProviderSnapshot(
+                state: "unavailable",
+                reason: "This engine is no longer advertised by the computer.",
+                authenticated: nil,
+                version: nil
+            ),
+            models: ModelCatalog(
+                default: selection.model,
+                options: [ModelOption(id: selection.model, label: displayModelLabel(selection.model))]
+            ),
+            instanceSelectable: false,
+            modelSelectable: false
+        )
     }
 }
 

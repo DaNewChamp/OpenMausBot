@@ -60,6 +60,18 @@ struct ModelPickerErrorView: View {
     }
 }
 
+struct ModelPickerEmptyView: View {
+    var body: some View {
+        Label(ModelSelectionPolicy.emptyCatalogExplanation, systemImage: "cpu")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(ModelPickerStyle.listSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .accessibilityLabel(ModelSelectionPolicy.emptyCatalogExplanation)
+    }
+}
+
 /// Horizontal reasoning chips for model sheets and profiles.
 struct ModelEffortPicker: View {
     let levels: [String]
@@ -149,8 +161,11 @@ struct ModelPickerView: View {
 
     @State private var railInstanceId: String?
 
-    private var selectableInstances: [Instance] {
-        AdvertisedModelCatalog.selectableInstances(from: instances)
+    private var railInstances: [Instance] {
+        AdvertisedModelCatalog.displayCatalog(
+            advertised: instances,
+            selection: ModelSelection(instanceId: selectedInstanceId, model: selectedModelId)
+        )
     }
 
     private var activeRailId: String {
@@ -159,7 +174,7 @@ struct ModelPickerView: View {
 
     private var railInstance: Instance? {
         AdvertisedModelCatalog.instance(id: activeRailId, in: instances)
-            ?? selectableInstances.first
+            ?? railInstances.first
     }
 
     private var models: [ModelOption] {
@@ -168,10 +183,8 @@ struct ModelPickerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if selectableInstances.isEmpty {
-                Label("No model providers are available.", systemImage: "cpu")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            if AdvertisedModelCatalog.isEmpty(instances) {
+                ModelPickerEmptyView()
             } else {
                 engineRail
                 modelList
@@ -188,13 +201,17 @@ struct ModelPickerView: View {
     private var engineRail: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(selectableInstances) { instance in
+                ForEach(railInstances) { instance in
                     EngineChip(
                         instance: instance,
                         selected: instance.instanceId == activeRailId,
-                        disabled: disabled
+                        selectedInstanceId: selectedInstanceId,
+                        selectedModelId: selectedModelId,
+                        disabled: disabled || (!instance.allowsInstanceChange && instance.instanceId != selectedInstanceId),
+                        unavailable: !instance.snapshot.isAvailable || !instance.allowsInstanceChange
                     ) {
                         guard !disabled else { return }
+                        guard instance.allowsInstanceChange || instance.instanceId == selectedInstanceId else { return }
                         railInstanceId = instance.instanceId
                         if instance.instanceId != selectedInstanceId {
                             selectedInstanceId = instance.instanceId
@@ -205,20 +222,6 @@ struct ModelPickerView: View {
                             )
                             onSelectionChange()
                         }
-                    }
-                }
-
-                if selectableInstances.contains(where: { $0.instanceId == selectedInstanceId }) == false,
-                   let orphan = AdvertisedModelCatalog.instance(id: selectedInstanceId, in: instances)
-                    ?? instances.first(where: { $0.instanceId == selectedInstanceId }) {
-                    EngineChip(
-                        instance: orphan,
-                        selected: activeRailId == orphan.instanceId,
-                        disabled: disabled,
-                        unavailable: true
-                    ) {
-                        guard !disabled else { return }
-                        railInstanceId = orphan.instanceId
                     }
                 }
             }
@@ -239,7 +242,7 @@ struct ModelPickerView: View {
 
                 VStack(spacing: 0) {
                     if models.isEmpty {
-                        Text("No models advertised for this engine.")
+                        Text(ModelSelectionPolicy.engineEmptyExplanation)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -268,7 +271,7 @@ struct ModelPickerView: View {
                            selectedInstanceId == railInstance.instanceId {
                             Divider().overlay(ModelPickerStyle.divider).padding(.leading, 14)
                             ModelRow(
-                                label: selectedModelId,
+                                label: AdvertisedModelCatalog.displayModelLabel(selectedModelId),
                                 selected: true,
                                 isDefault: false,
                                 disabled: disabled || modelsDisabled
@@ -283,16 +286,13 @@ struct ModelPickerView: View {
             }
         }
     }
-
-    private func markKey(for instance: Instance) -> String {
-        if !instance.driverKind.isEmpty { return instance.driverKind }
-        return instance.instanceId
-    }
 }
 
 private struct EngineChip: View {
     let instance: Instance
     let selected: Bool
+    var selectedInstanceId: String = ""
+    var selectedModelId: String = ""
     var disabled: Bool = false
     var unavailable: Bool = false
     let action: () -> Void
@@ -300,17 +300,14 @@ private struct EngineChip: View {
     var body: some View {
         Button(action: action) {
             VStack(spacing: 6) {
-                ProviderMarks.mark(
-                    for: instance.driverKind.isEmpty ? instance.instanceId : instance.driverKind,
-                    size: 20
-                )
-                Text(shortTitle(instance))
+                ProviderMarks.mark(for: instance.markKey, size: 20)
+                Text(instance.chipModelLabel(selectedInstanceId: selectedInstanceId, selectedModel: selectedModelId))
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(selected ? Color.primary : Color.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            .frame(width: 64)
+            .frame(width: 72)
             .padding(.vertical, 10)
             .background(
                 selected ? ModelPickerStyle.chipSelected : ModelPickerStyle.chip,
@@ -323,14 +320,8 @@ private struct EngineChip: View {
             .opacity(disabled ? 0.55 : unavailable ? 0.72 : 1)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(instance.pickerTitle)
+        .accessibilityLabel("\(instance.pickerTitle), \(instance.chipModelLabel(selectedInstanceId: selectedInstanceId, selectedModel: selectedModelId))")
         .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private func shortTitle(_ instance: Instance) -> String {
-        let name = instance.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !name.isEmpty { return name }
-        return ProviderMarks.displayName(for: instance.driverKind.isEmpty ? instance.instanceId : instance.driverKind)
     }
 }
 
@@ -424,7 +415,91 @@ struct ModelSelectionSummaryRow: View {
     }
 }
 
-/// Host-wide provider picker for Grok Reconstructed settings.
+/// Shared catalog surface for chat, profile, and settings pickers.
+struct ModelPickerCatalogHost: View {
+    let instances: [Instance]
+    let loading: Bool
+    let error: String?
+    let canEdit: Bool
+    let working: Bool
+    let saving: Bool
+    @Binding var selectedInstanceId: String
+    @Binding var selectedModelId: String
+    var effortLevels: [String] = []
+    @Binding var selectedEffort: String?
+    var showsEffort: Bool = false
+    var hostWide: Bool = false
+    var onRetry: () -> Void
+    var onSelectionChange: () -> Void
+
+    private var presentation: ModelCatalogPresentation {
+        ModelCatalogPresentation.surface(
+            loading: loading,
+            error: error,
+            instances: instances,
+            canEdit: canEdit
+        )
+    }
+
+    private var switchBlocked: Bool {
+        presentation.selectionDisabled
+            || !ModelSelectionPolicy.allowsSwitch(working: working, saving: saving, catalogLoading: loading)
+    }
+
+    private var pickedInstance: Instance? {
+        AdvertisedModelCatalog.instance(id: selectedInstanceId, in: instances)
+    }
+
+    private var footer: String {
+        ModelSelectionPolicy.footerHint(working: working, canEdit: canEdit, hostWide: hostWide)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            switch presentation {
+            case .loading:
+                ModelPickerLoadingView()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            case let .error(message):
+                ModelPickerErrorView(message: message, retry: onRetry)
+            case .empty:
+                ModelPickerEmptyView()
+            case let .catalog(cachedOffline):
+                ModelPickerView(
+                    instances: instances,
+                    selectedInstanceId: $selectedInstanceId,
+                    selectedModelId: $selectedModelId,
+                    disabled: switchBlocked,
+                    modelsDisabled: ModelSelectionPolicy.modelsDisabled(
+                        for: pickedInstance,
+                        hostWideEngine: hostWide
+                    ) || cachedOffline || !canEdit,
+                    footerHint: footer
+                ) {
+                    onSelectionChange()
+                }
+
+                if showsEffort {
+                    ModelEffortPicker(
+                        levels: effortLevels,
+                        selection: $selectedEffort,
+                        disabled: switchBlocked
+                    ) {
+                        onSelectionChange()
+                    }
+                }
+
+                if saving {
+                    Label("Saving…", systemImage: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+/// Host-wide reconstructed provider picker. Uses advertised `selectable` /
+/// `modelSelectable` flags instead of a vendor name.
 struct ReconstructedProviderPicker: View {
     let providers: [VBotProvider]
     let selectedProvider: String
@@ -434,13 +509,17 @@ struct ReconstructedProviderPicker: View {
     var onProviderChange: (String) -> Void
     var onModelChange: (String) -> Void
 
+    private var selected: VBotProvider? {
+        providers.first { $0.id == selectedProvider }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(providers.filter(\.selectable)) { provider in
+                    ForEach(providers) { provider in
                         Button {
-                            guard !disabled else { return }
+                            guard !disabled, provider.selectable else { return }
                             onProviderChange(provider.id)
                         } label: {
                             VStack(spacing: 6) {
@@ -458,18 +537,19 @@ struct ReconstructedProviderPicker: View {
                                     : ModelPickerStyle.chip,
                                 in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                             )
+                            .opacity(provider.selectable ? 1 : 0.55)
                         }
                         .buttonStyle(.plain)
-                        .disabled(disabled)
+                        .disabled(disabled || !provider.selectable)
                     }
                 }
             }
 
-            if selectedProvider == "cursor", !models.isEmpty {
+            if let selected, selected.modelSelectable, !models.isEmpty {
                 VStack(spacing: 0) {
                     ForEach(Array(models.enumerated()), id: \.element.id) { index, model in
                         ModelRow(
-                            label: model.id,
+                            label: AdvertisedModelCatalog.displayModelLabel(model.id),
                             selected: model.id == selectedModelId,
                             isDefault: model.current,
                             disabled: disabled
@@ -482,11 +562,93 @@ struct ReconstructedProviderPicker: View {
                     }
                 }
                 .background(ModelPickerStyle.listSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            } else if selectedProvider != "cursor" {
-                Label("Only Cursor models can be changed here.", systemImage: "info.circle")
+            } else if selected?.modelSelectable == false {
+                Label(ModelSelectionPolicy.providerKeepsLocalModel, systemImage: "info.circle")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
     }
 }
+
+#if DEBUG
+private enum ModelPickerPreviewData {
+    static let instances: [Instance] = {
+        let json = """
+        [
+          {
+            "instanceId":"claude","driverKind":"claudeAgent","displayName":"Claude",
+            "snapshot":{"state":"available"},
+            "models":{"default":"claude-sonnet-5","options":[
+              {"id":"claude-sonnet-5","label":"Claude Sonnet 5"},
+              {"id":"claude-haiku-4-5","label":"Claude Haiku 4.5"}
+            ]}
+          },
+          {
+            "instanceId":"codex","driverKind":"codex","displayName":"Codex",
+            "snapshot":{"state":"available"},
+            "models":{"default":"gpt-5.6-sol","options":[
+              {"id":"gpt-5.6-sol","label":"GPT 5.6 Sol"}
+            ]}
+          }
+        ]
+        """
+        return (try? JSONDecoder().decode([Instance].self, from: Data(json.utf8))) ?? []
+    }()
+}
+
+#Preview("Catalog loading") {
+    ModelPickerLoadingView()
+        .padding()
+        .vbotCanvas()
+}
+
+#Preview("Catalog error") {
+    ModelPickerErrorView(message: "Could not load models from this computer.") {}
+        .padding()
+        .vbotCanvas()
+}
+
+#Preview("Catalog empty") {
+    ModelPickerEmptyView()
+        .padding()
+        .vbotCanvas()
+}
+
+#Preview("Catalog ready") {
+    ModelPickerView(
+        instances: ModelPickerPreviewData.instances,
+        selectedInstanceId: .constant("claude"),
+        selectedModelId: .constant("claude-sonnet-5"),
+        footerHint: ModelSelectionPolicy.idleHint
+    ) {}
+    .padding()
+    .vbotCanvas()
+}
+
+#Preview("Catalog busy") {
+    ModelPickerView(
+        instances: ModelPickerPreviewData.instances,
+        selectedInstanceId: .constant("claude"),
+        selectedModelId: .constant("claude-sonnet-5"),
+        disabled: true,
+        footerHint: ModelSelectionPolicy.busyExplanation
+    ) {}
+    .padding()
+    .vbotCanvas()
+}
+
+#Preview("Catalog offline cached") {
+    ModelPickerView(
+        instances: ModelPickerPreviewData.instances,
+        selectedInstanceId: .constant("claude"),
+        selectedModelId: .constant("claude-sonnet-5"),
+        disabled: true,
+        modelsDisabled: true,
+        footerHint: CalmSurfacePolicy.reconnectToEdit
+    ) {}
+    .padding()
+    .vbotCanvas()
+}
+#endif
+

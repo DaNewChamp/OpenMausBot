@@ -237,7 +237,7 @@ final class ModelClientTests: XCTestCase {
         XCTAssertEqual(ScreenFrame.fromCapture(capture.image)?.png, "aGVsbG8=")
     }
 
-    func testSelectableCatalogDropsEmptyAdvertisementsAndAlignsModels() throws {
+    func testSelectableCatalogKeepsEveryAdvertisedInstanceAndAlignsModelsOnSwitch() throws {
         let claude = try decodeInstance("""
         {
           "instanceId":"claude","driverKind":"claudeAgent","displayName":"Claude",
@@ -263,22 +263,79 @@ final class ModelClientTests: XCTestCase {
         }
         """)
 
-        let selectable = AdvertisedModelCatalog.selectableInstances(from: [ghost, claude, unnamed])
-        XCTAssertEqual(selectable.map(\.instanceId), ["claude", "plain"])
+        let advertised = AdvertisedModelCatalog.advertisedInstances(from: [ghost, claude, unnamed])
+        XCTAssertEqual(advertised.map(\.instanceId), ["ghost", "claude", "plain"])
+        XCTAssertEqual(AdvertisedModelCatalog.selectableInstances(from: advertised).map(\.instanceId), ["claude", "plain"])
         XCTAssertEqual(unnamed.pickerTitle, "plainAgent")
+        XCTAssertFalse(AdvertisedModelCatalog.isEmpty(advertised))
+        XCTAssertTrue(AdvertisedModelCatalog.isEmpty([ghost]))
 
         XCTAssertEqual(
-            AdvertisedModelCatalog.alignedModel(instanceId: "claude", currentModel: "claude-haiku-4-5", in: selectable),
+            AdvertisedModelCatalog.alignedModel(instanceId: "claude", currentModel: "claude-haiku-4-5", in: advertised),
             "claude-haiku-4-5"
         )
         XCTAssertEqual(
-            AdvertisedModelCatalog.alignedModel(instanceId: "claude", currentModel: "ghost-1", in: selectable),
+            AdvertisedModelCatalog.alignedModel(instanceId: "claude", currentModel: "ghost-1", in: advertised),
             "claude-sonnet-5"
         )
         XCTAssertEqual(
-            AdvertisedModelCatalog.alignedModel(instanceId: "plain", currentModel: "claude-sonnet-5", in: selectable),
+            AdvertisedModelCatalog.alignedModel(instanceId: "plain", currentModel: "claude-sonnet-5", in: advertised),
             "plain-1"
         )
+
+        let selection = ModelSelection(instanceId: "claude", model: "retired-model")
+        XCTAssertEqual(
+            AdvertisedModelCatalog.preservedSelection(selection, in: advertised),
+            selection
+        )
+        XCTAssertEqual(
+            AdvertisedModelCatalog.humanModelLabel(selection: ModelSelection(instanceId: "claude", model: "claude-sonnet-5"), instances: advertised),
+            "Claude Sonnet 5"
+        )
+        XCTAssertEqual(AdvertisedModelCatalog.displayModelLabel("gpt-5.6-sol"), "Gpt 5.6 Sol")
+        XCTAssertEqual(AdvertisedModelCatalog.displayModelLabel("auto"), "Auto")
+    }
+
+    func testMissingInstanceStaysVisibleAsUnavailableOrphan() {
+        let advertised = [
+            Instance(
+                instanceId: "plain",
+                driverKind: "plainAgent",
+                displayName: "Plain",
+                snapshot: ProviderSnapshot(state: "available", reason: nil, authenticated: true, version: nil),
+                models: ModelCatalog(default: "plain-1", options: [ModelOption(id: "plain-1", label: "Plain")])
+            )
+        ]
+        let selection = ModelSelection(instanceId: "retired", model: "retired-1")
+        XCTAssertTrue(EngineSyncPolicy.instanceDisappeared(selectedId: selection.instanceId, advertised: advertised))
+        let catalog = AdvertisedModelCatalog.displayCatalog(advertised: advertised, selection: selection)
+        XCTAssertEqual(catalog.map(\.instanceId), ["plain", "retired"])
+        XCTAssertFalse(catalog[1].allowsInstanceChange)
+        XCTAssertFalse(catalog[1].snapshot.isAvailable)
+        XCTAssertEqual(catalog[1].chipModelLabel(selectedInstanceId: "retired", selectedModel: "retired-1"), "Retired 1")
+    }
+
+    func testReconstructedProvidersPreserveSelectableFlagsWithoutVendorFilter() throws {
+        let catalog = try JSONDecoder().decode(
+            VBotProviderCatalog.self,
+            from: Data("""
+            {
+              "scope":"host","perBotSelection":false,
+              "currentProvider":"alpha","currentModelId":"alpha-1",
+              "providers":[
+                {"id":"alpha","label":"Alpha","current":true,"selectable":true,"modelSelectable":true,
+                 "models":[{"id":"alpha-1","current":true,"selectable":true}]},
+                {"id":"beta","label":"Beta","current":false,"selectable":true,"modelSelectable":false,
+                 "models":[{"id":"local","current":true,"selectable":false}]}
+              ]
+            }
+            """.utf8)
+        )
+        let instances = catalog.asInstances
+        XCTAssertEqual(instances.map(\.instanceId), ["alpha", "beta"])
+        XCTAssertEqual(instances.map(\.allowsModelChange), [true, false])
+        XCTAssertEqual(instances[1].models.options.map(\.id), ["local"])
+        XCTAssertTrue(instances[1].allowsInstanceChange)
     }
 
     private func decodeInstance(_ json: String) throws -> Instance {

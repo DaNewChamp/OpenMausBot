@@ -8,33 +8,38 @@ struct ChatModelMenu: View {
     @EnvironmentObject private var session: Session
     @State private var instances: [Instance] = []
     @State private var saving = false
+    @State private var saveRevision = 0
 
     private var current: Bot { session.state.bot(bot.id) ?? bot }
+    private var advertised: [Instance] {
+        AdvertisedModelCatalog.displayCatalog(
+            advertised: instances,
+            selection: current.modelSelection
+        )
+    }
     private var instance: Instance? {
-        AdvertisedModelCatalog.instance(id: current.modelSelection.instanceId, in: instances)
+        AdvertisedModelCatalog.instance(id: current.modelSelection.instanceId, in: advertised)
     }
-
     private var modelLabel: String {
-        instance?.modelLabel(for: current.modelSelection.model) ?? current.modelSelection.model
+        AdvertisedModelCatalog.humanModelLabel(selection: current.modelSelection, instances: advertised)
     }
-
     private var subtitle: String {
         if let effort = current.modelSelection.effort, !effort.isEmpty {
-            return "\(modelLabel) · \(Self.effortLabel(effort))"
+            return "\(modelLabel) · \(ModelEffortPicker.effortLabel(effort))"
         }
         return modelLabel
     }
-
     private var blocked: Bool {
         !ModelSelectionPolicy.allowsSwitch(working: current.busy == true, saving: saving)
     }
+    private var hostWide: Bool { EngineSyncPolicy.hostWideSelection(session.engineSync) }
 
     var body: some View {
         Menu {
-            if instances.isEmpty {
+            if advertised.isEmpty {
                 Text("Loading engines…")
             } else {
-                ForEach(advertisedInstances) { provider in
+                ForEach(advertised) { provider in
                     Menu(provider.pickerTitle) {
                         ForEach(provider.models.options) { option in
                             Button {
@@ -47,12 +52,12 @@ struct ChatModelMenu: View {
                                     Text(option.label)
                                 }
                             }
-                            .disabled(blocked)
+                            .disabled(blocked || !provider.allowsInstanceChange)
                         }
                     }
                 }
-                if let levels = instance?.capabilities?.effortLevels, !levels.isEmpty,
-                   session.engineSync?.usesReconstructedMutations != true {
+                if let levels = instance?.capabilities?.effortLevels,
+                   ModelSelectionPolicy.showsEffortPicker(levels: levels, hostWideEngine: hostWide) {
                     Divider()
                     Button("Default reasoning") {
                         Task { await apply(instanceId: current.modelSelection.instanceId, model: current.modelSelection.model, effort: nil) }
@@ -63,9 +68,9 @@ struct ChatModelMenu: View {
                             Task { await apply(instanceId: current.modelSelection.instanceId, model: current.modelSelection.model, effort: level) }
                         } label: {
                             if current.modelSelection.effort == level {
-                                Label(Self.effortLabel(level), systemImage: "checkmark")
+                                Label(ModelEffortPicker.effortLabel(level), systemImage: "checkmark")
                             } else {
-                                Text(Self.effortLabel(level))
+                                Text(ModelEffortPicker.effortLabel(level))
                             }
                         }
                         .disabled(blocked)
@@ -74,8 +79,13 @@ struct ChatModelMenu: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: "cpu")
-                    .font(.caption.weight(.semibold))
+                ProviderMarks.mark(
+                    for: AdvertisedModelCatalog.providerMarkKey(
+                        instanceId: current.modelSelection.instanceId,
+                        instances: advertised
+                    ),
+                    size: 14
+                )
                 Text(subtitle)
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
@@ -90,7 +100,7 @@ struct ChatModelMenu: View {
         .buttonStyle(.plain)
         .glassCapsule()
         .fixedSize()
-        .disabled(blocked)
+        .opacity(blocked ? 0.7 : 1)
         .accessibilityLabel("Model and reasoning")
         .accessibilityValue(subtitle)
         .accessibilityHint(
@@ -99,43 +109,32 @@ struct ChatModelMenu: View {
                 : "Choose this agent's engine, model, and reasoning level"
         )
         .task(id: current.id) {
-            if case let .loaded(loaded) = await session.loadInstances() {
+            if instances.isEmpty { instances = session.modelCatalog }
+            if case let .loaded(loaded) = await session.loadModelCatalog() {
                 instances = loaded
             }
         }
     }
 
-    private var advertisedInstances: [Instance] {
-        AdvertisedModelCatalog.selectableInstances(from: instances)
-    }
-
     @MainActor
     private func apply(instanceId: String, model: String, effort: String?) async {
         guard !blocked else { return }
+        saveRevision &+= 1
+        let revision = saveRevision
         saving = true
-        defer { saving = false }
+        defer {
+            if ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: saveRevision) {
+                saving = false
+            }
+        }
         let effortPatch: BotModelPatch.EffortUpdate = {
             if let effort { return .set(effort) }
             if current.modelSelection.effort != nil { return .clear }
             return .omitted
         }()
         let patch = BotModelPatch(instanceId: instanceId, model: model, effort: effortPatch)
-        _ = await session.updateModel(patch, for: current)
+        guard let _ = await session.updateModel(patch, for: current) else { return }
+        guard ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: saveRevision) else { return }
         Haptics.selection()
-    }
-
-    private static func effortLabel(_ level: String) -> String {
-        switch level {
-        case "xhigh": return "X-High"
-        default: return level.capitalized
-        }
-    }
-}
-
-private extension Instance {
-    var pickerTitle: String { displayName ?? instanceId }
-
-    func modelLabel(for model: String) -> String {
-        models.options.first(where: { $0.id == model })?.label ?? model
     }
 }

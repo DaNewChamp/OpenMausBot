@@ -82,6 +82,10 @@ final class Session: ObservableObject {
     /// Companion-safe projection of the selected desktop engine. Mutations
     /// follow `primaryEngine`; OpenMaus roster fallback is read-only.
     @Published private(set) var engineSync: VBotEngineSync?
+    /// Last advertised or reconstructed model catalog. Kept across offline
+    /// reconnects so pickers can show a disabled cache instead of going blank.
+    @Published private(set) var modelCatalog: [Instance] = []
+    @Published private(set) var modelCatalogError: String?
     /// Text staged from another screen (for example Computer paste) for the
     /// next opened chat composer to absorb.
     @Published var stagedComposerText: String?
@@ -107,6 +111,9 @@ final class Session: ObservableObject {
     /// can finish after its replacement starts; its cleanup must not clear
     /// the replacement's handle.
     private var streamGeneration = 0
+    private var engineSyncGeneration = 0
+    private var modelCatalogGeneration = 0
+    private var modelUpdateGenerations: [String: Int] = [:]
     /// Token bursts land here and publish on a frame cadence, so SwiftUI does
     /// not rebuild the chat on every provider delta.
     private var streamCoalescer = StreamCoalescer()
@@ -208,6 +215,7 @@ final class Session: ObservableObject {
             localVmAccess = previewAccess
             localVmAccessDenied = previewDenied
             localVmStatuses = previewStatuses
+            modelCatalog = state.bots.compactMap { storePreviewInstance(matching: $0) }
             recordHydration(resumed: false)
             status = .live
             return
@@ -337,6 +345,11 @@ final class Session: ObservableObject {
         )
         self.state = CompanionState()
         self.engineSync = nil
+        self.modelCatalog = []
+        self.modelCatalogError = nil
+        engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
+        modelCatalogGeneration = EngineSyncPolicy.nextGeneration(after: modelCatalogGeneration)
+        modelUpdateGenerations.removeAll()
         localVmStatuses.removeAll()
         localVmAccess = false
         localVmAccessDenied = false
@@ -403,6 +416,11 @@ final class Session: ObservableObject {
         client = nil
         token = nil
         engineSync = nil
+        modelCatalog = []
+        modelCatalogError = nil
+        engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
+        modelCatalogGeneration = EngineSyncPolicy.nextGeneration(after: modelCatalogGeneration)
+        modelUpdateGenerations.removeAll()
         rotation = CandidateRotation(hosts: [])
         resetStreamCoalescer()
         state = CompanionState()
@@ -630,6 +648,7 @@ final class Session: ObservableObject {
         await retryPendingAppearanceOverrides(using: client)
         NotificationCoordinator.shared.setBadge(state.unreadCount)
         await refreshEngineSync(quietly: true)
+        _ = await loadModelCatalog(quietly: true)
     }
 
     private var hydrationRevision = HydrationRevision()
@@ -1582,13 +1601,90 @@ final class Session: ObservableObject {
         }
     }
 
+    /// Single catalog load used by chat, profile, and settings pickers.
+    func loadModelCatalog(quietly: Bool = false) async -> ModelCatalogLoadResult {
+        modelCatalogGeneration = EngineSyncPolicy.nextGeneration(after: modelCatalogGeneration)
+        let generation = modelCatalogGeneration
+
+        func publish(_ result: ModelCatalogLoadResult) -> ModelCatalogLoadResult {
+            guard EngineSyncPolicy.shouldApply(
+                startedGeneration: generation,
+                currentGeneration: modelCatalogGeneration
+            ) else { return .cancelled }
+            switch result {
+            case let .loaded(instances):
+                modelCatalog = instances
+                modelCatalogError = nil
+            case let .failed(message):
+                if modelCatalog.isEmpty {
+                    modelCatalogError = message
+                }
+                if !quietly, modelCatalog.isEmpty {
+                    actionError = message
+                }
+            case .cancelled:
+                break
+            }
+            return result
+        }
+
+        if engineSync == nil {
+            await refreshEngineSync(quietly: true)
+        }
+        guard EngineSyncPolicy.shouldApply(
+            startedGeneration: generation,
+            currentGeneration: modelCatalogGeneration
+        ) else { return .cancelled }
+
+        switch EngineSyncPolicy.catalogSource(for: engineSync) {
+        case .unknown:
+            return publish(.failed(actionError ?? "Engine status is not available yet. Try again in a moment."))
+        case let .reconstructedUnavailable(reason):
+            return publish(.failed(reason))
+        case .reconstructed:
+            let router: VBotRouterState?
+            if let existing = engineSync?.router {
+                router = existing
+            } else {
+                router = await reconstructedRouter()
+            }
+            guard EngineSyncPolicy.shouldApply(
+                startedGeneration: generation,
+                currentGeneration: modelCatalogGeneration
+            ) else { return .cancelled }
+            guard let router else {
+                return publish(.failed(actionError ?? "Could not load providers for the selected engine."))
+            }
+            return publish(.loaded(router.asInstances))
+        case .advertised:
+            switch await loadInstances() {
+            case let .loaded(loaded):
+                return publish(.loaded(loaded))
+            case let .failed(message):
+                return publish(.failed(message))
+            case .cancelled:
+                return .cancelled
+            }
+        }
+    }
+
     func loadEngineSync() async -> VBotEngineSync? {
+        engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
+        let generation = engineSyncGeneration
         guard let client else { return nil }
         do {
             let loaded = try await client.engineSync()
+            guard EngineSyncPolicy.shouldApply(
+                startedGeneration: generation,
+                currentGeneration: engineSyncGeneration
+            ) else { return nil }
             engineSync = loaded
             return loaded
         } catch let APIError.status(code, _) where code == 404 {
+            guard EngineSyncPolicy.shouldApply(
+                startedGeneration: generation,
+                currentGeneration: engineSyncGeneration
+            ) else { return nil }
             engineSync = .openMausOnly
             return engineSync
         } catch {
@@ -1598,9 +1694,15 @@ final class Session: ObservableObject {
     }
 
     func setPrimaryEngine(_ engine: VBotPrimaryEngine) async -> VBotEngineSync? {
+        engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
+        let generation = engineSyncGeneration
         guard let client else { return nil }
         do {
             let loaded = try await client.setPrimaryEngine(engine)
+            guard EngineSyncPolicy.shouldApply(
+                startedGeneration: generation,
+                currentGeneration: engineSyncGeneration
+            ) else { return nil }
             engineSync = loaded
             return loaded
         } catch {
@@ -1610,10 +1712,21 @@ final class Session: ObservableObject {
     }
 
     func refreshEngineSync(quietly: Bool = false) async {
+        engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
+        let generation = engineSyncGeneration
         guard let client else { return }
         do {
-            engineSync = try await client.engineSync()
+            let loaded = try await client.engineSync()
+            guard EngineSyncPolicy.shouldApply(
+                startedGeneration: generation,
+                currentGeneration: engineSyncGeneration
+            ) else { return }
+            engineSync = loaded
         } catch let APIError.status(code, _) where code == 404 {
+            guard EngineSyncPolicy.shouldApply(
+                startedGeneration: generation,
+                currentGeneration: engineSyncGeneration
+            ) else { return }
             engineSync = .openMausOnly
         } catch {
             if !quietly, !Task.isCancelled { actionError = error.localizedDescription }
@@ -1684,23 +1797,30 @@ final class Session: ObservableObject {
     }
 
     func updateModel(_ patch: BotModelPatch, for bot: Bot) async -> Bot? {
+        let generation = EngineSyncPolicy.nextGeneration(after: modelUpdateGenerations[bot.id] ?? 0)
+        modelUpdateGenerations[bot.id] = generation
         guard let client else { return nil }
         do {
+            let updated: Bot
             if VBotMutationRouting.target(for: engineSync) == .grokReconstructed {
                 let router = try await client.setReconstructedRouter(
                     VBotRouterPatch(provider: patch.instanceId, modelId: patch.model)
                 )
                 guard !Task.isCancelled else { return nil }
-                var updated = state.bot(bot.id) ?? bot
-                updated.modelSelection = ModelSelection(
+                var next = state.bot(bot.id) ?? bot
+                next.modelSelection = ModelSelection(
                     instanceId: router.selected.provider,
                     model: router.selected.modelId
                 )
-                state.apply(.bot(updated))
-                return updated
+                updated = next
+            } else {
+                updated = try await client.updateModel(botId: bot.id, patch: patch)
             }
-            let updated = try await client.updateModel(botId: bot.id, patch: patch)
             guard !Task.isCancelled else { return nil }
+            guard ModelSelectionPolicy.shouldApplyResponse(
+                requestRevision: generation,
+                currentRevision: modelUpdateGenerations[bot.id] ?? 0
+            ) else { return nil }
             state.apply(.bot(updated))
             return updated
         } catch {

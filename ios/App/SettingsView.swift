@@ -654,6 +654,7 @@ struct EngineSelectionView: View {
     @State private var loading = true
     @State private var saving = false
     @State private var error: String?
+    @State private var loadGeneration = 0
 
     private var canEdit: Bool {
         CalmSurfacePolicy.canEditRemoteContent(
@@ -824,64 +825,39 @@ struct EngineSelectionView: View {
     }
 
     private func hostProvider(_ router: VBotRouterState) -> some View {
-        let selectableProviders = router.providers.filter(\.selectable)
+        let models: [VBotProviderModel] = {
+            guard let current = router.providers.first(where: { $0.id == router.selected.provider }) else { return [] }
+            return current.models.filter { $0.selectable || $0.id == router.selected.modelId }
+        }()
         return VBotSurfaceGroup(
             title: "Host provider",
-            footer: "This selection is host-wide on Grok Reconstructed, not per agent."
+            footer: ModelSelectionPolicy.hostWideHint
         ) {
-            ForEach(Array(selectableProviders.enumerated()), id: \.element.id) { index, provider in
-                Button {
-                    guard canEdit, !saving else { return }
-                    Task { await saveRouter(provider: provider.id, modelId: nil) }
-                } label: {
-                    HStack {
-                        Text(provider.label)
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        if router.selected.provider == provider.id {
-                            Image(systemName: "checkmark")
-                                .foregroundStyle(Color.accentColor)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: VBotSurface.Hit.row)
-                    .contentShape(Rectangle())
+            ReconstructedProviderPicker(
+                providers: router.providers,
+                selectedProvider: router.selected.provider,
+                selectedModelId: router.selected.modelId,
+                models: models,
+                disabled: saving || !canEdit,
+                onProviderChange: { provider in
+                    Task { await saveRouter(provider: provider, modelId: nil) }
+                },
+                onModelChange: { modelId in
+                    Task { await saveRouter(provider: router.selected.provider, modelId: modelId) }
                 }
-                .buttonStyle(.plain)
-                .disabled(saving || !canEdit)
-                if index < selectableProviders.count - 1 {
-                    VBotHairline().padding(.leading, 16)
-                }
-            }
-            if router.providers.contains(where: { $0.id == router.selected.provider && $0.selectable }) == false {
-                HStack {
-                    Text(router.selected.provider)
-                        .foregroundStyle(.primary)
-                    Spacer()
-                    Image(systemName: "checkmark")
-                        .foregroundStyle(Color.accentColor)
-                }
-                .padding(.horizontal, 16)
-                .frame(minHeight: VBotSurface.Hit.row)
-            }
-            if router.selected.provider == "cursor" {
-                VBotHairline().padding(.leading, 16)
-                cursorModelPicker(router: router)
-                    .padding(.horizontal, 16)
-            } else {
-                VBotHairline().padding(.leading, 16)
-                Text("Only Cursor models can be changed here. Other providers keep their local model.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .padding(16)
-            }
+            )
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
     }
 
     private func load() async {
-        let hadCache = sync != nil
+        let hadCache = sync != nil || session.engineSync != nil
+        if sync == nil { sync = session.engineSync }
         if !hadCache { loading = true }
         defer { loading = false }
+        loadGeneration = EngineSyncPolicy.nextGeneration(after: loadGeneration)
+        let generation = loadGeneration
         guard session.connection != nil else {
             if sync == nil {
                 error = "Connect to your computer to choose an engine."
@@ -889,6 +865,7 @@ struct EngineSelectionView: View {
             return
         }
         if let loaded = await session.loadEngineSync() {
+            guard EngineSyncPolicy.shouldApply(startedGeneration: generation, currentGeneration: loadGeneration) else { return }
             sync = loaded
             error = nil
         } else if sync == nil {
@@ -919,41 +896,5 @@ struct EngineSelectionView: View {
         } else {
             error = session.actionError ?? "Could not update the reconstructed provider."
         }
-    }
-
-    private func selectableCursorModels(for router: VBotRouterState) -> [VBotProviderModel] {
-        guard let cursor = router.providers.first(where: { $0.id == "cursor" }) else { return [] }
-        return cursor.models.filter { $0.selectable || $0.id == router.selected.modelId }
-    }
-
-    private func cursorModelPicker(router: VBotRouterState) -> some View {
-        let models = selectableCursorModels(for: router)
-        return VStack(spacing: 0) {
-            ForEach(Array(models.enumerated()), id: \.element.id) { index, model in
-                Button {
-                    guard canEdit, !saving else { return }
-                    Task { await saveRouter(provider: "cursor", modelId: model.id) }
-                } label: {
-                    HStack {
-                        Text(model.id)
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        if router.selected.modelId == model.id {
-                            Image(systemName: "checkmark")
-                                .foregroundStyle(Color.accentColor)
-                        }
-                    }
-                    .frame(minHeight: VBotSurface.Hit.row)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(saving || !canEdit)
-                if index < models.count - 1 {
-                    VBotHairline()
-                }
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Cursor model")
     }
 }

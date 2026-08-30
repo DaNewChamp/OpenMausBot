@@ -83,12 +83,11 @@ struct AgentProfileView: View {
     private var voiceConfigured: Bool { config?.isTTSConfigured == true }
     private var hasWorkspaceDefaultVoice: Bool { config?.hasWorkspaceDefaultVoice == true }
     private var selectedVoiceCanSpeak: Bool { config?.canSpeak(agentVoice: voice) == true }
-    private var advertisedInstances: [Instance] { AdvertisedModelCatalog.selectableInstances(from: instances) }
     private var pickedInstance: Instance? { AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances) }
-    private var modelsForPickedInstance: [ModelOption] { pickedInstance?.models.options ?? [] }
     private var effortLevels: [String] { pickedInstance?.capabilities?.effortLevels ?? [] }
+    private var hostWide: Bool { EngineSyncPolicy.hostWideSelection(session.engineSync) }
     private var showsEffortPicker: Bool {
-        !effortLevels.isEmpty && session.engineSync?.usesReconstructedMutations != true
+        ModelSelectionPolicy.showsEffortPicker(levels: effortLevels, hostWideEngine: hostWide)
     }
     private var modelSwitchBlocked: Bool {
         busy || !ModelSelectionPolicy.allowsSwitch(
@@ -96,16 +95,6 @@ struct AgentProfileView: View {
             saving: savingModel,
             catalogLoading: instancesLoading
         )
-    }
-    private var currentProviderTitle: String { pickedInstance?.pickerTitle ?? pickedInstanceId }
-    private var currentModelTitle: String { pickedInstance?.modelLabel(for: pickedModel) ?? pickedModel }
-    private var reconstructedHostHint: String {
-        session.engineSync?.usesReconstructedMutations == true
-            ? "Grok Reconstructed uses a host-wide provider and Cursor model"
-            : "Choose which engine this agent uses"
-    }
-    private var reconstructedModelDisabled: Bool {
-        session.engineSync?.usesReconstructedMutations == true && pickedInstanceId != "cursor"
     }
     private var botRoutines: [Routine] { routines.filter { $0.botId == current.id } }
     private var canEdit: Bool {
@@ -184,6 +173,16 @@ struct AgentProfileView: View {
                 pickedInstanceId = selection.instanceId
                 pickedModel = selection.model
                 pickedEffort = selection.effort
+            }
+            .onChange(of: current.busy) { was, isBusy in
+                if ModelSelectionPolicy.shouldRevertDraft(wasWorking: was == true, isWorking: isBusy == true) {
+                    let selection = current.modelSelection
+                    pickedInstanceId = selection.instanceId
+                    pickedModel = selection.model
+                    pickedEffort = selection.effort
+                    modelSaveTask?.cancel()
+                    savingModel = false
+                }
             }
             .onChange(of: photo) { _, item in
                 guard let item else { return }
@@ -697,42 +696,34 @@ struct AgentProfileView: View {
 
     @ViewBuilder
     private var modelControls: some View {
-        if CalmSurfacePolicy.showsSkeleton(isLoading: instancesLoading, hasCachedRows: !instances.isEmpty) {
-            ModelPickerLoadingView()
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else if !advertisedInstances.isEmpty {
-            ModelPickerView(
+        VStack(alignment: .leading, spacing: 14) {
+            ModelPickerCatalogHost(
                 instances: instances,
+                loading: instancesLoading,
+                error: instancesError,
+                canEdit: canEdit,
+                working: current.busy == true,
+                saving: savingModel,
                 selectedInstanceId: $pickedInstanceId,
                 selectedModelId: $pickedModel,
-                disabled: !canEdit || modelSwitchBlocked || advertisedInstances.isEmpty,
-                modelsDisabled: reconstructedModelDisabled || !canEdit,
-                footerHint: canEdit ? reconstructedHostHint : CalmSurfacePolicy.reconnectToEdit
-            ) {
-                let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances)?.capabilities?.effortLevels ?? []
-                if let effort = pickedEffort, !levels.contains(effort) {
-                    pickedEffort = nil
-                }
-                scheduleModelSave()
-            }
-
-            if showsEffortPicker {
-                Picker("Reasoning", selection: effortSelection) {
-                    Text("Default").tag(Optional<String>.none)
-                    ForEach(effortLevels, id: \.self) { level in
-                        Text(Self.effortLabel(level)).tag(Optional.some(level))
+                effortLevels: effortLevels,
+                selectedEffort: $pickedEffort,
+                showsEffort: showsEffortPicker,
+                hostWide: hostWide,
+                onRetry: { Task { await loadInstances() } },
+                onSelectionChange: {
+                    let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances)?.capabilities?.effortLevels ?? []
+                    if let effort = pickedEffort, !levels.contains(effort) {
+                        pickedEffort = nil
                     }
+                    scheduleModelSave()
                 }
-                .disabled(!canEdit || modelSwitchBlocked)
-                .accessibilityLabel("Reasoning")
-                .accessibilityValue(Self.effortLabel(pickedEffort))
-                .accessibilityHint(current.busy == true ? ModelSelectionPolicy.busyExplanation : "How hard this bot thinks")
-            }
+            )
 
             Toggle(isOn: $fastMode) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Fast mode")
-                    Text("Codex first, then Claude/Cursor, then Grok — low effort when supported.")
+                    Text(ModelSelectionPolicy.fastModeHint)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -741,37 +732,6 @@ struct AgentProfileView: View {
             .onChange(of: fastMode) { _, enabled in
                 Task { _ = await session.updateFastMode(enabled, for: current) }
             }
-
-            if savingModel {
-                Label("Saving model…", systemImage: "arrow.triangle.2.circlepath")
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Saving model")
-            } else if current.busy == true {
-                Label(ModelSelectionPolicy.busyExplanation, systemImage: "info.circle")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        } else if !canEdit {
-            ModelSelectionSummaryRow(
-                instanceTitle: currentProviderTitle,
-                modelTitle: currentModelTitle,
-                providerKey: pickedInstanceId,
-                subtitle: CalmSurfacePolicy.reconnectToEdit,
-                disabled: true
-            )
-        } else if let instancesError {
-            ModelPickerErrorView(message: instancesError) {
-                Task { await loadInstances() }
-            }
-        } else {
-            ModelPickerView(
-                instances: instances,
-                selectedInstanceId: $pickedInstanceId,
-                selectedModelId: $pickedModel,
-                disabled: true,
-                modelsDisabled: true,
-                footerHint: reconstructedHostHint
-            ) {}
         }
     }
 
@@ -863,123 +823,29 @@ struct AgentProfileView: View {
         .presentationDragIndicator(.visible)
     }
 
-    private var providerSelection: Binding<String> {
-        Binding(
-            get: { pickedInstanceId },
-            set: { newId in
-                pickedInstanceId = newId
-                pickedModel = AdvertisedModelCatalog.alignedModel(
-                    instanceId: newId,
-                    currentModel: pickedModel,
-                    in: instances
-                )
-                let levels = AdvertisedModelCatalog.instance(id: newId, in: instances)?.capabilities?.effortLevels ?? []
-                if let effort = pickedEffort, !levels.contains(effort) {
-                    pickedEffort = nil
-                }
-                scheduleModelSave()
-            }
-        )
-    }
-
-    private var modelSelection: Binding<String> {
-        Binding(
-            get: { pickedModel },
-            set: { newModel in
-                pickedModel = newModel
-                scheduleModelSave()
-            }
-        )
-    }
-
-    private var effortSelection: Binding<String?> {
-        Binding(
-            get: { pickedEffort },
-            set: { newEffort in
-                pickedEffort = newEffort
-                scheduleModelSave()
-            }
-        )
-    }
-
-    private static func effortLabel(_ level: String?) -> String {
-        switch level {
-        case nil: return "Default"
-        case "xhigh": return "X-High"
-        case let value?: return value.capitalized
-        }
-    }
-
     private func loadInstances() async {
+        if instances.isEmpty {
+            instances = session.modelCatalog
+        }
         let hadCache = !instances.isEmpty
         if !hadCache { instancesLoading = true }
         defer { instancesLoading = false }
 
-        func retainCacheOrFail(_ message: String) {
-            if hadCache {
-                instancesError = nil
-            } else {
-                instances = []
-                instancesError = message
-            }
-        }
-
-        if session.engineSync == nil {
-            await session.refreshEngineSync()
-        }
-        guard let sync = session.engineSync else {
-            retainCacheOrFail(session.actionError ?? "Engine status is not available yet. Try again in a moment.")
-            return
-        }
-        if sync.usesReconstructedMutations {
-            if sync.reconstructedMutationsReady != true {
-                retainCacheOrFail(
-                    sync.fallbackReason
-                        ?? "Grok Reconstructed is selected, so model changes cannot fall back to OpenMaus."
-                )
-                return
-            }
-            let router: VBotRouterState?
-            if let existing = sync.router {
-                router = existing
-            } else {
-                router = await session.reconstructedRouter()
-            }
-            if let router {
-                instances = router.asInstances
-                instancesError = nil
-                pickedInstanceId = router.selected.provider
-                pickedModel = AdvertisedModelCatalog.alignedModel(
-                    instanceId: pickedInstanceId,
-                    currentModel: router.selected.modelId,
-                    in: instances
-                )
-                pickedEffort = nil
-                return
-            }
-            retainCacheOrFail(session.actionError ?? "Could not load Grok Reconstructed providers.")
-            return
-        }
-        switch await session.loadInstances() {
+        switch await session.loadModelCatalog() {
         case let .loaded(loaded):
-            guard !loaded.isEmpty else {
-                retainCacheOrFail("No models are advertised by the paired computer.")
-                return
-            }
             instances = loaded
             instancesError = nil
-            pickedInstanceId = current.modelSelection.instanceId
-            pickedModel = AdvertisedModelCatalog.alignedModel(
-                instanceId: pickedInstanceId,
-                currentModel: current.modelSelection.model,
-                in: loaded
-            )
+            let preserved = AdvertisedModelCatalog.preservedSelection(current.modelSelection, in: loaded)
+            pickedInstanceId = preserved.instanceId
+            pickedModel = preserved.model
             let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: loaded)?.capabilities?.effortLevels ?? []
             pickedEffort = current.modelSelection.effort.flatMap { levels.contains($0) ? $0 : nil }
         case let .failed(message):
-            retainCacheOrFail(message)
+            if !hadCache {
+                instancesError = message
+            }
         case .cancelled:
-            return
+            break
         }
     }
 
@@ -1010,7 +876,7 @@ struct AgentProfileView: View {
         savingModel = true
         modelSaveTask = Task { @MainActor in
             await saveModelIfNeeded(revision: revision, previous: selection)
-            if modelSaveRevision == revision {
+            if ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: modelSaveRevision) {
                 modelSaveTask = nil
             }
         }
@@ -1018,11 +884,11 @@ struct AgentProfileView: View {
 
     private func saveModelIfNeeded(revision: Int, previous: ModelSelection) async {
         defer {
-            if modelSaveRevision == revision {
+            if ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: modelSaveRevision) {
                 savingModel = false
             }
         }
-        guard modelSaveRevision == revision else { return }
+        guard ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: modelSaveRevision) else { return }
         let requested = BotModelPatch(
             instanceId: pickedInstanceId,
             model: pickedModel,
@@ -1037,7 +903,7 @@ struct AgentProfileView: View {
             // A newer picker value owns the form now. If another client
             // changed the bot while this request was in flight, follow that
             // server state rather than rolling back over it.
-            guard modelSaveRevision == revision else { return }
+            guard ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: modelSaveRevision) else { return }
             let latest = current.modelSelection
             if latest.instanceId == requested.instanceId && latest.model == requested.model && latest.effort == pickedEffort {
                 pickedInstanceId = previous.instanceId
@@ -1051,7 +917,7 @@ struct AgentProfileView: View {
             return
         }
 
-        guard modelSaveRevision == revision else { return }
+        guard ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: modelSaveRevision) else { return }
         pickedInstanceId = updated.modelSelection.instanceId
         pickedModel = updated.modelSelection.model
         pickedEffort = updated.modelSelection.effort
