@@ -2735,7 +2735,9 @@ private enum StorePreviewHarness {
     }
 
     static func applyConversation(arguments: [String], to state: inout CompanionState) {
-        guard arguments.contains("-preview-conversation") else { return }
+        guard arguments.contains("-preview-conversation"),
+              arguments.contains("-preview-busy")
+        else { return }
         guard let target = targetBotID(arguments: arguments, state: state),
               let index = state.bots.firstIndex(where: { $0.id == target })
         else { return }

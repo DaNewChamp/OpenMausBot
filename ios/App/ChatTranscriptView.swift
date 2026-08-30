@@ -248,8 +248,11 @@ struct ChatTranscriptView: View {
                         chat: current,
                         message: message,
                         endsRun: endsRun(at: row.startIndex, in: transcript),
-                        showsSpeaker: message.role != .user
-                            && startsSpeakerRun(at: row.startIndex, in: transcript),
+                        showsSpeaker: ChatPresentationPolicy.showsBubbleSpeakerAttribution(
+                            isRoom: !current.isBot,
+                            startsSpeakerRun: message.role != .user
+                                && startsSpeakerRun(at: row.startIndex, in: transcript)
+                        ),
                         onOpenComm: { groupId in
                             commRoom = session.state.rooms.first { $0.id == groupId }
                         },

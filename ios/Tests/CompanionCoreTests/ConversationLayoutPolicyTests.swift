@@ -19,15 +19,58 @@ final class ConversationLayoutPolicyTests: XCTestCase {
     }
 
     func testTranscriptMarginsAndBubbleWidth() {
-        XCTAssertEqual(ConversationLayoutPolicy.transcriptHorizontalMargin, 22)
+        XCTAssertEqual(ConversationLayoutPolicy.transcriptHorizontalMargin, 16)
+        XCTAssertEqual(ConversationLayoutPolicy.bubbleHorizontalPadding, 16)
         XCTAssertEqual(ConversationLayoutPolicy.bubbleCornerRadius, 24)
         XCTAssertEqual(ConversationLayoutPolicy.bubbleMaxWidthFraction, 0.83, accuracy: 0.001)
+        XCTAssertEqual(ConversationLayoutPolicy.headerScrimHeight, 118)
 
         let pane = ConversationLayoutPolicy.referenceWidth
         let maxBubble = ConversationLayoutPolicy.bubbleMaxWidth(paneWidth: pane)
         XCTAssertEqual(maxBubble, pane * 0.83, accuracy: 0.5)
         XCTAssertGreaterThanOrEqual(maxBubble / pane, 0.82)
         XCTAssertLessThanOrEqual(maxBubble / pane, 0.84)
+
+        let textMax = ConversationLayoutPolicy.bubbleTextMaxWidth(paneWidth: pane)
+        XCTAssertEqual(textMax, maxBubble - 32, accuracy: 0.5)
+    }
+
+    func testContentSizedBubbleWidthCapsAtPolicyMax() {
+        let pane = ConversationLayoutPolicy.referenceWidth
+        let maxBubble = ConversationLayoutPolicy.bubbleMaxWidth(paneWidth: pane)
+        let short = ConversationLayoutPolicy.contentSizedBubbleWidth(textWidth: 42, paneWidth: pane)
+        XCTAssertEqual(short, 42 + 32, accuracy: 0.5)
+        XCTAssertLessThan(short, maxBubble)
+
+        let long = ConversationLayoutPolicy.contentSizedBubbleWidth(textWidth: 900, paneWidth: pane)
+        XCTAssertEqual(long, maxBubble, accuracy: 0.5)
+    }
+
+    func testBotChatsSuppressInlineSpeakerAttribution() {
+        XCTAssertFalse(
+            ConversationLayoutPolicy.showsBubbleSpeakerAttribution(
+                isRoom: false,
+                startsSpeakerRun: true
+            )
+        )
+        XCTAssertFalse(
+            ConversationLayoutPolicy.showsBubbleSpeakerAttribution(
+                isRoom: false,
+                startsSpeakerRun: false
+            )
+        )
+        XCTAssertTrue(
+            ConversationLayoutPolicy.showsBubbleSpeakerAttribution(
+                isRoom: true,
+                startsSpeakerRun: true
+            )
+        )
+        XCTAssertFalse(
+            ConversationLayoutPolicy.showsBubbleSpeakerAttribution(
+                isRoom: true,
+                startsSpeakerRun: false
+            )
+        )
     }
 
     func testIdentityTitleJoinsNameAndModel() {

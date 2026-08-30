@@ -20,8 +20,10 @@ public enum ConversationLayoutPolicy: Sendable {
     public static let identityAvatar: CGFloat = 30
     public static let identityStatusDot: CGFloat = 8
 
-    public static let transcriptHorizontalMargin: CGFloat = 22
+    public static let transcriptHorizontalMargin: CGFloat = 16
+    public static let bubbleHorizontalPadding: CGFloat = 16
     public static let bubbleMaxWidthFraction: CGFloat = 0.83
+    public static let headerScrimHeight: CGFloat = 118
     public static let bubbleCornerRadius: CGFloat = 24
     public static let transcriptRowSpacing: CGFloat = 10
     public static let dateSeparatorTopPadding: CGFloat = 14
@@ -52,9 +54,33 @@ public enum ConversationLayoutPolicy: Sendable {
         paneWidth * bubbleMaxWidthFraction
     }
 
+    public static func bubbleTextMaxWidth(paneWidth: CGFloat) -> CGFloat {
+        max(0, bubbleMaxWidth(paneWidth: paneWidth) - bubbleHorizontalPadding * 2)
+    }
+
     public static func bubbleEdgeReserve(paneWidth: CGFloat) -> CGFloat {
         let content = max(0, paneWidth - transcriptHorizontalMargin * 2)
         return max(12, content - bubbleMaxWidth(paneWidth: paneWidth))
+    }
+
+    /// The identity pill owns speaker attribution in 1:1 bot chats. Rooms keep
+    /// inline speaker headers at the start of each peer run.
+    public static func showsBubbleSpeakerAttribution(
+        isRoom: Bool,
+        startsSpeakerRun: Bool
+    ) -> Bool {
+        isRoom && startsSpeakerRun
+    }
+
+    /// Content-sized bubble width: text intrinsic width capped by policy max.
+    public static func contentSizedBubbleWidth(
+        textWidth: CGFloat,
+        paneWidth: CGFloat
+    ) -> CGFloat {
+        min(
+            bubbleMaxWidth(paneWidth: paneWidth),
+            max(0, textWidth) + bubbleHorizontalPadding * 2
+        )
     }
 
     public static func showsScrollToBottomButton(

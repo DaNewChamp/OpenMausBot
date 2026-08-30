@@ -8,6 +8,18 @@ public enum ChatPresentationPolicy {
     /// `Message` is the only assistant text the transcript shows.
     public static let revealsLiveAssistantProse = false
 
+    /// 1:1 bot chats never repeat avatar/name inside bubbles; rooms do at run
+    /// boundaries. Delegates to `ConversationLayoutPolicy`.
+    public static func showsBubbleSpeakerAttribution(
+        isRoom: Bool,
+        startsSpeakerRun: Bool
+    ) -> Bool {
+        ConversationLayoutPolicy.showsBubbleSpeakerAttribution(
+            isRoom: isRoom,
+            startsSpeakerRun: startsSpeakerRun
+        )
+    }
+
     /// The four post-response suggestion chips (Show diff, Run tests,
     /// Explain steps, What's next?) are not part of the iOS chat surface.
     /// Mentions, slash commands, stop, and tool/approval cards stay.

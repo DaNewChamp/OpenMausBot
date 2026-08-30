@@ -7,6 +7,7 @@
 // beneath it; before that, a thin material with a hairline does the same
 // job in the same shape, just without the light.
 import SwiftUI
+import CompanionCore
 
 /// Something floating over content: a tile, a pill, a sheet.
 struct GlassSurface<S: InsettableShape>: ViewModifier {
@@ -140,21 +141,21 @@ struct ScrollEdgeChrome<Content: View>: View {
 
     var body: some View {
         content()
-            .background {
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                    .mask(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .black, location: 0),
-                                .init(color: .black.opacity(0.32), location: 0.24),
-                                .init(color: .clear, location: 0.52),
-                            ],
-                            startPoint: edge == .top ? .top : .bottom,
-                            endPoint: edge == .top ? .bottom : .top
-                        )
-                    )
-                    .ignoresSafeArea(.container, edges: edge == .top ? .top : .bottom)
+            .background(alignment: edge == .top ? .top : .bottom) {
+                LinearGradient(
+                    stops: [
+                        .init(color: Color.black.opacity(0.88), location: 0),
+                        .init(color: Color.black.opacity(0.62), location: 0.2),
+                        .init(color: Color.black.opacity(0.24), location: 0.4),
+                        .init(color: .clear, location: 0.62),
+                    ],
+                    startPoint: edge == .top ? .top : .bottom,
+                    endPoint: edge == .top ? .bottom : .top
+                )
+                .frame(height: ConversationLayoutPolicy.headerScrimHeight)
+                .frame(maxWidth: .infinity)
+                .ignoresSafeArea(.container, edges: edge == .top ? .top : .bottom)
+                .allowsHitTesting(false)
             }
     }
 }

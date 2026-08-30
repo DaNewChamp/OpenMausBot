@@ -32,6 +32,21 @@ final class ChatPresentationPolicyTests: XCTestCase {
         XCTAssertFalse(ChatPresentationPolicy.revealsLiveAssistantProse)
     }
 
+    func testBotChatsDelegateSpeakerAttributionSuppression() {
+        XCTAssertFalse(
+            ChatPresentationPolicy.showsBubbleSpeakerAttribution(
+                isRoom: false,
+                startsSpeakerRun: true
+            )
+        )
+        XCTAssertTrue(
+            ChatPresentationPolicy.showsBubbleSpeakerAttribution(
+                isRoom: true,
+                startsSpeakerRun: true
+            )
+        )
+    }
+
     func testWorkingStatusLineNeverQuotesAPartialReply() {
         XCTAssertEqual(
             ChatPresentationPolicy.workingStatusLine(

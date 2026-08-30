@@ -907,8 +907,14 @@ struct TextBubble: View {
     private var maxBubbleWidth: CGFloat {
         ConversationLayoutPolicy.bubbleMaxWidth(paneWidth: paneWidth)
     }
+    private var textMaxWidth: CGFloat {
+        ConversationLayoutPolicy.bubbleTextMaxWidth(paneWidth: paneWidth)
+    }
     private var edgeReserve: CGFloat {
         ConversationLayoutPolicy.bubbleEdgeReserve(paneWidth: paneWidth)
+    }
+    private var bubbleHorizontalPadding: CGFloat {
+        ConversationLayoutPolicy.bubbleHorizontalPadding
     }
 
     private var parsedAttachments: (display: String, imagePaths: [String], filePaths: [String])? {
@@ -992,10 +998,7 @@ struct TextBubble: View {
     var body: some View {
         let mine = message.role == .user
         let customCard = parsedDiff != nil || parsedTable != nil
-        // rooms attribute each line to the member who said it
         let speaker = message.from
-        // No face beside the bubble: the bot's face is in the header, and in
-        // a room the name line says who spoke. The bubble sits at the edge.
         HStack(alignment: .bottom, spacing: 0) {
             if mine { Spacer(minLength: edgeReserve) }
 
@@ -1008,25 +1011,26 @@ struct TextBubble: View {
                             .foregroundStyle(Color.primary)
                     }
                 }
-                // Bots get markdown, you do not — the same split the desktop
-                // makes. Markdown you did not intend is worse than markdown
-                // you did: a message about `**` should show the asterisks.
                 if let diff = parsedDiff {
                     GitPRDiffCardView(filename: diff.filename, diffText: diff.diff)
+                        .frame(maxWidth: maxBubbleWidth, alignment: .leading)
                 } else if let table = parsedTable {
                     SQLResultTableView(columns: table.headers, rows: table.rows)
+                        .frame(maxWidth: maxBubbleWidth, alignment: .leading)
                 } else if mine {
                     if let parsedAttachments {
                         TranscriptAttachmentGallery(
                             imagePaths: parsedAttachments.imagePaths,
                             filePaths: parsedAttachments.filePaths
                         )
+                        .frame(maxWidth: maxBubbleWidth, alignment: .trailing)
                         if !parsedAttachments.display.isEmpty {
                             Text(parsedAttachments.display)
                                 .font(typography.body)
                                 .foregroundStyle(BubbleColor.mineText)
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: textMaxWidth, alignment: .trailing)
                         }
                     } else {
                         Text(message.text ?? "")
@@ -1034,17 +1038,18 @@ struct TextBubble: View {
                             .foregroundStyle(BubbleColor.mineText)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: textMaxWidth, alignment: .trailing)
                     }
                 } else {
                     MarkdownText(source: message.text ?? "")
                         .foregroundStyle(Color.primary)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: textMaxWidth, alignment: .leading)
                 }
             }
-            .padding(.horizontal, customCard ? 0 : 16)
+            .padding(.horizontal, customCard ? 0 : bubbleHorizontalPadding)
             .padding(.vertical, customCard ? 0 : 12)
-            .frame(maxWidth: customCard ? maxBubbleWidth : maxBubbleWidth, alignment: mine ? .trailing : .leading)
             .background {
                 if !customCard {
                     if mine {

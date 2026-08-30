@@ -12,7 +12,7 @@
       "computer": "cloud",
       "cloudBackend": "box",
       "unread": false,
-      "busy": true,
+      "busy": false,
       "modelSelection": { "instanceId": "preview", "model": "preview" },
       "createdAt": 1787000000000,
       "activeLeafId": "parity-bot-final",
