@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { Bot } from "@/state/store";
 import { groupComposerHint, roomRespondersForComposer } from "./group-routing";
 
 describe("roomRespondersForComposer", () => {
@@ -26,10 +27,22 @@ describe("roomRespondersForComposer", () => {
     expect(roomRespondersForComposer("@everyone hello", members, { defaultResponder: { kind: "mentions" } })).toEqual(
       members,
     );
+  });
+
   it("mentions-only rooms use the composer hint copy", () => {
-    expect(groupComposerHint({ dm: false, defaultResponder: { kind: "mentions" } }, members)).toBe(
-      "@mention a bot",
-    );
+    const room = {
+      id: "g1",
+      threadId: "t1",
+      name: "Ops",
+      memberIds: ["atlas", "milind"],
+      defaultResponder: { kind: "mentions" as const },
+      bulletin: "",
+      unread: false,
+      createdAt: 0,
+      dm: false,
+      messages: [],
+    };
+    expect(groupComposerHint(room, members as Bot[])).toBe("@mention a bot");
   });
 });
 
