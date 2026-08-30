@@ -894,6 +894,41 @@ private struct CameraAttachmentPicker: UIViewControllerRepresentable {
     }
 }
 
+private struct BubbleChromeModifier: ViewModifier {
+    let customCard: Bool
+    let shrinkWrapsHorizontally: Bool
+    let maxBubbleWidth: CGFloat
+    let textMaxWidth: CGFloat
+    let mine: Bool
+    let bubbleHorizontalPadding: CGFloat
+    let bubbleCornerRadius: CGFloat
+    let tailed: Bool
+
+    func body(content: Content) -> some View {
+        Group {
+            if shrinkWrapsHorizontally && !customCard {
+                content.proseBubbleSized(maxContentWidth: textMaxWidth)
+            } else {
+                content.frame(maxWidth: maxBubbleWidth, alignment: mine ? .trailing : .leading)
+            }
+        }
+        .padding(.horizontal, customCard ? 0 : bubbleHorizontalPadding)
+        .padding(.vertical, customCard ? 0 : 12)
+        .background {
+            if !customCard {
+                if mine {
+                    SpeechBubble(tail: tailed ? .trailing : .none, cornerRadius: bubbleCornerRadius)
+                        .fill(BubbleColor.mine)
+                } else {
+                    RoundedRectangle(cornerRadius: bubbleCornerRadius, style: .continuous)
+                        .fill(BubbleColor.theirs)
+                }
+            }
+        }
+        .padding(.bottom, mine && tailed && !customCard ? SpeechBubble.tailDrop(cornerRadius: bubbleCornerRadius) : 0)
+    }
+}
+
 struct TextBubble: View {
     let message: Message
     let chat: Chat
@@ -915,6 +950,12 @@ struct TextBubble: View {
     }
     private var bubbleHorizontalPadding: CGFloat {
         ConversationLayoutPolicy.bubbleHorizontalPadding
+    }
+    private var shrinkWrapsHorizontally: Bool {
+        ConversationLayoutPolicy.bubbleShrinkWrapsHorizontally(
+            isCustomCard: parsedDiff != nil || parsedTable != nil,
+            hasAttachmentGallery: parsedAttachments != nil
+        )
     }
 
     private var parsedAttachments: (display: String, imagePaths: [String], filePaths: [String])? {
@@ -1002,72 +1043,67 @@ struct TextBubble: View {
         HStack(alignment: .bottom, spacing: 0) {
             if mine { Spacer(minLength: edgeReserve) }
 
-            VStack(alignment: .leading, spacing: 8) {
-                if !mine, showsSpeaker {
-                    HStack(spacing: 8) {
-                        speakerAvatar
-                        Text(speaker?.name ?? chat.name)
-                            .font(typography.font(size: 13, relativeTo: .subheadline, weight: .semibold))
-                            .foregroundStyle(Color.primary)
-                    }
-                }
-                if let diff = parsedDiff {
-                    GitPRDiffCardView(filename: diff.filename, diffText: diff.diff)
-                        .frame(maxWidth: maxBubbleWidth, alignment: .leading)
-                } else if let table = parsedTable {
-                    SQLResultTableView(columns: table.headers, rows: table.rows)
-                        .frame(maxWidth: maxBubbleWidth, alignment: .leading)
-                } else if mine {
-                    if let parsedAttachments {
-                        TranscriptAttachmentGallery(
-                            imagePaths: parsedAttachments.imagePaths,
-                            filePaths: parsedAttachments.filePaths
-                        )
-                        .frame(maxWidth: maxBubbleWidth, alignment: .trailing)
-                        if !parsedAttachments.display.isEmpty {
-                            Text(parsedAttachments.display)
-                                .font(typography.body)
-                                .foregroundStyle(BubbleColor.mineText)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: textMaxWidth, alignment: .trailing)
-                        }
-                    } else {
-                        Text(message.text ?? "")
-                            .font(typography.body)
-                            .foregroundStyle(BubbleColor.mineText)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: textMaxWidth, alignment: .trailing)
-                    }
-                } else {
-                    MarkdownText(source: message.text ?? "")
-                        .foregroundStyle(Color.primary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: textMaxWidth, alignment: .leading)
-                }
-            }
-            .padding(.horizontal, customCard ? 0 : bubbleHorizontalPadding)
-            .padding(.vertical, customCard ? 0 : 12)
-            .frame(maxWidth: maxBubbleWidth, alignment: mine ? .trailing : .leading)
-            .fixedSize(horizontal: !customCard, vertical: false)
-            .background {
-                if !customCard {
-                    if mine {
-                        SpeechBubble(tail: tailed ? .trailing : .none, cornerRadius: bubbleCornerRadius)
-                            .fill(BubbleColor.mine)
-                    } else {
-                        RoundedRectangle(cornerRadius: bubbleCornerRadius, style: .continuous)
-                            .fill(BubbleColor.theirs)
-                    }
-                }
-            }
-            .padding(.bottom, mine && tailed && !customCard ? SpeechBubble.tailDrop(cornerRadius: bubbleCornerRadius) : 0)
+            bubbleContent(mine: mine, customCard: customCard, speaker: speaker)
+                .modifier(BubbleChromeModifier(
+                    customCard: customCard,
+                    shrinkWrapsHorizontally: shrinkWrapsHorizontally,
+                    maxBubbleWidth: maxBubbleWidth,
+                    textMaxWidth: textMaxWidth,
+                    mine: mine,
+                    bubbleHorizontalPadding: bubbleHorizontalPadding,
+                    bubbleCornerRadius: bubbleCornerRadius,
+                    tailed: tailed
+                ))
 
             if !mine { Spacer(minLength: edgeReserve) }
         }
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+    }
+
+    @ViewBuilder
+    private func bubbleContent(mine: Bool, customCard: Bool, speaker: Sender?) -> some View {
+        VStack(alignment: mine ? .trailing : .leading, spacing: 8) {
+            if !mine, showsSpeaker {
+                HStack(spacing: 8) {
+                    speakerAvatar
+                    Text(speaker?.name ?? chat.name)
+                        .font(typography.font(size: 13, relativeTo: .subheadline, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                }
+            }
+            if let diff = parsedDiff {
+                GitPRDiffCardView(filename: diff.filename, diffText: diff.diff)
+            } else if let table = parsedTable {
+                SQLResultTableView(columns: table.headers, rows: table.rows)
+            } else if mine {
+                if let parsedAttachments {
+                    TranscriptAttachmentGallery(
+                        imagePaths: parsedAttachments.imagePaths,
+                        filePaths: parsedAttachments.filePaths
+                    )
+                    if !parsedAttachments.display.isEmpty {
+                        Text(parsedAttachments.display)
+                            .font(typography.body)
+                            .foregroundStyle(BubbleColor.mineText)
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.trailing)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    Text(message.text ?? "")
+                        .font(typography.body)
+                        .foregroundStyle(BubbleColor.mineText)
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(.trailing)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                MarkdownText(source: message.text ?? "")
+                    .foregroundStyle(Color.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     @ViewBuilder

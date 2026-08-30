@@ -72,15 +72,48 @@ public enum ConversationLayoutPolicy: Sendable {
         isRoom && startsSpeakerRun
     }
 
+    /// Prose content width: intrinsic width capped by the policy text column.
+    public static func proseBubbleContentWidth(
+        idealContentWidth: CGFloat,
+        maxContentWidth: CGFloat
+    ) -> CGFloat {
+        min(max(0, maxContentWidth), max(0, idealContentWidth))
+    }
+
+    /// Prose content height after width is chosen: short lines keep ideal
+    /// height; wider copy remeasures at the capped width so every wrap fits.
+    public static func proseBubbleContentHeight(
+        idealContentWidth: CGFloat,
+        idealContentHeight: CGFloat,
+        wrappedContentHeight: CGFloat,
+        maxContentWidth: CGFloat
+    ) -> CGFloat {
+        let width = proseBubbleContentWidth(
+            idealContentWidth: idealContentWidth,
+            maxContentWidth: maxContentWidth
+        )
+        if width + 0.5 >= idealContentWidth {
+            return idealContentHeight
+        }
+        return wrappedContentHeight
+    }
+
     /// Content-sized bubble width: text intrinsic width capped by policy max.
     public static func contentSizedBubbleWidth(
         textWidth: CGFloat,
         paneWidth: CGFloat
     ) -> CGFloat {
-        min(
-            bubbleMaxWidth(paneWidth: paneWidth),
-            max(0, textWidth) + bubbleHorizontalPadding * 2
-        )
+        proseBubbleWidth(idealContentWidth: textWidth, paneWidth: paneWidth)
+    }
+
+    public static func proseBubbleWidth(
+        idealContentWidth: CGFloat,
+        paneWidth: CGFloat
+    ) -> CGFloat {
+        proseBubbleContentWidth(
+            idealContentWidth: idealContentWidth,
+            maxContentWidth: bubbleTextMaxWidth(paneWidth: paneWidth)
+        ) + bubbleHorizontalPadding * 2
     }
 
     /// Prose bubbles shrink to intrinsic width; cards and attachment rows keep

@@ -46,6 +46,54 @@ final class ConversationLayoutPolicyTests: XCTestCase {
         XCTAssertEqual(long, maxBubble, accuracy: 0.5)
     }
 
+    func testProseBubbleContentWidthCapsWithoutCharacterHeuristics() {
+        let cap: CGFloat = 300
+        XCTAssertEqual(
+            ConversationLayoutPolicy.proseBubbleContentWidth(idealContentWidth: 42, maxContentWidth: cap),
+            42,
+            accuracy: 0.5
+        )
+        XCTAssertEqual(
+            ConversationLayoutPolicy.proseBubbleContentWidth(idealContentWidth: 900, maxContentWidth: cap),
+            cap,
+            accuracy: 0.5
+        )
+    }
+
+    func testProseBubbleContentHeightRemeasuresWhenWidthIsCapped() {
+        let cap: CGFloat = 300
+        XCTAssertEqual(
+            ConversationLayoutPolicy.proseBubbleContentHeight(
+                idealContentWidth: 42,
+                idealContentHeight: 22,
+                wrappedContentHeight: 22,
+                maxContentWidth: cap
+            ),
+            22,
+            accuracy: 0.5
+        )
+        XCTAssertEqual(
+            ConversationLayoutPolicy.proseBubbleContentHeight(
+                idealContentWidth: 900,
+                idealContentHeight: 22,
+                wrappedContentHeight: 66,
+                maxContentWidth: cap
+            ),
+            66,
+            accuracy: 0.5
+        )
+    }
+
+    func testProseBubbleWidthMatchesPaddingPolicy() {
+        let pane: CGFloat = 402
+        let hey = ConversationLayoutPolicy.proseBubbleWidth(idealContentWidth: 30, paneWidth: pane)
+        let thanks = ConversationLayoutPolicy.proseBubbleWidth(idealContentWidth: 52, paneWidth: pane)
+        let long = ConversationLayoutPolicy.proseBubbleWidth(idealContentWidth: 900, paneWidth: pane)
+        XCTAssertEqual(hey, 30 + 32, accuracy: 0.5)
+        XCTAssertEqual(thanks, 52 + 32, accuracy: 0.5)
+        XCTAssertEqual(long, ConversationLayoutPolicy.bubbleMaxWidth(paneWidth: pane), accuracy: 0.5)
+    }
+
     func testProseBubblesShrinkWrapWhileCardsUsePolicyMax() {
         XCTAssertTrue(
             ConversationLayoutPolicy.bubbleShrinkWrapsHorizontally(
