@@ -1,7 +1,7 @@
-V Bot build 62: message layout, scroll position, Grok proportions, and unread dots.
+V Bot build 63: reliable sending plus cleaner home and model settings.
 
-• Short messages use natural intrinsic bubbles; long messages wrap fully
-• Last assistant message stays visible above the composer when you open a chat
-• Home hero and top-left account avatar match compact Grok proportions
-• Unread dots for completed bot replies/notifications persist until opened
-• Bot Settings: provider order OpenAI, Claude, Cursor, OpenRouter, Grok Auth; Cursor Auto label and Refresh models
+• Chief now routes through the available Codex engine instead of failing instantly
+• Home hero avatar and caption no longer clip at the top or bottom
+• OpenAI uses a clean original provider mark instead of an emoji
+• OpenAI shows the curated Sol, Sol 1M, Terra, Luna, and GPT-5.5 choices only
+• Desktop bridge and reconstructed-engine capabilities now fail closed when unsupported
