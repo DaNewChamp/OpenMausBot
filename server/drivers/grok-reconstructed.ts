@@ -1128,7 +1128,7 @@ export async function probeReconstructedGateway(
         method: "POST",
         headers: requestHeaders(discovery.token, { "content-type": "application/json" }),
         body: JSON.stringify({ id: firstAgentId, limit: 1 }),
-        signal: AbortSignal.timeout(COMMAND_TIMEOUT_MS),
+        signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
       });
       const tailValue = asRecord(tail.value);
       transcriptTail = tail.ok && tailValue != null && Array.isArray(tailValue.entries);
