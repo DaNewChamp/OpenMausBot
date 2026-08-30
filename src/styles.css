@@ -71,9 +71,9 @@
   /* V Bot desktop shell — layout rhythm, not a second palette. Kept outside
      [data-skin] so skins can keep their color contracts while the three-column
      geometry stays one system. */
-  --shell-left-width: 220px;
+  --shell-left-width: 280px;
   --shell-left-icons: 72px;
-  --shell-right-width: 272px;
+  --shell-right-width: 320px;
   --shell-control: 44px;
   --shell-row: 44px;
   --shell-pin-width: 156px;

@@ -11,8 +11,11 @@ import {
   SHELL_COLLAPSE_RIGHT_BELOW,
   SHELL_LEFT_ICONS_PX,
   SHELL_LEFT_WIDTH_PX,
+  SHELL_RIGHT_WIDTH_PX,
   SHELL_SCREENSHOT_HEIGHT,
   SHELL_SCREENSHOT_WIDTH,
+  shellBubbleMaxPx,
+  shellCenterWidthPx,
   shellColumnVisibility,
   unreadAfterSelected,
 } from "./shell-layout";
@@ -25,6 +28,10 @@ describe("shell column collapse policy", () => {
     });
     expect(SHELL_SCREENSHOT_WIDTH).toBe(1024);
     expect(SHELL_SCREENSHOT_HEIGHT).toBe(648);
+    expect(SHELL_LEFT_WIDTH_PX).toBe(280);
+    expect(SHELL_RIGHT_WIDTH_PX).toBe(320);
+    expect(shellCenterWidthPx()).toBe(424);
+    expect(shellBubbleMaxPx()).toBe(322);
     expect(vis.right).toBe("open");
     expect(vis.left).toBe("open");
     expect(vis.collapseOrder).toEqual(["right", "left"]);

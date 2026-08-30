@@ -7,12 +7,28 @@ export const SHELL_COLLAPSE_RIGHT_BELOW = 900;
 /** Viewport width where the left rail becomes an overlay drawer. */
 export const SHELL_COLLAPSE_LEFT_BELOW = 720;
 
-export const SHELL_LEFT_WIDTH_PX = 220;
+export const SHELL_LEFT_WIDTH_PX = 280;
 export const SHELL_LEFT_ICONS_PX = 72;
-export const SHELL_RIGHT_WIDTH_PX = 272;
+export const SHELL_RIGHT_WIDTH_PX = 320;
 export const SHELL_CONTROL_PX = 44;
 export const SHELL_SCREENSHOT_WIDTH = 1024;
 export const SHELL_SCREENSHOT_HEIGHT = 648;
+export const SHELL_BUBBLE_MAX_RATIO = 0.76;
+
+/** Center column width at the reference three-column canvas. */
+export const shellCenterWidthPx = (
+  width = SHELL_SCREENSHOT_WIDTH,
+  left = SHELL_LEFT_WIDTH_PX,
+  right = SHELL_RIGHT_WIDTH_PX,
+) => width - left - right;
+
+/** Assistant bubble cap in px at the reference canvas (76% of center). */
+export const shellBubbleMaxPx = (
+  width = SHELL_SCREENSHOT_WIDTH,
+  left = SHELL_LEFT_WIDTH_PX,
+  right = SHELL_RIGHT_WIDTH_PX,
+  ratio = SHELL_BUBBLE_MAX_RATIO,
+) => Math.round(shellCenterWidthPx(width, left, right) * ratio);
 
 export const RIGHT_RAIL_KEY = "vbot.rightRail";
 
