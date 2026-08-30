@@ -106,6 +106,65 @@ final class AttachmentTests: XCTestCase {
         XCTAssertNoThrow(try AttachmentPath.validate(data: Self.minimalISOMMOV, mime: "video/quicktime"))
     }
 
+    func testAttachmentMIMESniffAcceptsGenericAndAliasTypesForRealIPhoneFiles() {
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        XCTAssertEqual(AttachmentPath.sniffedMIME(data: png, suggested: "application/octet-stream"), "image/png")
+        XCTAssertEqual(AttachmentPath.sniffedMIME(data: png, suggested: nil), "image/png")
+        XCTAssertEqual(AttachmentPath.sniffedMIME(data: png, suggested: "image/jpg"), "image/png")
+
+        let jpeg = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10])
+        XCTAssertEqual(AttachmentPath.sniffedMIME(data: jpeg, suggested: "public.item"), "image/jpeg")
+        XCTAssertEqual(AttachmentPath.sniffedMIME(data: jpeg, suggested: "image/jpg"), "image/jpeg")
+
+        XCTAssertEqual(
+            AttachmentPath.sniffedMIME(data: Self.minimalMP4, suggested: "application/octet-stream"),
+            "video/mp4"
+        )
+        XCTAssertEqual(AttachmentPath.sniffedMIME(data: Self.minimalMP4, suggested: nil), "video/mp4")
+        XCTAssertEqual(AttachmentPath.sniffedMIME(data: Self.minimalMP4, suggested: "public.movie"), "video/mp4")
+        XCTAssertEqual(AttachmentPath.sniffedMIME(data: Self.minimalMP4, suggested: "video/m4v"), "video/mp4")
+        XCTAssertEqual(
+            AttachmentPath.sniffedMIME(data: Self.minimalISO5MOV, suggested: "application/octet-stream"),
+            "video/mp4"
+        )
+        XCTAssertEqual(
+            AttachmentPath.sniffedMIME(data: Self.minimalISO5MOV, suggested: "video/quicktime"),
+            "video/quicktime"
+        )
+        XCTAssertEqual(
+            AttachmentPath.sniffedMIME(data: Self.minimalQuickTime, suggested: "application/octet-stream"),
+            "video/quicktime"
+        )
+        XCTAssertEqual(
+            AttachmentPath.sniffedMIME(data: Self.minimalQuickTime, suggested: "video/mov"),
+            "video/quicktime"
+        )
+        XCTAssertEqual(
+            AttachmentPath.sniffedMIME(data: Self.minimalISOMMOV, suggested: ".MOV"),
+            "video/quicktime"
+        )
+
+        XCTAssertNil(AttachmentPath.sniffedMIME(data: Data([1, 2, 3, 4, 5, 6, 7, 8]), suggested: "application/octet-stream"))
+        XCTAssertNil(AttachmentPath.sniffedMIME(data: Self.minimalMP4, suggested: "image/jpeg"))
+        XCTAssertNil(AttachmentPath.sniffedMIME(data: Self.unknownFtyp, suggested: "video/mp4"))
+        XCTAssertNil(AttachmentPath.sniffedMIME(data: Self.unknownFtyp, suggested: "application/octet-stream"))
+        XCTAssertNoThrow(try AttachmentPath.validate(data: Self.minimalISO5MOV, mime: "video/mp4"))
+        XCTAssertThrowsError(try AttachmentPath.validate(data: Self.unknownFtyp, mime: "video/mp4"))
+    }
+
+    func testAttachmentComposerCopyInterpolatesCountsAndNames() {
+        XCTAssertEqual(
+            AttachmentComposerCopy.tooMany(),
+            "You can attach up to 10 images per message."
+        )
+        XCTAssertFalse(AttachmentComposerCopy.tooMany().contains("Self.maxAttachmentCount"))
+        XCTAssertEqual(
+            AttachmentComposerCopy.importFailure(name: "clip.mp4", message: "That attachment is too large."),
+            "clip.mp4: That attachment is too large."
+        )
+        XCTAssertEqual(AttachmentComposerCopy.removeLabel(name: "Shared photo"), "Remove Shared photo")
+    }
+
     func testAttachmentPromptUsesFileTagForVideoPaths() {
         let path = "/Users/test/.openmausbot/attachments/abc-123.mp4"
         let prompt = AttachmentPrompt.compose(
@@ -238,6 +297,23 @@ final class AttachmentTests: XCTestCase {
         0x00, 0x00, 0x00, 0x00,
         0x69, 0x73, 0x6F, 0x6D,
         0x6D, 0x70, 0x34, 0x31,
+    ])
+
+    private static let minimalISO5MOV = Data([
+        0x00, 0x00, 0x00, 0x18,
+        0x66, 0x74, 0x79, 0x70,
+        0x69, 0x73, 0x6F, 0x35,
+        0x00, 0x00, 0x00, 0x00,
+        0x69, 0x73, 0x6F, 0x35,
+        0x6D, 0x70, 0x34, 0x32,
+    ])
+
+    private static let unknownFtyp = Data([
+        0x00, 0x00, 0x00, 0x14,
+        0x66, 0x74, 0x79, 0x70,
+        0x58, 0x41, 0x56, 0x43,
+        0x00, 0x00, 0x00, 0x00,
+        0x58, 0x41, 0x56, 0x43,
     ])
 
     private static func body(from request: URLRequest) -> Data? {

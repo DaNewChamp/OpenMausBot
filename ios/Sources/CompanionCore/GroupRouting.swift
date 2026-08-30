@@ -139,6 +139,27 @@ public enum GroupRouting {
         return .ignore
     }
 
+    /// Hardware Return and the software send button insert a highlighted
+    /// mention instead of sending. No match (or no open `@query`) keeps
+    /// normal send semantics.
+    public static func mentionReturnSends(query: String?, candidates: [Member]) -> Bool {
+        guard let query else { return true }
+        switch mentionReturnAction(query: query, candidates: candidates) {
+        case .accept:
+            return false
+        case .ignore:
+            return true
+        }
+    }
+
+    public static func mentionRowLabel(name: String) -> String {
+        name.hasPrefix("@") ? name : "@\(name)"
+    }
+
+    public static func mentionReturnHint(name: String) -> String {
+        "Return inserts \(mentionRowLabel(name: name)) without sending"
+    }
+
     public static func applyingMention(_ name: String, to draft: String) -> String {
         guard let at = draft.lastIndex(of: "@") else {
             return draft.hasSuffix(" ") || draft.isEmpty ? draft + "@\(name) " : draft + " @\(name) "

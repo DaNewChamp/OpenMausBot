@@ -24,8 +24,10 @@ final class ShareViewController: SLComposeServiceViewController {
                         defer { group.leave() }
                         if let image = item as? UIImage, let data = image.jpegData(compressionQuality: 0.92) {
                             imageData = data
+                        } else if let data = item as? Data {
+                            imageData = ShareStagingPolicy.acceptedShareImageData(data)
                         } else if let url = item as? URL, let data = try? Data(contentsOf: url) {
-                            imageData = data
+                            imageData = ShareStagingPolicy.acceptedShareImageData(data)
                         }
                     }
                 } else if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {

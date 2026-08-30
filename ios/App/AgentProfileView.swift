@@ -93,7 +93,10 @@ struct AgentProfileView: View {
         busy || !ModelSelectionPolicy.allowsSwitch(
             working: current.busy == true,
             saving: savingModel,
-            catalogLoading: instancesLoading || session.modelCatalogRefreshing
+            catalogLoading: ModelCatalogLoadPolicy.hostLoading(
+                localLoading: instancesLoading,
+                sessionRefreshing: session.modelCatalogRefreshing
+            )
         )
     }
     private var botRoutines: [Routine] { routines.filter { $0.botId == current.id } }
@@ -168,6 +171,12 @@ struct AgentProfileView: View {
                     speakReplies = false
                 }
                 await session.retryPendingAppearanceOverrides()
+            }
+            .onChange(of: session.modelCatalogRefreshing) { _, _ in
+                applySessionCatalogSnapshot()
+            }
+            .onChange(of: session.modelCatalog) { _, _ in
+                applySessionCatalogSnapshot()
             }
             .onChange(of: current.modelSelection) { _, selection in
                 pickedInstanceId = selection.instanceId
@@ -700,7 +709,10 @@ struct AgentProfileView: View {
         VStack(alignment: .leading, spacing: 14) {
             ModelPickerCatalogHost(
                 instances: instances,
-                loading: instancesLoading || session.modelCatalogRefreshing,
+                loading: ModelCatalogLoadPolicy.hostLoading(
+                    localLoading: instancesLoading,
+                    sessionRefreshing: session.modelCatalogRefreshing
+                ),
                 error: instancesError,
                 canEdit: canEdit,
                 working: current.busy == true,
@@ -824,6 +836,27 @@ struct AgentProfileView: View {
         .presentationDragIndicator(.visible)
     }
 
+    private func applySessionCatalogSnapshot() {
+        let refreshing = session.modelCatalogRefreshing
+        if ModelCatalogLoadPolicy.shouldReplaceDisplayedCatalog(
+            incomingIsEmpty: session.modelCatalog.isEmpty,
+            sessionRefreshing: refreshing
+        ) {
+            instances = session.modelCatalog
+            if !instances.isEmpty {
+                let preserved = AdvertisedModelCatalog.preservedSelection(current.modelSelection, in: instances)
+                pickedInstanceId = preserved.instanceId
+                pickedModel = preserved.model
+                let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances)?.capabilities?.effortLevels ?? []
+                pickedEffort = current.modelSelection.effort.flatMap { levels.contains($0) ? $0 : nil }
+            }
+        }
+        instancesError = session.modelCatalogError
+        instancesLoading = ModelCatalogLoadPolicy.localLoadingAfterSessionPublish(
+            sessionRefreshing: refreshing
+        )
+    }
+
     private func loadInstances() async {
         if instances.isEmpty {
             instances = session.modelCatalog
@@ -844,11 +877,11 @@ struct AgentProfileView: View {
             instancesError = message
             instancesLoading = false
         case .cancelled:
-            instances = session.modelCatalog
-            instancesError = session.modelCatalogError
-            if !session.modelCatalogRefreshing {
-                instancesLoading = false
-            }
+            applySessionCatalogSnapshot()
+            instancesLoading = ModelCatalogLoadPolicy.waiterStillLoading(
+                resultCancelled: true,
+                sessionRefreshing: session.modelCatalogRefreshing
+            )
         }
     }
 

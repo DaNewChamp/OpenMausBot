@@ -36,4 +36,17 @@ public enum ShareStagingPolicy {
         if draft.hasSuffix(" ") { return draft + text }
         return draft + " " + text
     }
+
+    /// Share-sheet bytes are often PNG/HEIC/JPEG with a `.jpg` inbox name or
+    /// a generic UTI. Only sniffed still-image types enter the composer.
+    public static func acceptedSharedImageMIME(for data: Data) -> String? {
+        guard let mime = AttachmentPath.sniffedMIME(data: data, suggested: "application/octet-stream"),
+              mime.hasPrefix("image/")
+        else { return nil }
+        return mime
+    }
+
+    public static func acceptedShareImageData(_ data: Data) -> Data? {
+        acceptedSharedImageMIME(for: data) == nil ? nil : data
+    }
 }

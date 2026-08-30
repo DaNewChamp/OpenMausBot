@@ -401,18 +401,22 @@ struct ChatView: View {
 
     // MARK: - Attachments
 
-    private static let maxAttachmentCount = 10
+    private static let maxAttachmentCount = AttachmentComposerCopy.maxCount
     private static let importerContentTypes: [UTType] = [
         .image, .png, .jpeg, .gif, .mpeg4Movie, .quickTimeMovie,
     ] + [UTType(filenameExtension: "webp")].compactMap { $0 }
 
     private func appendSharedImage(_ data: Data) {
-        appendAttachment(data: data, mime: "image/jpeg", name: "Shared photo")
+        guard let mime = ShareStagingPolicy.acceptedSharedImageMIME(for: data) else {
+            attachmentError = "Choose a PNG, JPEG, GIF, or WebP image."
+            return
+        }
+        appendAttachment(data: data, mime: mime, name: "Shared photo")
     }
 
     private func appendAttachment(data: Data, mime: String, name: String) {
         guard selectedAttachments.count < Self.maxAttachmentCount else {
-            attachmentError = "You can attach up to (Self.maxAttachmentCount) images per message."
+            attachmentError = AttachmentComposerCopy.tooMany()
             return
         }
         do {
@@ -435,7 +439,7 @@ struct ChatView: View {
     private func importPhotos(_ items: [PhotosPickerItem]) async {
         for item in items {
             guard selectedAttachments.count < Self.maxAttachmentCount else {
-                attachmentError = "You can attach up to (Self.maxAttachmentCount) images per message."
+                attachmentError = AttachmentComposerCopy.tooMany()
                 break
             }
             do {
@@ -456,7 +460,7 @@ struct ChatView: View {
     private func importFiles(_ urls: [URL]) async {
         for url in urls {
             guard selectedAttachments.count < Self.maxAttachmentCount else {
-                attachmentError = "You can attach up to (Self.maxAttachmentCount) images per message."
+                attachmentError = AttachmentComposerCopy.tooMany()
                 break
             }
             let accessed = url.startAccessingSecurityScopedResource()
@@ -466,12 +470,16 @@ struct ChatView: View {
             do {
                 let data = try Data(contentsOf: url, options: [.mappedIfSafe])
                 let suggested = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+                    ?? url.lastPathComponent
                 guard let mime = AttachmentPath.sniffedMIME(data: data, suggested: suggested) else {
                     throw APIError.transport("Choose a PNG, JPEG, GIF, WebP, MP4, or MOV file.")
                 }
                 appendAttachment(data: data, mime: mime, name: url.deletingPathExtension().lastPathComponent)
             } catch {
-                attachmentError = "(url.lastPathComponent): (error.localizedDescription)"
+                attachmentError = AttachmentComposerCopy.importFailure(
+                    name: url.lastPathComponent,
+                    message: error.localizedDescription
+                )
             }
         }
     }

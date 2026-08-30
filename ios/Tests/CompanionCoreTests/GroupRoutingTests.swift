@@ -94,6 +94,21 @@ final class GroupRoutingTests: XCTestCase {
         XCTAssertEqual(GroupRouting.mentionReturnAction(query: "mira", candidates: ranked), .accept("Mira"))
         XCTAssertEqual(GroupRouting.mentionReturnAction(query: "e", candidates: ranked), .accept("everyone"))
         XCTAssertEqual(GroupRouting.mentionReturnAction(query: "z", candidates: []), .ignore)
+        XCTAssertFalse(GroupRouting.mentionReturnSends(query: "mira", candidates: ranked))
+        XCTAssertFalse(GroupRouting.mentionReturnSends(query: "e", candidates: ranked))
+        XCTAssertTrue(GroupRouting.mentionReturnSends(query: "z", candidates: []))
+        XCTAssertTrue(GroupRouting.mentionReturnSends(query: nil, candidates: ranked))
+        XCTAssertEqual(
+            GroupRouting.mentionReturnHint(name: "Mira"),
+            "Return inserts @Mira without sending"
+        )
+        XCTAssertEqual(
+            GroupRouting.mentionReturnHint(name: "@everyone"),
+            "Return inserts @everyone without sending"
+        )
+        XCTAssertFalse(GroupRouting.mentionReturnHint(name: "Mira").contains("name"))
+        XCTAssertEqual(GroupRouting.mentionRowLabel(name: "Mira"), "@Mira")
+        XCTAssertEqual(GroupRouting.mentionRowLabel(name: "@everyone"), "@everyone")
     }
 
     func testMentionCandidatesKeepBotColor() {

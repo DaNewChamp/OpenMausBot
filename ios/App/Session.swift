@@ -118,7 +118,7 @@ final class Session: ObservableObject {
     /// the replacement's handle.
     private var streamGeneration = 0
     private var engineSyncGeneration = 0
-    private var modelCatalogGeneration = 0
+    private var modelCatalogGate = ModelCatalogRefreshGate()
     private var modelUpdateGenerations: [String: Int] = [:]
     private var routerWriteGeneration = 0
     private let modelWriter = SerializedLatestWriter<String, ModelWriteIntent, Bot>()
@@ -363,7 +363,7 @@ final class Session: ObservableObject {
         self.modelCatalogError = nil
         self.modelCatalogRefreshing = false
         engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
-        modelCatalogGeneration = EngineSyncPolicy.nextGeneration(after: modelCatalogGeneration)
+        modelCatalogGate.invalidate()
         routerWriteGeneration = EngineSyncPolicy.nextGeneration(after: routerWriteGeneration)
         modelUpdateGenerations.removeAll()
         resetInterruptedModelWriteTracking()
@@ -437,7 +437,7 @@ final class Session: ObservableObject {
         modelCatalogError = nil
         modelCatalogRefreshing = false
         engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
-        modelCatalogGeneration = EngineSyncPolicy.nextGeneration(after: modelCatalogGeneration)
+        modelCatalogGate.invalidate()
         routerWriteGeneration = EngineSyncPolicy.nextGeneration(after: routerWriteGeneration)
         modelUpdateGenerations.removeAll()
         resetInterruptedModelWriteTracking()
@@ -953,12 +953,6 @@ final class Session: ObservableObject {
             return try await client.uploadAttachment(data: data, mime: mime)
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
-            throw error
-        }         catch let error as APIError {
-            if !Task.isCancelled { actionError = error.localizedDescription }
-            throw error
-        } catch {
-            if !Task.isCancelled { actionError = error.localizedDescription }
             throw error
         }
     }
@@ -1626,20 +1620,19 @@ final class Session: ObservableObject {
 
     /// Single catalog load used by chat, profile, and settings pickers.
     func loadModelCatalog(quietly: Bool = false) async -> ModelCatalogLoadResult {
-        modelCatalogGeneration = EngineSyncPolicy.nextGeneration(after: modelCatalogGeneration)
-        let generation = modelCatalogGeneration
-        modelCatalogRefreshing = true
+        let generation = modelCatalogGate.beginLoad()
+        modelCatalogRefreshing = modelCatalogGate.refreshing
 
         func isCurrent() -> Bool {
             EngineSyncPolicy.shouldApply(
                 startedGeneration: generation,
-                currentGeneration: modelCatalogGeneration
+                currentGeneration: modelCatalogGate.generation
             )
         }
 
         func publish(_ result: ModelCatalogLoadResult) -> ModelCatalogLoadResult {
-            guard isCurrent() else { return .cancelled }
-            modelCatalogRefreshing = false
+            guard modelCatalogGate.finishLoad(startedGeneration: generation) else { return .cancelled }
+            modelCatalogRefreshing = modelCatalogGate.refreshing
             switch result {
             case let .loaded(instances):
                 modelCatalog = instances

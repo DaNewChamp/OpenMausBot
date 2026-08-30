@@ -39,23 +39,63 @@ public enum AttachmentPath {
         "video/mp4", "video/quicktime",
     ]
     private static let supportedExtensions = ["png", "jpg", "gif", "webp", "mp4", "mov"]
+    private static let mimeAliases: [String: String] = [
+        "image/jpg": "image/jpeg",
+        "image/pjpeg": "image/jpeg",
+        "image/x-png": "image/png",
+        "video/m4v": "video/mp4",
+        "video/x-m4v": "video/mp4",
+        "video/mov": "video/quicktime",
+        "video/x-quicktime": "video/quicktime",
+    ]
+    private static let genericSuggestedTypes: Set<String> = [
+        "application/octet-stream",
+        "binary/octet-stream",
+        "application/download",
+        "application/force-download",
+        "application/x-download",
+        "public.data",
+        "public.item",
+        "public.content",
+        "public.movie",
+        "public.mpeg-4",
+        "public.audiovisual-content",
+        "*/*",
+    ]
+    private static let mp4FamilyBrands: Set<String> = [
+        "isom", "iso2", "iso3", "iso4", "iso5", "iso6",
+        "mp41", "mp42", "mp71",
+        "avc1", "avc3",
+        "dash",
+        "M4V ", "M4VH", "M4VP",
+        "mp4v",
+        "msdh",
+    ]
 
     public static func normalizedMIME(_ mime: String) -> String? {
         let value = mime.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
             .first.map(String.init)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard let value, supportedMIMEs.contains(value) else { return nil }
-        return value
+        guard let value else { return nil }
+        let canonical = mimeAliases[value] ?? value
+        guard supportedMIMEs.contains(canonical) else { return nil }
+        return canonical
     }
 
     /// Magic-byte sniff plus suggested MIME/extension. Image signatures never
-    /// become video. Video requires both a container signature and a matching
-    /// mp4/mov suggestion; mismatches are rejected.
+    /// become video. Video requires an MP4-family or QuickTime container plus
+    /// a matching, generic, or alias suggestion; mismatches are rejected.
     public static func sniffedMIME(data: Data, suggested: String? = nil) -> String? {
         if let image = imageMagicMIME(data) {
             return image
         }
         let suggestedMIME = normalizedSuggestedMIME(suggested)
         if let container = videoContainerKind(data) {
+            if isGenericSuggestion(suggested) {
+                switch container {
+                case .mp4: return "video/mp4"
+                case .quickTime: return "video/quicktime"
+                }
+            }
             switch (container, suggestedMIME) {
             case (.mp4, "video/mp4"): return "video/mp4"
             case (.mp4, "video/quicktime"): return "video/quicktime"
@@ -130,16 +170,49 @@ public enum AttachmentPath {
         let typeEnd = data.index(typeStart, offsetBy: 4)
         let type = String(data: data[typeStart..<typeEnd], encoding: .ascii) ?? ""
         if type == "ftyp" {
-            guard data.count >= 12 else { return nil }
-            let brandStart = typeEnd
-            let brandEnd = data.index(brandStart, offsetBy: 4)
-            let brand = String(data: data[brandStart..<brandEnd], encoding: .ascii) ?? ""
-            return brand == "qt  " ? .quickTime : .mp4
+            let brands = ftypBrands(in: data)
+            guard let major = brands.first else { return nil }
+            if major == "qt  " { return .quickTime }
+            if mp4FamilyBrands.contains(major) { return .mp4 }
+            if brands.contains(where: { mp4FamilyBrands.contains($0) }) { return .mp4 }
+            if brands.contains("qt  ") { return .quickTime }
+            return nil
         }
         if ["moov", "mdat", "free", "skip", "wide", "pnot"].contains(type) {
             return .quickTime
         }
         return nil
+    }
+
+    private static func ftypBrands(in data: Data) -> [String] {
+        guard data.count >= 12 else { return [] }
+        var size: UInt32 = 0
+        _ = withUnsafeMutableBytes(of: &size) { dest in
+            data.prefix(4).copyBytes(to: dest, count: 4)
+        }
+        size = size.bigEndian
+        let declared = Int(size)
+        let boxEnd = min(data.count, declared == 0 ? data.count : declared)
+        var brands: [String] = []
+        var offset = 8
+        while offset + 4 <= boxEnd {
+            let start = data.index(data.startIndex, offsetBy: offset)
+            let end = data.index(start, offsetBy: 4)
+            if let brand = String(data: data[start..<end], encoding: .ascii) {
+                brands.append(brand)
+            }
+            offset += 4
+            if offset == 12 { offset = 16 }
+        }
+        return brands
+    }
+
+    private static func isGenericSuggestion(_ suggested: String?) -> Bool {
+        guard let suggested else { return true }
+        let value = suggested.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
+            .first.map(String.init)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if value.isEmpty { return true }
+        return genericSuggestedTypes.contains(value)
     }
 
     private static func normalizedSuggestedMIME(_ suggested: String?) -> String? {
@@ -193,6 +266,24 @@ public enum AttachmentPath {
         let bytes = Array(path.utf8)
         return bytes.count >= 3 && ((48...57).contains(bytes[0]) || (65...90).contains(bytes[0]) || (97...122).contains(bytes[0])) &&
             bytes[1] == 58 && (bytes[2] == 47 || bytes[2] == 92)
+    }
+}
+
+/// User-facing composer copy for attachment limits and VoiceOver. Kept out
+/// of SwiftUI so interpolation cannot regress to a literal `Self.` path.
+public enum AttachmentComposerCopy: Sendable {
+    public static let maxCount = 10
+
+    public static func tooMany(_ count: Int = maxCount) -> String {
+        "You can attach up to \(count) images per message."
+    }
+
+    public static func importFailure(name: String, message: String) -> String {
+        "\(name): \(message)"
+    }
+
+    public static func removeLabel(name: String) -> String {
+        "Remove \(name)"
     }
 }
 

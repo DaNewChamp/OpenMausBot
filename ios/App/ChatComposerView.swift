@@ -33,7 +33,7 @@ struct ChatComposerView: View {
     @Environment(\.conversationTypography) private var chatTypography
     @AppStorage("busySendDefault") private var busySendDefault = BusySendDefault.steer.rawValue
 
-    private static let maxAttachmentCount = 10
+    private static let maxAttachmentCount = AttachmentComposerCopy.maxCount
 
     private var current: Chat {
         switch chat {
@@ -68,6 +68,17 @@ struct ChatComposerView: View {
     private var mentionCandidates: [GroupRouting.Member] {
         guard let query = activeMentionQuery else { return [] }
         return GroupRouting.mentionCandidates(query: query, members: roomMembers)
+    }
+
+    private var highlightedMentionName: String? {
+        guard let query = activeMentionQuery else { return nil }
+        if case let .accept(name) = GroupRouting.mentionReturnAction(
+            query: query,
+            candidates: mentionCandidates
+        ) {
+            return name
+        }
+        return nil
     }
 
     private var composerPlaceholder: String {
@@ -260,7 +271,7 @@ struct ChatComposerView: View {
             insertMention(name)
             return true
         case .ignore:
-            return true
+            return false
         }
     }
 
@@ -398,7 +409,7 @@ struct ChatComposerView: View {
                             }
                             .buttonStyle(.plain)
                             .disabled(isUploadingAttachments)
-                            .accessibilityLabel("Remove (attachment.name)")
+                            .accessibilityLabel(AttachmentComposerCopy.removeLabel(name: attachment.name))
                         }
                         .accessibilityElement(children: .contain)
                     }
@@ -476,7 +487,10 @@ struct ChatComposerView: View {
     }
 
     private func composerSendButton(mode: MessageDeliveryMode) -> some View {
-        Button { onSubmit(nil, mode) } label: {
+        Button {
+            if acceptTopMentionIfNeeded() { return }
+            onSubmit(nil, mode)
+        } label: {
             Image(systemName: "arrow.up")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color.black)
@@ -503,7 +517,10 @@ struct ChatComposerView: View {
             }
         }
         .accessibilityLabel(mode == .steer ? "Send and steer" : mode == .queue ? "Send and queue" : "Send")
-        .accessibilityHint("Touch and hold for explicit steer or queue choices")
+        .accessibilityHint(
+            highlightedMentionName.map(GroupRouting.mentionReturnHint)
+                ?? "Touch and hold for explicit steer or queue choices"
+        )
     }
 }
 
@@ -532,15 +549,21 @@ private struct MentionMenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if includeEveryone {
-                mentionRow(title: "@everyone", subtitle: "Every bot in this chat", color: accentColor) {
+                mentionRow(
+                    title: "@everyone",
+                    subtitle: "Every bot in this chat",
+                    color: accentColor,
+                    highlighted: true
+                ) {
                     onPick("everyone")
                 }
             }
-            ForEach(members, id: \.id) { member in
+            ForEach(Array(members.enumerated()), id: \.element.id) { index, member in
                 mentionRow(
                     title: member.name,
                     subtitle: "Bring \(member.name) in",
-                    color: MausPalette.color(member.color)
+                    color: MausPalette.color(member.color),
+                    highlighted: !includeEveryone && index == 0
                 ) {
                     onPick(member.name)
                 }
@@ -565,7 +588,13 @@ private struct MentionMenuView: View {
         .accessibilityLabel("Mention a bot")
     }
 
-    private func mentionRow(title: String, subtitle: String, color: Color, action: @escaping () -> Void) -> some View {
+    private func mentionRow(
+        title: String,
+        subtitle: String,
+        color: Color,
+        highlighted: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Circle()
@@ -577,7 +606,7 @@ private struct MentionMenuView: View {
                             .foregroundStyle(MausPalette.faceInk(""))
                     }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title.hasPrefix("@") ? title : "@\(title)")
+                    Text(GroupRouting.mentionRowLabel(name: title))
                         .font(.body.weight(.medium))
                         .foregroundStyle(color)
                     Text(subtitle)
@@ -591,9 +620,12 @@ private struct MentionMenuView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(title.hasPrefix("@") ? title : "@\(title)")
-        .accessibilityHint(subtitle)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(GroupRouting.mentionRowLabel(name: title))
+        .accessibilityHint(
+            highlighted ? GroupRouting.mentionReturnHint(name: title) : subtitle
+        )
+        .accessibilityAddTraits(highlighted ? .isSelected : [])
     }
 }
 

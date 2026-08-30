@@ -47,7 +47,10 @@ struct ChatModelPickerSheet: View {
             ScrollView {
                 ModelPickerCatalogHost(
                     instances: instances,
-                    loading: instancesLoading || session.modelCatalogRefreshing,
+                    loading: ModelCatalogLoadPolicy.hostLoading(
+                        localLoading: instancesLoading,
+                        sessionRefreshing: session.modelCatalogRefreshing
+                    ),
                     error: instancesError,
                     canEdit: canEdit,
                     working: current.busy == true,
@@ -73,6 +76,12 @@ struct ChatModelPickerSheet: View {
             }
         }
         .task { await loadInstances() }
+        .onChange(of: session.modelCatalogRefreshing) { _, _ in
+            applySessionCatalogSnapshot()
+        }
+        .onChange(of: session.modelCatalog) { _, _ in
+            applySessionCatalogSnapshot()
+        }
         .onChange(of: current.modelSelection) { _, selection in
             pickedInstanceId = selection.instanceId
             pickedModel = selection.model
@@ -89,6 +98,25 @@ struct ChatModelPickerSheet: View {
                 savingModel = false
             }
         }
+    }
+
+    private func applySessionCatalogSnapshot() {
+        let refreshing = session.modelCatalogRefreshing
+        if ModelCatalogLoadPolicy.shouldReplaceDisplayedCatalog(
+            incomingIsEmpty: session.modelCatalog.isEmpty,
+            sessionRefreshing: refreshing
+        ) {
+            instances = session.modelCatalog
+            if !instances.isEmpty {
+                let preserved = AdvertisedModelCatalog.preservedSelection(current.modelSelection, in: instances)
+                pickedInstanceId = preserved.instanceId
+                pickedModel = preserved.model
+            }
+        }
+        instancesError = session.modelCatalogError
+        instancesLoading = ModelCatalogLoadPolicy.localLoadingAfterSessionPublish(
+            sessionRefreshing: refreshing
+        )
     }
 
     private func loadInstances() async {
@@ -108,11 +136,11 @@ struct ChatModelPickerSheet: View {
             instancesError = message
             instancesLoading = false
         case .cancelled:
-            instances = session.modelCatalog
-            instancesError = session.modelCatalogError
-            if !session.modelCatalogRefreshing {
-                instancesLoading = false
-            }
+            applySessionCatalogSnapshot()
+            instancesLoading = ModelCatalogLoadPolicy.waiterStillLoading(
+                resultCancelled: true,
+                sessionRefreshing: session.modelCatalogRefreshing
+            )
         }
     }
 
@@ -120,7 +148,10 @@ struct ChatModelPickerSheet: View {
         guard ModelSelectionPolicy.allowsSwitch(
             working: current.busy == true,
             saving: false,
-            catalogLoading: instancesLoading || session.modelCatalogRefreshing
+            catalogLoading: ModelCatalogLoadPolicy.hostLoading(
+                localLoading: instancesLoading,
+                sessionRefreshing: session.modelCatalogRefreshing
+            )
         ), canEdit else { return }
         modelSaveRevision &+= 1
         let revision = modelSaveRevision
