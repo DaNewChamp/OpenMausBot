@@ -1,8 +1,7 @@
-V Bot build 61: cleaner Grok-style home and conversation layout.
+V Bot build 62: message layout, scroll position, Grok proportions, and unread dots.
 
-• Refined home and chat geometry with a more compact header and composer
-• Assistant replies appear as complete messages (no token-by-token streaming)
-• Removed suggestion chips for a simpler conversation flow
-• Improved reconnect and cloud viewer resilience
-• Background Live Activity presence while sessions continue
-• Share sheet, video attachments, and model picker unchanged from build 60
+• Short messages use natural intrinsic bubbles; long messages wrap fully
+• Last assistant message stays visible above the composer when you open a chat
+• Home hero and top-left account avatar match compact Grok proportions
+• Unread dots for completed bot replies/notifications persist until opened
+• Bot Settings: provider order OpenAI, Claude, Cursor, OpenRouter, Grok Auth; Cursor Auto label and Refresh models
