@@ -100,6 +100,7 @@ export function desktopDemoBots(): Bot[] {
       color: "orange",
       unread: false,
       chiefOfStaff: true,
+      autoApprove: true,
       computer: "vm",
       modelSelection: { instanceId: "demo-grok", model: "super", effort: "medium" },
       messages: chiefMessages,

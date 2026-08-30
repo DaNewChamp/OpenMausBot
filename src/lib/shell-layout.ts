@@ -7,9 +7,9 @@ export const SHELL_COLLAPSE_RIGHT_BELOW = 900;
 /** Viewport width where the left rail becomes an overlay drawer. */
 export const SHELL_COLLAPSE_LEFT_BELOW = 720;
 
-export const SHELL_LEFT_WIDTH_PX = 248;
+export const SHELL_LEFT_WIDTH_PX = 220;
 export const SHELL_LEFT_ICONS_PX = 72;
-export const SHELL_RIGHT_WIDTH_PX = 292;
+export const SHELL_RIGHT_WIDTH_PX = 272;
 export const SHELL_CONTROL_PX = 44;
 export const SHELL_SCREENSHOT_WIDTH = 1024;
 export const SHELL_SCREENSHOT_HEIGHT = 648;

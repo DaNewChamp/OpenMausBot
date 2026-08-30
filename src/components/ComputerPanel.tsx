@@ -6,7 +6,6 @@
 // Linux user's desktop.
 import { useEffect, useRef, useState } from "react";
 import {
-  CalendarDays,
   ChevronsRight,
   Hand,
   Loader2,
@@ -37,7 +36,6 @@ import { DESKTOP_DEMO_SCREEN_DATA_URL, isDesktopDemoMode } from "@/lib/desktop-d
 import {
   autoSelectsLocalComputer,
   instanceSupportsLocalComputer,
-  linuxAutoDescription,
   localComputerDisabledReason,
   localComputerSelectable,
 } from "@/lib/local-computer";
@@ -176,18 +174,6 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const activeRoutineRun = state.routineRuns.find(
     (run) => run.botId === bot.id && ["queued", "running", "waiting"].includes(run.status),
   );
-  const computerDestination =
-    bot.computer === "cloud"
-      ? cloudBackend === "vps" ? "this self-hosted VPS" : "this cloud box"
-      : bot.computer === "vm"
-        ? "the Local VM"
-      : bot.computer === "local"
-        ? "this computer"
-        : bot.computer === "off"
-          ? null
-          : phase === "ready"
-            ? cloudBackend === "vps" ? "the self-hosted VPS selected by Auto" : "the cloud box selected by Auto"
-            : "this computer selected by Auto";
 
   // resolve the mode on open; box endpoints are only ever hit on the
   // cloud path, so local/off can never render a JSON error as an image
@@ -872,6 +858,101 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           {conversationTitle(bot.name, bot.modelSelection)}'s screen
         </div>
         <ShellHealth bot={bot} />
+
+        <div className="mt-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[14px] font-semibold text-ink">Routines</div>
+            <button
+              type="button"
+              onClick={() => setCreatingRoutine(true)}
+              className="shell-control flex items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
+              aria-label={`Add a routine for ${bot.name}`}
+              title="Add routine"
+            >
+              <Plus size={18} />
+            </button>
+          </div>
+          {activeRoutineRun && (
+            <button
+              onClick={() => dispatch({ type: "showRoutines" })}
+              className="mt-1 flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-left text-[12px] text-accent hover:bg-raised/50"
+            >
+              <Loader2 size={13} className={activeRoutineRun.status === "queued" ? "" : "animate-spin"} />
+              <span className="min-w-0 flex-1 truncate">
+                {activeRoutineRun.routineName} · {activeRoutineRun.status === "waiting" ? "needs you" : activeRoutineRun.status}
+              </span>
+            </button>
+          )}
+          {botRoutines.length > 0 && (
+            <div className="mt-0.5">
+              {botRoutines.map((routine) => (
+                <button
+                  key={routine.id}
+                  onClick={() => dispatch({ type: "showRoutines" })}
+                  className="flex min-h-10 w-full items-center gap-2 rounded-lg px-1 py-1 text-left hover:bg-raised/40"
+                >
+                  <Pause size={14} className="shrink-0 text-ink-secondary" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-medium text-ink">{routine.name}</span>
+                    <span className="block truncate text-[11px] text-ink-secondary">
+                      {routine.enabled ? nextRunLabel(routine.nextRunAt) : "Paused"}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-2">
+          <div className="mb-1 text-[11.5px] font-medium text-ink-secondary">Runs on</div>
+          <div className="flex overflow-hidden rounded-lg border border-hairline/40">
+            {(
+              [
+                ["cloud", "Cloud"],
+                ["vm", "Local VM"],
+                ["local", "This computer"],
+                ["off", "Off"],
+              ] as const
+            ).map(([mode, label], i) => {
+              const disabled =
+                (mode === "cloud" && !cloudSupported) ||
+                (mode === "vm" && !vmSupported) ||
+                (mode === "local" && !localSelectable);
+              const unavailableTitle =
+                mode === "vm" && !vmSupported
+                  ? "This model engine cannot use the Local VM"
+                  : mode === "cloud" && !cloudSupported
+                    ? "This model engine cannot use cloud computer tools"
+                    : mode === "local" && !localSelectable
+                      ? localDisabledReason ?? "Local computer control isn't ready"
+                      : undefined;
+              return (
+                <button
+                  key={mode}
+                  disabled={disabled}
+                  title={unavailableTitle}
+                  onClick={() => {
+                    if (mode === bot.computer) return;
+                    if (mode === "local" && bot.autoApprove) setLocalAutoWarning(true);
+                    else dispatch({ type: "updateBot", botId: bot.id, patch: { computer: mode } });
+                  }}
+                  className={cn(
+                    "flex-1 py-1 text-[11.5px]",
+                    i > 0 && "border-l border-hairline/40",
+                    disabled && "cursor-not-allowed opacity-40",
+                    bot.computer === mode
+                      ? "bg-control text-ink"
+                      : "text-ink-secondary hover:bg-control/60 hover:text-ink",
+                  )}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {error && (
           <div className="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">
             {error}
@@ -1026,70 +1107,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         <LinuxLocalControl />
         <MacLocalControl />
 
-        {/* Computer source */}
-          <div className="mt-4 rounded-xl bg-card p-4">
-            <div className="text-[15px] font-medium text-ink">Runs on</div>
-            <div className={cn("mt-0.5 text-[13px] text-ink-secondary", isDesktopDemoMode() && "hidden")}>
-              {!bot.computer &&
-                (isLinux || !localSelectable
-                  ? cloudBackend === "vps"
-                    ? "Auto reuses a ready VPS when one is configured; otherwise computer use stays off. "
-                    : `${linuxAutoDescription()} `
-                  : cloudBackend === "vps"
-                    ? "Auto reuses a ready VPS when one exists, otherwise this computer. "
-                    : "Auto uses a cloud box when one exists, otherwise this computer. ")}
-              Pick where this bot's computer lives. <b className="text-ink">Local VM</b> is a Cua-controlled Linux desktop
-              in a container on this machine — free and separate from your own desktop. Set it up in App
-              Settings → Local VM.
-          </div>
-          <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
-            {(
-              [
-                ["cloud", "Cloud"],
-                ["vm", "Local VM"],
-                ["local", "This computer"],
-                ["off", "Off"],
-              ] as const
-            ).map(([mode, label], i) => (
-              (() => {
-                const disabled =
-                  (mode === "cloud" && !cloudSupported) ||
-                  (mode === "vm" && !vmSupported) ||
-                  (mode === "local" && !localSelectable);
-                const unavailableTitle =
-                  mode === "vm" && !vmSupported
-                    ? "This model engine cannot use the Local VM"
-                    : mode === "cloud" && !cloudSupported
-                      ? "This model engine cannot use cloud computer tools"
-                      : mode === "local" && !localSelectable
-                        ? localDisabledReason ?? "Local computer control isn't ready"
-                          : undefined;
-                return (
-              <button
-                key={mode}
-                disabled={disabled}
-                title={unavailableTitle}
-                onClick={() => {
-                  if (mode === bot.computer) return;
-                  if (mode === "local" && bot.autoApprove) setLocalAutoWarning(true);
-                  else dispatch({ type: "updateBot", botId: bot.id, patch: { computer: mode } });
-                }}
-                className={cn(
-                  "flex-1 py-1.5 text-[13px]",
-                  i > 0 && "border-l border-hairline/40",
-                  disabled && "cursor-not-allowed opacity-40",
-                  bot.computer === mode
-                    ? "bg-control text-ink"
-                    : "text-ink-secondary hover:bg-control/60 hover:text-ink",
-                )}
-              >
-                {label}
-              </button>
-                );
-              })()
-            ))}
-          </div>
-          {(!bot.computer || bot.computer === "cloud") && (
+        {(!bot.computer || bot.computer === "cloud") && !isDesktopDemoMode() && (
             <>
               <CloudBackendPicker
                 value={cloudBackend}
@@ -1129,67 +1147,6 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
               )}
             </>
           )}
-        </div>
-
-        {/* Routines */}
-        <div className="mt-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-[15px] font-semibold text-ink">Routines</div>
-            <button
-              type="button"
-              onClick={() => setCreatingRoutine(true)}
-              className="shell-control flex items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
-              aria-label={`Add a routine for ${bot.name}`}
-              title="Add routine"
-            >
-              <Plus size={18} />
-            </button>
-          </div>
-          {!computerDestination && (
-            <div className="mt-2 flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-[11.5px] leading-relaxed text-warning">
-              <Power size={13} className="mt-0.5 shrink-0" />
-              Scheduled tasks on this computer will not have desktop access while this is Off. Choose Cloud VM in the schedule editor to run the whole job there.
-            </div>
-          )}
-          {activeRoutineRun && (
-            <button
-              onClick={() => dispatch({ type: "showRoutines" })}
-              className="mt-2 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[12px] text-accent hover:bg-raised/50"
-            >
-              <Loader2 size={13} className={activeRoutineRun.status === "queued" ? "" : "animate-spin"} />
-              <span className="min-w-0 flex-1 truncate">
-                {activeRoutineRun.routineName} · {activeRoutineRun.status === "waiting" ? "needs you" : activeRoutineRun.status}
-              </span>
-            </button>
-          )}
-          {botRoutines.length > 0 && (
-            <div className="mt-1">
-              {botRoutines.map((routine) => (
-                <button
-                  key={routine.id}
-                  onClick={() => dispatch({ type: "showRoutines" })}
-                  className="flex min-h-11 w-full items-center gap-2.5 rounded-lg px-1 py-1.5 text-left hover:bg-raised/40"
-                >
-                  <Pause size={14} className="shrink-0 text-ink-secondary" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-medium text-ink">{routine.name}</span>
-                    <span className="block truncate text-[11.5px] text-ink-secondary">
-                      {routine.enabled ? nextRunLabel(routine.nextRunAt) : "Paused"}
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-          <button
-            onClick={() => dispatch({ type: "showRoutines" })}
-            className="mt-1 flex min-h-11 w-full items-center gap-2 rounded-lg px-1 text-[13px] text-ink-secondary hover:bg-raised/40 hover:text-ink"
-            title="Open schedules"
-          >
-            <CalendarDays size={14} />
-            All schedules
-          </button>
-        </div>
       </div>
       )}
       {creatingRoutine && (

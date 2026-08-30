@@ -10,12 +10,12 @@ import {
   Bug,
   Clock,
   Copy,
-  Crown,
   Folder,
   ListTree,
   Loader2,
   Monitor,
   MessageSquareReply,
+  MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
@@ -56,7 +56,7 @@ import { ReactionBar, ReactionChips } from "./Reactions";
 import { SpeakButton } from "./SpeakButton";
 import { CallButton, CallOverlay } from "./CallView";
 import { cn } from "@/lib/cn";
-import { COMPACT_BUBBLE, COMPACT_SQUARE } from "@/lib/compact-chip";
+import { COMPACT_SQUARE } from "@/lib/compact-chip";
 import { useFocusMessage } from "@/lib/focus-message";
 import { groupActivityRuns } from "@/lib/activity-runs";
 import { ActivityRun } from "./ActivityRun";
@@ -372,7 +372,7 @@ function Bubble({
 
   return (
     <div className={cn("group animate-msg-in flex w-full flex-col", user ? "items-end" : "items-start")}>
-      <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
+      <div className={cn("flex w-full items-start gap-1.5", user ? "justify-end" : "justify-start")}>
         {/* editing rewinds the thread, so it waits for the turn to end —
             same rule as the version switcher below */}
         {user && message.kind === "text" && !webhookView && !bot.busy && (
@@ -416,12 +416,17 @@ function Bubble({
         </button>
         <div
           className={cn(
-            "shell-bubble max-w-[70%] text-[15px] leading-relaxed",
+            user ? "max-w-[70%] shrink-0" : "max-w-[var(--shell-bubble-max)] shrink-0",
+          )}
+        >
+        <div
+          className={cn(
+            "shell-bubble text-[15px] leading-relaxed",
             user && webhookView
               ? "overflow-hidden border border-accent/25 bg-card text-ink shadow-[0_10px_30px_rgba(0,0,0,0.18)]"
               : user
                 ? "bg-bubble-user px-4 py-2.5 whitespace-pre-wrap text-ink"
-                : "bg-card px-4 py-2.5 text-ink",
+                : "shell-bubble-assistant bg-card px-4 py-2.5 text-ink",
           )}
           title={new Date(message.at).toLocaleString()}
         >
@@ -482,6 +487,7 @@ function Bubble({
               <ChatMarkdown text={text} />
             </MessageBoundary>
           )}
+        </div>
         </div>
         {!user && (
           <div className="flex flex-col gap-0.5 self-end pb-0.5">
@@ -608,7 +614,7 @@ function StreamingBubble({ text }: { text: string }) {
   const deferred = useDeferredValue(text);
   return (
     <div className="flex w-full justify-start">
-      <div className="shell-bubble max-w-[70%] bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
+      <div className="shell-bubble shell-bubble-assistant bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
         <MessageBoundary fallbackText={deferred}>
           <ChatMarkdown text={deferred} streaming />
         </MessageBoundary>
@@ -815,6 +821,142 @@ function PinnedBanner({
   );
 }
 
+function ChatHeaderMenu({
+  bot,
+  messages,
+  onToggleFind,
+  onToggleTimeline,
+  timelineOpen,
+}: {
+  bot: Bot;
+  messages: Message[];
+  onToggleFind: () => void;
+  onToggleTimeline: () => void;
+  timelineOpen: boolean;
+}) {
+  const { state, dispatch } = useStore();
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const hasTimeline = timelineEvents(messages).length > 0;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => event.key === "Escape" && setOpen(false);
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative shrink-0" ref={wrapperRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-label="Conversation actions"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className="shell-control rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+        title="Conversation actions"
+      >
+        <MoreHorizontal size={18} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-30 mt-1 w-56 overflow-hidden rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onToggleFind();
+              setOpen(false);
+            }}
+            className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] text-ink hover:bg-raised/70"
+          >
+            <Search size={15} className="text-ink-secondary" />
+            Find in conversation
+          </button>
+          {hasTimeline && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onToggleTimeline();
+                setOpen(false);
+              }}
+              className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] text-ink hover:bg-raised/70"
+            >
+              <ListTree size={15} className="text-ink-secondary" />
+              {timelineOpen ? "Hide execution timeline" : "Execution timeline"}
+            </button>
+          )}
+          {bot.busy && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                dispatch({ type: "interrupt", botId: bot.id });
+                setOpen(false);
+              }}
+              className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] text-ink hover:bg-raised/70"
+            >
+              <Square size={14} className="text-ink-secondary" />
+              Stop this turn
+            </button>
+          )}
+          <div className="my-1 border-t border-hairline/40" />
+          <div className="px-2 py-1">
+            <TaskPicker bot={bot} />
+          </div>
+          <div className="px-2 py-1">
+            <UsageChip bot={bot} />
+          </div>
+          <div className="px-2 py-1">
+            <WorkingFolderChip bot={bot} />
+          </div>
+          <div className="px-2 py-1">
+            <ModelPicker bot={bot} />
+          </div>
+          <div className="px-2 py-1">
+            <CallButton bot={bot} />
+          </div>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              dispatch({ type: "toggleComputer" });
+              setOpen(false);
+            }}
+            className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] text-ink hover:bg-raised/70"
+          >
+            <Monitor size={15} className={state.computerOpen ? "text-accent" : "text-ink-secondary"} />
+            Bot&apos;s computer
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              dispatch({ type: "toggleInspector" });
+              setOpen(false);
+            }}
+            className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] text-ink hover:bg-raised/70"
+          >
+            <Bug size={15} className={state.inspectorOpen ? "text-accent" : "text-ink-secondary"} />
+            Inspector
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatView({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -825,8 +967,10 @@ export function ChatView({ bot }: { bot: Bot }) {
   const provisioning = state.provisioning[bot.id];
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const [findOpen, setFindOpen] = useState(false);
+  const [timelineOpen, setTimelineOpen] = useState(false);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   useEffect(() => setFindOpen(false), [bot.threadId]);
+  useEffect(() => setTimelineOpen(false), [bot.threadId]);
   useEffect(() => setReplyTo(null), [bot.threadId]);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
@@ -1010,16 +1154,13 @@ export function ChatView({ bot }: { bot: Bot }) {
       {/* Header */}
       <div
         className={cn(
-          // @container so the chips on the right can fold to icon bubbles
-          // when the column is narrow (side panel open, small window)
-          "@container/chathead flex items-center justify-between px-4 py-2",
-          // Room for the drawer button, which overlays this corner below md.
+          "@container/chathead flex items-center justify-between border-b border-hairline/20 px-4 py-2.5",
           "pl-11 md:pl-5",
           isWin && "pr-[148px]",
         )}
         style={drag}
       >
-        <div className="flex min-w-0 items-center gap-2 rounded-lg px-1 py-1" style={noDrag}>
+        <div className="flex min-w-0 items-center gap-2.5" style={noDrag}>
           <button
             onClick={() => dispatch({ type: "toggleSettings", open: true })}
             className="shell-control flex shrink-0 items-center justify-center rounded-lg hover:bg-raised/50"
@@ -1029,83 +1170,24 @@ export function ChatView({ bot }: { bot: Bot }) {
             <BotAvatar
               bot={bot}
               state={stateForBot({ ...bot, messages })}
-              size={28}
+              size={32}
               motion={mascotMotion?.kind ?? "none"}
               motionKey={mascotMotion?.nonce ?? 0}
             />
           </button>
-          <RenameTitle
-            value={bot.name}
-            onCommit={(name) => dispatch({ type: "updateBot", botId: bot.id, patch: { name } })}
-            onActivate={() => dispatch({ type: "toggleSettings", open: true })}
-            showEditButton
-            className="truncate text-[14px] font-semibold text-ink"
-            inputClassName="max-w-[220px] rounded bg-inset px-1.5 py-0.5 text-[14px] font-semibold"
-          />
-          <span className="hidden shrink-0 text-[13px] font-medium text-ink-secondary sm:inline">
-            · {modelSuffix(bot.modelSelection)}
-          </span>
-          {bot.chiefOfStaff && (
-            <span className="flex items-center gap-1 rounded-full bg-raised px-2 py-0.5 text-[11px] font-medium text-ink-secondary">
-              <Crown size={11} /> Chief of Staff
-            </span>
-          )}
-          {bot.busy && <Loader2 size={14} className="animate-spin text-ink-secondary" />}
+          <div className="min-w-0 truncate text-[15px] font-semibold text-ink">
+            {bot.name}
+            <span className="font-medium text-ink-secondary"> · {modelSuffix(bot.modelSelection)}</span>
+            {bot.busy ? <Loader2 size={14} className="ml-1.5 inline animate-spin text-ink-secondary" /> : null}
+          </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2" style={noDrag}>
-          <button
-            onClick={() => setFindOpen((open) => !open)}
-            aria-label="Find in conversation"
-            aria-pressed={findOpen}
-            className={cn(
-              "shell-control rounded-md hover:bg-raised",
-              findOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
-            )}
-            title="Find in conversation (⌘F)"
-          >
-            <Search size={18} />
-          </button>
-          {bot.busy && (
-            <button
-              onClick={() => dispatch({ type: "interrupt", botId: bot.id })}
-              className={cn(
-                "flex items-center gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink",
-                COMPACT_BUBBLE,
-              )}
-              title="Stop this turn"
-            >
-              <Square size={12} className="fill-current" />
-              <span className="@max-4xl/chathead:hidden">Stop</span>
-            </button>
-          )}
-          <TaskPicker bot={bot} />
-          <UsageChip bot={bot} />
-          <WorkingFolderChip bot={bot} />
-          <ModelPicker bot={bot} />
-          <CallButton bot={bot} />
-          <button
-            onClick={() => dispatch({ type: "toggleComputer" })}
-            className={cn(
-              "shell-control rounded-md hover:bg-raised",
-              state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
-            )}
-            title="Bot's computer"
-          >
-            <Monitor size={18} />
-          </button>
-          <button
-            onClick={() => dispatch({ type: "toggleInspector" })}
-            aria-label="Inspector"
-            aria-pressed={state.inspectorOpen}
-            className={cn(
-              "shell-control rounded-md hover:bg-raised",
-              state.inspectorOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
-            )}
-            title="Inspector — runtime events and raw protocol for this thread"
-          >
-            <Bug size={18} />
-          </button>
-        </div>
+        <ChatHeaderMenu
+          bot={bot}
+          messages={messages}
+          onToggleFind={() => setFindOpen((open) => !open)}
+          onToggleTimeline={() => setTimelineOpen((open) => !open)}
+          timelineOpen={timelineOpen}
+        />
       </div>
 
       {findOpen && <ChatFindBar threadId={bot.threadId} onClose={() => setFindOpen(false)} />}
@@ -1132,7 +1214,7 @@ export function ChatView({ bot }: { bot: Bot }) {
         }
       />
 
-      <TaskTimeline messages={messages} busy={bot.busy ?? false} />
+      {timelineOpen && <TaskTimeline messages={messages} busy={bot.busy ?? false} />}
 
       {/* Messages */}
       <div

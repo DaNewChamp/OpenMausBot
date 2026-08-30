@@ -71,13 +71,16 @@
   /* V Bot desktop shell — layout rhythm, not a second palette. Kept outside
      [data-skin] so skins can keep their color contracts while the three-column
      geometry stays one system. */
-  --shell-left-width: 248px;
+  --shell-left-width: 220px;
   --shell-left-icons: 72px;
-  --shell-right-width: 292px;
+  --shell-right-width: 272px;
   --shell-control: 44px;
-  --shell-row: 52px;
-  --shell-pin-avatar: 72px;
-  --shell-row-avatar: 36px;
+  --shell-row: 44px;
+  --shell-pin-width: 156px;
+  --shell-pin-avatar: 56px;
+  --shell-row-avatar: 32px;
+  --shell-bubble-max: 76%;
+  --shell-composer-height: 48px;
   --shell-search-radius: 999px;
   --shell-bubble-radius: 18px;
   --shell-composer-radius: 999px;
@@ -392,8 +395,12 @@ body {
 }
 
 .shell-composer-pill {
-  min-height: var(--shell-control);
+  min-height: var(--shell-composer-height);
   border-radius: var(--shell-composer-radius);
+}
+
+.shell-bubble-assistant {
+  max-width: var(--shell-bubble-max);
 }
 
 .shell-unread {

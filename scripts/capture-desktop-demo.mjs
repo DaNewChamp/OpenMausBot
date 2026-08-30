@@ -10,7 +10,7 @@ import { createRequire } from "node:module";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
-const out = process.env.VBOT_DEMO_SCREENSHOT || "/tmp/vbot-desktop-phase1.png";
+const out = process.env.VBOT_DEMO_SCREENSHOT || "/tmp/vbot-desktop-phase2.png";
 const port = Number(process.env.VBOT_DEMO_PORT || 4179);
 const WIDTH = 1024;
 const HEIGHT = 648;

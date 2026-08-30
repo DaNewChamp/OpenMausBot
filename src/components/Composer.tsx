@@ -21,6 +21,7 @@ import {
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { conversationTitle } from "@/lib/model-suffix";
+import { isDesktopDemoMode } from "@/lib/desktop-demo";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { ReplyQuote } from "./ReplyQuote";
@@ -71,7 +72,7 @@ function PermissionModeSelector({ bot, onSetAuto }: { bot: Bot; onSetAuto: (auto
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-hairline/20 bg-transparent px-3 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
+        className="flex h-7 items-center gap-1 whitespace-nowrap rounded-full border border-hairline/20 bg-transparent px-2.5 text-[12px] text-ink-secondary hover:bg-raised hover:text-ink"
       >
         <Icon size={14} className="opacity-70" />
         {label}
@@ -463,7 +464,7 @@ export function Composer({
         {/* An approval takes over the composer: you answer it before you
             can type again, so a waiting bot is impossible to miss. */}
         {approval && (
-          <div className="mb-2 overflow-hidden rounded-2xl border border-accent/40 bg-card">
+          <div className="mb-2 overflow-hidden rounded-xl border border-accent/40 bg-card">
             <PendingApprovalPanel pending={approval} count={approvals.length} index={0} />
             <PendingApprovalActions
               pending={approval}
@@ -494,7 +495,7 @@ export function Composer({
           notice={attachmentNotice}
           onNotice={setAttachmentNotice}
         />
-        <div className="grid grid-cols-[auto_1fr_auto] items-center gap-x-2 shell-composer-pill border border-hairline/30 bg-raised/50 px-2 pb-1.5 pt-1">
+        <div className="flex items-center gap-1.5 shell-composer-pill border border-hairline/30 bg-raised/50 px-2">
           <input
             ref={fileInput}
             type="file"
@@ -502,23 +503,19 @@ export function Composer({
             className="hidden"
             onChange={(e) => {
               void pickFiles(e.target.files);
-              // same file twice in a row still fires onChange
               e.target.value = "";
             }}
           />
           {!locked && (
-            <div className="col-start-1 row-start-2 mt-1 flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => fileInput.current?.click()}
-                aria-label="Attach a file"
-                title="Attach a file"
+            <button
+              type="button"
+              onClick={() => fileInput.current?.click()}
+              aria-label="Attach a file"
+              title="Attach a file"
               className="shell-control flex shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink"
-              >
-                <Plus size={18} />
-              </button>
-              {autoBot && <PermissionModeSelector bot={autoBot} onSetAuto={setAuto} />}
-            </div>
+            >
+              <Plus size={18} />
+            </button>
           )}
           <textarea
           ref={inputRef}
@@ -618,9 +615,8 @@ export function Composer({
                   : `Message ${bot ? conversationTitle(bot.name, bot.modelSelection) : ""}`
           }
             aria-label={`Message ${group ? group.name : (bot ? conversationTitle(bot.name, bot.modelSelection) : "")}`}
-            className="col-span-full row-start-1 max-h-60 min-h-[40px] w-full resize-none self-center bg-transparent px-1 pb-0 pt-2.5 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
+            className="max-h-32 min-h-0 min-w-0 flex-1 resize-none self-center bg-transparent py-2.5 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
           />
-          <div className="col-start-3 row-start-2 mt-1 flex items-center gap-1">
           {busy && !locked && (
           <button
             onClick={() => {
@@ -642,7 +638,7 @@ export function Composer({
               "flex size-[var(--shell-control)] shrink-0 items-center justify-center rounded-full",
               recording
                 ? "animate-pulse bg-danger/20 text-danger"
-                : "text-ink-secondary hover:bg-raised hover:text-ink",
+                : "bg-white text-black hover:brightness-95",
             )}
             title={recording ? "Stop dictation (Esc)" : "Dictate"}
           >
@@ -662,8 +658,12 @@ export function Composer({
             {busy && !canSteer ? <Clock size={15} /> : <ArrowUp size={17} />}
           </button>
           )}
-          </div>
         </div>
+        {!locked && autoBot && !isDesktopDemoMode() && (
+          <div className="mt-1 flex justify-start px-1">
+            <PermissionModeSelector bot={autoBot} onSetAuto={setAuto} />
+          </div>
+        )}
       </div>
       <LocalComputerAutoWarning
         open={autoWarn}

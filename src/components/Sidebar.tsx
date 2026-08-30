@@ -23,11 +23,10 @@ import {
   Pin,
   PinOff,
   Plus,
+  Puzzle,
   RefreshCw,
   Search,
   Sparkles,
-  Settings,
-  Puzzle,
   Trash2,
   Users,
   X,
@@ -471,11 +470,8 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
  * EngineGroupLabel so the sidebar reads as one system. */
 function SectionDivider({ name }: { name: string }) {
   return (
-    <div className="flex items-center gap-2 px-3 pb-1 pt-3 first:pt-0" data-section={name}>
-      <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
-        {name}
-      </span>
-      <span className="h-px flex-1 bg-hairline/40" />
+    <div className="flex items-center gap-2 px-2 pb-0.5 pt-2 first:pt-0" data-section={name}>
+      <span className="sr-only">{name}</span>
     </div>
   );
 }
@@ -754,7 +750,7 @@ function PinnedChiefCard({
   const selected = state.activeView === "chat" && state.selectedId === bot.id;
   const suffix = modelSuffix(bot.modelSelection);
   return (
-    <div className="px-2 pb-3 pt-1">
+    <div className="flex justify-center px-2 pb-1.5 pt-0.5">
       <button
         type="button"
         onClick={() => dispatch({ type: "select", id: bot.id })}
@@ -765,24 +761,22 @@ function PinnedChiefCard({
         aria-label={conversationTitle(bot.name, bot.modelSelection)}
         aria-current={selected ? "true" : undefined}
         className={cn(
-          "flex w-full flex-col items-center gap-2 rounded-xl px-3 py-3 text-center",
-          selected ? "bg-raised/50" : "hover:bg-raised/30",
+          "flex w-[var(--shell-pin-width)] max-w-full flex-col items-center gap-1.5 rounded-xl border px-2 py-2.5 text-center",
+          selected ? "border-hairline/40 bg-raised/40" : "border-hairline/20 bg-card/40 hover:bg-raised/25",
         )}
       >
         <BotAvatar
           bot={bot}
           state={stateForBot({ ...bot, messages: visibleMessages(bot) })}
-          size={72}
+          size={56}
           animated={Boolean(bot.busy) || Boolean(bot.unread)}
         />
-        <div className="min-w-0">
-          <div className="truncate text-[14px] font-semibold text-ink">
+        <div className="min-w-0 w-full">
+          <div className="truncate text-[13px] font-semibold leading-tight text-ink">
             {bot.name}
             {suffix ? <span className="font-medium text-ink-secondary"> · {suffix}</span> : null}
           </div>
-          <div className="mt-1 inline-flex items-center rounded-full bg-raised px-2.5 py-0.5 text-[11px] font-medium text-ink-secondary">
-            Chief of Staff
-          </div>
+          <div className="mt-0.5 truncate text-[10.5px] text-ink-secondary">Chief of Staff</div>
         </div>
       </button>
     </div>
@@ -1086,7 +1080,6 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
     const saved = loadSidebarDensity();
     return saved === "icons" ? "comfortable" : saved;
   });
-  const [densityOpen, setDensityOpen] = useState(false);
 
   const setDensity = (next: SidebarDensity) => {
     setDensityState(next);
@@ -1095,7 +1088,6 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
     // filter bots, rooms, and message results with no visible way to clear it.
     else setQuery("");
     saveSidebarDensity(next);
-    setDensityOpen(false);
   };
 
   const toggleCollapsed = () => {
@@ -1118,15 +1110,6 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [open, onClose]);
-
-  useEffect(() => {
-    if (!densityOpen) return;
-    const closeDensityMenu = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setDensityOpen(false);
-    };
-    window.addEventListener("keydown", closeDensityMenu);
-    return () => window.removeEventListener("keydown", closeDensityMenu);
-  }, [densityOpen]);
 
   useEffect(() => {
     return window.ogb?.onPackageInstall?.((url) => {
@@ -1335,71 +1318,21 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
     >
       {/* macOS owns inset traffic lights; Linux/Windows use native chrome. */}
       <div
-        className={cn("flex items-center pt-3.5 pb-1", density === "icons" ? "flex-col gap-1 px-2" : "justify-between px-3")}
+        className={cn("flex items-center pb-1 pt-3", density === "icons" ? "flex-col gap-1 px-2" : "justify-between px-3")}
         style={windowDragStyle}
       >
         {macInset ? (
-          <div className={density === "icons" ? "h-5 w-full" : "w-[var(--shell-traffic-inset)]"} />
+          <div className={density === "icons" ? "h-5 w-full" : "w-[var(--shell-traffic-inset)] shrink-0"} />
         ) : browser ? (
           <div className="flex items-center gap-2">
             <span className="size-3 rounded-full bg-[#ff5f57]" />
             <span className="size-3 rounded-full bg-[#febc2e]" />
             <span className="size-3 rounded-full bg-[#28c840]" />
           </div>
-        ) : <div />}
-        <div
-          className={cn("relative flex items-center", density === "icons" ? "flex-col gap-1" : "gap-1")}
-          style={windowNoDragStyle}
-        >
-          <button
-            type="button"
-            onClick={toggleCollapsed}
-            aria-label={density === "icons" ? "Expand sidebar" : "Collapse sidebar to avatars"}
-            className="shell-control flex items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
-            title={density === "icons" ? "Expand sidebar" : "Collapse to avatars"}
-          >
-            {density === "icons" ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
-          </button>
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setDensityOpen((value) => !value)}
-              aria-label="Choose sidebar density"
-              aria-expanded={densityOpen}
-              className="shell-control flex items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
-              title="Sidebar density"
-            >
-              <span aria-hidden="true" className="flex size-5 flex-col items-center justify-center gap-[3px]">
-                <span className="h-px w-3.5 rounded-full bg-current" />
-                <span className="h-px w-2.5 rounded-full bg-current" />
-                <span className="h-px w-3.5 rounded-full bg-current" />
-              </span>
-            </button>
-            {densityOpen && (
-              <>
-                <div className="fixed inset-0 z-30" onMouseDown={() => setDensityOpen(false)} />
-                <div className={cn(
-                  "absolute top-full z-40 mt-1 w-40 overflow-hidden rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60",
-                  density === "icons" ? "left-0" : "right-0",
-                )}>
-                  {(["comfortable", "compact", "icons"] as const).map((option) => (
-                    <button
-                      key={option}
-                      type="button"
-                      onClick={() => setDensity(option)}
-                      className={cn(
-                        "flex w-full items-center justify-between px-3 py-2 text-left text-[13px] capitalize hover:bg-raised/70",
-                        density === option ? "text-accent" : "text-ink",
-                      )}
-                    >
-                      {option === "icons" ? "Avatars only" : option}
-                      {density === option && <Check size={14} />}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
+        ) : (
+          <div />
+        )}
+        <div className="relative flex items-center" style={windowNoDragStyle}>
           <button
             ref={importReturnRef}
             onClick={() => setPlusOpen((o) => !o)}
@@ -1471,6 +1404,35 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
                     <span className="text-[11.5px] text-ink-secondary">{archivedBots.length}</span>
                   </button>
                 )}
+                <div className="mx-2 my-1 border-t border-hairline/40" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPlusOpen(false);
+                    toggleCollapsed();
+                  }}
+                  className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                >
+                  {density === "icons" ? <PanelLeftOpen size={16} className="text-ink-secondary" /> : <PanelLeftClose size={16} className="text-ink-secondary" />}
+                  {density === "icons" ? "Expand sidebar" : "Collapse to avatars"}
+                </button>
+                {(["comfortable", "compact", "icons"] as const).map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => {
+                      setPlusOpen(false);
+                      setDensity(option);
+                    }}
+                    className={cn(
+                      "flex w-full items-center justify-between px-3.5 py-2 text-left text-[13px] hover:bg-raised/70",
+                      density === option ? "text-accent" : "text-ink",
+                    )}
+                  >
+                    {option === "icons" ? "Avatars only" : option === "compact" ? "Compact list" : "Comfortable list"}
+                    {density === option && <Check size={14} />}
+                  </button>
+                ))}
               </div>
             </>
           )}
@@ -1566,54 +1528,54 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
       </div>
 
       {/* Footer */}
-      <div className={cn("pb-3 pt-2", density === "icons" ? "px-2" : "px-3")}>
-        <button
-          onClick={() => dispatch({ type: "showTeamMap" })}
-          aria-label={density === "icons" ? "Team map" : undefined}
-          title={density === "icons" ? "Team map" : undefined}
-          className={cn(
-            "flex min-h-10 w-full items-center rounded-xl py-2 text-left transition-colors",
-            density === "icons" ? "justify-center px-2" : "gap-3 px-3",
-            state.activeView === "team-map" ? "bg-raised text-ink" : "text-ink hover:bg-raised/50",
-          )}
-        >
-          <Network size={20} className={state.activeView === "team-map" ? "text-accent" : "text-ink-secondary"} />
-          <span className={cn("flex-1 text-[14px]", density === "icons" && "hidden")}>Team map</span>
-        </button>
-        {skillRecorderEnabled(state.config) && (
-          <button
-            onClick={() => dispatch({ type: "showSkillRecorder" })}
-            aria-label={density === "icons" ? "Teach a skill" : undefined}
-            title={density === "icons" ? "Teach a skill" : undefined}
-            className={cn(
-              "flex min-h-10 w-full items-center rounded-xl py-2 text-left transition-colors",
-              density === "icons" ? "justify-center px-2" : "gap-3 px-3",
-              state.activeView === "skill-recorder" ? "bg-raised text-ink" : "text-ink hover:bg-raised/50",
-            )}
-          >
-            <Sparkles size={20} className={state.activeView === "skill-recorder" ? "text-accent" : "text-ink-secondary"} />
-            <span className={cn("flex-1 text-[14px]", density === "icons" && "hidden")}>Teach a skill</span>
-          </button>
-        )}
-        <button
-          onClick={() => dispatch({ type: "showRoutines" })}
-          aria-label={density === "icons" ? "Tasks and routines" : undefined}
-          title={density === "icons" ? "Tasks and routines" : undefined}
-          className={cn(
-            "flex min-h-10 w-full items-center rounded-xl py-2 text-left transition-colors",
-            density === "icons" ? "justify-center px-2" : "gap-3 px-3",
-            state.activeView === "routines" ? "bg-raised text-ink" : "text-ink hover:bg-raised/50",
-          )}
-        >
-          <CalendarDays size={20} className={state.activeView === "routines" ? "text-accent" : "text-ink-secondary"} />
-          <span className={cn("flex-1 text-[14px]", density === "icons" && "hidden")}>Tasks &amp; routines</span>
-          {state.routineRuns.some((run) => ["failed", "missed"].includes(run.status) && !run.seenAt) && (
-            <span className="size-2 rounded-full bg-danger" />
-          )}
-        </button>
+      <div className={cn("border-t border-hairline/20 pb-2.5 pt-1.5", density === "icons" ? "px-2" : "px-2.5")}>
+        <div className={cn("mb-1 space-y-0.5 px-1", density === "icons" && "hidden")}>
+          <details className="group/more">
+            <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1 text-[12px] text-ink-secondary marker:content-none hover:bg-raised/40 hover:text-ink [&::-webkit-details-marker]:hidden">
+              More
+            </summary>
+            <div className="pb-1 pl-2">
+              <button
+                onClick={() => dispatch({ type: "showTeamMap" })}
+                className={cn(
+                  "flex min-h-9 w-full items-center gap-2.5 rounded-lg px-2 py-1 text-left text-[13px] transition-colors",
+                  state.activeView === "team-map" ? "bg-raised/60 text-ink" : "text-ink-secondary hover:bg-raised/40 hover:text-ink",
+                )}
+              >
+                <Network size={16} />
+                <span className="flex-1">Team map</span>
+              </button>
+              {skillRecorderEnabled(state.config) && (
+                <button
+                  onClick={() => dispatch({ type: "showSkillRecorder" })}
+                  className={cn(
+                    "flex min-h-9 w-full items-center gap-2.5 rounded-lg px-2 py-1 text-left text-[13px] transition-colors",
+                    state.activeView === "skill-recorder" ? "bg-raised/60 text-ink" : "text-ink-secondary hover:bg-raised/40 hover:text-ink",
+                  )}
+                >
+                  <Sparkles size={16} />
+                  <span className="flex-1">Teach a skill</span>
+                </button>
+              )}
+              <button
+                onClick={() => dispatch({ type: "showRoutines" })}
+                className={cn(
+                  "flex min-h-9 w-full items-center gap-2.5 rounded-lg px-2 py-1 text-left text-[13px] transition-colors",
+                  state.activeView === "routines" ? "bg-raised/60 text-ink" : "text-ink-secondary hover:bg-raised/40 hover:text-ink",
+                )}
+              >
+                <CalendarDays size={16} />
+                <span className="flex-1">Tasks &amp; routines</span>
+                {state.routineRuns.some((run) => ["failed", "missed"].includes(run.status) && !run.seenAt) && (
+                  <span className="size-2 rounded-full bg-danger" />
+                )}
+              </button>
+            </div>
+          </details>
+        </div>
         <button
           onClick={() => dispatch({ type: "togglePlugins", open: true })}
-          className={cn("shell-control flex w-full items-center rounded-lg text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "gap-3 px-3")}
+          className={cn("shell-control flex w-full items-center rounded-lg text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "gap-3 px-2")}
           aria-label={density === "icons" ? "Plugins" : undefined}
           title={density === "icons" ? "Plugins" : undefined}
         >
@@ -1629,7 +1591,7 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
         <div className={cn("flex items-center", density === "icons" && "justify-center")}>
           <button
             onClick={() => dispatch({ type: "toggleAppSettings" })}
-            className={cn("shell-control flex min-w-0 items-center rounded-lg text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "flex-1 gap-3 px-3")}
+            className={cn("shell-control flex min-w-0 items-center rounded-lg text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "flex-1 gap-3 px-2")}
             aria-label={density === "icons" ? "App settings" : undefined}
             title={density === "icons" ? (state.config?.profile?.name?.trim() || "App settings") : undefined}
           >
@@ -1645,13 +1607,6 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
             />
           )}
           {density !== "icons" && <UpdateButton />}
-          {density !== "icons" && <button
-            onClick={() => dispatch({ type: "toggleAppSettings" })}
-            className="shell-control flex items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
-            title="App settings"
-          >
-            <Settings size={18} />
-          </button>}
         </div>
       </div>
 
