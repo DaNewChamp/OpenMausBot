@@ -3,13 +3,13 @@ import UIKit
 import CompanionCore
 
 /// Shared near-black / paper canvas for home, chat, settings, and profiles.
-/// Dark mode tracks the official Grok Bot canvas (true black, not lifted
-/// charcoal). Light mode keeps a quiet paper gray so contrast is not
+/// Dark mode tracks the Grok Bot home canvas: charcoal near-black, not
+/// pure black. Light mode keeps a quiet paper gray so contrast is not
 /// invented twice per screen.
 enum VBotSurface {
     static let background = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.000, green: 0.000, blue: 0.000, alpha: 1) // #000000
+            ? UIColor(red: 0.071, green: 0.071, blue: 0.078, alpha: 1) // #121214
             : UIColor(red: 0.965, green: 0.965, blue: 0.973, alpha: 1) // #F6F6F8
     })
 

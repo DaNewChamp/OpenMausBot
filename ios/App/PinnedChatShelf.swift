@@ -20,7 +20,10 @@ struct PinnedChatShelf: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let layout = PinnedChatShelfLayout.metrics(paneWidth: proxy.size.width)
+            let layout = PinnedChatShelfLayout.metrics(
+                paneWidth: proxy.size.width,
+                pinCount: summaries.count
+            )
             let overflowing = PinnedChatShelfLayout.overflows(pinCount: summaries.count)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: layout.spacing) {
@@ -49,8 +52,10 @@ struct PinnedChatShelf: View {
                 )
             }
             .scrollBounceBehavior(overflowing ? .always : .basedOnSize, axes: .horizontal)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
+        .padding(.top, HomeRosterLayoutPolicy.shelfTopPadding)
+        .padding(.bottom, HomeRosterLayoutPolicy.shelfBottomPadding)
         .frame(height: reservedHeight)
         .animation(reduceMotion ? nil : .snappy(duration: 0.28), value: summaries.map(\.id))
         .accessibilityElement(children: .contain)
@@ -85,7 +90,7 @@ private struct PinnedChatTile: View {
     let animated: Bool
 
     var body: some View {
-        VStack(spacing: 7) {
+        VStack(spacing: PinnedChatShelfLayout.heroCaptionSpacing) {
             ZStack(alignment: .bottomTrailing) {
                 PinnedChatAvatar(chat: chat, size: avatarSize, animated: animated)
 
@@ -96,16 +101,17 @@ private struct PinnedChatTile: View {
                         .frame(width: 22, height: 22)
                         .background(Circle().fill(VBotSurface.controlSurface.opacity(0.92)))
                         .overlay(Circle().stroke(VBotSurface.background, lineWidth: 2))
+                        .offset(x: 2, y: 2)
                 }
             }
             .frame(width: avatarSize, height: avatarSize)
 
             HStack(spacing: 4) {
-                Text(chat.name)
-                    .font(.caption2.weight(.medium))
+                Text(pinnedCaption)
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(Color.primary)
                     .multilineTextAlignment(.center)
-                    .lineLimit(2)
+                    .lineLimit(1)
                     .minimumScaleFactor(0.85)
                 if chat.unread && !chat.busy {
                     Circle()
@@ -120,6 +126,12 @@ private struct PinnedChatTile: View {
         .contentShape(Rectangle())
         .accessibilityLabel(chat.name)
         .accessibilityValue(accessibilityStatus)
+    }
+
+    private var pinnedCaption: String {
+        let subtitle = chat.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !subtitle.isEmpty else { return chat.name }
+        return "\(chat.name) · \(subtitle)"
     }
 
     private var accessibilityStatus: String {

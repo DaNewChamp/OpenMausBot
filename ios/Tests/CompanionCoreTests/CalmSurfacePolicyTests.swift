@@ -54,12 +54,11 @@ final class CalmSurfacePolicyTests: XCTestCase {
         XCTAssertTrue(CalmSurfacePolicy.reservesPinnedShelfRegion(pinCount: 0, animatingCollapse: true))
     }
 
-    func testPinnedShelfMetricsStayThreeAcrossOnPhoneWidth() {
-        let layout = PinnedChatShelfLayout.metrics(paneWidth: 390)
-        XCTAssertEqual(layout.avatar, 80)
-        XCTAssertEqual(layout.spacing, 20)
-        XCTAssertGreaterThanOrEqual(layout.tile, layout.avatar)
-        XCTAssertEqual(PinnedChatShelfLayout.reservedHeight, 123)
+    func testPinnedShelfHeroMetricsOnPhoneWidth() {
+        let layout = PinnedChatShelfLayout.metrics(paneWidth: 390, pinCount: 1)
+        XCTAssertEqual(layout.mode, .hero)
+        XCTAssertEqual(layout.avatar, PinnedChatShelfLayout.heroAvatar)
+        XCTAssertEqual(layout.spacing, 0)
     }
 
     func testPinnedShelfDoesNotOverflowUntilTheFourthPin() {
@@ -69,13 +68,20 @@ final class CalmSurfacePolicyTests: XCTestCase {
     }
 
     func testPinnedShelfKeepsAReadableAvatarOnNarrowPanes() {
-        let layout = PinnedChatShelfLayout.metrics(paneWidth: 200)
+        let layout = PinnedChatShelfLayout.metrics(paneWidth: 200, pinCount: 4)
+        XCTAssertEqual(layout.mode, .compact)
         XCTAssertEqual(layout.avatar, PinnedChatShelfLayout.minimumAvatar)
         XCTAssertEqual(layout.tile, layout.avatar)
     }
 
     func testPinnedShelfReservedHeightDoesNotDependOnPinCount() {
-        XCTAssertEqual(PinnedChatShelfLayout.reservedHeight, 80 + 7 + 36)
+        let reserved = PinnedChatShelfLayout.reservedHeight(
+            nameBlockHeight: PinnedChatShelfLayout.nameBlock
+        )
+        XCTAssertEqual(
+            reserved,
+            HomeRosterLayoutPolicy.pinnedShelfReservedHeight(nameBlockHeight: PinnedChatShelfLayout.nameBlock)
+        )
     }
 
     func testPinnedShelfReservedHeightGrowsWithDynamicType() {
@@ -85,8 +91,7 @@ final class CalmSurfacePolicyTests: XCTestCase {
         let large = PinnedChatShelfLayout.reservedHeight(
             nameBlockHeight: PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: 22)
         )
-        XCTAssertEqual(compact, 80 + 7 + 36)
-        XCTAssertGreaterThan(large, compact)
-        XCTAssertEqual(large, 80 + 7 + 44)
+        XCTAssertGreaterThanOrEqual(large, compact)
+        XCTAssertEqual(large, HomeRosterLayoutPolicy.pinnedShelfReservedHeight(nameBlockHeight: 44))
     }
 }

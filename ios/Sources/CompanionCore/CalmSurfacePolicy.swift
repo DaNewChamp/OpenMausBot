@@ -38,44 +38,83 @@ public enum CalmSurfacePolicy: Sendable {
     }
 }
 
-/// Three-across pinned shelf metrics. Extra pins scroll horizontally; the
+/// Pinned shelf metrics. One to three pins use a centered hero row with a
+/// large avatar; four or more scroll horizontally in a compact strip. The
 /// reserved height stays constant so the roster below does not jump.
 public struct PinnedChatShelfLayout: Equatable, Sendable {
+    public enum Mode: Equatable, Sendable {
+        case hero
+        case compact
+    }
+
     public static let columns = 3
+    public static let heroPinLimit = 3
     public static let gutter: CGFloat = 10
-    public static let coverAvatar: CGFloat = 80
+    public static let heroAvatar: CGFloat = 123
+    public static let compactCoverAvatar: CGFloat = 72
     public static let cellPadding: CGFloat = 8
-    public static let nameBlock: CGFloat = 36
-    public static let pagePadding: CGFloat = 16
+    public static let nameBlock: CGFloat = 28
+    public static let pagePadding: CGFloat = HomeRosterLayoutPolicy.pagePadding
     public static let minimumAvatar: CGFloat = 64
+    public static let heroCaptionSpacing: CGFloat = 7
+    public static let heroTileSpacing: CGFloat = 20
 
     public var avatar: CGFloat
     public var tile: CGFloat
     public var spacing: CGFloat
+    public var mode: Mode
 
     public static var reservedHeight: CGFloat { reservedHeight(nameBlockHeight: nameBlock) }
 
     public static func reservedHeight(nameBlockHeight: CGFloat) -> CGFloat {
-        coverAvatar + 7 + nameBlockHeight
+        HomeRosterLayoutPolicy.pinnedShelfReservedHeight(nameBlockHeight: nameBlockHeight)
     }
 
-    /// Two-line caption2 label area that scales with Dynamic Type.
+    /// Single-line caption2 label area that scales with Dynamic Type.
     public static func nameBlockHeight(
         captionLineHeight: CGFloat,
-        lines: CGFloat = 2
+        lines: CGFloat = 1
     ) -> CGFloat {
         max(nameBlock, ceil(captionLineHeight * lines))
     }
 
-    public static func overflows(pinCount: Int) -> Bool {
-        pinCount > columns
+    public static func mode(for pinCount: Int) -> Mode {
+        pinCount > heroPinLimit ? .compact : .hero
     }
 
-    public static func metrics(paneWidth: CGFloat) -> PinnedChatShelfLayout {
+    public static func overflows(pinCount: Int) -> Bool {
+        pinCount > heroPinLimit
+    }
+
+    public static func metrics(paneWidth: CGFloat, pinCount: Int) -> PinnedChatShelfLayout {
+        switch mode(for: pinCount) {
+        case .hero:
+            return heroMetrics(pinCount: pinCount)
+        case .compact:
+            return compactMetrics(paneWidth: paneWidth)
+        }
+    }
+
+    private static func heroMetrics(pinCount: Int) -> PinnedChatShelfLayout {
+        let spacing = pinCount <= 1 ? CGFloat(0) : heroTileSpacing
+        return PinnedChatShelfLayout(
+            avatar: heroAvatar,
+            tile: heroAvatar,
+            spacing: spacing,
+            mode: .hero
+        )
+    }
+
+    private static func compactMetrics(paneWidth: CGFloat) -> PinnedChatShelfLayout {
         let inner = max(paneWidth - pagePadding * 2, 1)
         let cell = max(0, inner / CGFloat(columns) - gutter * 2)
-        let avatar = min(coverAvatar, max(minimumAvatar, cell - cellPadding * 2))
+        let avatar = min(compactCoverAvatar, max(minimumAvatar, cell - cellPadding * 2))
         let tile = max(avatar, cell)
-        return PinnedChatShelfLayout(avatar: avatar, tile: tile, spacing: gutter * 2)
+        return PinnedChatShelfLayout(
+            avatar: avatar,
+            tile: tile,
+            spacing: gutter * 2,
+            mode: .compact
+        )
     }
 }

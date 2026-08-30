@@ -42,8 +42,6 @@ struct ChatListView: View {
                         Haptics.selection()
                         open(chat)
                     }
-                    .padding(.top, 2)
-                    .padding(.bottom, 4)
                 }
 
                 ScrollView {
@@ -54,7 +52,7 @@ struct ChatListView: View {
                                 if searching { ProgressView().controlSize(.small) }
                             }
                             .frame(height: 1)
-                            .padding(.horizontal, 16)
+                            .padding(.horizontal, HomeRosterLayoutPolicy.pagePadding)
 
                             ForEach(searchHits) { hit in
                                 Button {
@@ -68,7 +66,7 @@ struct ChatListView: View {
                                     SearchHitRow(hit: hit)
                                 }
                                 .buttonStyle(.plain)
-                                .padding(.horizontal, 16)
+                                .padding(.horizontal, HomeRosterLayoutPolicy.pagePadding)
                             }
                         }
 
@@ -242,13 +240,19 @@ struct ChatListView: View {
                         .accessibilityLabel("Close search")
                 }
             } else {
-                HStack(alignment: .center, spacing: 10) {
+                HStack(alignment: .center, spacing: 12) {
                     Button {
                         Haptics.selection()
                         showingAccount = true
                     } label: {
-                        ProfileAvatar(name: session.connection?.name ?? "You", size: 32)
-                            .frame(width: 36, height: 36)
+                        ProfileAvatar(
+                            name: session.connection?.name ?? "You",
+                            size: HomeRosterLayoutPolicy.profileDiameter
+                        )
+                        .frame(
+                            width: HomeRosterLayoutPolicy.profileDiameter,
+                            height: HomeRosterLayoutPolicy.profileDiameter
+                        )
                     }
                     .buttonStyle(.plain)
                     .glassCircle()
@@ -265,8 +269,8 @@ struct ChatListView: View {
 
                     Spacer(minLength: 8)
 
-                    GlassGroup(spacing: 8) {
-                        HStack(spacing: 8) {
+                    GlassGroup(spacing: HomeRosterLayoutPolicy.chromeButtonGap) {
+                        HStack(spacing: HomeRosterLayoutPolicy.chromeButtonGap) {
                             RosterHeaderButton(systemImage: "magnifyingglass", accessibilityLabel: "Search") {
                                 withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
                                     searchOpen = true
@@ -289,9 +293,12 @@ struct ChatListView: View {
                                 }
                             } label: {
                                 Image(systemName: "plus")
-                                    .font(.system(size: 17, weight: .medium))
+                                    .font(.system(size: 19, weight: .medium))
                                     .foregroundStyle(Color.primary)
-                                    .frame(width: 36, height: 36)
+                                    .frame(
+                                        width: HomeRosterLayoutPolicy.chromeButtonDiameter,
+                                        height: HomeRosterLayoutPolicy.chromeButtonDiameter
+                                    )
                                     .contentShape(Circle())
                             }
                             .buttonStyle(.plain)
@@ -302,9 +309,9 @@ struct ChatListView: View {
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 6)
-        .padding(.bottom, searchOpen ? 8 : 10)
+        .padding(.horizontal, HomeRosterLayoutPolicy.pagePadding)
+        .padding(.top, HomeRosterLayoutPolicy.headerTopPadding)
+        .padding(.bottom, searchOpen ? 8 : HomeRosterLayoutPolicy.headerBottomPadding)
         .animation(reduceMotion ? nil : .snappy(duration: 0.24), value: searchOpen)
     }
 
@@ -384,9 +391,12 @@ private struct RosterHeaderButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 17, weight: .medium))
+                .font(.system(size: 19, weight: .medium))
                 .foregroundStyle(Color.primary)
-                .frame(width: 36, height: 36)
+                .frame(
+                    width: HomeRosterLayoutPolicy.chromeButtonDiameter,
+                    height: HomeRosterLayoutPolicy.chromeButtonDiameter
+                )
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -519,10 +529,10 @@ struct ChatRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: HomeRosterLayoutPolicy.rowAvatarSpacing) {
             RosterChatAvatar(
                 chat: chat,
-                size: 56,
+                size: HomeRosterLayoutPolicy.rowAvatar,
                 state: state,
                 animated: !reduceMotion && state.showsActivity
             )
@@ -549,7 +559,7 @@ struct ChatRow: View {
                     Text(preview.isEmpty ? " " : preview)
                         .font(.subheadline)
                         .foregroundStyle(Color.secondary)
-                        .lineLimit(2)
+                        .lineLimit(1)
                         .truncationMode(.tail)
 
                     Spacer(minLength: 0)
@@ -577,8 +587,9 @@ struct ChatRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, HomeRosterLayoutPolicy.pagePadding)
+        .padding(.vertical, HomeRosterLayoutPolicy.rowVerticalPadding)
+        .frame(minHeight: HomeRosterLayoutPolicy.rowMinHeight, alignment: .top)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(chat.name)
