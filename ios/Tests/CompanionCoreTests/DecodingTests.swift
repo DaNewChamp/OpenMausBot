@@ -447,6 +447,21 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(kind, "routine.run")
     }
 
+    func testDecodesARuntimeDeltaWithEventId() throws {
+        let json = """
+        {"kind":"runtime","seq":4,"event":{
+          "type":"content.delta","threadId":"t1","delta":"Hel",
+          "streamKind":"assistant_text","eventId":"e1"}}
+        """
+        let frame = try JSONDecoder().decode(StreamFrame.self, from: Data(json.utf8))
+        guard case let .runtime(event) = frame.frame else {
+            return XCTFail("expected .runtime")
+        }
+        XCTAssertEqual(event.eventId, "e1")
+        XCTAssertEqual(event.delta, "Hel")
+        XCTAssertEqual(event.streamKind, "assistant_text")
+    }
+
     func testDecodesANotifyFrame() throws {
         let json = """
         {"kind":"notify","seq":12,"notification":{

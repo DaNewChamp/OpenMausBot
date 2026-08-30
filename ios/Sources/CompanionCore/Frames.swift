@@ -29,6 +29,27 @@ public struct RuntimeEvent: Codable, Hashable, Sendable {
     /// content.delta only
     public var delta: String?
     public var streamKind: String?
+    /// Provider event id when the harness supplies one. Used to drop
+    /// duplicate deltas after a replayed reconnect.
+    public var eventId: String?
+
+    public init(
+        type: String,
+        threadId: String,
+        delta: String? = nil,
+        streamKind: String? = nil,
+        eventId: String? = nil
+    ) {
+        self.type = type
+        self.threadId = threadId
+        self.delta = delta
+        self.streamKind = streamKind
+        self.eventId = eventId
+    }
+
+    public var endsTurn: Bool {
+        type == "turn.completed" || type == "turn.failed" || type == "turn.aborted"
+    }
 }
 
 public enum Frame: Sendable {

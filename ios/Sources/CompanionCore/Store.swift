@@ -42,6 +42,12 @@ public struct CompanionState: Sendable {
     /// Character choices retained on the phone when an older paired server
     /// rejects appearance fields on the paired-safe profile route.
     public var appearanceOverrides = BotAppearanceOverrides()
+    /// Threads whose live tail has been replaced by a settled message or a
+    /// terminal turn. Late deltas are ignored until a new turn starts.
+    var streamSealed: Set<String> = []
+    /// Recent provider event ids per thread, so a replayed reconnect cannot
+    /// append the same token twice.
+    var seenStreamEventIds: [String: [String]] = [:]
 
     public init() {}
 
@@ -133,6 +139,18 @@ public struct CompanionState: Sendable {
             messages[room.threadId] = room.messages ?? []
             hasMore[room.threadId] = room.hasMore ?? false
         }
+        // Hydration is the authoritative transcript. Any in-flight tail from a
+        // previous connection is either already in those messages or gone.
+        streaming.removeAll()
+        reasoning.removeAll()
+        seenStreamEventIds.removeAll()
+        streamSealed.removeAll()
+        for bot in bots where bot.busy != true {
+            streamSealed.insert(bot.threadId)
+        }
+        for room in rooms where room.busyBotId == nil {
+            streamSealed.insert(room.threadId)
+        }
     }
 
     /// Prepend an older page fetched for scrollback.
@@ -190,6 +208,11 @@ public struct CompanionState: Sendable {
             // hard way; no reason to learn it twice.
             if message.role == .bot, message.kind == .text {
                 clearStream(threadId)
+                streamSealed.insert(threadId)
+            }
+            if message.role == .user {
+                streamSealed.remove(threadId)
+                seenStreamEventIds[threadId] = []
             }
 
         case let .messagePatch(threadId, message):
@@ -207,10 +230,8 @@ public struct CompanionState: Sendable {
             if let index = bots.firstIndex(where: { $0.threadId == threadId }) {
                 bots[index].activeLeafId = activeLeafId
             }
-            // A branch switch changes which in-flight tail is meaningful.
-            // Keeping the old branch's partial answer below the new leaf is
-            // indistinguishable from the bot replying on the wrong branch.
             clearStream(threadId)
+            streamSealed.insert(threadId)
 
         case let .bot(bot):
             let stableID = "bot:\(bot.id)"
@@ -255,6 +276,8 @@ public struct CompanionState: Sendable {
                 // was the last event that could ever mention this id.
                 clearStream(threadId)
                 clearScreen(botId)
+                streamSealed.remove(threadId)
+                seenStreamEventIds.removeValue(forKey: threadId)
                 pinnedOverrides.remove(for: "bot:\(botId)")
                 appearanceOverrides.remove(for: "bot:\(botId)")
                 bots.remove(at: index)
@@ -285,6 +308,8 @@ public struct CompanionState: Sendable {
                 // Same reasoning as a deleted bot: the thread is gone, so the
                 // half-written reply streaming into it has nowhere to land.
                 clearStream(threadId)
+                streamSealed.remove(threadId)
+                seenStreamEventIds.removeValue(forKey: threadId)
                 pinnedOverrides.remove(for: "room:\(groupId)")
                 rooms.remove(at: index)
             }
@@ -319,6 +344,10 @@ public struct CompanionState: Sendable {
         switch event.type {
         case "content.delta":
             guard let delta = event.delta, !delta.isEmpty else { return }
+            guard shouldAcceptDelta(on: event.threadId) else { return }
+            if let eventId = event.eventId, rememberDuplicate(eventId, thread: event.threadId) {
+                return
+            }
             switch event.streamKind {
             case "assistant_text":
                 streaming[event.threadId, default: ""] += delta
@@ -329,8 +358,13 @@ public struct CompanionState: Sendable {
                 // is better than showing thinking as if it were the answer
                 break
             }
+        case "turn.started":
+            streamSealed.remove(event.threadId)
+            seenStreamEventIds[event.threadId] = []
+            clearStream(event.threadId)
         case "turn.completed", "turn.failed", "turn.aborted":
             clearStream(event.threadId)
+            streamSealed.insert(event.threadId)
         default:
             break
         }
@@ -348,6 +382,31 @@ public struct CompanionState: Sendable {
     public mutating func clearStream(_ threadId: String) {
         streaming.removeValue(forKey: threadId)
         reasoning.removeValue(forKey: threadId)
+    }
+
+    private mutating func shouldAcceptDelta(on threadId: String) -> Bool {
+        if bot(forThread: threadId)?.busy == true {
+            streamSealed.remove(threadId)
+            return true
+        }
+        if room(forThread: threadId)?.busyBotId != nil {
+            streamSealed.remove(threadId)
+            return true
+        }
+        return !streamSealed.contains(threadId)
+    }
+
+    /// Returns true when this id has already been folded for the thread.
+    private mutating func rememberDuplicate(_ eventId: String, thread threadId: String) -> Bool {
+        guard !eventId.isEmpty else { return false }
+        var seen = seenStreamEventIds[threadId] ?? []
+        if seen.contains(eventId) { return true }
+        seen.append(eventId)
+        if seen.count > 512 {
+            seen.removeFirst(seen.count - 512)
+        }
+        seenStreamEventIds[threadId] = seen
+        return false
     }
 
     /// Apply a pin immediately after an old server rejected both supported

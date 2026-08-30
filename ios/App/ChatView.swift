@@ -60,6 +60,12 @@ struct ChatView: View {
     /// Captured when this chat opened with unread lines, so the Grok-style
     /// NEW divider survives `markRead`.
     @State private var newAfterMessageId: String?
+    /// Follow the latest line only while the reader is already near the
+    /// bottom. Scrolling up to copy a citation must not yank the transcript.
+    @State private var followingLatest = true
+    @State private var lastDistanceFromBottom: CGFloat = 0
+    @State private var viewportHeight: CGFloat = 0
+    @State private var streamA11yPhase: StreamAccessibilityPhase = .idle
 
     /// The live bubble's scroll target. A constant because there is at most
     /// one per chat and it has no message id to borrow.
@@ -90,208 +96,170 @@ struct ChatView: View {
     }
 
     var body: some View {
-        // Read the transcript once for this render. Pagination changes the
-        // array as a unit; repeatedly reaching through ObservableObject for
-        // every row only recomputes the same value.
-        let transcript = messages
-        // Full-height stack, then composer as a bottom safe-area inset.
-        // Putting the inset on the ScrollView itself sized the transcript
-        // to its content, so a short chat left the composer floating in the
-        // middle. The outer frame is forced to fill, then the inset shrinks
-        // it for the composer *and* the keyboard. `.ignoresSafeArea()` on
-        // the canvas must stay `.container` so it never eats the keyboard.
-        VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    // VStack, not LazyVStack. A lazy stack does not know how
-                    // tall it is until its rows have been built, so
-                    // `.defaultScrollAnchor(.bottom)` anchors against an
-                    // estimate and the chat opens somewhere in the middle of
-                    // the conversation. Building all of it up front makes the
-                    // height exact and the anchor land on the newest message.
-                    // A thread holds 50 messages until you ask for more, so
-                    // there is nothing here worth being lazy about.
-                    VStack(alignment: .leading, spacing: 10) {
-                        if session.state.hasMore[threadId] == true {
-                            Button("Load earlier messages") {
-                                // keep the reader where they were: after older
-                                // messages are prepended, sit back on the one
-                                // that used to be at the top
-                                let anchor = transcript.first?.id
-                                Task {
-                                    await session.loadOlder(threadId: threadId)
-                                    if let anchor { proxy.scrollTo(anchor, anchor: .top) }
-                                }
-                            }
-                            .font(.footnote)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                        }
+        // Split across typed subviews so Release type-checking can finish.
+        // The streaming UX is unchanged: coalesced live text, working-state
+        // fallback, near-bottom follow, and VoiceOver phase announcements.
+        chatPresented
+    }
 
-                        ForEach(transcriptRows(in: transcript)) { row in
-                            VStack(alignment: .leading, spacing: 6) {
-                                // a gap in time is worth marking; a timestamp
-                                // on every message is just noise
-                                if !row.isRedundantCommNarration,
-                                   startsANewStretch(at: row.startIndex, in: transcript) {
-                                    Text(RelativeStamp.separator(row.firstMessage.date))
-                                        .font(chatTypography.compact)
-                                        .foregroundStyle(Color.secondary.opacity(0.58))
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.top, 14)
-                                        .padding(.bottom, 6)
-                                }
-                                if showsNewDivider(before: row, in: transcript) {
-                                    NewMessagesDivider()
-                                }
-                                switch row.segment {
-                                case .message(let message):
-                                    if row.isRedundantCommNarration {
-                                        // Keep the persisted message and its
-                                        // scroll identity, but let the comm
-                                        // activity row carry the visible and
-                                        // accessible handoff affordance.
-                                        Color.clear
-                                            .frame(width: 0, height: 0)
-                                            .accessibilityHidden(true)
-                                    } else {
-                                        MessageRow(
-                                            chat: current,
-                                            message: message,
-                                            endsRun: endsRun(at: row.startIndex, in: transcript),
-                                            showsSpeaker: message.role != .user
-                                                && startsSpeakerRun(at: row.startIndex, in: transcript),
-                                            onOpenComm: { groupId in
-                                                commRoom = session.state.rooms.first { $0.id == groupId }
-                                            },
-                                            onReply: { message in
-                                                replyingTo = message
-                                                composerFocused = true
-                                            }
-                                        )
-                                    }
-                                case .toolRun(let run):
-                                    ToolRunDisclosure(
-                                        run: run,
-                                        isExpanded: ToolRunGrouping.isExpanded(
-                                            run,
-                                            opened: openedToolRuns,
-                                            closed: closedToolRuns
-                                        ),
-                                        onToggle: { toggleToolRun(run) }
-                                    )
-                                }
-                            }
-                            .id(row.id)
-                            .overlay(alignment: .top) {
-                                // Extra ids for chips absorbed into the run.
-                                // The first id is the row itself, so search
-                                // to any step still lands on this disclosure.
-                                if case .toolRun(let run) = row.segment {
-                                    VStack(spacing: 0) {
-                                        ForEach(Array(run.messageIds.dropFirst()), id: \.self) { id in
-                                            Color.clear
-                                                .frame(height: 1)
-                                                .id(id)
-                                        }
-                                    }
-                                    .frame(maxHeight: 1, alignment: .top)
-                                    .accessibilityHidden(true)
-                                    .allowsHitTesting(false)
-                                }
-                            }
-                        }
-
-                        // The reply as it is typed. It sits after the last
-                        // settled message and disappears the moment the real
-                        // one arrives — the store clears it on the same frame
-                        // that appends the message, so there is never a beat
-                        // where both are on screen.
-                        if let live = session.state.streaming[threadId], !live.isEmpty {
-                            StreamingBubble(
-                                text: live,
-                                color: streamingTintColor,
-                                speaker: streamingSpeaker
-                            )
-                                .id(Self.liveBubbleId)
-                        } else if current.busy
-                                    || !(session.state.reasoning[threadId] ?? "").isEmpty {
-                            WorkingTypingIndicatorView(
-                                chat: current,
-                                speakerBotId: workingBotId
-                            )
-                                .id(Self.liveBubbleId)
-                                .accessibilityLabel(
-                                    streamingSpeaker.map { "\($0.name) is working" }
-                                        ?? "\(current.name) is working"
-                                )
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                // The transcript scrolls beneath the floating header chrome.
-                .contentMargins(.top, 56, for: .scrollContent)
-                .scrollClipDisabled()
-                .scrollDismissesKeyboard(.interactively)
-                // A conversation grows from the bottom: a transcript shorter
-                // than the screen rests at the bottom, and opening a chat
-                // starts on the newest message rather than the oldest.
-                .defaultScrollAnchor(.bottom)
-                .onChange(of: transcript.last?.id) { _, _ in
-                    reconcilePendingQueue(in: messages)
-                    guard let last = transcript.last else { return }
-                    if last.role != .user, last.kind == .text || last.kind == .options {
-                        SoundEffects.playReceived()
-                        Haptics.impact(.light)
-                    }
-                    scrollToLatest(proxy)
-                }
-                .onChange(of: transcript.last?.text) { _, _ in
-                    scrollToLatest(proxy, animated: false)
-                }
-                .onChange(of: current.busy) { _, _ in
-                    scrollToLatest(proxy)
-                }
-                .onChange(of: composerFocused) { _, _ in
-                    scrollToLatest(proxy)
-                }
-                .onChange(of: draft.isEmpty) { _, _ in
-                    scrollToLatest(proxy)
-                }
-                // Follow the text as it arrives. Keyed on length rather than
-                // the string so this fires once per delta batch, and without
-                // animation — animating every token turns a smooth stream
-                // into a stutter, because each scroll interrupts the last.
-                .onChange(of: session.state.streaming[threadId]?.count ?? 0) { _, length in
-                    guard length > 0 else { return }
-                    scrollToLatest(proxy, animated: false)
-                }
-                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { _ in
-                    scrollToLatest(proxy, animated: false)
-                }
-                .onChange(of: session.focusedMessageId) { _, messageId in
-                    guard let messageId,
-                          messages.contains(where: { $0.id == messageId })
-                    else { return }
-                    if reduceMotion {
-                        proxy.scrollTo(messageId, anchor: .center)
-                    } else {
-                        withAnimation { proxy.scrollTo(messageId, anchor: .center) }
-                    }
-                    session.consumeFocus(messageId)
-                }
-                .task {
-                    guard let messageId = session.focusedMessageId,
-                          messages.contains(where: { $0.id == messageId })
-                    else { return }
-                    proxy.scrollTo(messageId, anchor: .center)
-                    session.consumeFocus(messageId)
+    /// Sheets and importers sit on their own `some View` so they are not
+    /// type-checked together with the transcript ScrollView.
+    private var chatPresented: some View {
+        chatLifecycle
+            .sheet(isPresented: $showingTasks) {
+                if case let .bot(bot) = current { TaskManagerView(bot: bot) }
+            }
+            .sheet(isPresented: $showingProfile) {
+                if case let .bot(bot) = current { AgentProfileView(bot: bot) }
+            }
+            .sheet(item: $shareFile) { file in
+                ActivityShareSheet(items: [file.url])
+            }
+            .fileImporter(
+                isPresented: $showingFileImporter,
+                allowedContentTypes: [.image],
+                allowsMultipleSelection: true
+            ) { result in
+                switch result {
+                case let .success(urls):
+                    Task { await importFiles(urls) }
+                case let .failure(error):
+                    attachmentError = error.localizedDescription
                 }
             }
-            .id(threadId)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .sheet(isPresented: $showingCamera) {
+                CameraAttachmentPicker { image in
+                    showingCamera = false
+                    addCameraImage(image)
+                } onCancel: {
+                    showingCamera = false
+                }
+                .ignoresSafeArea()
+            }
+            .onChange(of: photoItems) { _, items in
+                guard !items.isEmpty else { return }
+                photoItems = []
+                Task { await importPhotos(items) }
+            }
+    }
+
+    private var chatLifecycle: some View {
+        chatNavigation
+            .task(id: threadId) {
+                session.setForegroundThread(threadId)
+                if newAfterMessageId == nil, current.unread {
+                    newAfterMessageId = messages.last(where: { $0.role == .user })?.id
+                }
+                if current.unread { await session.markRead(current) }
+#if DEBUG
+                // Profile parity screenshots without automating a tap through the
+                // animated island/header transition.
+                if ProcessInfo.processInfo.arguments.contains("-open-profile") { showingProfile = true }
+                // `-open-computer` opens the watch-only panel for the preview
+                // harness, so each deterministic computer state can be captured
+                // without a paired computer or credentials.
+                if ProcessInfo.processInfo.arguments.contains("-open-computer"), case .bot = current {
+                    showingComputer = true
+                }
+#endif
+            }
+            .task(id: "\(threadId)|reconstructed-activity") {
+                guard case let .bot(bot) = current else { return }
+                while !Task.isCancelled {
+                    await session.refreshReconstructedActivity(for: bot)
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                }
+            }
+            .onChange(of: current.unread) { _, unread in
+                // A message can arrive while this chat is already on screen. The
+                // initial task above will not run again, so clear that new unread
+                // bit here rather than leaving a badge on an open conversation.
+                if unread { Task { await session.markRead(current) } }
+            }
+            .onChange(of: session.authoritativeHydrationRevision) { _, _ in
+                // Only a completed full hydrate can retire notices that are no
+                // longer represented by the server transcript. Resumed SSE
+                // reconnects leave this revision alone, preserving local notices.
+                reconcilePendingQueue(in: messages, authoritativeRefresh: true)
+            }
+            .onDisappear {
+                dictation.stop()
+                if NotificationCoordinator.shared.foregroundThreadId == threadId {
+                    session.setForegroundThread(nil)
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active { dictation.stop() }
+            }
+            .onChange(of: showingComputer) { _, shown in
+                if shown { dictation.stop() }
+            }
+            .onChange(of: showingTasks) { _, shown in
+                if shown { dictation.stop() }
+            }
+            .onChange(of: showingProfile) { _, shown in
+                if shown { dictation.stop() }
+            }
+            .onChange(of: groupProfileRoom) { _, room in
+                if room != nil { dictation.stop() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { note in
+                let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey]
+                let value = (raw as? NSNumber)?.uintValue ?? (raw as? UInt)
+                if value == AVAudioSession.InterruptionType.began.rawValue {
+                    dictation.stop()
+                }
+            }
+            .onChange(of: dictation.transcript) { _, spoken in
+                // Always join against the text frozen at capture start. A newer
+                // partial then replaces the older partial instead of duplicating it.
+                draft = Dictation.draft(base: dictation.base, transcript: spoken)
+            }
+            .onChange(of: dictation.isListening) { _, listening in
+                if listening { composerFocused = false }
+            }
+    }
+
+    private var chatNavigation: some View {
+        chatCanvas
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationBarBackButtonHidden(true)
+            .background(VBotSurface.background.ignoresSafeArea(.container))
+            .background {
+                InteractivePopGestureEnabler()
+                    .frame(width: 0, height: 0)
+            }
+            .conversationTypography(ConversationTypography(
+                size: selectedConversationTextSize,
+                dynamicTypeSize: dynamicTypeSize
+            ))
+            .navigationDestination(isPresented: $showingComputer) {
+                if case let .bot(bot) = current { ComputerView(bot: bot) }
+            }
+            .sheet(isPresented: $showingModelPicker) {
+                if case let .bot(bot) = current {
+                    ChatModelPickerSheet(bot: bot)
+                        .environmentObject(session)
+                        .presentationDetents([.medium, .large])
+                }
+            }
+            .navigationDestination(item: $commRoom) { room in
+                ChatView(chat: .room(room))
+            }
+            .navigationDestination(item: $groupProfileRoom) { room in
+                GroupProfileView(room: room)
+            }
+    }
+
+    /// Full-height stack, then composer as a bottom safe-area inset.
+    /// Putting the inset on the ScrollView itself sized the transcript
+    /// to its content, so a short chat left the composer floating in the
+    /// middle. The outer frame is forced to fill, then the inset shrinks
+    /// it for the composer *and* the keyboard. `.ignoresSafeArea()` on
+    /// the canvas must stay `.container` so it never eats the keyboard.
+    private var chatCanvas: some View {
+        VStack(spacing: 0) {
+            transcriptPane
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .top) { chatTopChrome }
@@ -314,141 +282,245 @@ struct ChatView: View {
                 session.stagedShareImageData = nil
             }
         }
-        .toolbar(.hidden, for: .navigationBar)
-        .navigationBarBackButtonHidden(true)
-        .background(VBotSurface.background.ignoresSafeArea(.container))
-        .background {
-            InteractivePopGestureEnabler()
-                .frame(width: 0, height: 0)
+    }
+
+    private var transcriptPane: some View {
+        ScrollViewReader { proxy in
+            applyingTranscriptScrollEffects(
+                to: transcriptScrollView(proxy: proxy),
+                proxy: proxy
+            )
         }
-        .conversationTypography(ConversationTypography(
-            size: selectedConversationTextSize,
-            dynamicTypeSize: dynamicTypeSize
+        .id(threadId)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func transcriptScrollView(proxy: ScrollViewProxy) -> some View {
+        ScrollView {
+            transcriptStack(proxy: proxy)
+        }
+        // The transcript scrolls beneath the floating header chrome.
+        .contentMargins(.top, 56, for: .scrollContent)
+        .scrollClipDisabled()
+        .scrollDismissesKeyboard(.interactively)
+        // A conversation grows from the bottom: a transcript shorter
+        // than the screen rests at the bottom, and opening a chat
+        // starts on the newest message rather than the oldest.
+        .defaultScrollAnchor(.bottom)
+        .modifier(ChatFollowMonitor(
+            followingLatest: $followingLatest,
+            lastDistanceFromBottom: $lastDistanceFromBottom,
+            viewportHeight: $viewportHeight
         ))
-        .navigationDestination(isPresented: $showingComputer) {
-            if case let .bot(bot) = current { ComputerView(bot: bot) }
+    }
+
+    private func transcriptStack(proxy: ScrollViewProxy) -> some View {
+        // Read the transcript once for this render. Pagination changes the
+        // array as a unit; repeatedly reaching through ObservableObject for
+        // every row only recomputes the same value.
+        let transcript = messages
+        // VStack, not LazyVStack. A lazy stack does not know how
+        // tall it is until its rows have been built, so
+        // `.defaultScrollAnchor(.bottom)` anchors against an
+        // estimate and the chat opens somewhere in the middle of
+        // the conversation. Building all of it up front makes the
+        // height exact and the anchor land on the newest message.
+        // A thread holds 50 messages until you ask for more, so
+        // there is nothing here worth being lazy about.
+        return VStack(alignment: .leading, spacing: 10) {
+            if session.state.hasMore[threadId] == true {
+                Button("Load earlier messages") {
+                    // keep the reader where they were: after older
+                    // messages are prepended, sit back on the one
+                    // that used to be at the top
+                    let anchor = transcript.first?.id
+                    Task {
+                        await session.loadOlder(threadId: threadId)
+                        if let anchor { proxy.scrollTo(anchor, anchor: .top) }
+                    }
+                }
+                .font(.footnote)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+
+            ForEach(transcriptRows(in: transcript)) { row in
+                transcriptRow(row, in: transcript)
+            }
+
+            ChatLiveTail(
+                liveText: presentedLiveText,
+                showWorking: current.busy
+                    || !(session.state.reasoning[threadId] ?? "").isEmpty,
+                tintColor: streamingTintColor,
+                speaker: streamingSpeaker,
+                reduceMotion: reduceMotion,
+                accessibilityLabel: streamingAccessibilityLabel,
+                chat: current,
+                speakerBotId: workingBotId
+            )
         }
-        .sheet(isPresented: $showingModelPicker) {
-            if case let .bot(bot) = current {
-                ChatModelPickerSheet(bot: bot)
-                    .environmentObject(session)
-                    .presentationDetents([.medium, .large])
+        .background(alignment: .bottom) {
+            ChatScrollOffsetReader()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func transcriptRow(_ row: ChatTranscriptRow, in transcript: [Message]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // a gap in time is worth marking; a timestamp
+            // on every message is just noise
+            if !row.isRedundantCommNarration,
+               startsANewStretch(at: row.startIndex, in: transcript) {
+                Text(RelativeStamp.separator(row.firstMessage.date))
+                    .font(chatTypography.compact)
+                    .foregroundStyle(Color.secondary.opacity(0.58))
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 14)
+                    .padding(.bottom, 6)
+            }
+            if showsNewDivider(before: row, in: transcript) {
+                NewMessagesDivider()
+            }
+            switch row.segment {
+            case .message(let message):
+                if row.isRedundantCommNarration {
+                    // Keep the persisted message and its
+                    // scroll identity, but let the comm
+                    // activity row carry the visible and
+                    // accessible handoff affordance.
+                    Color.clear
+                        .frame(width: 0, height: 0)
+                        .accessibilityHidden(true)
+                } else {
+                    MessageRow(
+                        chat: current,
+                        message: message,
+                        endsRun: endsRun(at: row.startIndex, in: transcript),
+                        showsSpeaker: message.role != .user
+                            && startsSpeakerRun(at: row.startIndex, in: transcript),
+                        onOpenComm: { groupId in
+                            commRoom = session.state.rooms.first { $0.id == groupId }
+                        },
+                        onReply: { message in
+                            replyingTo = message
+                            composerFocused = true
+                        }
+                    )
+                }
+            case .toolRun(let run):
+                ToolRunDisclosure(
+                    run: run,
+                    isExpanded: ToolRunGrouping.isExpanded(
+                        run,
+                        opened: openedToolRuns,
+                        closed: closedToolRuns
+                    ),
+                    onToggle: { toggleToolRun(run) }
+                )
             }
         }
-        .navigationDestination(item: $commRoom) { room in
-            ChatView(chat: .room(room))
-        }
-        .navigationDestination(item: $groupProfileRoom) { room in
-            GroupProfileView(room: room)
-        }
-        .task(id: threadId) {
-            session.setForegroundThread(threadId)
-            if newAfterMessageId == nil, current.unread {
-                newAfterMessageId = messages.last(where: { $0.role == .user })?.id
-            }
-            if current.unread { await session.markRead(current) }
-#if DEBUG
-            // Profile parity screenshots without automating a tap through the
-            // animated island/header transition.
-            if ProcessInfo.processInfo.arguments.contains("-open-profile") { showingProfile = true }
-            // `-open-computer` opens the watch-only panel for the preview
-            // harness, so each deterministic computer state can be captured
-            // without a paired computer or credentials.
-            if ProcessInfo.processInfo.arguments.contains("-open-computer"), case .bot = current {
-                showingComputer = true
-            }
-#endif
-        }
-        .task(id: "\(threadId)|reconstructed-activity") {
-            guard case let .bot(bot) = current else { return }
-            while !Task.isCancelled {
-                await session.refreshReconstructedActivity(for: bot)
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+        .id(row.id)
+        .overlay(alignment: .top) {
+            // Extra ids for chips absorbed into the run.
+            // The first id is the row itself, so search
+            // to any step still lands on this disclosure.
+            if case .toolRun(let run) = row.segment {
+                VStack(spacing: 0) {
+                    ForEach(Array(run.messageIds.dropFirst()), id: \.self) { id in
+                        Color.clear
+                            .frame(height: 1)
+                            .id(id)
+                    }
+                }
+                .frame(maxHeight: 1, alignment: .top)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
             }
         }
-        .onChange(of: current.unread) { _, unread in
-            // A message can arrive while this chat is already on screen. The
-            // initial task above will not run again, so clear that new unread
-            // bit here rather than leaving a badge on an open conversation.
-            if unread { Task { await session.markRead(current) } }
-        }
-        .onChange(of: session.authoritativeHydrationRevision) { _, _ in
-            // Only a completed full hydrate can retire notices that are no
-            // longer represented by the server transcript. Resumed SSE
-            // reconnects leave this revision alone, preserving local notices.
-            reconcilePendingQueue(in: messages, authoritativeRefresh: true)
-        }
-        .onDisappear {
-            dictation.stop()
-            if NotificationCoordinator.shared.foregroundThreadId == threadId {
-                session.setForegroundThread(nil)
+    }
+
+    private func applyingTranscriptScrollEffects<Content: View>(
+        to content: Content,
+        proxy: ScrollViewProxy
+    ) -> some View {
+        applyingTranscriptFocusEffects(
+            to: applyingTranscriptFollowEffects(to: content, proxy: proxy),
+            proxy: proxy
+        )
+    }
+
+    private func applyingTranscriptFollowEffects<Content: View>(
+        to content: Content,
+        proxy: ScrollViewProxy
+    ) -> some View {
+        content
+            .onChange(of: messages.last?.id) { _, _ in
+                reconcilePendingQueue(in: messages)
+                guard let last = messages.last else { return }
+                if last.role != .user, last.kind == .text || last.kind == .options {
+                    SoundEffects.playReceived()
+                    Haptics.impact(.light)
+                }
+                scrollToLatest(proxy)
             }
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase != .active { dictation.stop() }
-        }
-        .onChange(of: showingComputer) { _, shown in
-            if shown { dictation.stop() }
-        }
-        .onChange(of: showingTasks) { _, shown in
-            if shown { dictation.stop() }
-        }
-        .onChange(of: showingProfile) { _, shown in
-            if shown { dictation.stop() }
-        }
-        .onChange(of: groupProfileRoom) { _, room in
-            if room != nil { dictation.stop() }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { note in
-            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey]
-            let value = (raw as? NSNumber)?.uintValue ?? (raw as? UInt)
-            if value == AVAudioSession.InterruptionType.began.rawValue {
-                dictation.stop()
+            .onChange(of: messages.last?.text) { _, _ in
+                scrollToLatest(proxy, animated: false)
             }
-        }
-        .onChange(of: dictation.transcript) { _, spoken in
-            // Always join against the text frozen at capture start. A newer
-            // partial then replaces the older partial instead of duplicating it.
-            draft = Dictation.draft(base: dictation.base, transcript: spoken)
-        }
-        .onChange(of: dictation.isListening) { _, listening in
-            if listening { composerFocused = false }
-        }
-        .sheet(isPresented: $showingTasks) {
-            if case let .bot(bot) = current { TaskManagerView(bot: bot) }
-        }
-        .sheet(isPresented: $showingProfile) {
-            if case let .bot(bot) = current { AgentProfileView(bot: bot) }
-        }
-        .sheet(item: $shareFile) { file in
-            ActivityShareSheet(items: [file.url])
-        }
-        .fileImporter(
-            isPresented: $showingFileImporter,
-            allowedContentTypes: [.image],
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case let .success(urls):
-                Task { await importFiles(urls) }
-            case let .failure(error):
-                attachmentError = error.localizedDescription
+            .onChange(of: presentedLiveText?.count ?? 0) { _, length in
+                guard length > 0 else { return }
+                scrollToLatest(proxy, animated: false)
             }
-        }
-        .sheet(isPresented: $showingCamera) {
-            CameraAttachmentPicker { image in
-                showingCamera = false
-                addCameraImage(image)
-            } onCancel: {
-                showingCamera = false
+            .onChange(of: current.busy) { _, _ in
+                announceStreamPhase()
+                scrollToLatest(proxy)
             }
-            .ignoresSafeArea()
-        }
-        .onChange(of: photoItems) { _, items in
-            guard !items.isEmpty else { return }
-            photoItems = []
-            Task { await importPhotos(items) }
-        }
+            .onChange(of: threadId) { _, _ in
+                followingLatest = true
+                lastDistanceFromBottom = 0
+                streamA11yPhase = .idle
+            }
+            .onAppear { announceStreamPhase() }
+            .onChange(of: presentedLiveText) { _, _ in
+                announceStreamPhase()
+            }
+    }
+
+    private func applyingTranscriptFocusEffects<Content: View>(
+        to content: Content,
+        proxy: ScrollViewProxy
+    ) -> some View {
+        content
+            .onChange(of: composerFocused) { _, _ in
+                scrollToLatest(proxy)
+            }
+            .onChange(of: draft.isEmpty) { _, _ in
+                scrollToLatest(proxy)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { _ in
+                scrollToLatest(proxy, animated: false)
+            }
+            .onChange(of: session.focusedMessageId) { _, messageId in
+                guard let messageId,
+                      messages.contains(where: { $0.id == messageId })
+                else { return }
+                if reduceMotion {
+                    proxy.scrollTo(messageId, anchor: .center)
+                } else {
+                    withAnimation { proxy.scrollTo(messageId, anchor: .center) }
+                }
+                session.consumeFocus(messageId)
+            }
+            .task {
+                guard let messageId = session.focusedMessageId,
+                      messages.contains(where: { $0.id == messageId })
+                else { return }
+                proxy.scrollTo(messageId, anchor: .center)
+                session.consumeFocus(messageId)
+            }
     }
 
     private var selectedConversationTextSize: ConversationTextSize {
@@ -943,6 +1015,33 @@ struct ChatView: View {
         return (bot.name, bot.color)
     }
 
+    private var presentedLiveText: String? {
+        MarkdownReveal.visiblePrefix(session.state.streaming[threadId] ?? "")
+    }
+
+    private var streamingAccessibilityLabel: String {
+        let name = streamingSpeaker?.name ?? current.name
+        if presentedLiveText?.isEmpty == false {
+            return "\(name) is writing"
+        }
+        return "\(name) is working"
+    }
+
+    private func announceStreamPhase() {
+        let next = StreamAccessibility.phase(
+            isBusy: current.busy || !(session.state.reasoning[threadId] ?? "").isEmpty,
+            hasVisibleText: presentedLiveText?.isEmpty == false
+        )
+        let announcement = StreamAccessibility.announcement(
+            from: streamA11yPhase,
+            to: next,
+            speaker: streamingSpeaker?.name ?? current.name
+        )
+        streamA11yPhase = next
+        guard let announcement else { return }
+        UIAccessibility.post(notification: .announcement, argument: announcement)
+    }
+
     private var streamingTintColor: String {
         streamingSpeaker?.color ?? current.color
     }
@@ -1019,7 +1118,8 @@ struct ChatView: View {
     }
 
     private func scrollToLatest(_ proxy: ScrollViewProxy, animated: Bool = true) {
-        let streaming = session.state.streaming[threadId] ?? ""
+        guard ChatFollow.shouldScrollToLatest(following: followingLatest) else { return }
+        let streaming = presentedLiveText ?? ""
         let thinking = session.state.reasoning[threadId] ?? ""
         let target: String
         if current.busy || !streaming.isEmpty || !thinking.isEmpty {
@@ -1038,7 +1138,6 @@ struct ChatView: View {
         }
         Task { @MainActor in
             scroll(proxy)
-            // Keyboard, chips, and safe-area inset settle after the first pass.
             try? await Task.sleep(nanoseconds: 50_000_000)
             scroll(proxy)
             try? await Task.sleep(nanoseconds: 120_000_000)
@@ -2732,6 +2831,7 @@ struct StreamingBubble: View {
     let text: String?
     var color: String = "blue"
     var speaker: (name: String, color: String)?
+    var reduceMotion: Bool = false
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 0) {
@@ -2742,14 +2842,7 @@ struct StreamingBubble: View {
                         .foregroundStyle(Color.primary)
                 }
                 if let text, !text.isEmpty {
-                    // Same renderer as the settled bubble, for the same
-                    // reason as the padding: a live reply showing `**bold**`
-                    // that snaps to bold on arrival is the message jumping,
-                    // just in a different dimension. The parser tolerates the
-                    // half-finished markdown this is always holding — an
-                    // unclosed fence renders as code, an unclosed link as the
-                    // characters typed so far.
-                    MarkdownText(source: text, caret: true)
+                    MarkdownText(source: text, caret: !reduceMotion)
                         .foregroundStyle(Color.primary)
                 }
             }
@@ -2764,6 +2857,109 @@ struct StreamingBubble: View {
         // No `.textSelection` on purpose: selecting text that is still growing
         // fights the reader, and the settled bubble a frame later is
         // selectable anyway.
+    }
+}
+
+/// Live reply vs working indicator. Own typed body so the transcript
+/// stack does not type-check this branch together with every message row.
+private struct ChatLiveTail: View {
+    let liveText: String?
+    let showWorking: Bool
+    let tintColor: String
+    let speaker: (name: String, color: String)?
+    let reduceMotion: Bool
+    let accessibilityLabel: String
+    let chat: Chat
+    let speakerBotId: String?
+
+    var body: some View {
+        // The reply as it is typed. Coalesced deltas and a
+        // stable markdown prefix keep the bubble from
+        // jittering token-by-token; an empty prefix while
+        // busy is the working indicator, not a malformed
+        // one-character bubble.
+        if let live = liveText, !live.isEmpty {
+            StreamingBubble(
+                text: live,
+                color: tintColor,
+                speaker: speaker,
+                reduceMotion: reduceMotion
+            )
+            .id(ChatView.liveBubbleId)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityLabel)
+        } else if showWorking {
+            WorkingTypingIndicatorView(
+                chat: chat,
+                speakerBotId: speakerBotId
+            )
+            .id(ChatView.liveBubbleId)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityLabel)
+        }
+    }
+}
+
+private struct ChatFollowMonitor: ViewModifier {
+    @Binding var followingLatest: Bool
+    @Binding var lastDistanceFromBottom: CGFloat
+    @Binding var viewportHeight: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .coordinateSpace(name: "chat-scroll")
+            .background { ChatViewportHeightReader() }
+            .onPreferenceChange(ChatViewportHeightKey.self) { height in
+                viewportHeight = height
+            }
+            .onPreferenceChange(ChatContentMaxYKey.self) { maxY in
+                guard viewportHeight > 1 else { return }
+                let distance = max(0, maxY - viewportHeight)
+                followingLatest = ChatFollow.updatedFollowing(
+                    following: followingLatest,
+                    previousDistanceFromBottom: lastDistanceFromBottom,
+                    distanceFromBottom: distance
+                )
+                lastDistanceFromBottom = distance
+            }
+    }
+}
+
+private struct ChatContentMaxYKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct ChatViewportHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct ChatViewportHeightReader: View {
+    var body: some View {
+        GeometryReader { viewport in
+            Color.clear.preference(
+                key: ChatViewportHeightKey.self,
+                value: viewport.size.height
+            )
+        }
+    }
+}
+
+private struct ChatScrollOffsetReader: View {
+    var body: some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: ChatContentMaxYKey.self,
+                value: geo.frame(in: .named("chat-scroll")).maxY
+            )
+        }
+        .frame(height: 0)
+        .accessibilityHidden(true)
     }
 }
 

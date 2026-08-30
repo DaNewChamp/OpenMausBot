@@ -233,6 +233,13 @@ Intentionally refused:
 `CompanionCore` contains the wire models, client, raw-byte SSE parser, and pure
 state fold. The SwiftUI target owns lifecycle and presentation only.
 
+The live reply is presentation, not a second fold. Token deltas are buffered
+on a ~32ms cadence before `@Published` state updates, incomplete markdown is
+held behind a working indicator until a coherent prefix exists, and a settled
+assistant message replaces the in-progress tail. Autoscroll follows only while
+the reader is already near the bottom. VoiceOver announces working and finished
+phases, not each token.
+
 On connection, the server sends a `hello` frame containing a cursor and whether
 the requested gap was replayed. The client:
 

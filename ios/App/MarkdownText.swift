@@ -20,12 +20,13 @@ struct MarkdownText: View {
     /// moment the reply ends in a list item.
     var caret: Bool = false
     @Environment(\.conversationTypography) private var typography
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let blocks = Markdown.blocks(source)
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { item in
-                view(for: item.element, tail: caret && item.offset == blocks.count - 1)
+                view(for: item.element, tail: caret && !reduceMotion && item.offset == blocks.count - 1)
             }
         }
     }
