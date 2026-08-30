@@ -11,6 +11,7 @@ import { EngineSetup, needsCli, needsSignIn } from "./EngineSetup";
 import { EngineGroupLabel } from "./EngineGroupLabel";
 import { cn } from "@/lib/cn";
 import { COMPACT_SQUARE } from "@/lib/compact-chip";
+import { isVBotReconstructedActive, vbotProviderInstances } from "@/lib/vbot-engine";
 
 type ModelOption = InstanceInfo["models"]["options"][number];
 const COMPACT_MODEL_COUNT = 5;
@@ -104,7 +105,7 @@ export function ModelPicker({
   contained?: boolean;
   label?: ReactNode;
 }) {
-  const { state, dispatch, refreshInstances } = useStore();
+  const { state, dispatch, refreshInstances, refreshEngineSync } = useStore();
   const [open, setOpen] = useState(false);
   const [railId, setRailId] = useState<string | null>(null);
   const [pane, setPane] = useState<"main" | "custom">("main");
@@ -113,13 +114,18 @@ export function ModelPicker({
   const rootRef = useRef<HTMLDivElement>(null);
 
   const selection = bot.modelSelection;
-  const active = state.instances.find((instance) => instance.instanceId === selection.instanceId);
+  const reconstructedActive = isVBotReconstructedActive(state.engineSync);
+  const pickerInstances = reconstructedActive ? vbotProviderInstances(state.engineSync!) : state.instances;
+  const active = pickerInstances.find((instance) => instance.instanceId === selection.instanceId);
   const railInstance =
-    state.instances.find((instance) => instance.instanceId === (railId ?? selection.instanceId)) ?? state.instances[0];
+    pickerInstances.find((instance) => instance.instanceId === (railId ?? selection.instanceId)) ?? pickerInstances[0];
+  const engineSelectionBlocked = state.engineSync?.primaryEngine === "grokReconstructed" && !reconstructedActive;
 
   useEffect(() => {
-    if (open) void refreshInstances();
-  }, [open, refreshInstances]);
+    if (!open) return;
+    void refreshInstances();
+    if (state.engineSync?.primaryEngine === "grokReconstructed") void refreshEngineSync();
+  }, [open, refreshInstances, refreshEngineSync, state.engineSync?.primaryEngine]);
 
   useEffect(() => {
     if (!open) return;
@@ -187,11 +193,11 @@ export function ModelPicker({
   const shownOfficial = query ? filteredOfficial : showAll ? official : compactOfficial;
   const filteredCustom = filterCustomModels(custom, query);
   const { pinned, rest } = partitionCustomModels(filteredCustom);
-  const blocked = railInstance
+  const blocked = engineSelectionBlocked || (railInstance
     ? pane === "custom"
       ? needsCli(railInstance)
       : needsCli(railInstance) || needsSignIn(railInstance)
-    : false;
+    : false);
   const canOpenCustom = Boolean(railInstance && !needsCli(railInstance));
   const canReturnToOfficial = official.length > 0 && !isCustomOnly(railInstance);
 
@@ -212,7 +218,7 @@ export function ModelPicker({
         setRailId(selection.instanceId);
         setOpen((wasOpen) => {
           const next = !wasOpen;
-          if (next) openFor(state.instances.find((instance) => instance.instanceId === selection.instanceId));
+          if (next) openFor(pickerInstances.find((instance) => instance.instanceId === selection.instanceId));
           return next;
         });
       }}
@@ -267,7 +273,7 @@ export function ModelPicker({
         >
           <div className="flex w-14 shrink-0 flex-col gap-1 overflow-y-auto border-r border-hairline/40 bg-panel p-2">
             {(() => {
-              const { subscription, custom: local } = splitEngineRail(state.instances);
+              const { subscription, custom: local } = splitEngineRail(pickerInstances);
               const railButton = (instance: InstanceInfo) => {
                 const selected = instance.instanceId === railInstance?.instanceId;
                 const attention = needsCli(instance) || needsSignIn(instance);
@@ -343,12 +349,23 @@ export function ModelPicker({
 
                 {blocked ? (
                   <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-1">
-                    <EngineSetup instance={railInstance} intent={pane === "custom" ? "inject" : "cloud"} />
-                    <p className="mt-2 text-center text-[11.5px] text-ink-secondary/70">
-                      {pane === "main" && official.length > 0
-                        ? `${official.length} ${official.length === 1 ? "model" : "models"} will appear after setup.`
-                        : "Local models will appear as soon as the agent is installed."}
-                    </p>
+                    {engineSelectionBlocked ? (
+                      <div className="rounded-xl border border-warning/25 bg-warning/10 p-3 text-[12.5px] leading-relaxed text-warning">
+                        Grok Reconstructed is selected but unavailable. Start its local desktop gateway, then reopen this picker.
+                        {state.engineSync?.fallbackReason && (
+                          <div className="mt-1 text-[11.5px] text-warning/80">{state.engineSync.fallbackReason}</div>
+                        )}
+                      </div>
+                    ) : railInstance ? (
+                      <>
+                        <EngineSetup instance={railInstance} intent={pane === "custom" ? "inject" : "cloud"} />
+                        <p className="mt-2 text-center text-[11.5px] text-ink-secondary/70">
+                          {pane === "main" && official.length > 0
+                            ? `${official.length} ${official.length === 1 ? "model" : "models"} will appear after setup.`
+                            : "Local models will appear as soon as the agent is installed."}
+                        </p>
+                      </>
+                    ) : null}
                   </div>
                 ) : (
                   <>

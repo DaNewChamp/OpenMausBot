@@ -128,6 +128,7 @@ export function ProviderMark({ driverKind, size, className }: IconProps & { driv
   switch (driverKind) {
     case "grok":
     case "grokAgent":
+    case "grokReconstructed":
       return <GrokMark size={size} className={className} />;
     case "claudeAgent":
       return <ClaudeMark size={size} className={className} />;

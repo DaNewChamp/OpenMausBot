@@ -12,6 +12,7 @@ import { EngineGroupLabel } from "./EngineGroupLabel";
 import { ProviderMark } from "./ProviderIcons";
 import { splitEngineRail } from "@/lib/engine-rail";
 import { cn } from "@/lib/cn";
+import type { VBotEngineStatus } from "@/lib/vbot-engine";
 
 interface ProbeResult {
   ok: boolean;
@@ -280,6 +281,79 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
   );
 }
 
+function VBotEngineChoice() {
+  const { state, refreshEngineSync, setPrimaryEngine } = useStore();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const choose = (engine: VBotEngineStatus) => {
+    if (saving || engine.state !== "available" || state.engineSync?.primaryEngine === engine.id) return;
+    setSaving(true);
+    setError(null);
+    void setPrimaryEngine(engine.id)
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Could not change the V Bot engine."))
+      .finally(() => setSaving(false));
+  };
+
+  return (
+    <section className="flex flex-col gap-2.5 rounded-xl border border-hairline/40 bg-control/25 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <EngineGroupLabel className="p-0">V Bot desktop engine</EngineGroupLabel>
+        <button
+          type="button"
+          onClick={() => void refreshEngineSync().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Engine sync is unavailable."))}
+          disabled={state.engineSyncLoading || saving}
+          className="text-[11.5px] text-accent hover:underline disabled:opacity-50"
+        >
+          {state.engineSyncLoading ? "Checking…" : "Check again"}
+        </button>
+      </div>
+      {state.engineSync ? (
+        <div role="radiogroup" aria-label="V Bot desktop engine" className="flex flex-col gap-1.5">
+          {state.engineSync.engines.map((engine) => {
+            const selected = state.engineSync?.primaryEngine === engine.id;
+            const unavailable = engine.state !== "available";
+            return (
+              <button
+                type="button"
+                key={engine.id}
+                role="radio"
+                aria-checked={selected}
+                disabled={unavailable || saving}
+                onClick={() => choose(engine)}
+                className={cn(
+                  "flex items-start gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors",
+                  selected ? "border-accent/60 bg-accent/10" : "border-hairline/30 bg-inset/30 hover:bg-inset/60",
+                  unavailable && "cursor-not-allowed opacity-45",
+                )}
+              >
+                <span className={cn("mt-1 size-2 shrink-0 rounded-full", selected ? "bg-accent" : "bg-ink-secondary/50")} />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-2 text-[13px] font-medium text-ink">
+                    {engine.displayName}
+                    {selected && <span className="text-[10.5px] font-normal text-accent">Selected</span>}
+                  </span>
+                  <span className="mt-0.5 block text-[11.5px] leading-relaxed text-ink-secondary">
+                    {unavailable ? engine.reason ?? "Unavailable on this computer." : engine.id === "grokReconstructed" ? "Use the local reconstructed desktop gateway." : "Use the OpenMaus control plane (default)."}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="text-[12px] text-ink-secondary">Engine status is not available yet.</div>
+      )}
+      {state.engineSync?.fallback && state.engineSync.fallbackReason && (
+        <div className="rounded-lg bg-warning/10 px-2.5 py-2 text-[11.5px] leading-relaxed text-warning">
+          Grok Reconstructed is selected but unavailable; actions stay blocked instead of silently using OpenMaus. {state.engineSync.fallbackReason}
+        </div>
+      )}
+      {error && <div role="alert" className="text-[12px] text-danger">{error}</div>}
+    </section>
+  );
+}
+
 export function EnginesSettings() {
   const { state } = useStore();
   // every KNOWN-driver instance has cliDefault; unknown-driver shadows have
@@ -289,6 +363,7 @@ export function EnginesSettings() {
 
   return (
     <div className="flex flex-col gap-5">
+      <VBotEngineChoice />
       {rows.length === 0 && (
         <div className="text-[13px] text-ink-secondary">No CLI engines detected yet.</div>
       )}

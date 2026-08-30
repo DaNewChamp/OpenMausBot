@@ -25,6 +25,14 @@ import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import { skillRecorderEnabled } from "@/lib/feature-flags";
 import { desktopDemoFixture, isDesktopDemoMode } from "@/lib/desktop-demo";
 import { loadRightRailOpen } from "@/lib/shell-layout";
+import {
+  foldVBotEngineSync,
+  parseVBotEngineSync,
+  reconstructedActionUnavailable,
+  vbotMutationPath,
+  type VBotEngineSync,
+  type VBotPrimaryEngine,
+} from "@/lib/vbot-engine";
 
 export type { MausColor } from "@/lib/mascot";
 
@@ -356,6 +364,10 @@ export interface AppState {
   groups: Group[];
   instances: InstanceInfo[];
   config: ConfigStatus | null;
+  /** Sanitized desktop engine choice and host capability snapshot. */
+  engineSync: VBotEngineSync | null;
+  engineSyncLoading: boolean;
+  engineSyncError: string | null;
   /** selected chat — a bot id OR a group id */
   selectedId: string;
   activeView: "chat" | "team-map" | "routines" | "skill-recorder";
@@ -447,6 +459,8 @@ export type Action =
   | { type: "toggleReaction"; threadId: string; messageId: string; emoji: string }
   | { type: "interruptGroup"; groupId: string }
   | { type: "instances"; instances: InstanceInfo[] }
+  | { type: "engineSync"; sync: VBotEngineSync }
+  | { type: "engineSyncError"; message: string | null }
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
   | { type: "send"; botId: string; text: string; replyToId?: string }
@@ -568,17 +582,35 @@ function dismissOnboardingCard(state: AppState, botId: string): AppState {
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
-      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
+      const folded = state.engineSync
+        ? foldVBotEngineSync(state.engineSync, action.bots, action.groups)
+        : { bots: action.bots, groups: action.groups };
+      const known = (id: string) => folded.bots.some((b) => b.id === id) || folded.groups.some((g) => g.id === id);
       const selectedId =
-        state.selectedId && known(state.selectedId) ? state.selectedId : (action.bots[0]?.id ?? "");
+        state.selectedId && known(state.selectedId) ? state.selectedId : (folded.bots[0]?.id ?? folded.groups[0]?.id ?? "");
       return {
         ...state,
-        bots: action.bots,
-        groups: action.groups,
+        bots: folded.bots,
+        groups: folded.groups,
         computerControl: action.computerControl,
         selectedId,
       };
     }
+    case "engineSync": {
+      const folded = foldVBotEngineSync(action.sync, state.bots, state.groups);
+      const known = (id: string) => folded.bots.some((b) => b.id === id) || folded.groups.some((g) => g.id === id);
+      return {
+        ...state,
+        engineSync: action.sync,
+        engineSyncLoading: false,
+        engineSyncError: null,
+        bots: folded.bots,
+        groups: folded.groups,
+        selectedId: state.selectedId && known(state.selectedId) ? state.selectedId : (folded.bots[0]?.id ?? folded.groups[0]?.id ?? ""),
+      };
+    }
+    case "engineSyncError":
+      return { ...state, engineSyncLoading: false, engineSyncError: action.message };
     case "showRoutines":
       return {
         ...state,
@@ -1070,6 +1102,9 @@ export const initialState: AppState = {
   groups: [],
   instances: [],
   config: null,
+  engineSync: null,
+  engineSyncLoading: true,
+  engineSyncError: null,
   selectedId: "",
   activeView: "chat",
   routines: [],
@@ -1129,6 +1164,10 @@ const StoreContext = createContext<{
   flushBotPatches: (botId: string) => Promise<void>;
   /** Re-fetch engine availability — after an install, without a restart. */
   refreshInstances: () => Promise<void>;
+  /** Refresh the selected desktop engine and its sanitized roster snapshot. */
+  refreshEngineSync: () => Promise<void>;
+  /** Persist the desktop engine choice and fold its returned snapshot. */
+  setPrimaryEngine: (engine: VBotPrimaryEngine) => Promise<void>;
 } | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
@@ -1213,6 +1252,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => botPatchQueue.dispose();
   }, [botPatchQueue]);
 
+  const applyEngineSyncResponse = useCallback((body: unknown): VBotEngineSync => {
+    const sync = parseVBotEngineSync(body);
+    if (!sync) throw new Error("Engine sync returned an invalid public snapshot.");
+    rawDispatch({ type: "engineSync", sync });
+    return sync;
+  }, []);
+
+  const refreshEngineSync = useCallback(async () => {
+    applyEngineSyncResponse(await api("/api/vbot/engine-sync"));
+  }, [applyEngineSyncResponse]);
+
+  const setPrimaryEngine = useCallback(async (engine: VBotPrimaryEngine) => {
+    applyEngineSyncResponse(
+      await api("/api/vbot/primary-engine", {
+        method: "PATCH",
+        body: JSON.stringify({ primaryEngine: engine }),
+      }),
+    );
+    // The sync envelope carries only a compact OpenMaus roster. Rehydrate
+    // after switching back so full profiles, transcripts, and real thread ids
+    // replace any reconstructed projection.
+    if (engine === "openmaus") {
+      const { bots, groups, computerControl } = await api("/api/bots");
+      rawDispatch({ type: "hydrate", bots, groups: groups ?? [], computerControl: computerControl ?? {} });
+    }
+  }, [applyEngineSyncResponse]);
+
   const dispatch = useMemo(() => {
     const showError = (e: unknown) => {
       rawDispatch({ type: "error", message: e instanceof Error ? e.message : String(e) });
@@ -1262,6 +1328,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           api(`/api/routine-runs/${action.runId}/seen`, { method: "POST" }).catch(showError);
           break;
         case "send": {
+          const sync = stateRef.current.engineSync;
+          if (sync?.primaryEngine === "grokReconstructed") {
+            const bot = stateRef.current.bots.find((candidate) => candidate.id === action.botId);
+            const reason = reconstructedActionUnavailable(sync, bot?.busy ? "steer" : "send");
+            if (reason) {
+              showError(new Error(reason));
+              break;
+            }
+            const endpoint = vbotMutationPath(action.botId, bot?.busy ? "steer" : "turns");
+            void api(endpoint, {
+              method: "POST",
+              body: JSON.stringify({ prompt: action.text }),
+            })
+              .then(() => refreshEngineSync())
+              .catch(showError);
+            break;
+          }
           // persist through the existing card route so an older server that
           // does not auto-dismiss still hides the quiz on this client
           if (quizBeforeSend) persistCard(action.botId, quizBeforeSend.id, { dismissed: true });
@@ -1427,6 +1510,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             .catch(showError);
           break;
         case "sendGroup":
+          if (stateRef.current.engineSync?.primaryEngine === "grokReconstructed") {
+            showError(new Error("Group sends are unavailable on Grok Reconstructed."));
+            break;
+          }
           api(`/api/groups/${action.groupId}/messages`, {
             method: "POST",
             body: JSON.stringify({ text: action.text, replyToId: action.replyToId }),
@@ -1447,15 +1534,50 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             body: JSON.stringify({ emoji: action.emoji, by: "user" }),
           }).catch(showError);
           break;
-        case "setModel":
+        case "setModel": {
+          const sync = stateRef.current.engineSync;
+          if (sync?.primaryEngine === "grokReconstructed") {
+            const reason = reconstructedActionUnavailable(sync, "provider");
+            if (reason) {
+              showError(new Error(reason));
+              break;
+            }
+            const provider = action.selection.instanceId;
+            const knownProvider = (sync.router ?? sync.providers)?.providers.some((candidate) => candidate.id === provider);
+            if (!knownProvider) {
+              showError(new Error("That provider is not available on Grok Reconstructed."));
+              break;
+            }
+            void api("/api/vbot/router", {
+              method: "PUT",
+              body: JSON.stringify({ provider, modelId: action.selection.model }),
+            })
+              .then(() => refreshEngineSync())
+              .catch(showError);
+            break;
+          }
           api(`/api/bots/${action.botId}`, {
             method: "PATCH",
             body: JSON.stringify({ modelSelection: action.selection }),
           }).catch(showError);
           break;
-        case "interrupt":
+        }
+        case "interrupt": {
+          const sync = stateRef.current.engineSync;
+          if (sync?.primaryEngine === "grokReconstructed") {
+            const reason = reconstructedActionUnavailable(sync, "stop");
+            if (reason) {
+              showError(new Error(reason));
+              break;
+            }
+            void api(vbotMutationPath(action.botId, "stop"), { method: "POST" })
+              .then(() => refreshEngineSync())
+              .catch(showError);
+            break;
+          }
           api(`/api/bots/${action.botId}/interrupt`, { method: "POST" }).catch(showError);
           break;
+        }
         // tasks: the server answers with the bot AND the live transcript,
         // because switching changes which conversation is on screen
         case "newTask":
@@ -1480,6 +1602,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             .catch(showError);
           break;
         case "interruptGroup":
+          if (stateRef.current.engineSync?.primaryEngine === "grokReconstructed") {
+            showError(new Error("Group stopping is unavailable on Grok Reconstructed."));
+            break;
+          }
           api(`/api/groups/${action.groupId}/interrupt`, { method: "POST" }).catch(showError);
           break;
         case "updateBot": {
@@ -1493,7 +1619,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
     return wrapped;
-  }, [botPatchQueue]);
+  }, [botPatchQueue, refreshEngineSync]);
 
   // ── initial load + SSE fold ──────────────────────────────────────────
   useEffect(() => {
@@ -1516,6 +1642,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let alive = true;
     const loadAll = () =>
       Promise.all([
+        api("/api/vbot/engine-sync")
+          .then((body) => {
+            if (!alive) return;
+            try {
+              applyEngineSyncResponse(body);
+            } catch {
+              rawDispatch({ type: "engineSyncError", message: "Engine sync returned an invalid public snapshot." });
+            }
+          })
+          .catch(() => {
+            if (alive) rawDispatch({ type: "engineSyncError", message: "Engine sync is unavailable." });
+          }),
         api("/api/bots")
           .then(({ bots, groups, computerControl }) =>
             alive && rawDispatch({
@@ -1762,7 +1900,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       clearTimeout(hydrationFallback);
       es.close();
     };
-  }, []);
+  }, [applyEngineSyncResponse]);
 
   // Re-probe the engines on demand. A CLI installed while the app is running
   // is invisible until something asks again — the setup screens expose this
@@ -1797,8 +1935,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [botPatchQueue],
   );
   const value = useMemo(
-    () => ({ state, dispatch, flushBotPatches, refreshInstances }),
-    [state, dispatch, flushBotPatches, refreshInstances],
+    () => ({ state, dispatch, flushBotPatches, refreshInstances, refreshEngineSync, setPrimaryEngine }),
+    [state, dispatch, flushBotPatches, refreshInstances, refreshEngineSync, setPrimaryEngine],
   );
   return (
     <StoreContext.Provider value={value}>
