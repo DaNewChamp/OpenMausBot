@@ -29,7 +29,7 @@ export function ActivityRun({
   if (open) {
     return (
       <div className="flex flex-col gap-1">
-        <div className="flex justify-start">
+        <div className="flex justify-center">
           <button
             type="button"
             onClick={() => setOpen(false)}
@@ -45,7 +45,7 @@ export function ActivityRun({
     );
   }
   return (
-    <div className="flex justify-start">
+    <div className="flex justify-center">
       <button
         type="button"
         onClick={() => setOpen(true)}

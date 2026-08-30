@@ -1,6 +1,6 @@
 import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, Clock, Hand, Mic, Paperclip, ShieldCheck, Square, Users, X } from "lucide-react";
+import { ArrowUp, Check, Clock, Hand, Mic, Plus, ShieldCheck, Square, Users, X } from "lucide-react";
 import { useStore, visibleMessages, type Bot, type Group, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useComposerDraft } from "@/lib/drafts";
@@ -20,6 +20,7 @@ import {
 } from "@/lib/composer-attachments";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
+import { conversationTitle } from "@/lib/model-suffix";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { ReplyQuote } from "./ReplyQuote";
@@ -493,7 +494,7 @@ export function Composer({
           notice={attachmentNotice}
           onNotice={setAttachmentNotice}
         />
-        <div className="grid grid-cols-[auto_1fr_auto] items-center gap-x-2 rounded-3xl border border-hairline/40 bg-raised/60 px-3 pb-2 pt-1">
+        <div className="grid grid-cols-[auto_1fr_auto] items-center gap-x-2 shell-composer-pill border border-hairline/30 bg-raised/50 px-2 pb-1.5 pt-1">
           <input
             ref={fileInput}
             type="file"
@@ -512,9 +513,9 @@ export function Composer({
                 onClick={() => fileInput.current?.click()}
                 aria-label="Attach a file"
                 title="Attach a file"
-                className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink"
+              className="shell-control flex shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink"
               >
-                <Paperclip size={17} />
+                <Plus size={18} />
               </button>
               {autoBot && <PermissionModeSelector bot={autoBot} onSetAuto={setAuto} />}
             </div>
@@ -614,9 +615,9 @@ export function Composer({
                   : `${busyName} is working — sends when this turn finishes`
                 : group
                   ? `Message ${group.name} — ${groupComposerHint(group, members ?? [])}`
-                  : `Message ${bot?.name ?? ""}`
+                  : `Message ${bot ? conversationTitle(bot.name, bot.modelSelection) : ""}`
           }
-          aria-label={`Message ${group ? group.name : (bot?.name ?? "")}`}
+            aria-label={`Message ${group ? group.name : (bot ? conversationTitle(bot.name, bot.modelSelection) : "")}`}
             className="col-span-full row-start-1 max-h-60 min-h-[40px] w-full resize-none self-center bg-transparent px-1 pb-0 pt-2.5 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
           />
           <div className="col-start-3 row-start-2 mt-1 flex items-center gap-1">
@@ -627,7 +628,7 @@ export function Composer({
               else if (bot) dispatch({ type: "interrupt", botId: bot.id });
             }}
             aria-label="Stop this turn"
-            className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
+            className="flex size-[var(--shell-control)] shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
             title="Stop"
           >
             <Square size={14} className="fill-current" />
@@ -638,7 +639,7 @@ export function Composer({
             onClick={toggleMic}
             aria-label={recording ? "Stop dictation" : "Start dictation"}
             className={cn(
-              "flex size-8 shrink-0 items-center justify-center rounded-full",
+              "flex size-[var(--shell-control)] shrink-0 items-center justify-center rounded-full",
               recording
                 ? "animate-pulse bg-danger/20 text-danger"
                 : "text-ink-secondary hover:bg-raised hover:text-ink",
@@ -654,7 +655,7 @@ export function Composer({
             aria-label={busy && canSteer ? "Send into the running turn" : busy ? "Queue message" : "Send message"}
             title={busy && canSteer ? "Send into the running turn" : busy ? "Sends when the current turn finishes" : "Send"}
             className={cn(
-              "flex size-8 shrink-0 items-center justify-center rounded-full text-white",
+              "flex size-[var(--shell-control)] shrink-0 items-center justify-center rounded-full text-white",
               busy && !canSteer ? "bg-raised text-ink-secondary hover:bg-raised-hover" : "bg-accent hover:brightness-110",
             )}
           >

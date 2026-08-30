@@ -262,7 +262,7 @@ function ChatMarkdownComponent({ text, streaming = false }: { text: string; stre
           },
           code({ children }: { children?: ReactNode }) {
             return (
-              <code className="rounded bg-inset px-1 py-px text-[13px]">{children}</code>
+              <code className="rounded bg-inset px-1 py-px text-[13px] text-[#ff7b8a]">{children}</code>
             );
           },
           a({ href, children }: { href?: string; children?: ReactNode }) {

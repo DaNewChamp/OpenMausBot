@@ -7,20 +7,19 @@
 import { useEffect, useRef, useState } from "react";
 import {
   CalendarDays,
-  CalendarClock,
+  ChevronsRight,
   Hand,
   Loader2,
   Maximize2,
   Monitor,
   Moon,
+  Pause,
   Plus,
   Power,
   Settings,
   Smartphone,
-  X,
 } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
-import type { Routine } from "@/lib/routines";
 import { ApiKeyRow } from "./ApiKeys";
 import { cn } from "@/lib/cn";
 import { usePageVisible } from "@/lib/page-visible";
@@ -32,6 +31,9 @@ import { LocalScreenPreview } from "./LocalScreenPreview";
 import { LinuxLocalControl } from "./LinuxLocalControl";
 import { MacLocalControl } from "./MacLocalControl";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
+import { ShellHealth } from "./ShellHealth";
+import { conversationTitle } from "@/lib/model-suffix";
+import { DESKTOP_DEMO_SCREEN_DATA_URL, isDesktopDemoMode } from "@/lib/desktop-demo";
 import {
   autoSelectsLocalComputer,
   instanceSupportsLocalComputer,
@@ -78,26 +80,6 @@ interface LocalVmStatus {
   ready: boolean;
   problem: string | null;
   viewer_url: string;
-}
-
-function routineScheduleLabel(routine: Routine) {
-  if (routine.schedule.type === "once") {
-    return new Date(routine.schedule.at).toLocaleString([], {
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  }
-  const days = routine.schedule.weekdays;
-  const cadence =
-    days.length === 7
-      ? "Every day"
-      : days.join(",") === "1,2,3,4,5"
-        ? "Weekdays"
-        : days.map((day) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ");
-  const [hour, minute] = routine.schedule.time.split(":").map(Number);
-  return `${cadence} · ${new Date(2000, 0, 1, hour, minute).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 }
 
 function nextRunLabel(at: number | null) {
@@ -219,6 +201,11 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     setVpsStatus(null);
     setLocalFrame(null);
     setError(null);
+    if (isDesktopDemoMode()) {
+      setPhase("vm");
+      setVmFrame(DESKTOP_DEMO_SCREEN_DATA_URL);
+      return;
+    }
     if (bot.computer === "off") {
       setPhase("off");
       return;
@@ -417,6 +404,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const sseFlowing = Boolean(bot.busy && live);
   const inFlight = useRef(false);
   useEffect(() => {
+    if (isDesktopDemoMode()) return;
     if (phase !== "ready" || sseFlowing || viewerOpen || !pageVisible) return;
     let alive = true;
     const shoot = async () => {
@@ -443,6 +431,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   // does not use the password-protected noVNC viewer or cloud endpoints.
   const vmInFlight = useRef(false);
   useEffect(() => {
+    if (isDesktopDemoMode()) return;
     if (phase !== "vm" || viewerOpen || !pageVisible) return;
     let alive = true;
     const shoot = async () => {
@@ -580,12 +569,12 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
 
       if (window.ogb?.desktopViewer) {
         const opened = await window.ogb.desktopViewer.open(viewerUrl, `${bot.name}'s live desktop`, bot.id);
-        if (!opened) throw new Error("OpenMausBot could not open the live desktop");
+        if (!opened) throw new Error("V Bot could not open the live desktop");
       } else if (fallbackTab) {
         fallbackTab.location.replace(viewerUrl);
       } else if (window.ogb?.openExternal) {
         const opened = await window.ogb.openExternal(viewerUrl);
-        if (!opened) throw new Error("OpenMausBot could not open the live desktop link");
+        if (!opened) throw new Error("V Bot could not open the live desktop link");
       } else if (!window.open(viewerUrl, "_blank", "noopener")) {
         throw new Error("Your browser blocked the live desktop tab");
       }
@@ -669,7 +658,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   };
 
   const replaceVpsComputer = async () => {
-    if (!window.confirm(`Replace ${bot.name}'s VPS computer with the version required by this OpenMausBot update? Files stored only inside the disposable container will be deleted.`)) return;
+    if (!window.confirm(`Replace ${bot.name}'s VPS computer with the version required by this V Bot update? Files stored only inside the disposable container will be deleted.`)) return;
     setPending("vps-replace");
     setError(null);
     try {
@@ -705,7 +694,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     starting: "Starting your bot's computer…",
     unconfigured: "No cloud computer configured",
     "vps-unconfigured": "No managed VPS computer is configured for this bot",
-    "vps-incompatible": "This VPS computer belongs to an earlier OpenMausBot version",
+    "vps-incompatible": "This VPS computer belongs to an earlier V Bot version",
     "vps-stopped": "The managed VPS computer is stopped",
     "local-unavailable": localDisabledReason ?? "Local computer control isn't ready.",
     "vm-unavailable": "The Local VM isn't available for this bot",
@@ -715,12 +704,12 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
 
   return (
     <>
-    <aside className="animate-panel-in flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel">
+    <aside className="shell-right animate-panel-in flex h-full w-[var(--shell-right-width)] shrink-0 flex-col border-l border-hairline/30 bg-panel">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3">
+      <div className="flex items-center justify-between px-3 py-2">
         <button
           onClick={() => dispatch({ type: "toggleSettings", open: true })}
-          className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
+          className="shell-control rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
           title="Bot settings"
         >
           <Settings size={18} />
@@ -753,9 +742,11 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         )}
         <button
           onClick={() => dispatch({ type: "toggleComputer", open: false })}
-          className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
+          className="shell-control rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
+          aria-label="Collapse right rail"
+          title="Collapse right rail"
         >
-          <X size={18} />
+          <ChevronsRight size={18} />
         </button>
       </div>
 
@@ -764,15 +755,9 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           <AndroidDevicePanel status={androidStatus} />
         </div>
       ) : (
-      <div className="flex-1 overflow-y-auto px-5 pb-5">
+      <div className="flex-1 overflow-y-auto px-4 pb-4">
           {/* Screen preview */}
-          <div className="mb-1.5 mt-2 flex items-center justify-between text-[13px] text-ink-secondary">
-            <span>{bot.name}'s screen</span>
-            {phase === "local" && <span className="text-[11px]">this computer</span>}
-            {phase === "vm" && <span className="text-[11px]">Local VM</span>}
-            {cloudBackend === "vps" && (phase === "ready" || phase === "starting") && <span className="text-[11px]">self-hosted VPS</span>}
-        </div>
-        <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card">
+        <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-lg bg-card">
           {frameSrc && previewOpensDesktop ? (
             <button
               type="button"
@@ -883,7 +868,10 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             </div>
           )}
         </div>
-
+        <div className="mt-1.5 mb-2 text-[12.5px] text-ink-secondary">
+          {conversationTitle(bot.name, bot.modelSelection)}'s screen
+        </div>
+        <ShellHealth bot={bot} />
         {error && (
           <div className="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">
             {error}
@@ -966,13 +954,13 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             onClick={() => void openDesktop()}
             disabled={pending === "join"}
             className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
-            title="Open the Local VM's live desktop inside OpenMausBot"
+            title="Open the Local VM's live desktop inside V Bot"
           >
             {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Monitor size={14} />}
             Open live desktop
           </button>
         )}
-        {phase === "vm" && !control.held && !control.helpReason && (
+        {phase === "vm" && !isDesktopDemoMode() && !control.held && !control.helpReason && (
           <button
             onClick={() => void openDesktop()}
             disabled={controlPending || pending === "join" || !vmViewerUrl}
@@ -983,7 +971,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             Take control
           </button>
         )}
-        {phase === "vm" && vmStatus?.mode === "per-bot" && (
+        {phase === "vm" && !isDesktopDemoMode() && vmStatus?.mode === "per-bot" && (
           <button
             onClick={() => void runVmAction("vm-delete")}
             disabled={pending !== null || bot.busy}
@@ -1041,7 +1029,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         {/* Computer source */}
           <div className="mt-4 rounded-xl bg-card p-4">
             <div className="text-[15px] font-medium text-ink">Runs on</div>
-            <div className="mt-0.5 text-[13px] text-ink-secondary">
+            <div className={cn("mt-0.5 text-[13px] text-ink-secondary", isDesktopDemoMode() && "hidden")}>
               {!bot.computer &&
                 (isLinux || !localSelectable
                   ? cloudBackend === "vps"
@@ -1144,23 +1132,21 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         </div>
 
         {/* Routines */}
-        <div className="mt-4 rounded-xl bg-card p-4">
+        <div className="mt-3">
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-[15px] font-medium text-ink">
-              <CalendarClock size={16} className="text-accent" />
-              Scheduled tasks
-            </div>
-            {botRoutines.length > 0 && (
-              <span className="rounded-full bg-control px-2 py-0.5 text-[10px] font-medium text-ink-secondary">
-                {botRoutines.length}
-              </span>
-            )}
-          </div>
-          <div className="mt-0.5 text-[13px] text-ink-secondary">
-            Schedule work for {bot.name}. Use its current setup, or run the whole job inside its cloud VM.
+            <div className="text-[15px] font-semibold text-ink">Routines</div>
+            <button
+              type="button"
+              onClick={() => setCreatingRoutine(true)}
+              className="shell-control flex items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
+              aria-label={`Add a routine for ${bot.name}`}
+              title="Add routine"
+            >
+              <Plus size={18} />
+            </button>
           </div>
           {!computerDestination && (
-            <div className="mt-3 flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-[11.5px] leading-relaxed text-warning">
+            <div className="mt-2 flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-[11.5px] leading-relaxed text-warning">
               <Power size={13} className="mt-0.5 shrink-0" />
               Scheduled tasks on this computer will not have desktop access while this is Off. Choose Cloud VM in the schedule editor to run the whole job there.
             </div>
@@ -1168,7 +1154,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           {activeRoutineRun && (
             <button
               onClick={() => dispatch({ type: "showRoutines" })}
-              className="mt-3 flex w-full items-center gap-2 rounded-lg border border-accent/25 bg-accent/10 px-3 py-2 text-left text-[12px] text-accent hover:bg-accent/15"
+              className="mt-2 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[12px] text-accent hover:bg-raised/50"
             >
               <Loader2 size={13} className={activeRoutineRun.status === "queued" ? "" : "animate-spin"} />
               <span className="min-w-0 flex-1 truncate">
@@ -1177,42 +1163,32 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             </button>
           )}
           {botRoutines.length > 0 && (
-            <div className="mt-3 space-y-1.5">
-              {botRoutines.slice(0, 3).map((routine) => (
+            <div className="mt-1">
+              {botRoutines.map((routine) => (
                 <button
                   key={routine.id}
                   onClick={() => dispatch({ type: "showRoutines" })}
-                  className="flex w-full items-center gap-2 rounded-lg bg-inset px-3 py-2 text-left hover:bg-control/60"
+                  className="flex min-h-11 w-full items-center gap-2.5 rounded-lg px-1 py-1.5 text-left hover:bg-raised/40"
                 >
-                  <span className={cn("size-1.5 shrink-0 rounded-full", routine.enabled ? "bg-success" : "bg-ink-secondary/40")} />
+                  <Pause size={14} className="shrink-0 text-ink-secondary" />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[12.5px] font-medium text-ink">{routine.name}</span>
-                    <span className="block truncate text-[10.5px] text-ink-secondary">
-                      {routineScheduleLabel(routine)}{routine.runOn === "cloud" ? " · runs on VM" : ""}
+                    <span className="block truncate text-[13px] font-medium text-ink">{routine.name}</span>
+                    <span className="block truncate text-[11.5px] text-ink-secondary">
+                      {routine.enabled ? nextRunLabel(routine.nextRunAt) : "Paused"}
                     </span>
                   </span>
-                  <span className="shrink-0 text-[10px] text-ink-secondary">{nextRunLabel(routine.nextRunAt)}</span>
                 </button>
               ))}
             </div>
           )}
-          <div className="mt-3 flex gap-2">
-            <button
-              onClick={() => setCreatingRoutine(true)}
-              className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent py-2 text-[13px] font-medium text-white hover:brightness-110"
-            >
-              <Plus size={14} />
-              Create schedule
-            </button>
-            <button
-              onClick={() => dispatch({ type: "showRoutines" })}
-              className="flex items-center justify-center gap-1.5 rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover"
-              title="Open schedules"
-            >
-              <CalendarDays size={14} />
-              Schedules
-            </button>
-          </div>
+          <button
+            onClick={() => dispatch({ type: "showRoutines" })}
+            className="mt-1 flex min-h-11 w-full items-center gap-2 rounded-lg px-1 text-[13px] text-ink-secondary hover:bg-raised/40 hover:text-ink"
+            title="Open schedules"
+          >
+            <CalendarDays size={14} />
+            All schedules
+          </button>
         </div>
       </div>
       )}

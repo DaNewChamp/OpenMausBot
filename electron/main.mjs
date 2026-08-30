@@ -739,13 +739,13 @@ function syncManagedComposioCredentials() {
 const ERROR_PAGE =
   "data:text/html;charset=utf-8," +
   encodeURIComponent(
-    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen OpenMausBot — if it keeps happening, restart your computer.</p></div></body>`,
+    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">V</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen V Bot — if it keeps happening, restart your computer.</p></div></body>`,
   );
 
 const STARTING_PAGE =
   "data:text/html;charset=utf-8," +
   encodeURIComponent(
-    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Starting OpenMausBot</h2><p style="color:#fcfcfc99;line-height:1.5">Getting the bot server ready…</p></div></body>`,
+    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">V</div><h2 style="font-weight:600;margin:12px 0 6px">Starting V Bot</h2><p style="color:#fcfcfc99;line-height:1.5">Getting the bot server ready…</p></div></body>`,
   );
 
 function appWindowUrl() {

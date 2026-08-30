@@ -180,7 +180,7 @@ export function SkillRecorderPage() {
   const start = async () => {
     setError("");
     if (!bridge || !window.ogb?.beginScreenPreviewIntent || !navigator.mediaDevices?.getDisplayMedia) {
-      setError("Skill recording requires the OpenMausBot desktop app on macOS.");
+      setError("Skill recording requires the V Bot desktop app on macOS.");
       return;
     }
     if (!transcriptionConfigured || !window.ogb.transcription) {

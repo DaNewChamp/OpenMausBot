@@ -71,6 +71,7 @@ import {
   tailWindowStart,
 } from "@/lib/transcript-window";
 import { timelineEvents } from "@/lib/taskTimeline";
+import { conversationTitle, modelSuffix } from "@/lib/model-suffix";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
  * bury the conversation; bots get full markdown. */
@@ -254,7 +255,7 @@ class MessageBoundary extends Component<{ children: ReactNode; fallbackText: str
   render() {
     if (this.state.failed) {
       return (
-        <div className="max-w-[70%] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-ink">
+        <div className="shell-bubble max-w-[70%] bg-card px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-ink">
           {this.props.fallbackText}
         </div>
       );
@@ -286,7 +287,7 @@ function BubbleEditor({
     if (draft.trim()) onSubmit(draft.trim());
   };
   return (
-    <div className="w-full max-w-[70%] rounded-2xl border border-hairline/40 bg-bubble-user px-4 py-3">
+    <div className="shell-bubble w-full max-w-[70%] border border-hairline/40 bg-bubble-user px-4 py-3">
       <textarea
         ref={ref}
         value={draft}
@@ -415,7 +416,7 @@ function Bubble({
         </button>
         <div
           className={cn(
-            "max-w-[70%] rounded-2xl text-[15px] leading-relaxed",
+            "shell-bubble max-w-[70%] text-[15px] leading-relaxed",
             user && webhookView
               ? "overflow-hidden border border-accent/25 bg-card text-ink shadow-[0_10px_30px_rgba(0,0,0,0.18)]"
               : user
@@ -554,11 +555,11 @@ function ActivityChip({ message }: { message: Message }) {
   const comm = message.comm;
   if (comm) {
     return (
-      <div className="flex justify-start">
+      <div className="flex justify-center py-1">
         <button
           onClick={() => dispatch({ type: "select", id: comm.groupId })}
           title={`Open the conversation with ${comm.withName}`}
-          className="flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
+          className="flex items-center gap-2 text-[12.5px] text-ink-secondary hover:text-ink"
         >
           <MausAvatar color={comm.withColor} state="happy" size={16} />
           <span className="max-w-[480px] truncate">{tool.name}</span>
@@ -595,7 +596,7 @@ function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
       <img
         src={`data:${mime ?? "image/png"};base64,${png}`}
         alt="Bot's screen"
-        className="max-w-[70%] rounded-2xl border border-hairline/40"
+        className="max-w-[70%] shell-bubble border border-hairline/40"
       />
     </div>
   );
@@ -607,7 +608,7 @@ function StreamingBubble({ text }: { text: string }) {
   const deferred = useDeferredValue(text);
   return (
     <div className="flex w-full justify-start">
-      <div className="max-w-[70%] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
+      <div className="shell-bubble max-w-[70%] bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
         <MessageBoundary fallbackText={deferred}>
           <ChatMarkdown text={deferred} streaming />
         </MessageBoundary>
@@ -1011,17 +1012,17 @@ export function ChatView({ bot }: { bot: Bot }) {
         className={cn(
           // @container so the chips on the right can fold to icon bubbles
           // when the column is narrow (side panel open, small window)
-          "@container/chathead flex items-center justify-between px-5 py-3",
+          "@container/chathead flex items-center justify-between px-4 py-2",
           // Room for the drawer button, which overlays this corner below md.
           "pl-11 md:pl-5",
           isWin && "pr-[148px]",
         )}
         style={drag}
       >
-        <div className="flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1" style={noDrag}>
+        <div className="flex min-w-0 items-center gap-2 rounded-lg px-1 py-1" style={noDrag}>
           <button
             onClick={() => dispatch({ type: "toggleSettings", open: true })}
-            className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50"
+            className="shell-control flex shrink-0 items-center justify-center rounded-lg hover:bg-raised/50"
             title="Open agent profile"
             aria-label={`Open ${bot.name}'s profile`}
           >
@@ -1038,11 +1039,14 @@ export function ChatView({ bot }: { bot: Bot }) {
             onCommit={(name) => dispatch({ type: "updateBot", botId: bot.id, patch: { name } })}
             onActivate={() => dispatch({ type: "toggleSettings", open: true })}
             showEditButton
-            className="truncate text-[15px] font-semibold text-ink"
-            inputClassName="max-w-[220px] rounded bg-inset px-1.5 py-0.5 text-[15px] font-semibold"
+            className="truncate text-[14px] font-semibold text-ink"
+            inputClassName="max-w-[220px] rounded bg-inset px-1.5 py-0.5 text-[14px] font-semibold"
           />
+          <span className="hidden shrink-0 text-[13px] font-medium text-ink-secondary sm:inline">
+            · {modelSuffix(bot.modelSelection)}
+          </span>
           {bot.chiefOfStaff && (
-            <span className="flex items-center gap-1 rounded-full bg-accent/12 px-2 py-0.5 text-[11px] font-medium text-accent">
+            <span className="flex items-center gap-1 rounded-full bg-raised px-2 py-0.5 text-[11px] font-medium text-ink-secondary">
               <Crown size={11} /> Chief of Staff
             </span>
           )}
@@ -1054,7 +1058,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             aria-label="Find in conversation"
             aria-pressed={findOpen}
             className={cn(
-              "rounded-md p-1.5 hover:bg-raised",
+              "shell-control rounded-md hover:bg-raised",
               findOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
             )}
             title="Find in conversation (⌘F)"
@@ -1082,7 +1086,7 @@ export function ChatView({ bot }: { bot: Bot }) {
           <button
             onClick={() => dispatch({ type: "toggleComputer" })}
             className={cn(
-              "rounded-md p-1.5 hover:bg-raised",
+              "shell-control rounded-md hover:bg-raised",
               state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
             )}
             title="Bot's computer"
@@ -1094,7 +1098,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             aria-label="Inspector"
             aria-pressed={state.inspectorOpen}
             className={cn(
-              "rounded-md p-1.5 hover:bg-raised",
+              "shell-control rounded-md hover:bg-raised",
               state.inspectorOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
             )}
             title="Inspector — runtime events and raw protocol for this thread"
@@ -1133,7 +1137,7 @@ export function ChatView({ bot }: { bot: Bot }) {
       {/* Messages */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-5 [overflow-anchor:none]"
+        className="flex-1 overflow-y-auto px-5 [overflow-anchor:none] bg-app"
         onWheel={(e) => {
           if (e.deltaY < 0) setBottomFollow(false);
           else if (atEnd()) setBottomFollow(true);
@@ -1162,7 +1166,7 @@ export function ChatView({ bot }: { bot: Bot }) {
           className="mx-auto flex max-w-[900px] flex-col gap-3 pb-4"
           role="log"
           aria-live="polite"
-          aria-label={`Conversation with ${bot.name}`}
+          aria-label={`Conversation with ${conversationTitle(bot.name, bot.modelSelection)}`}
         >
           {hiddenCount > 0 && (
             <div className="flex justify-center pt-2">

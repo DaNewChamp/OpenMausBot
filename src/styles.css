@@ -67,6 +67,23 @@
   --color-scrollbar: #3d3d3d;
   /* second speed line of the mascot — contrasts against the app ground */
   --color-maus-line: #fcfcfc;
+
+  /* V Bot desktop shell — layout rhythm, not a second palette. Kept outside
+     [data-skin] so skins can keep their color contracts while the three-column
+     geometry stays one system. */
+  --shell-left-width: 248px;
+  --shell-left-icons: 72px;
+  --shell-right-width: 292px;
+  --shell-control: 44px;
+  --shell-row: 52px;
+  --shell-pin-avatar: 72px;
+  --shell-row-avatar: 36px;
+  --shell-search-radius: 999px;
+  --shell-bubble-radius: 18px;
+  --shell-composer-radius: 999px;
+  --shell-unread: 8px;
+  --shell-traffic-inset: 78px;
+  --shell-hairline: color-mix(in oklab, var(--color-hairline) 55%, transparent);
 }
 
 /* ── Midnight ──────────────────────────────────────────────────────────────
@@ -353,10 +370,44 @@ body {
   color: transparent;
 }
 @media (prefers-reduced-motion: reduce) {
-  .animate-caret, .animate-msg-in, .animate-shimmer { animation: none; }
+  .animate-caret, .animate-msg-in, .animate-shimmer, .animate-panel-in, .animate-pop-in { animation: none; }
   .thinking-shimmer { background: none; color: var(--color-ink-secondary); }
   /* The drawer still moves, it just arrives instantly. */
   aside { transition: none; }
+  .shell-rail, .shell-right, .shell-composer { transition: none; }
+}
+
+.shell-control {
+  min-width: var(--shell-control);
+  min-height: var(--shell-control);
+}
+
+.shell-search {
+  min-height: var(--shell-control);
+  border-radius: var(--shell-search-radius);
+}
+
+.shell-bubble {
+  border-radius: var(--shell-bubble-radius);
+}
+
+.shell-composer-pill {
+  min-height: var(--shell-control);
+  border-radius: var(--shell-composer-radius);
+}
+
+.shell-unread {
+  width: var(--shell-unread);
+  height: var(--shell-unread);
+}
+
+.prose-chat code,
+.shell-bubble code {
+  color: #ff7b8a;
+  background: color-mix(in oklab, #ff5667 14%, transparent);
+  border-radius: 4px;
+  padding: 0.05em 0.28em;
+  font-size: 0.92em;
 }
 
 /* SupaMaus vector motion. The fast horizontal compression is the edge-on

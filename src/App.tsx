@@ -19,10 +19,34 @@ import { NoEngines } from "@/components/NoEngines";
 import { CommandPalette } from "@/components/CommandPalette";
 import { SkillRecorderPage } from "@/components/SkillRecorderPage";
 import { TeamMapPage } from "@/components/TeamMapPage";
+import { isDesktopDemoMode } from "@/lib/desktop-demo";
+import {
+  conversationNavOrder,
+  neighborConversationId,
+  saveRightRailOpen,
+  shellColumnVisibility,
+} from "@/lib/shell-layout";
+import { loadSidebarDensity } from "@/lib/sidebar-preferences";
+
+function useViewportWidth() {
+  const [width, setWidth] = useState(() => globalThis.innerWidth || 1280);
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return width;
+}
 
 function Shell() {
   const { state, dispatch } = useStore();
   const unreadCount = unreadConversationCount(state.bots, state.groups);
+  const viewportWidth = useViewportWidth();
+  const [leftDensity] = useState(() => loadSidebarDensity());
+  const layout = shellColumnVisibility(viewportWidth, {
+    leftDensity,
+    rightUserCollapsed: !state.computerOpen,
+  });
   // Mobile-only drawer state. Above md, none of these properties are emitted
   // at all — Sidebar scopes every mobile class with max-md: rather than
   // cancelling them with md:, which would still emit a translate value and
@@ -32,6 +56,16 @@ function Shell() {
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const group = state.groups.find((g) => g.id === state.selectedId);
   const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0]);
+  const showRightRail =
+    layout.right === "open" &&
+    Boolean(bot) &&
+    !state.settingsOpen &&
+    !state.inspectorOpen &&
+    state.activeView === "chat";
+
+  useEffect(() => {
+    saveRightRailOpen(state.computerOpen);
+  }, [state.computerOpen]);
 
   // Nothing on this machine can run a bot. A missing cloud login does not
   // count — that CLI can still host a local model. Wait for the first
@@ -46,6 +80,38 @@ function Shell() {
   // Kept deliberately small; every panel already closes on Esc.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.metaKey && !e.ctrlKey) {
+        if (state.pluginsOpen) {
+          e.preventDefault();
+          dispatch({ type: "togglePlugins", open: false });
+          return;
+        }
+        if (state.appSettingsOpen) {
+          e.preventDefault();
+          dispatch({ type: "toggleAppSettings", open: false });
+          return;
+        }
+        if (state.settingsOpen) {
+          e.preventDefault();
+          dispatch({ type: "toggleSettings", open: false });
+          return;
+        }
+        if (state.inspectorOpen) {
+          e.preventDefault();
+          dispatch({ type: "toggleInspector", open: false });
+          return;
+        }
+        if (state.computerOpen && layout.right === "open") {
+          e.preventDefault();
+          dispatch({ type: "toggleComputer", open: false });
+          return;
+        }
+        if (drawerOpen) {
+          e.preventDefault();
+          setDrawerOpen(false);
+        }
+        return;
+      }
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
       const bots = state.bots.filter((b) => !b.hidden);
@@ -59,17 +125,20 @@ function Shell() {
           dispatch({ type: "select", id: target.id });
         }
       } else if (e.shiftKey && (e.key === "[" || e.key === "]")) {
-        const idx = bots.findIndex((b) => b.id === state.selectedId);
-        const next = bots[(idx + (e.key === "]" ? 1 : -1) + bots.length) % bots.length];
+        const ids = conversationNavOrder(
+          state.bots.map((bot) => ({ id: bot.id, hidden: bot.hidden })),
+          state.groups.map((group) => ({ id: group.id })),
+        ).map((row) => row.id);
+        const next = neighborConversationId(ids, state.selectedId, e.key === "]" ? 1 : -1);
         if (next) {
           e.preventDefault();
-          dispatch({ type: "select", id: next.id });
+          dispatch({ type: "select", id: next });
         }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state.bots, state.selectedId, dispatch]);
+  }, [state.bots, state.groups, state.selectedId, state.pluginsOpen, state.appSettingsOpen, state.settingsOpen, state.inspectorOpen, state.computerOpen, layout.right, drawerOpen, dispatch]);
 
   useEffect(() => {
     window.ogb?.setUnreadCount?.(unreadCount);
@@ -118,29 +187,36 @@ function Shell() {
   }, [dispatch]);
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="flex h-full flex-col"
+      data-shell-left={layout.left}
+      data-shell-right={layout.right}
+    >
       {/* fixed-position popup, bottom-left — outside the layout flow */}
       <UpdateBanner />
       <div className="relative flex min-h-0 flex-1">
-      <button
-        type="button"
-        ref={menuButtonRef}
-        aria-label="Open bot list"
-        aria-expanded={drawerOpen}
-        onClick={() => setDrawerOpen(true)}
-        className="absolute left-3 top-3 z-30 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink md:hidden"
-      >
-        <Menu size={18} />
-      </button>
-      {drawerOpen && (
+      {layout.left === "overlay" && (
+        <button
+          type="button"
+          ref={menuButtonRef}
+          aria-label="Open bot list"
+          aria-expanded={drawerOpen}
+          onClick={() => setDrawerOpen(true)}
+          className="shell-control absolute left-3 top-3 z-30 rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+        >
+          <Menu size={18} />
+        </button>
+      )}
+      {layout.left === "overlay" && drawerOpen && (
         <div
           aria-hidden
           onMouseDown={(e) => e.target === e.currentTarget && setDrawerOpen(false)}
-          className="absolute inset-0 z-30 bg-black/50 md:hidden"
+          className="absolute inset-0 z-30 bg-black/50"
         />
       )}
       <Sidebar
         open={drawerOpen}
+        overlay={layout.left === "overlay"}
         onClose={() => {
           setDrawerOpen(false);
           menuButtonRef.current?.focus();
@@ -172,7 +248,7 @@ function Shell() {
         </main>
       )}
       {state.settingsOpen && bot && <SettingsPanel bot={bot} />}
-      {state.computerOpen && bot && <ComputerPanel bot={bot} />}
+      {showRightRail && bot && <ComputerPanel bot={bot} />}
       {state.inspectorOpen && bot && <InspectorPanel bot={bot} />}
       {state.appSettingsOpen && <SettingsModal />}
       {state.pluginsOpen && <PluginsPanel />}
@@ -185,7 +261,7 @@ function Shell() {
 }
 
 export default function App() {
-  const [gated, setGated] = useState(() => !emailGateDone());
+  const [gated, setGated] = useState(() => !isDesktopDemoMode() && !emailGateDone());
   useEffect(() => {
     initAnalytics();
   }, []);

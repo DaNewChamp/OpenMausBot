@@ -23,6 +23,8 @@ import { showNotification, type NotificationTarget } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
 import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import { skillRecorderEnabled } from "@/lib/feature-flags";
+import { desktopDemoFixture, isDesktopDemoMode } from "@/lib/desktop-demo";
+import { loadRightRailOpen } from "@/lib/shell-layout";
 
 export type { MausColor } from "@/lib/mascot";
 
@@ -1130,7 +1132,10 @@ const StoreContext = createContext<{
 } | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [state, rawDispatch] = useReducer(reducer, initialState);
+  const [state, rawDispatch] = useReducer(reducer, initialState, (base) => ({
+    ...base,
+    computerOpen: isDesktopDemoMode() || loadRightRailOpen(),
+  }));
   const stateRef = useRef(state);
   stateRef.current = state;
   // per-frame stream-delta batching (see the "runtime" SSE case); stream
@@ -1492,6 +1497,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // ── initial load + SSE fold ──────────────────────────────────────────
   useEffect(() => {
+    if (isDesktopDemoMode()) {
+      const fixture = desktopDemoFixture();
+      rawDispatch({
+        type: "hydrate",
+        bots: fixture.bots,
+        groups: fixture.groups,
+        computerControl: {},
+      });
+      rawDispatch({ type: "instances", instances: fixture.instances });
+      rawDispatch({ type: "configStatus", config: fixture.config });
+      rawDispatch({ type: "routinesHydrated", routines: fixture.routines, runs: fixture.runs });
+      rawDispatch({ type: "connected", value: true });
+      rawDispatch({ type: "toggleComputer", open: true });
+      rawDispatch({ type: "select", id: fixture.selectedId });
+      return;
+    }
     let alive = true;
     const loadAll = () =>
       Promise.all([

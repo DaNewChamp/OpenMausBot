@@ -3,6 +3,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Archive,
+  ArrowDown,
   ArrowDownToLine,
   BellDot,
   Bot as BotIcon,
@@ -50,6 +51,8 @@ import {
   saveSidebarDensity,
   type SidebarDensity,
 } from "@/lib/sidebar-preferences";
+import { conversationTitle, modelSuffix } from "@/lib/model-suffix";
+import { unreadAfterSelected } from "@/lib/shell-layout";
 import { phoneSettingsAction, SidebarPhoneButton } from "./SidebarPhoneButton";
 
 /** "Milind Soni" → "MS", "milind" → "M", "you@x.dev" → "Y", unset → "?" */
@@ -235,8 +238,8 @@ function GroupListItem({
         onMenu({ groupId: group.id, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
       }}
       className={cn(
-        "relative flex w-full items-center rounded-xl text-left",
-        density === "icons" ? "justify-center px-1 py-1.5" : density === "compact" ? "gap-2 px-2 py-1.5" : "gap-3 px-3 py-2.5",
+        "relative flex w-full items-center rounded-lg text-left",
+        density === "icons" ? "justify-center px-1 py-1.5" : "gap-2.5 px-2 py-1.5",
         selected ? "bg-raised" : "hover:bg-raised/50",
       )}
       title={density === "icons" ? group.name : undefined}
@@ -245,12 +248,12 @@ function GroupListItem({
       <StackedMauses members={members} density={density} />
       <div className={cn("min-w-0 flex-1", density === "icons" && "hidden")}>
         <div className="flex items-baseline justify-between gap-2">
-          <span className="truncate text-[15px] font-semibold text-ink">{group.name}</span>
-          {selected && last && <span className="shrink-0 text-xs text-ink-secondary">{formatTime(last.at)}</span>}
+          <span className="truncate text-[14px] font-medium text-ink">{group.name}</span>
+          {last && <span className="shrink-0 text-[11px] text-ink-secondary">{formatTime(last.at)}</span>}
         </div>
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[13px] text-ink-secondary">{groupPreview(group, state.bots)}</span>
-          {group.unread && <span className="size-2 shrink-0 rounded-full bg-accent" />}
+          {group.unread && <span className="shell-unread shrink-0 rounded-full bg-accent" />}
         </div>
       </div>
       {density === "icons" && group.unread && (
@@ -727,6 +730,65 @@ function BotContextMenu({
   );
 }
 
+function PinnedChiefCard({
+  bot,
+  density,
+  onMenu,
+}: {
+  bot: Bot;
+  density: SidebarDensity;
+  onMenu: (menu: MenuState) => void;
+}) {
+  const { state, dispatch } = useStore();
+  if (density === "icons") {
+    return (
+      <BotListItem
+        bot={bot}
+        density={density}
+        onMenu={onMenu}
+        onArchive={() => {}}
+        archiveDisabled
+      />
+    );
+  }
+  const selected = state.activeView === "chat" && state.selectedId === bot.id;
+  const suffix = modelSuffix(bot.modelSelection);
+  return (
+    <div className="px-2 pb-3 pt-1">
+      <button
+        type="button"
+        onClick={() => dispatch({ type: "select", id: bot.id })}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onMenu({ botId: bot.id, x: event.clientX, y: event.clientY });
+        }}
+        aria-label={conversationTitle(bot.name, bot.modelSelection)}
+        aria-current={selected ? "true" : undefined}
+        className={cn(
+          "flex w-full flex-col items-center gap-2 rounded-xl px-3 py-3 text-center",
+          selected ? "bg-raised/50" : "hover:bg-raised/30",
+        )}
+      >
+        <BotAvatar
+          bot={bot}
+          state={stateForBot({ ...bot, messages: visibleMessages(bot) })}
+          size={72}
+          animated={Boolean(bot.busy) || Boolean(bot.unread)}
+        />
+        <div className="min-w-0">
+          <div className="truncate text-[14px] font-semibold text-ink">
+            {bot.name}
+            {suffix ? <span className="font-medium text-ink-secondary"> · {suffix}</span> : null}
+          </div>
+          <div className="mt-1 inline-flex items-center rounded-full bg-raised px-2.5 py-0.5 text-[11px] font-medium text-ink-secondary">
+            Chief of Staff
+          </div>
+        </div>
+      </button>
+    </div>
+  );
+}
+
 function BotListItem({
   bot,
   density,
@@ -748,24 +810,17 @@ function BotListItem({
   useEffect(() => {
     if (iconOnly) setRenaming(false);
   }, [iconOnly]);
-  const avatarSize = iconOnly ? 44 : density === "compact" ? 40 : 56;
+  const avatarSize = iconOnly ? 44 : 36;
   // the visible branch, so a version switch changes the row with the chat
   const visible = visibleMessages(bot);
   const last = visible.at(-1);
+  const suffix = modelSuffix(bot.modelSelection);
   const rowClass = cn(
-    "flex w-full items-center rounded-xl border text-left",
+    "flex w-full items-center rounded-lg text-left",
     iconOnly
       ? "justify-center px-1 py-1.5"
-      : density === "compact"
-        ? "gap-2 px-2 py-1.5 pr-12"
-        : "gap-3 px-3 py-2.5 pr-12",
-    bot.chiefOfStaff
-      ? selected
-        ? "border-accent/40 bg-accent/15"
-        : "border-accent/25 bg-accent/5 hover:bg-accent/10"
-      : selected
-        ? "border-transparent bg-raised"
-        : "border-transparent hover:bg-raised/50",
+      : "gap-2.5 px-2 py-1.5 pr-10",
+    selected ? "bg-raised/80" : "hover:bg-raised/40",
   );
   const body = (
     <>
@@ -783,7 +838,7 @@ function BotListItem({
       />
       <div className={cn("min-w-0 flex-1", iconOnly && "hidden")}>
         <div className="flex items-baseline justify-between gap-2">
-          <span className="flex min-w-0 items-center gap-1.5 truncate text-[15px] font-semibold text-ink">
+          <span className="flex min-w-0 items-center gap-1.5 truncate text-[14px] font-medium text-ink">
             {bot.pinned && <Pin size={12} className="shrink-0 text-ink-secondary" />}
             <RenameTitle
               key={iconOnly ? "icons" : "expanded"}
@@ -791,27 +846,24 @@ function BotListItem({
               onCommit={(name) => dispatch({ type: "updateBot", botId: bot.id, patch: { name } })}
               onEditingChange={setRenaming}
               className="truncate"
-              inputClassName="w-full rounded bg-inset px-1 py-0.5 text-[15px] font-semibold"
+              inputClassName="w-full rounded bg-inset px-1 py-0.5 text-[14px] font-medium"
             />
+            {suffix && !renaming && (
+              <span className="shrink-0 text-[13px] font-medium text-ink-secondary">· {suffix}</span>
+            )}
           </span>
-          {selected && last && !renaming && (
-            <span className="shrink-0 text-xs text-ink-secondary transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
+          {last && !renaming && (
+            <span className="shrink-0 text-[11px] text-ink-secondary transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
               {formatTime(last.at)}
             </span>
           )}
         </div>
         <div className="flex items-center justify-between gap-2">
-          <span className="flex min-w-0 items-center gap-1.5 truncate text-[13px] text-ink-secondary">
-            {bot.chiefOfStaff && (
-              <span className="flex shrink-0 items-center gap-1 text-[11.5px] font-medium text-accent">
-                <Crown size={11} /> Chief of Staff
-              </span>
-            )}
-            {bot.chiefOfStaff && preview(bot) && <span className="shrink-0 text-ink-secondary/60">·</span>}
+          <span className="flex min-w-0 items-center gap-1.5 truncate text-[12.5px] text-ink-secondary">
             <span className="truncate">{preview(bot)}</span>
           </span>
           {bot.unread && (
-            <span className="size-2 shrink-0 rounded-full bg-accent" />
+            <span className="shell-unread shrink-0 rounded-full bg-accent" />
           )}
         </div>
       </div>
@@ -1008,7 +1060,7 @@ function ArchivedBotsPanel({
   );
 }
 
-export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onClose: () => void; overlay?: boolean }) {
   const { state, dispatch } = useStore();
   const { capabilities } = useDesktopCapabilities();
   const importReturnRef = useRef<HTMLButtonElement>(null);
@@ -1254,32 +1306,40 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const archivedBots = state.bots.filter((bot) => bot.hidden);
   const pendingTeamUndo = teamFeedback?.undo;
   const pendingBotUndo = teamFeedback?.restoreBot;
+  const moreUnreads = unreadAfterSelected(
+    [
+      ...(unsectionedChief ? [{ id: unsectionedChief.id, unread: unsectionedChief.unread }] : []),
+      ...unsectionedGroups.map((group) => ({ id: group.id, unread: group.unread })),
+      ...visibleBots.map((candidate) => ({ id: candidate.id, unread: candidate.unread })),
+      ...sectionedBots.map((candidate) => ({ id: candidate.id, unread: candidate.unread })),
+    ],
+    state.selectedId,
+  );
+  const jumpToUnread = () => {
+    const next = moreUnreads[0];
+    if (next) dispatch({ type: "select", id: next.id });
+  };
 
   return (
     <aside
       aria-label="Bots and navigation"
       className={cn(
-        "flex h-full shrink-0 flex-col border-r border-hairline/40 bg-panel transition-[width] duration-200",
-        density === "icons" ? "w-[80px]" : density === "compact" ? "w-[272px]" : "w-[320px]",
-        // Below md only: the sidebar leaves the flow and slides in over the chat.
-        // Scoped with max-md: rather than cancelled with md: on purpose — Tailwind
-        // v4 emits the native `translate` property, and any value other than
-        // `none` turns this element into a containing block for its `fixed`
-        // descendants. Cancelling it with an `md:` prefix still emits a value, which
-        // silently reparents NewRoomPanel's overlay and the "+" menu backdrop on
-        // desktop.
-        "max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-40",
-        "max-md:transition-transform max-md:duration-200",
-        open ? "max-md:translate-x-0" : "max-md:-translate-x-full",
+        "shell-rail flex h-full shrink-0 flex-col border-r border-hairline/30 bg-panel transition-[width] duration-200",
+        density === "icons" ? "w-[var(--shell-left-icons)]" : "w-[var(--shell-left-width)]",
+        // Overlay only: the rail leaves the flow. Do not emit a translate when
+        // in-flow — Tailwind v4's native `translate` makes this a containing
+        // block for fixed menus (+ and NewRoomPanel).
+        overlay && "absolute inset-y-0 left-0 z-40 transition-transform duration-200",
+        overlay && (open ? "translate-x-0" : "-translate-x-full"),
       )}
     >
       {/* macOS owns inset traffic lights; Linux/Windows use native chrome. */}
       <div
-        className={cn("flex items-center pt-3.5 pb-1", density === "icons" ? "flex-col gap-1 px-2" : "justify-between px-4")}
+        className={cn("flex items-center pt-3.5 pb-1", density === "icons" ? "flex-col gap-1 px-2" : "justify-between px-3")}
         style={windowDragStyle}
       >
         {macInset ? (
-          <div className={density === "icons" ? "h-5 w-full" : "w-14"} />
+          <div className={density === "icons" ? "h-5 w-full" : "w-[var(--shell-traffic-inset)]"} />
         ) : browser ? (
           <div className="flex items-center gap-2">
             <span className="size-3 rounded-full bg-[#ff5f57]" />
@@ -1295,7 +1355,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             type="button"
             onClick={toggleCollapsed}
             aria-label={density === "icons" ? "Expand sidebar" : "Collapse sidebar to avatars"}
-            className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+            className="shell-control flex items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
             title={density === "icons" ? "Expand sidebar" : "Collapse to avatars"}
           >
             {density === "icons" ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
@@ -1306,7 +1366,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               onClick={() => setDensityOpen((value) => !value)}
               aria-label="Choose sidebar density"
               aria-expanded={densityOpen}
-              className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+              className="shell-control flex items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
               title="Sidebar density"
             >
               <span aria-hidden="true" className="flex size-5 flex-col items-center justify-center gap-[3px]">
@@ -1344,7 +1404,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             ref={importReturnRef}
             onClick={() => setPlusOpen((o) => !o)}
             aria-label="New or share"
-            className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+            className="shell-control flex items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
             title="New or share"
           >
             <Plus size={20} strokeWidth={2} />
@@ -1418,8 +1478,8 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       </div>
 
       {/* Search */}
-      <div className={cn("pt-2 pb-3", density === "icons" ? "hidden" : "px-3")}>
-        <div className="flex items-center gap-2 rounded-lg bg-raised/70 px-3 py-2">
+      <div className={cn("pt-1 pb-2", density === "icons" ? "hidden" : "px-3")}>
+        <div className="shell-search flex items-center gap-2 bg-raised/70 px-3">
           <Search size={16} className="text-ink-secondary" />
           <input
             value={query}
@@ -1439,21 +1499,12 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             <div className="px-3 py-6 text-center text-[13px] text-ink-secondary">Nothing matches “{query}”</div>
           )}
           {unsectionedChief && (
-            <div className="mb-1.5">
-              <BotListItem
-                bot={unsectionedChief}
-                density={density}
-                onMenu={setMenu}
-                onArchive={(bot) => void archiveBot(bot)}
-                archiveDisabled
-              />
-            </div>
+            <PinnedChiefCard bot={unsectionedChief} density={density} onMenu={setMenu} />
           )}
           {unsectionedGroups.length > 0 && density !== "icons" && <SectionDivider name="Channels" />}
           {unsectionedGroups.map((g) => (
             <GroupListItem key={g.id} group={g} density={density} onMenu={setRoomMenu} />
           ))}
-          {visibleBots.length > 0 && density !== "icons" && <SectionDivider name="Bots" />}
           {visibleBots.map((b) => (
             <BotListItem
               key={b.id}
@@ -1500,6 +1551,18 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           ))}
           <SearchResults query={query} onLanded={() => setQuery("")} />
         </div>
+        {moreUnreads.length > 0 && density !== "icons" && (
+          <div className="sticky bottom-2 flex justify-center pt-2">
+            <button
+              type="button"
+              onClick={jumpToUnread}
+              className="shell-control inline-flex items-center gap-1.5 rounded-full bg-accent px-3 text-[13px] font-medium text-white shadow-lg hover:brightness-110"
+            >
+              <ArrowDown size={14} />
+              More unreads
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Footer */}
@@ -1550,12 +1613,12 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </button>
         <button
           onClick={() => dispatch({ type: "togglePlugins", open: true })}
-          className={cn("flex min-h-10 w-full items-center rounded-xl py-2 text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "gap-3 px-3")}
-          aria-label={density === "icons" ? "Connected apps" : undefined}
-          title={density === "icons" ? "Connected apps" : undefined}
+          className={cn("shell-control flex w-full items-center rounded-lg text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "gap-3 px-3")}
+          aria-label={density === "icons" ? "Plugins" : undefined}
+          title={density === "icons" ? "Plugins" : undefined}
         >
           <Puzzle size={20} className="text-ink-secondary" />
-          <span className={cn("text-[14px] text-ink", density === "icons" && "hidden")}>Connected apps</span>
+          <span className={cn("text-[14px] text-ink", density === "icons" && "hidden")}>Plugins</span>
         </button>
         {density === "icons" && (
           <SidebarPhoneButton
@@ -1566,7 +1629,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         <div className={cn("flex items-center", density === "icons" && "justify-center")}>
           <button
             onClick={() => dispatch({ type: "toggleAppSettings" })}
-            className={cn("flex min-w-0 items-center rounded-xl py-2 text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "flex-1 gap-3 px-3")}
+            className={cn("shell-control flex min-w-0 items-center rounded-lg text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "flex-1 gap-3 px-3")}
             aria-label={density === "icons" ? "App settings" : undefined}
             title={density === "icons" ? (state.config?.profile?.name?.trim() || "App settings") : undefined}
           >
@@ -1584,7 +1647,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           {density !== "icons" && <UpdateButton />}
           {density !== "icons" && <button
             onClick={() => dispatch({ type: "toggleAppSettings" })}
-            className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+            className="shell-control flex items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
             title="App settings"
           >
             <Settings size={18} />
