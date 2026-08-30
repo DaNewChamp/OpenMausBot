@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Phone-side Local VM desktop policy. Views own SwiftUI and WKWebView;
@@ -8,6 +9,9 @@ public enum LocalVmDesktopPolicy: Sendable {
     public static let statusPollInterval: Duration = .seconds(2)
     public static let screenshotPollInterval: Duration = .seconds(2)
     public static let ticketRefreshLimit = 2
+    public static let joinNotReadyRetryLimit = 3
+    public static let joinNotReadyRetryDelay: Duration = .milliseconds(500)
+    public static let minimumChromeControlHeight: CGFloat = 44
 
     public static let checkingMessage = "Checking Local VM…"
     public static let startingDesktopMessage = "The Local VM desktop is still starting."
@@ -109,6 +113,19 @@ public enum LocalVmDesktopPolicy: Sendable {
         case explicitRetry
     }
 
+    public enum JoinHTTPOutcome: Equatable, Sendable {
+        case retryNotReady
+        case staleTicket
+        case notReadyExhausted
+        case transientFailure
+    }
+
+    public enum ViewerHealthSignal: String, Equatable, Sendable {
+        case ok
+        case waiting
+        case auth
+    }
+
     public static func isLocalVm(_ bot: Bot) -> Bool {
         bot.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "vm"
     }
@@ -178,11 +195,48 @@ public enum LocalVmDesktopPolicy: Sendable {
 
     public static func shouldPollScreenshot(bot: Bot, snapshot: Snapshot) -> Bool {
         guard isLocalVm(bot), snapshot.accessGranted else { return false }
-        if snapshot.viewerReady { return false }
+        if snapshot.viewerReady {
+            return needsSeedScreenshot(snapshot: snapshot)
+        }
         switch snapshot.status?.state {
         case .missing, .stopped, .unavailable: return false
         case .ready, .running, .unknown, nil: return true
         }
+    }
+
+    /// Live viewer can become ready before the first idle screenshot lands.
+    /// Request one seed capture for Save, then stop polling.
+    public static func needsSeedScreenshot(snapshot: Snapshot) -> Bool {
+        snapshot.viewerReady && !snapshot.hasScreenshot
+    }
+
+    public static func joinHTTPOutcome(statusCode: Int, attempt: Int) -> JoinHTTPOutcome {
+        switch statusCode {
+        case 401, 403:
+            return .staleTicket
+        case 409:
+            return attempt + 1 < joinNotReadyRetryLimit ? .retryNotReady : .notReadyExhausted
+        default:
+            return .transientFailure
+        }
+    }
+
+  /// noVNC health: require a connected RFB session when the object exists.
+  /// Legacy canvas sizing is only used before RFB is exposed.
+    public static func viewerHealthSignal(
+        rfbPresent: Bool,
+        rfbConnectionState: String?,
+        canvasWidth: Int,
+        canvasHeight: Int,
+        bodyContainsPairPrompt: Bool
+    ) -> ViewerHealthSignal {
+        if bodyContainsPairPrompt { return .auth }
+        if rfbPresent {
+            if rfbConnectionState == "connected" { return .ok }
+            return .waiting
+        }
+        if canvasWidth > 8 && canvasHeight > 8 { return .ok }
+        return .waiting
     }
 
     /// Local VM never uses the SSE first-frame timeout. Status polling,

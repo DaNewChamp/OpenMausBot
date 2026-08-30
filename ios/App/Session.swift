@@ -73,6 +73,9 @@ final class Session: ObservableObject {
     @Published private(set) var localVmStatuses: [String: LocalVmStatus] = [:]
     @Published private(set) var localVmAccess = false
     @Published private(set) var localVmAccessDenied = false
+    /// Transient status-poll failures for the open Local VM panel. These must
+    /// not surface through the global chat `actionError` banner.
+    @Published private(set) var localVmStatusError: String?
     /// One lifecycle action per bot at a time. Keeping this in the session
     /// prevents repeated taps from racing the server-side lease/capacity guard.
     @Published private(set) var pendingLocalVmActions: Set<String> = []
@@ -1116,22 +1119,25 @@ final class Session: ObservableObject {
             guard !Task.isCancelled else { return }
             localVmAccess = true
             localVmAccessDenied = false
+            localVmStatusError = nil
             localVmStatuses[bot.id] = snapshot
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
             localVmAccess = false
             localVmAccessDenied = true
+            localVmStatusError = nil
             localVmStatuses.removeAll()
         } catch let error as APIError {
             if case let .status(code, _) = error, code == 403 || code == 404 {
                 localVmAccess = false
                 localVmAccessDenied = true
+                localVmStatusError = nil
                 localVmStatuses.removeValue(forKey: bot.id)
             } else if !Task.isCancelled {
-                actionError = error.localizedDescription
+                localVmStatusError = error.localizedDescription
             }
         } catch {
-            if !Task.isCancelled { actionError = error.localizedDescription }
+            if !Task.isCancelled { localVmStatusError = error.localizedDescription }
         }
     }
 
@@ -1172,19 +1178,34 @@ final class Session: ObservableObject {
             return (nil, LocalVmDesktopPolicy.accessOffMessage, false)
         }
         guard let base = client.connection.baseURL else { return (nil, nil, false) }
-        do {
-            let join = try await client.localVmJoin(botId: bot.id)
-            guard join.ready else { return (nil, LocalVmDesktopPolicy.viewerNotReadyMessage, false) }
-            let url = URL(string: join.viewerPath, relativeTo: base)?.absoluteURL
-            return (url, url == nil ? LocalVmDesktopPolicy.viewerAddressInvalidMessage : nil, false)
-        } catch let error as APIError {
-            if case let .status(code, _) = error, code == 401 || code == 403 {
-                return (nil, LocalVmDesktopPolicy.staleTicketMessage, true)
+        var attempt = 0
+        while attempt < LocalVmDesktopPolicy.joinNotReadyRetryLimit {
+            do {
+                let join = try await client.localVmJoin(botId: bot.id)
+                guard join.ready else { return (nil, LocalVmDesktopPolicy.viewerNotReadyMessage, false) }
+                let url = URL(string: join.viewerPath, relativeTo: base)?.absoluteURL
+                return (url, url == nil ? LocalVmDesktopPolicy.viewerAddressInvalidMessage : nil, false)
+            } catch let error as APIError {
+                if case let .status(code, message) = error {
+                    switch LocalVmDesktopPolicy.joinHTTPOutcome(statusCode: code, attempt: attempt) {
+                    case .retryNotReady:
+                        attempt += 1
+                        try? await Task.sleep(for: LocalVmDesktopPolicy.joinNotReadyRetryDelay)
+                        continue
+                    case .staleTicket:
+                        return (nil, LocalVmDesktopPolicy.staleTicketMessage, true)
+                    case .notReadyExhausted:
+                        return (nil, message ?? LocalVmDesktopPolicy.viewerNotReadyMessage, false)
+                    case .transientFailure:
+                        return (nil, Self.localVmSurfaceError(error), false)
+                    }
+                }
+                return (nil, Self.localVmSurfaceError(error), false)
+            } catch {
+                return (nil, error.localizedDescription, false)
             }
-            return (nil, Self.localVmSurfaceError(error), false)
-        } catch {
-            return (nil, error.localizedDescription, false)
         }
+        return (nil, LocalVmDesktopPolicy.viewerNotReadyMessage, false)
     }
 
     @discardableResult

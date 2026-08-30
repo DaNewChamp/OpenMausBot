@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createProxyHandler } from "../src/proxy.ts";
 import {
   mintViewerAccessToken,
+  resetViewerAccessTickets,
   verifyViewerAccessToken,
   VIEWER_ACCESS_COOKIE,
 } from "../src/viewer-access.ts";
@@ -45,6 +46,7 @@ const device = async (
 };
 
 beforeAll(async () => {
+  resetViewerAccessTickets();
   harness = createServer((req, res) => {
     const url = req.url ?? "";
     seen.push({ path: url, marker: String(req.headers["x-openmausbot-companion"] ?? "") });
@@ -138,7 +140,7 @@ describe("Local VM companion boundary", () => {
     localVmAccess = false;
   });
 
-  it("mints a one-time viewer ticket and refreshes it on a second join", async () => {
+  it("mints a one-time viewer ticket and invalidates the prior join", async () => {
     localVmAccess = true;
     const first = await device("POST", "/api/bots/bot-1/local-computer/join", {});
     expect(first.status).toBe(200);
@@ -171,6 +173,21 @@ describe("Local VM companion boundary", () => {
     const secondTicket = new URL(String(second.body?.viewerPath ?? ""), "http://127.0.0.1").searchParams.get("omb_viewer");
     expect(secondTicket).toBeTruthy();
     expect(secondTicket).not.toBe(firstTicket);
+
+    const staleFirst = await fetch(
+      `http://127.0.0.1:${port}/api/bots/bot-1/local-computer/viewer/vnc.html?omb_viewer=${encodeURIComponent(firstTicket!)}`,
+    );
+    expect(staleFirst.status).toBe(401);
+
+    const fresh = await fetch(
+      `http://127.0.0.1:${port}/api/bots/bot-1/local-computer/viewer/vnc.html?omb_viewer=${encodeURIComponent(secondTicket!)}`,
+    );
+    expect(fresh.status).toBe(200);
+
+    const viaSecondCookie = await fetch(`http://127.0.0.1:${port}/api/bots/bot-1/local-computer/viewer/vnc.html`, {
+      headers: { cookie: `${VIEWER_ACCESS_COOKIE}=${encodeURIComponent(secondTicket!)}` },
+    });
+    expect(viaSecondCookie.status).toBe(200);
     localVmAccess = false;
   });
 });

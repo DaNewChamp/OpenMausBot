@@ -5,6 +5,14 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 const VERSION = "v1";
 const TTL_MS = 30 * 60_000;
+const MAX_ACTIVE_TICKETS = 256;
+
+type ActiveTicket = {
+  generation: number;
+  nonce: string;
+};
+
+const activeTickets = new Map<string, ActiveTicket>();
 
 function secret(): Buffer {
   // Stable per companion data dir; not the device bearer secret.
@@ -16,21 +24,50 @@ function sign(payload: string): string {
   return createHmac("sha256", secret()).update(payload).digest("base64url");
 }
 
+function ticketKey(deviceId: string, botId: string): string {
+  return `${deviceId}:${botId}`;
+}
+
+function rememberActiveTicket(deviceId: string, botId: string, generation: number, nonce: string): void {
+  const key = ticketKey(deviceId, botId);
+  activeTickets.set(key, { generation, nonce });
+  while (activeTickets.size > MAX_ACTIVE_TICKETS) {
+    const oldest = activeTickets.keys().next().value;
+    if (!oldest) break;
+    activeTickets.delete(oldest);
+  }
+}
+
+function activeTicket(deviceId: string, botId: string): ActiveTicket | null {
+  return activeTickets.get(ticketKey(deviceId, botId)) ?? null;
+}
+
+/** Test hook: clear bounded rotation state. */
+export function resetViewerAccessTickets(): void {
+  activeTickets.clear();
+}
+
 export function mintViewerAccessToken(deviceId: string, botId: string, now = Date.now()): string {
-  const exp = now + TTL_MS;
+  const current = activeTicket(deviceId, botId);
+  const generation = (current?.generation ?? 0) + 1;
   const nonce = randomBytes(8).toString("base64url");
-  const payload = `${VERSION}.${deviceId}.${botId}.${exp}.${nonce}`;
+  rememberActiveTicket(deviceId, botId, generation, nonce);
+  const exp = now + TTL_MS;
+  const payload = `${VERSION}.${deviceId}.${botId}.${exp}.${generation}.${nonce}`;
   return `${payload}.${sign(payload)}`;
 }
 
 export function verifyViewerAccessToken(token: string, botId: string, now = Date.now()): string | null {
   const parts = token.split(".");
-  if (parts.length !== 6 || parts[0] !== VERSION) return null;
-  const [, deviceId, tokenBotId, expRaw, nonce, signature] = parts;
+  if (parts.length !== 7 || parts[0] !== VERSION) return null;
+  const [, deviceId, tokenBotId, expRaw, generationRaw, nonce, signature] = parts;
   if (!deviceId || tokenBotId !== botId || !nonce || !signature) return null;
   const exp = Number(expRaw);
-  if (!Number.isFinite(exp) || exp < now) return null;
-  const payload = parts.slice(0, 5).join(".");
+  const generation = Number(generationRaw);
+  if (!Number.isFinite(exp) || exp < now || !Number.isFinite(generation)) return null;
+  const active = activeTicket(deviceId, botId);
+  if (!active || active.generation !== generation || active.nonce !== nonce) return null;
+  const payload = parts.slice(0, 6).join(".");
   const expected = sign(payload);
   if (expected.length !== signature.length) return null;
   try {

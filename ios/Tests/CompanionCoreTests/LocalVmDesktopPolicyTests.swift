@@ -239,14 +239,112 @@ final class LocalVmDesktopPolicyTests: XCTestCase {
             bot: bot(),
             snapshot: .init(status: status(state: .ready, ready: true), accessGranted: true)
         ))
+        XCTAssertTrue(LocalVmDesktopPolicy.shouldPollScreenshot(
+            bot: bot(),
+            snapshot: .init(
+                status: status(state: .ready, ready: true),
+                accessGranted: true,
+                hasScreenshot: false,
+                viewerReady: true
+            )
+        ))
         XCTAssertFalse(LocalVmDesktopPolicy.shouldPollScreenshot(
             bot: bot(),
             snapshot: .init(
                 status: status(state: .ready, ready: true),
                 accessGranted: true,
+                hasScreenshot: true,
                 viewerReady: true
             )
         ))
+        XCTAssertTrue(LocalVmDesktopPolicy.needsSeedScreenshot(
+            snapshot: .init(
+                status: status(state: .ready, ready: true),
+                accessGranted: true,
+                hasScreenshot: false,
+                viewerReady: true
+            )
+        ))
+    }
+
+    func testJoinNotReadyMapsToBoundedRetry() {
+        XCTAssertEqual(
+            LocalVmDesktopPolicy.joinHTTPOutcome(statusCode: 409, attempt: 0),
+            .retryNotReady
+        )
+        XCTAssertEqual(
+            LocalVmDesktopPolicy.joinHTTPOutcome(statusCode: 409, attempt: 1),
+            .retryNotReady
+        )
+        XCTAssertEqual(
+            LocalVmDesktopPolicy.joinHTTPOutcome(statusCode: 409, attempt: 2),
+            .notReadyExhausted
+        )
+        XCTAssertEqual(
+            LocalVmDesktopPolicy.joinHTTPOutcome(statusCode: 403, attempt: 0),
+            .staleTicket
+        )
+        XCTAssertEqual(
+            LocalVmDesktopPolicy.joinHTTPOutcome(statusCode: 500, attempt: 0),
+            .transientFailure
+        )
+    }
+
+    func testViewerHealthRequiresConnectedRFBWhenAvailable() {
+        XCTAssertEqual(
+            LocalVmDesktopPolicy.viewerHealthSignal(
+                rfbPresent: true,
+                rfbConnectionState: "connected",
+                canvasWidth: 16,
+                canvasHeight: 16,
+                bodyContainsPairPrompt: false
+            ),
+            .ok
+        )
+        XCTAssertEqual(
+            LocalVmDesktopPolicy.viewerHealthSignal(
+                rfbPresent: true,
+                rfbConnectionState: "connecting",
+                canvasWidth: 640,
+                canvasHeight: 480,
+                bodyContainsPairPrompt: false
+            ),
+            .waiting
+        )
+        XCTAssertEqual(
+            LocalVmDesktopPolicy.viewerHealthSignal(
+                rfbPresent: false,
+                rfbConnectionState: nil,
+                canvasWidth: 640,
+                canvasHeight: 480,
+                bodyContainsPairPrompt: false
+            ),
+            .ok
+        )
+        XCTAssertEqual(
+            LocalVmDesktopPolicy.viewerHealthSignal(
+                rfbPresent: false,
+                rfbConnectionState: nil,
+                canvasWidth: 4,
+                canvasHeight: 4,
+                bodyContainsPairPrompt: false
+            ),
+            .waiting
+        )
+        XCTAssertEqual(
+            LocalVmDesktopPolicy.viewerHealthSignal(
+                rfbPresent: true,
+                rfbConnectionState: "connected",
+                canvasWidth: 0,
+                canvasHeight: 0,
+                bodyContainsPairPrompt: true
+            ),
+            .auth
+        )
+    }
+
+    func testSaveControlUsesMinimumHitTarget() {
+        XCTAssertEqual(LocalVmDesktopPolicy.minimumChromeControlHeight, 44)
     }
 
     func testScreenshotWatchSkipsLocalVmSSETimeout() {

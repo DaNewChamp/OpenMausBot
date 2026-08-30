@@ -1,4 +1,5 @@
 import SwiftUI
+import CompanionCore
 
 /// Floating clipboard, screenshot save, and keyboard controls for a Local VM
 /// session. The keyboard button stays pinned bottom-right; paste/copy/save
@@ -96,6 +97,7 @@ struct LocalVmInteractionChrome: View {
                 Divider().opacity(0.25)
                 chromeButton(title: "Save to Photos", systemImage: "square.and.arrow.down", action: onSaveScreenshot)
                     .disabled(!canSave)
+                    .frame(minHeight: LocalVmDesktopPolicy.minimumChromeControlHeight)
             }
         }
         .padding(.vertical, 4)

@@ -35,9 +35,10 @@ struct VMViewerWebView: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.onLoadSucceeded = onLoadSucceeded
         context.coordinator.onLoadFailed = onLoadFailed
-        context.coordinator.pointerMode = pointerMode
+        if context.coordinator.pointerMode != pointerMode {
+            context.coordinator.applyPointerMode(pointerMode, on: webView)
+        }
         context.coordinator.applyScrollZoom(for: pointerMode, on: webView)
-        context.coordinator.applyPointerMode(pointerMode, on: webView)
 
         let target = LocalVmDesktopPolicy.stableViewerKey(for: url)
         let stableChanged = context.coordinator.loadedURL != target
@@ -62,6 +63,8 @@ struct VMViewerWebView: UIViewRepresentable {
         var onLoadFailed: ((String, LocalVmDesktopPolicy.ViewerFailure) -> Void)?
         private var healthCheckTask: Task<Void, Never>?
         var pointerMode: VmPointerMode = .trackpad
+        private var pointerModeInjected: VmPointerMode?
+        private var pointerModeToken: UInt = 0
         private var reportedFailure = false
         private var reportedSuccess = false
 
@@ -86,6 +89,7 @@ struct VMViewerWebView: UIViewRepresentable {
             resetHealthCheck()
             reportedFailure = false
             reportedSuccess = false
+            pointerModeInjected = nil
         }
 
         func applyScrollZoom(for mode: VmPointerMode, on webView: WKWebView) {
@@ -106,9 +110,13 @@ struct VMViewerWebView: UIViewRepresentable {
         }
 
         func applyPointerMode(_ mode: VmPointerMode, on webView: WKWebView) {
+            guard mode != pointerModeInjected else { return }
             pointerMode = mode
+            pointerModeInjected = mode
+            pointerModeToken &+= 1
+            let token = pointerModeToken
             let trackpad = mode == .trackpad
-            webView.evaluateJavaScript(Self.pointerModeScript(trackpad: trackpad), completionHandler: nil)
+            webView.evaluateJavaScript(Self.pointerModeScript(trackpad: trackpad, token: token), completionHandler: nil)
         }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? {
@@ -135,7 +143,7 @@ struct VMViewerWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             webView.evaluateJavaScript(Self.chromeScript, completionHandler: nil)
-            webView.evaluateJavaScript(Self.pointerModeScript(trackpad: pointerMode == .trackpad), completionHandler: nil)
+            applyPointerMode(pointerMode, on: webView)
             webView.evaluateJavaScript("document.body && document.body.innerText") { value, _ in
                 guard let text = value as? String else { return }
                 if text.contains("pair this device from Phone settings") {
@@ -195,11 +203,11 @@ struct VMViewerWebView: UIViewRepresentable {
                         let value = try await webView.evaluateJavaScript(Self.healthScript)
                         if Task.isCancelled { return }
                         if let result = value as? String {
-                            if result == "ok" {
+                            if result == LocalVmDesktopPolicy.ViewerHealthSignal.ok.rawValue {
                                 self.succeed()
                                 return
                             }
-                            if result == "auth" {
+                            if result == LocalVmDesktopPolicy.ViewerHealthSignal.auth.rawValue {
                                 self.fail(.staleTicket)
                                 return
                             }
@@ -212,10 +220,11 @@ struct VMViewerWebView: UIViewRepresentable {
             }
         }
 
-        private static func pointerModeScript(trackpad: Bool) -> String {
+        private static func pointerModeScript(trackpad: Bool, token: UInt) -> String {
             let mode = trackpad ? "true" : "false"
             return """
-            (function(enableTrackpad) {
+            (function(enableTrackpad, token) {
+              window.__ombPointerModeToken = token;
               function findRfb() {
                 if (window.rfb) return window.rfb;
                 if (window.UI && window.UI.rfb) return window.UI.rfb;
@@ -232,10 +241,11 @@ struct VMViewerWebView: UIViewRepresentable {
               }
               var tries = 0;
               (function poll() {
+                if (window.__ombPointerModeToken !== token) return;
                 if (apply() || ++tries > 80) return;
                 setTimeout(poll, 200);
               })();
-            })(\(mode));
+            })(\(mode), \(token));
             """
         }
 
@@ -252,13 +262,16 @@ struct VMViewerWebView: UIViewRepresentable {
 
         private static let healthScript = """
         (function() {
-          var canvas = document.getElementById('noVNC_canvas') || document.querySelector('#noVNC_container canvas') || document.querySelector('canvas');
-          if (canvas && canvas.width > 8 && canvas.height > 8) return 'ok';
-          var rfb = window.rfb || (window.UI && window.UI.rfb);
-          var state = rfb && (rfb._rfb_connection_state || rfb._rfbConnectionState);
-          if (state === 'connected') return 'ok';
           var body = document.body ? document.body.innerText : '';
           if (body.indexOf('pair this device') >= 0) return 'auth';
+          var rfb = window.rfb || (window.UI && window.UI.rfb);
+          if (rfb) {
+            var state = rfb._rfb_connection_state || rfb._rfbConnectionState;
+            if (state === 'connected') return 'ok';
+            return 'waiting';
+          }
+          var canvas = document.getElementById('noVNC_canvas') || document.querySelector('#noVNC_container canvas') || document.querySelector('canvas');
+          if (canvas && canvas.width > 8 && canvas.height > 8) return 'ok';
           return 'waiting';
         })();
         """
