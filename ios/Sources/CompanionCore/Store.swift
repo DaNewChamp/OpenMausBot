@@ -382,10 +382,9 @@ public struct CompanionState: Sendable {
     /// Live text, before the server has settled it into a `Message`.
     ///
     /// The harness folds provider events into settled messages and also
-    /// relays the raw deltas, so a client can have the reply as it is typed
-    /// and the authoritative record when the turn ends. Rendering only the
-    /// settled message — which is what this did until now — means a long
-    /// answer looks like nothing is happening for thirty seconds.
+    /// relays the raw deltas. The phone keeps the buffer for reconnect and
+    /// duplicate-tail protection; live presentation never paints those
+    /// tokens. The authoritative answer is the settled `Message`.
     private mutating func apply(runtime event: RuntimeEvent) {
         switch event.type {
         case "content.delta":

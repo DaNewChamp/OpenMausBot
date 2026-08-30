@@ -96,8 +96,9 @@ struct ChatView: View {
 
     var body: some View {
         // Split across typed subviews so Release type-checking can finish.
-        // The streaming UX is unchanged: coalesced live text, working-state
-        // fallback, near-bottom follow, and VoiceOver phase announcements.
+        // Live tokens stay hidden; working/tool/activity remain, and the
+        // settled message appears once. Near-bottom follow and VoiceOver
+        // phase announcements are unchanged.
         chatPresented
     }
 
@@ -290,7 +291,6 @@ struct ChatView: View {
                 attachmentError: $attachmentError,
                 isUploadingAttachments: isUploadingAttachments,
                 pendingQueueCount: pendingQueueNotices.values.filter { $0.threadId == threadId }.count,
-                hasPendingApproval: hasPendingApproval,
                 dictation: dictation,
                 onSubmit: { text, mode in
                     if let text {
@@ -578,11 +578,6 @@ struct ChatView: View {
             capabilities: composerCapabilities
         )
     }
-
-    private var hasPendingApproval: Bool {
-        messages.contains { $0.card?.isPending == true }
-    }
-
 
     private func submit(
         _ explicitText: String? = nil,
@@ -2024,52 +2019,5 @@ struct ScreenShot: View {
             }
             image = data.flatMap(UIImage.init(data:))
         }
-    }
-}
-
-/// The reply as it is being typed, styled to match the settled bubble it is
-/// about to become — the handover should be invisible, and any difference in
-/// padding or corner radius reads as the message jumping on arrival.
-///
-/// A caret rather than a spinner: a spinner says "something is happening
-/// somewhere", which the reader already knows. A caret at the end of real
-/// text says how far along it is.
-///
-/// The caret does not blink, deliberately. The obvious way to blink it —
-/// `withAnimation(.repeatForever) { flag.toggle() }` in `onAppear` — animates
-/// the change once and then sits still, and a caret that blinks twice and
-/// stops looks more broken than one that never blinks. A correct version
-/// animates opacity on a separate view, which needs a device to get right;
-/// static is honest until then.
-struct StreamingBubble: View {
-    let text: String?
-    var color: String = "blue"
-    var speaker: (name: String, color: String)?
-    var reduceMotion: Bool = false
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                if let speaker {
-                    Text(speaker.name)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color.primary)
-                }
-                if let text, !text.isEmpty {
-                    MarkdownText(source: text, caret: !reduceMotion)
-                        .foregroundStyle(Color.primary)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(BubbleColor.theirs)
-            }
-            Spacer(minLength: 36)
-        }
-        // No `.textSelection` on purpose: selecting text that is still growing
-        // fights the reader, and the settled bubble a frame later is
-        // selectable anyway.
     }
 }

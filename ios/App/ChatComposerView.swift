@@ -22,7 +22,6 @@ struct ChatComposerView: View {
     @Binding var attachmentError: String?
     let isUploadingAttachments: Bool
     let pendingQueueCount: Int
-    let hasPendingApproval: Bool
     @ObservedObject var dictation: SpeechDictation
     var onSubmit: (String?, MessageDeliveryMode?) -> Void
     var onActivatePrimary: () -> Void
@@ -170,11 +169,6 @@ struct ChatComposerView: View {
                     }
                 }
                 .transition(reduceMotion ? .identity : .move(edge: .bottom).combined(with: .opacity))
-            } else if draft.isEmpty && !current.busy && !hasPendingApproval {
-                PredictiveActionChipsView(accentColor: MausPalette.color(current.color)) { chip in
-                    onSubmit(chip.prompt, nil)
-                }
-                .transition(reduceMotion ? .identity : .opacity)
             }
 
             HStack(alignment: .center, spacing: 10) {

@@ -1,10 +1,9 @@
 // Live-reply presentation policy.
 //
-// The fold in `Store` still concatenates every accepted delta. This file is
-// the phone's Grok-like surface on top of that fold: buffer token bursts to a
-// short frame cadence, refuse duplicate/late work, and only show markdown
-// that will not thrash layout. Views read the reveal helper; Session owns a
-// coalescer so `@Published` state does not update once per token.
+// The fold in `Store` still concatenates every accepted delta so reconnect
+// and duplicate-tail protection have a buffer. This file is the phone's
+// Grok-like surface on top of that fold: hold tokens off the transcript,
+// show the calm working row, and reveal the settled `Message` once.
 import Foundation
 
 /// How often buffered deltas may land in the published transcript.
@@ -257,9 +256,9 @@ public enum LiveTailKind: Equatable, Sendable {
     case streaming(String)
 }
 
-/// Live bubble vs working row. A settled bot reply at the tail is the
-/// transcript; busy remaining true until the bot patch must not resurrect
-/// a second bubble or a stuck Working row.
+/// Live working row vs settled transcript. Partial assistant prose is held
+/// in `CompanionState.streaming` for reconnect and duplicate-tail protection,
+/// but it is never a second bubble: the settled `Message` is the answer.
 public enum LiveTailPolicy {
     public static func presentation(
         busy: Bool,
@@ -270,24 +269,35 @@ public enum LiveTailPolicy {
         suppressSettledReplay: Bool = true
     ) -> LiveTailKind {
         let held = streaming ?? ""
+        let coveringSettled = isSettledReply(lastMessage, covering: speakerBotId)
         let duplicateOfSettled = suppressSettledReplay && duplicatesSettledReply(
             held,
             lastMessage: lastMessage,
             speakerBotId: speakerBotId
         )
-        let effectiveStreaming = duplicateOfSettled ? nil : streaming
-        if let visible = MarkdownReveal.visiblePrefix(effectiveStreaming ?? ""), !visible.isEmpty {
-            return .streaming(visible)
+        if duplicateOfSettled || (suppressSettledReplay && coveringSettled) {
+            return .none
+        }
+
+        if ChatPresentationPolicy.revealsLiveAssistantProse {
+            let effectiveStreaming = duplicateOfSettled ? nil : streaming
+            if let visible = MarkdownReveal.visiblePrefix(effectiveStreaming ?? ""), !visible.isEmpty {
+                return .streaming(visible)
+            }
+        }
+
+        if showsWorking(
+            busy: busy,
+            streaming: nil,
+            lastMessage: lastMessage,
+            speakerBotId: speakerBotId
+        ) {
+            return .working
         }
         if !(reasoning ?? "").isEmpty {
             return .working
         }
-        if showsWorking(
-            busy: busy,
-            streaming: effectiveStreaming,
-            lastMessage: lastMessage,
-            speakerBotId: speakerBotId
-        ) {
+        if busy && !held.isEmpty {
             return .working
         }
         return .none
@@ -333,16 +343,17 @@ public enum StreamAccessibilityPhase: Equatable, Sendable {
     case complete
 }
 
-/// VoiceOver must not speak the growing reply. Announce phase changes only.
+/// VoiceOver must not speak growing tokens. Announce working once, then
+/// the settled assistant message once when it lands.
 public enum StreamAccessibility {
     public static func phase(for tail: LiveTailKind) -> StreamAccessibilityPhase {
         switch tail {
         case .none:
             return .idle
-        case .working:
+        case .working, .streaming:
+            // Buffered tokens are not a spoken phase. One working
+            // announcement, then the settled message when it lands.
             return .working
-        case .streaming:
-            return .streaming
         }
     }
 
@@ -356,14 +367,17 @@ public enum StreamAccessibility {
     public static func announcement(
         from old: StreamAccessibilityPhase,
         to new: StreamAccessibilityPhase,
-        speaker: String
+        speaker: String,
+        settledReply: String? = nil
     ) -> String? {
         if old == new { return nil }
         switch (old, new) {
         case (_, .working):
             return "\(speaker) is working"
-        case (.streaming, .idle), (_, .complete):
-            return "\(speaker) finished their reply"
+        case (.working, .idle), (.streaming, .idle),
+             (.working, .complete), (.streaming, .complete), (_, .complete):
+            let reply = settledReply?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return reply.isEmpty ? nil : reply
         default:
             return nil
         }

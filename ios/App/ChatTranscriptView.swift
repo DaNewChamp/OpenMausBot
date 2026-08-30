@@ -22,6 +22,8 @@ struct ChatTranscriptView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationTypography) private var chatTypography
 
+    @State private var lastAnnouncedSettledId: String?
+
     static let liveBubbleId = "companion.live"
 
     private var current: Chat {
@@ -42,34 +44,26 @@ struct ChatTranscriptView: View {
         session.state.liveTailPresentation(forThread: threadId)
     }
 
-    private var presentedLiveText: String? {
-        if case let .streaming(text) = liveTail { return text }
-        return nil
-    }
-
     private var showsWorkingRow: Bool {
-        if case .working = liveTail { return true }
-        return false
+        switch liveTail {
+        case .working, .streaming:
+            return true
+        case .none:
+            return false
+        }
     }
 
-    private var streamingSpeaker: (name: String, color: String)? {
+    private var streamingSpeakerName: String? {
         guard case let .room(room) = current,
               let botId = room.busyBotId,
               let bot = session.state.bot(botId)
         else { return nil }
-        return (bot.name, bot.color)
+        return bot.name
     }
 
     private var streamingAccessibilityLabel: String {
-        let name = streamingSpeaker?.name ?? current.name
-        if presentedLiveText?.isEmpty == false {
-            return "\(name) is writing"
-        }
+        let name = streamingSpeakerName ?? current.name
         return "\(name) is working"
-    }
-
-    private var streamingTintColor: String {
-        streamingSpeaker?.color ?? current.color
     }
 
     private var workingBotId: String? {
@@ -126,11 +120,7 @@ struct ChatTranscriptView: View {
             }
 
             ChatLiveTail(
-                liveText: presentedLiveText,
                 showWorking: showsWorkingRow,
-                tintColor: streamingTintColor,
-                speaker: streamingSpeaker,
-                reduceMotion: reduceMotion,
                 accessibilityLabel: streamingAccessibilityLabel,
                 chat: current,
                 speakerBotId: workingBotId
@@ -237,8 +227,7 @@ struct ChatTranscriptView: View {
             .onChange(of: messages.last?.text) { _, _ in
                 scrollToLatest(proxy, animated: false)
             }
-            .onChange(of: presentedLiveText?.count ?? 0) { _, length in
-                guard length > 0 else { return }
+            .onChange(of: showsWorkingRow) { _, _ in
                 scrollToLatest(proxy, animated: false)
             }
             .onChange(of: current.busy) { _, _ in
@@ -248,8 +237,14 @@ struct ChatTranscriptView: View {
                 followingLatest = true
                 lastDistanceFromBottom = 0
                 streamA11yPhase = .idle
+                lastAnnouncedSettledId = messages.last(where: { $0.role == .bot && $0.kind == .text })?.id
             }
-            .onAppear { announceStreamPhase() }
+            .onAppear {
+                if lastAnnouncedSettledId == nil {
+                    lastAnnouncedSettledId = messages.last(where: { $0.role == .bot && $0.kind == .text })?.id
+                }
+                announceStreamPhase()
+            }
             .onChange(of: liveTail) { _, _ in
                 announceStreamPhase()
             }
@@ -365,21 +360,35 @@ struct ChatTranscriptView: View {
 
     private func announceStreamPhase() {
         let next = StreamAccessibility.phase(for: liveTail)
+        let last = messages.last
+        let isSettling = (streamA11yPhase == .working || streamA11yPhase == .streaming)
+            && (next == .idle || next == .complete)
+        let newlySettled: String?
+        if isSettling,
+           let last, last.role == .bot, last.kind == .text,
+           last.id != lastAnnouncedSettledId {
+            newlySettled = last.text
+        } else {
+            newlySettled = nil
+        }
         let announcement = StreamAccessibility.announcement(
             from: streamA11yPhase,
             to: next,
-            speaker: streamingSpeaker?.name ?? current.name
+            speaker: streamingSpeakerName ?? current.name,
+            settledReply: newlySettled
         )
         streamA11yPhase = next
+        if newlySettled != nil, let id = last?.id {
+            lastAnnouncedSettledId = id
+        }
         guard let announcement else { return }
         UIAccessibility.post(notification: .announcement, argument: announcement)
     }
 
     private func scrollToLatest(_ proxy: ScrollViewProxy, animated: Bool = true) {
         guard ChatFollow.shouldScrollToLatest(following: followingLatest) else { return }
-        let streaming = presentedLiveText ?? ""
         let target: String
-        if showsWorkingRow || !streaming.isEmpty {
+        if showsWorkingRow {
             target = Self.liveBubbleId
         } else if let last = messages.last {
             target = last.id
@@ -422,30 +431,16 @@ private struct ChatTranscriptRow: Identifiable {
     }
 }
 
-/// Live reply vs working indicator. Own typed body so the transcript
-/// stack does not type-check this branch together with every message row.
+/// Working indicator. Partial assistant prose is never painted here; the
+/// settled transcript row is the answer.
 private struct ChatLiveTail: View {
-    let liveText: String?
     let showWorking: Bool
-    let tintColor: String
-    let speaker: (name: String, color: String)?
-    let reduceMotion: Bool
     let accessibilityLabel: String
     let chat: Chat
     let speakerBotId: String?
 
     var body: some View {
-        if let live = liveText, !live.isEmpty {
-            StreamingBubble(
-                text: live,
-                color: tintColor,
-                speaker: speaker,
-                reduceMotion: reduceMotion
-            )
-            .id(ChatTranscriptView.liveBubbleId)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(accessibilityLabel)
-        } else if showWorking {
+        if showWorking {
             WorkingTypingIndicatorView(
                 chat: chat,
                 speakerBotId: speakerBotId

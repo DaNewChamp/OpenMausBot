@@ -209,7 +209,7 @@ final class MarkdownRevealTests: XCTestCase {
 }
 
 final class StreamAccessibilityTests: XCTestCase {
-    func testWorkingAndCompletionAreAnnouncedOnce() {
+    func testWorkingIsAnnouncedOnceAndTokensAreNot() {
         XCTAssertEqual(
             StreamAccessibility.announcement(from: .idle, to: .working, speaker: "Scout"),
             "Scout is working"
@@ -217,13 +217,37 @@ final class StreamAccessibilityTests: XCTestCase {
         XCTAssertNil(StreamAccessibility.announcement(from: .working, to: .working, speaker: "Scout"))
         XCTAssertNil(StreamAccessibility.announcement(from: .working, to: .streaming, speaker: "Scout"))
         XCTAssertNil(StreamAccessibility.announcement(from: .streaming, to: .streaming, speaker: "Scout"))
+    }
+
+    func testTheSettledReplyIsAnnouncedOnceWhenTheTurnEnds() {
         XCTAssertEqual(
-            StreamAccessibility.announcement(from: .streaming, to: .complete, speaker: "Scout"),
-            "Scout finished their reply"
+            StreamAccessibility.announcement(
+                from: .working,
+                to: .idle,
+                speaker: "Scout",
+                settledReply: "Hello world"
+            ),
+            "Hello world"
         )
         XCTAssertEqual(
-            StreamAccessibility.announcement(from: .streaming, to: .idle, speaker: "Scout"),
-            "Scout finished their reply"
+            StreamAccessibility.announcement(
+                from: .working,
+                to: .complete,
+                speaker: "Scout",
+                settledReply: "Hello world"
+            ),
+            "Hello world"
+        )
+        XCTAssertNil(
+            StreamAccessibility.announcement(
+                from: .working,
+                to: .idle,
+                speaker: "Scout",
+                settledReply: "   "
+            )
+        )
+        XCTAssertNil(
+            StreamAccessibility.announcement(from: .idle, to: .idle, speaker: "Scout", settledReply: "Hello world")
         )
     }
 
@@ -231,10 +255,6 @@ final class StreamAccessibilityTests: XCTestCase {
         XCTAssertEqual(
             StreamAccessibility.phase(isBusy: true, hasVisibleText: false),
             .working
-        )
-        XCTAssertEqual(
-            StreamAccessibility.phase(isBusy: true, hasVisibleText: true),
-            .streaming
         )
         XCTAssertEqual(
             StreamAccessibility.phase(isBusy: false, hasVisibleText: false),
@@ -246,22 +266,23 @@ final class StreamAccessibilityTests: XCTestCase {
         )
     }
 
-    func testPhaseFollowsLiveTailNotTheWorkingRow() {
+    func testALiveTokenTailIsStillTheWorkingPhase() {
         XCTAssertEqual(StreamAccessibility.phase(for: .working), .working)
-        XCTAssertEqual(StreamAccessibility.phase(for: .streaming("Hello world")), .streaming)
-        XCTAssertEqual(StreamAccessibility.phase(for: .streaming("Hello world more")), .streaming)
+        XCTAssertEqual(StreamAccessibility.phase(for: .streaming("Hello world")), .working)
+        XCTAssertEqual(StreamAccessibility.phase(for: .streaming("Hello world more")), .working)
         XCTAssertEqual(StreamAccessibility.phase(for: .none), .idle)
     }
 
-    func testWorkingThenStreamingThenIdleAnnouncesOnceEach() {
+    func testWorkingThenHiddenPartialsThenSettledAnnouncesTheMessageOnce() {
         var phase = StreamAccessibility.phase(for: .none)
         var heard: [String] = []
-        func advance(_ tail: LiveTailKind) {
+        func advance(_ tail: LiveTailKind, settled: String? = nil) {
             let next = StreamAccessibility.phase(for: tail)
             if let announcement = StreamAccessibility.announcement(
                 from: phase,
                 to: next,
-                speaker: "Scout"
+                speaker: "Scout",
+                settledReply: settled
             ) {
                 heard.append(announcement)
             }
@@ -270,35 +291,20 @@ final class StreamAccessibilityTests: XCTestCase {
         advance(.working)
         advance(.streaming("Hello world"))
         advance(.streaming("Hello world more"))
-        advance(.none)
+        advance(.none, settled: "Hello world more")
         XCTAssertEqual(heard, [
             "Scout is working",
-            "Scout finished their reply"
+            "Hello world more"
         ])
     }
 
     func testASettledTailDoesNotResurrectWorking() {
-        // LiveTailPolicy reports .none under a settled bubble even while the
-        // harness is still busy. Mapping that as working would re-announce.
         XCTAssertEqual(StreamAccessibility.phase(for: .none), .idle)
         XCTAssertNil(
             StreamAccessibility.announcement(from: .idle, to: .idle, speaker: "Scout")
         )
         XCTAssertNil(
             StreamAccessibility.announcement(from: .streaming, to: .streaming, speaker: "Scout")
-        )
-    }
-
-    func testWorkingRowAsBusyIsNotTheLiveTailMapping() {
-        // App used to pass showsWorkingRow as isBusy. During .streaming that
-        // flag is false, so the busy mapping announces complete too early.
-        XCTAssertEqual(
-            StreamAccessibility.phase(isBusy: false, hasVisibleText: true),
-            .complete
-        )
-        XCTAssertEqual(
-            StreamAccessibility.phase(for: .streaming("Hello world")),
-            .streaming
         )
     }
 }
@@ -355,7 +361,7 @@ final class LiveTailPolicyTests: XCTestCase {
         )
     }
 
-    func testVisibleLiveTextResumesTheBubble() {
+    func testLivePartialsStayHiddenAndShowWorking() {
         XCTAssertEqual(
             LiveTailPolicy.presentation(
                 busy: true,
@@ -364,7 +370,18 @@ final class LiveTailPolicyTests: XCTestCase {
                 lastMessage: Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi"),
                 speakerBotId: nil
             ),
-            .streaming("Hello world")
+            .working
+        )
+        XCTAssertEqual(
+            LiveTailPolicy.presentation(
+                busy: true,
+                streaming: "H",
+                reasoning: nil,
+                lastMessage: Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi"),
+                speakerBotId: nil
+            ),
+            .working,
+            "a one-character buffer must not paint a blank bubble or hide working"
         )
     }
 
@@ -408,7 +425,7 @@ final class LiveTailPolicyTests: XCTestCase {
         )
     }
 
-    func testANewTurnCanShowStreamingThatPrefixesTheSettledReply() {
+    func testANewTurnShowsWorkingInsteadOfPartialProse() {
         XCTAssertEqual(
             LiveTailPolicy.presentation(
                 busy: true,
@@ -418,8 +435,79 @@ final class LiveTailPolicyTests: XCTestCase {
                 speakerBotId: nil,
                 suppressSettledReplay: false
             ),
-            .streaming("Hello ")
+            .working
         )
+    }
+
+    func testAStrayLiveFragmentUnderASettledReplyDoesNotResurrectWorking() {
+        XCTAssertEqual(
+            LiveTailPolicy.presentation(
+                busy: true,
+                streaming: " world",
+                reasoning: nil,
+                lastMessage: botText("Hello world"),
+                speakerBotId: nil,
+                suppressSettledReplay: true
+            ),
+            .none
+        )
+    }
+
+    func testAToolChipStaysVisibleWhileLiveProseStaysHidden() {
+        var activity = Message(id: "tool-1", role: .bot, kind: .activity, at: 2)
+        activity.tool = ToolActivity(name: "Bash", ok: nil, spoken: nil, setup: nil)
+        XCTAssertEqual(
+            LiveTailPolicy.presentation(
+                busy: true,
+                streaming: "partial answer",
+                reasoning: nil,
+                lastMessage: activity,
+                speakerBotId: nil
+            ),
+            .working
+        )
+    }
+
+    func testAPendingApprovalStaysVisibleWhileLiveProseStaysHidden() {
+        var card = Message(id: "ask-1", role: .bot, kind: .options, at: 2)
+        card.card = OptionCard(
+            title: "Approval needed",
+            subtitle: "rm -rf ./build",
+            options: ["Allow", "Deny"],
+            answered: nil,
+            dismissed: nil,
+            requestId: "r1",
+            tool: "Bash",
+            held: nil,
+            allowKey: "Bash:rm"
+        )
+        XCTAssertEqual(
+            LiveTailPolicy.presentation(
+                busy: true,
+                streaming: "I need to run this",
+                reasoning: nil,
+                lastMessage: card,
+                speakerBotId: nil
+            ),
+            .working
+        )
+        XCTAssertTrue(card.card?.isPending == true)
+    }
+
+    func testProviderNeutralDeltasNeverPaintPartialProse() {
+        for partial in ["Hello world", "```py\nprint(1)", String(repeating: "a", count: 40)] {
+            XCTAssertEqual(
+                LiveTailPolicy.presentation(
+                    busy: true,
+                    streaming: partial,
+                    reasoning: nil,
+                    lastMessage: Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi"),
+                    speakerBotId: nil
+                ),
+                .working,
+                "partial \(partial.prefix(12))…"
+            )
+        }
     }
 
     func testARoomStillShowsWorkingWhenAnotherMemberOwnsTheSettledTail() {

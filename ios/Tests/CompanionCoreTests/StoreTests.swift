@@ -718,7 +718,7 @@ final class StreamingTests: XCTestCase {
         state.apply(.runtime(RuntimeEvent(type: "turn.started", threadId: bot.threadId, eventId: "turn-2")))
         state.apply(delta("Next word ", thread: bot.threadId, id: "e2"))
         XCTAssertEqual(state.streaming[bot.threadId], "Next word ")
-        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .streaming("Next word "))
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .working)
     }
 
     func testANewTurnAcceptsTheFirstDeltaWhenItMatchesTheSettledTail() throws {
@@ -737,7 +737,7 @@ final class StreamingTests: XCTestCase {
         state.apply(.runtime(RuntimeEvent(type: "turn.started", threadId: bot.threadId, eventId: "turn-2")))
         state.apply(delta("Hello ", thread: bot.threadId, id: "e2"))
         XCTAssertEqual(state.streaming[bot.threadId], "Hello ")
-        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .streaming("Hello "))
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .working)
     }
 
     func testReconnectReplayAfterSettleStillDropsWithoutEventIds() {
@@ -822,6 +822,11 @@ final class StreamingTests: XCTestCase {
 
         state.apply(delta(" world", thread: bot.threadId))
         XCTAssertEqual(state.streaming[bot.threadId], " world")
+        XCTAssertEqual(
+            state.liveTailPresentation(forThread: bot.threadId),
+            .none,
+            "a stray fragment must not paint a second tail under the settled reply"
+        )
     }
 
     func testReconnectSuffixReplayAfterSettleStillDrops() throws {
@@ -842,6 +847,145 @@ final class StreamingTests: XCTestCase {
         state.apply(delta(" world", thread: bot.threadId))
         XCTAssertNil(state.streaming[bot.threadId])
         XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .none)
+    }
+
+    func testBufferedPartialsStayHiddenUntilASettledMessageArrives() throws {
+        var bot = try XCTUnwrap(try Self.hydratedFixture().bots.first)
+        bot.busy = true
+        bot.messages = [Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi")]
+        var state = CompanionState()
+        state.hydrate(Fleet(bots: [bot], groups: []))
+        state.apply(.bot(bot))
+        state.apply(.runtime(RuntimeEvent(type: "turn.started", threadId: bot.threadId)))
+        state.apply(delta("Hel", thread: bot.threadId, id: "e1"))
+        state.apply(delta("lo world", thread: bot.threadId, id: "e2"))
+
+        XCTAssertEqual(state.streaming[bot.threadId], "Hello world")
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .working)
+        XCTAssertEqual(
+            state.visibleTranscript(forThread: bot.threadId).filter { $0.role == .bot && $0.kind == .text }.count,
+            0
+        )
+
+        state.apply(.message(
+            threadId: bot.threadId,
+            message: Message(id: "m1", role: .bot, kind: .text, at: 2, text: "Hello world")
+        ))
+        XCTAssertNil(state.streaming[bot.threadId])
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .none)
+        XCTAssertEqual(
+            state.visibleTranscript(forThread: bot.threadId).filter { $0.role == .bot && $0.kind == .text }.map(\.text),
+            ["Hello world"]
+        )
+    }
+
+    func testASettledMessageWithoutATerminalEventIsRevealedImmediately() throws {
+        var bot = try XCTUnwrap(try Self.hydratedFixture().bots.first)
+        bot.busy = true
+        bot.messages = [Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi")]
+        var state = CompanionState()
+        state.hydrate(Fleet(bots: [bot], groups: []))
+        state.apply(.bot(bot))
+        state.apply(delta("partial", thread: bot.threadId, id: "e1"))
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .working)
+
+        state.apply(.message(
+            threadId: bot.threadId,
+            message: Message(id: "m1", role: .bot, kind: .text, at: 2, text: "the complete answer")
+        ))
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .none)
+        XCTAssertEqual(
+            state.visibleTranscript(forThread: bot.threadId).last?.text,
+            "the complete answer"
+        )
+        XCTAssertEqual(
+            state.visibleTranscript(forThread: bot.threadId).filter { $0.role == .bot && $0.kind == .text }.count,
+            1
+        )
+    }
+
+    func testHydrateReplacesABufferedPartialWithTheSettledReplyOnce() throws {
+        var bot = try XCTUnwrap(try Self.hydratedFixture().bots.first)
+        bot.busy = true
+        bot.messages = [Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi")]
+        var state = CompanionState()
+        state.hydrate(Fleet(bots: [bot], groups: []))
+        state.apply(.bot(bot))
+        state.apply(.runtime(RuntimeEvent(type: "turn.started", threadId: bot.threadId)))
+        state.apply(delta("stale partial", thread: bot.threadId, id: "e1"))
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .working)
+
+        bot.messages = [
+            Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi"),
+            Message(id: "a1", role: .bot, kind: .text, at: 2, text: "Hello world")
+        ]
+        state.hydrate(Fleet(bots: [bot], groups: []))
+
+        XCTAssertNil(state.streaming[bot.threadId])
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .none)
+        XCTAssertEqual(
+            state.visibleTranscript(forThread: bot.threadId).filter { $0.role == .bot && $0.kind == .text }.map(\.text),
+            ["Hello world"]
+        )
+    }
+
+    func testAToolAndApprovalRemainInTheTranscriptWhilePartialsStayHidden() throws {
+        var bot = try XCTUnwrap(try Self.hydratedFixture().bots.first)
+        bot.busy = true
+        bot.messages = [Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi")]
+        var state = CompanionState()
+        state.hydrate(Fleet(bots: [bot], groups: []))
+        state.apply(.bot(bot))
+        state.apply(.runtime(RuntimeEvent(type: "turn.started", threadId: bot.threadId)))
+        state.apply(delta("I will run this", thread: bot.threadId, id: "e1"))
+
+        var activity = Message(id: "tool-1", role: .bot, kind: .activity, at: 2)
+        activity.tool = ToolActivity(name: "Bash", ok: nil, spoken: nil, setup: nil)
+        activity.parentId = "u1"
+        state.apply(.message(threadId: bot.threadId, message: activity))
+
+        var card = Message(id: "ask-1", role: .bot, kind: .options, at: 3)
+        card.card = OptionCard(
+            title: "Approval needed",
+            subtitle: "rm -rf ./build",
+            options: ["Allow", "Deny"],
+            answered: nil,
+            dismissed: nil,
+            requestId: "r1",
+            tool: "Bash",
+            held: nil,
+            allowKey: "Bash:rm"
+        )
+        card.parentId = "tool-1"
+        state.apply(.message(threadId: bot.threadId, message: card))
+
+        XCTAssertEqual(state.streaming[bot.threadId], "I will run this")
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .working)
+        XCTAssertEqual(
+            state.visibleTranscript(forThread: bot.threadId).map(\.id),
+            ["u1", "tool-1", "ask-1"]
+        )
+        XCTAssertEqual(state.pendingApprovals.map(\.message.id), ["ask-1"])
+    }
+
+    func testProviderNeutralDeltasDoNotPaintUntilTheSettledMessage() throws {
+        var bot = try XCTUnwrap(try Self.hydratedFixture().bots.first)
+        bot.busy = true
+        bot.messages = [Message(id: "u1", role: .user, kind: .text, at: 1, text: "hi")]
+        var state = CompanionState()
+        state.hydrate(Fleet(bots: [bot], groups: []))
+        state.apply(.bot(bot))
+        for (index, token) in ["Hello", " from", " any", " provider"].enumerated() {
+            state.apply(delta(token, thread: bot.threadId, id: "p\(index)"))
+            XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .working)
+        }
+        XCTAssertEqual(state.streaming[bot.threadId], "Hello from any provider")
+        state.apply(.message(
+            threadId: bot.threadId,
+            message: Message(id: "m1", role: .bot, kind: .text, at: 2, text: "Hello from any provider")
+        ))
+        XCTAssertEqual(state.liveTailPresentation(forThread: bot.threadId), .none)
+        XCTAssertEqual(state.visibleTranscript(forThread: bot.threadId).last?.id, "m1")
     }
 
     private static func hydratedFixture() throws -> CompanionState {
