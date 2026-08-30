@@ -47,7 +47,7 @@ struct ChatModelPickerSheet: View {
             ScrollView {
                 ModelPickerCatalogHost(
                     instances: instances,
-                    loading: instancesLoading,
+                    loading: instancesLoading || session.modelCatalogRefreshing,
                     error: instancesError,
                     canEdit: canEdit,
                     working: current.busy == true,
@@ -95,7 +95,7 @@ struct ChatModelPickerSheet: View {
         if instances.isEmpty {
             instances = session.modelCatalog
         }
-        instancesLoading = instances.isEmpty
+        instancesLoading = true
         switch await session.loadModelCatalog() {
         case let .loaded(loaded):
             instances = loaded
@@ -103,19 +103,24 @@ struct ChatModelPickerSheet: View {
             let preserved = AdvertisedModelCatalog.preservedSelection(current.modelSelection, in: loaded)
             pickedInstanceId = preserved.instanceId
             pickedModel = preserved.model
+            instancesLoading = false
         case let .failed(message):
             instancesError = message
+            instancesLoading = false
         case .cancelled:
-            break
+            instances = session.modelCatalog
+            instancesError = session.modelCatalogError
+            if !session.modelCatalogRefreshing {
+                instancesLoading = false
+            }
         }
-        instancesLoading = false
     }
 
     private func saveModel() async {
         guard ModelSelectionPolicy.allowsSwitch(
             working: current.busy == true,
             saving: false,
-            catalogLoading: instancesLoading
+            catalogLoading: instancesLoading || session.modelCatalogRefreshing
         ), canEdit else { return }
         modelSaveRevision &+= 1
         let revision = modelSaveRevision

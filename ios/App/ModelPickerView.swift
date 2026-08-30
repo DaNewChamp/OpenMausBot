@@ -456,26 +456,23 @@ struct ModelPickerCatalogHost: View {
     var onRetry: () -> Void
     var onSelectionChange: () -> Void
 
+    private var currentSelection: ModelSelection {
+        ModelSelection(instanceId: selectedInstanceId, model: selectedModelId)
+    }
+
     private var presentation: ModelCatalogPresentation {
         ModelCatalogPresentation.surface(
             loading: loading,
             error: error,
             instances: instances,
-            canEdit: canEdit
+            canEdit: canEdit,
+            selection: currentSelection
         )
     }
 
     private var switchBlocked: Bool {
         presentation.selectionDisabled
             || !ModelSelectionPolicy.allowsSwitch(working: working, saving: saving, catalogLoading: loading)
-    }
-
-    private var pickedInstance: Instance? {
-        ModelPickerRailPolicy.resolvedRail(
-            advertised: instances,
-            selection: ModelSelection(instanceId: selectedInstanceId, model: selectedModelId),
-            activeRailId: selectedInstanceId
-        )
     }
 
     private var footer: String {
@@ -492,17 +489,29 @@ struct ModelPickerCatalogHost: View {
                 ModelPickerErrorView(message: message, retry: onRetry)
             case .empty:
                 ModelPickerEmptyView()
-            case let .catalog(_, refreshError):
+            case let .catalog(_, refreshError, refreshing):
                 if let refreshError {
                     ModelPickerErrorView(message: refreshError, retry: onRetry)
+                } else if refreshing {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(ModelSelectionPolicy.refreshingExplanation)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(ModelSelectionPolicy.refreshingExplanation)
                 }
                 ModelPickerView(
                     instances: instances,
                     selectedInstanceId: $selectedInstanceId,
                     selectedModelId: $selectedModelId,
                     disabled: switchBlocked,
-                    modelsDisabled: ModelSelectionPolicy.modelsDisabled(
-                        for: pickedInstance,
+                    modelsDisabled: ModelPickerRailPolicy.modelsDisabled(
+                        advertised: instances,
+                        selection: currentSelection,
+                        activeRailId: selectedInstanceId,
                         hostWideEngine: hostWide
                     ) || presentation.selectionDisabled,
                     footerHint: footer

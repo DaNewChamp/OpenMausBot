@@ -41,6 +41,51 @@ private final class ModelRequestStub: URLProtocol {
     }
 }
 
+private final class HeldModelRequestStub: URLProtocol {
+    static let lock = NSLock()
+    static var started = 0
+    static var stopped = 0
+    static var finished = 0
+    static var capturedRequest: URLRequest?
+    static var inflight: HeldModelRequestStub?
+
+    private let instanceLock = NSLock()
+    private var didStop = false
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.lock.lock()
+        Self.started += 1
+        Self.capturedRequest = request
+        Self.inflight = self
+        Self.lock.unlock()
+    }
+
+    override func stopLoading() {
+        instanceLock.lock()
+        defer { instanceLock.unlock() }
+        guard !didStop else { return }
+        didStop = true
+        Self.lock.lock()
+        Self.stopped += 1
+        Self.inflight = nil
+        Self.lock.unlock()
+        client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+    }
+
+    static func reset() {
+        lock.lock()
+        started = 0
+        stopped = 0
+        finished = 0
+        capturedRequest = nil
+        inflight = nil
+        lock.unlock()
+    }
+}
+
 final class ModelClientTests: XCTestCase {
     private var session: URLSession!
     private var client: CompanionClient!
@@ -352,6 +397,117 @@ final class ModelClientTests: XCTestCase {
         XCTAssertTrue(instances[1].allowsInstanceChange)
     }
 
+    func testCancelledUpdateModelDoesNotCommitResponse() async {
+        HeldModelRequestStub.reset()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HeldModelRequestStub.self]
+        let gatedSession = URLSession(configuration: configuration)
+        let gatedClient = CompanionClient(
+            connection: Connection(name: "Mac", host: "127.0.0.1", port: 8810),
+            token: "paired-token",
+            session: gatedSession
+        )
+        defer {
+            gatedSession.invalidateAndCancel()
+        }
+
+        let task = Task {
+            try await gatedClient.updateModel(
+                botId: "model-bot",
+                patch: BotModelPatch(instanceId: "claude", model: "claude-haiku-4-5")
+            )
+        }
+        let started = await waitUntil { HeldModelRequestStub.started > 0 }
+        XCTAssertTrue(started, "updateModel should create a request before cancel")
+        XCTAssertEqual(HeldModelRequestStub.finished, 0)
+
+        task.cancel()
+        _ = await waitUntil { HeldModelRequestStub.stopped > 0 }
+        var committed: Bot?
+        do {
+            committed = try await task.value
+            XCTFail("cancelled updateModel committed \(String(describing: committed))")
+        } catch {
+            XCTAssertTrue(
+                error is CancellationError || error.isCancellation,
+                "expected cancellation, got \(error)"
+            )
+        }
+        XCTAssertNil(committed)
+        XCTAssertEqual(HeldModelRequestStub.finished, 0)
+    }
+
+    func testCancelledRouterWriteDoesNotCommitResponse() async {
+        HeldModelRequestStub.reset()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HeldModelRequestStub.self]
+        let gatedSession = URLSession(configuration: configuration)
+        let gatedClient = CompanionClient(
+            connection: Connection(name: "Mac", host: "127.0.0.1", port: 8810),
+            token: "paired-token",
+            session: gatedSession
+        )
+        defer {
+            gatedSession.invalidateAndCancel()
+        }
+
+        let task = Task {
+            try await gatedClient.setReconstructedRouter(
+                VBotRouterPatch(provider: "alpha", modelId: "alpha-1")
+            )
+        }
+        let started = await waitUntil { HeldModelRequestStub.started > 0 }
+        XCTAssertTrue(started, "setReconstructedRouter should create a request before cancel")
+        XCTAssertEqual(HeldModelRequestStub.finished, 0)
+
+        task.cancel()
+        _ = await waitUntil { HeldModelRequestStub.stopped > 0 }
+        var committed: VBotRouterState?
+        do {
+            committed = try await task.value
+            XCTFail("cancelled setReconstructedRouter committed \(String(describing: committed))")
+        } catch {
+            XCTAssertTrue(
+                error is CancellationError || error.isCancellation,
+                "expected cancellation, got \(error)"
+            )
+        }
+        XCTAssertNil(committed)
+        XCTAssertEqual(HeldModelRequestStub.finished, 0)
+    }
+
+    func testCancelledUpdateModelBeforeSendDoesNotStartRequest() async {
+        HeldModelRequestStub.reset()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HeldModelRequestStub.self]
+        let gatedSession = URLSession(configuration: configuration)
+        let gatedClient = CompanionClient(
+            connection: Connection(name: "Mac", host: "127.0.0.1", port: 8810),
+            token: "paired-token",
+            session: gatedSession
+        )
+        defer {
+            gatedSession.invalidateAndCancel()
+        }
+
+        let task = Task {
+            try await Task.sleep(nanoseconds: 5_000_000_000)
+            return try await gatedClient.updateModel(
+                botId: "model-bot",
+                patch: BotModelPatch(instanceId: "claude", model: "claude-haiku-4-5")
+            )
+        }
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("cancelled task should not send updateModel")
+        } catch {
+            XCTAssertTrue(error is CancellationError || error.isCancellation)
+        }
+        XCTAssertEqual(HeldModelRequestStub.started, 0)
+        XCTAssertEqual(HeldModelRequestStub.finished, 0)
+    }
+
     private func decodeInstance(_ json: String) throws -> Instance {
         try JSONDecoder().decode(Instance.self, from: Data(json.utf8))
     }
@@ -364,4 +520,16 @@ final class ModelClientTests: XCTestCase {
       "createdAt":1786742441013
     }}
     """.utf8)
+}
+
+private func waitUntil(
+    timeoutNanoseconds: UInt64 = 2_000_000_000,
+    _ condition: @Sendable () -> Bool
+) async -> Bool {
+    let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+    while DispatchTime.now().uptimeNanoseconds < deadline {
+        if condition() { return true }
+        try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    return condition()
 }

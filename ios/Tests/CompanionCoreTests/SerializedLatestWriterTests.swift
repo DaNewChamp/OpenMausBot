@@ -69,6 +69,61 @@ final class SerializedLatestWriterTests: XCTestCase {
         XCTAssertEqual(performed, ["A"])
     }
 
+    func testInvalidateCancelsInFlightPerformSoSendDoesNotCommit() async {
+        let writer = SerializedLatestWriter<String, String, String>()
+        let probe = PerformProbe()
+        await probe.block("A")
+
+        async let first: String? = writer.submit(key: "bot", intent: "A") { intent in
+            await probe.enter(intent)
+            guard !Task.isCancelled else { return nil }
+            await probe.commit(intent)
+            return intent
+        }
+        await probe.waitUntilStarted("A")
+        await writer.invalidate(key: "bot")
+        let result = await first
+
+        XCTAssertNil(result)
+        let performed = await probe.performed
+        XCTAssertEqual(performed, ["A"])
+        let committed = await probe.committed
+        XCTAssertEqual(committed, [])
+    }
+
+    func testInvalidateBeforePerformStartsSkipsSend() async {
+        let writer = SerializedLatestWriter<String, String, String>()
+        let probe = PerformProbe()
+        await probe.block("A")
+
+        async let first: String? = writer.submit(key: "bot", intent: "A") { intent in
+            await probe.enter(intent)
+            guard !Task.isCancelled else { return nil }
+            await probe.commit(intent)
+            return intent
+        }
+        await probe.waitUntilStarted("A")
+
+        let secondTask = Task {
+            await writer.submit(key: "bot", intent: "B") { intent in
+                await probe.enter(intent)
+                guard !Task.isCancelled else { return nil }
+                await probe.commit(intent)
+                return intent
+            }
+        }
+        await waitUntilGeneration(writer, key: "bot", atLeast: 2)
+        await writer.invalidate(key: "bot")
+        let results = await (first, secondTask.value)
+
+        XCTAssertNil(results.0)
+        XCTAssertNil(results.1)
+        let performed = await probe.performed
+        XCTAssertEqual(performed, ["A"])
+        let committed = await probe.committed
+        XCTAssertEqual(committed, [])
+    }
+
     func testLaterSubmitAfterInvalidateRunsOnceInFlightFinishes() async {
         let writer = SerializedLatestWriter<String, String, String>()
         let probe = PerformProbe()
@@ -103,6 +158,7 @@ private actor PerformProbe {
     private var gates: [String: Gate] = [:]
     private var blocking: Set<String> = []
     private(set) var performed: [String] = []
+    private(set) var committed: [String] = []
     private var overlap = 0
     private(set) var maxOverlap = 0
 
@@ -140,6 +196,10 @@ private actor PerformProbe {
         gates[intent] = gate
     }
 
+    func commit(_ intent: String) {
+        committed.append(intent)
+    }
+
     func enter(_ intent: String) async {
         overlap += 1
         maxOverlap = max(maxOverlap, overlap)
@@ -163,14 +223,18 @@ private actor PerformProbe {
             return
         }
 
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            var current = gates[intent] ?? Gate()
-            if current.released {
-                continuation.resume()
-            } else {
-                current.release = continuation
-                gates[intent] = current
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                var current = gates[intent] ?? Gate()
+                if current.released {
+                    continuation.resume()
+                } else {
+                    current.release = continuation
+                    gates[intent] = current
+                }
             }
+        } onCancel: {
+            Task { await self.release(intent) }
         }
         overlap -= 1
     }

@@ -36,6 +36,7 @@ final class ModelSelectionPolicyTests: XCTestCase {
             ModelSelectionPolicy.hostWideHint,
             ModelSelectionPolicy.fastModeHint,
             ModelSelectionPolicy.providerKeepsLocalModel,
+            ModelSelectionPolicy.refreshingExplanation,
         ] {
             XCTAssertFalse(copy.localizedCaseInsensitiveContains("codex"))
             XCTAssertFalse(copy.localizedCaseInsensitiveContains("claude"))
@@ -76,10 +77,19 @@ final class ModelSelectionPolicyTests: XCTestCase {
             ModelCatalogPresentation.surface(loading: true, error: nil, instances: [], canEdit: true),
             .loading
         )
-        XCTAssertEqual(
-            ModelCatalogPresentation.surface(loading: true, error: nil, instances: catalog, canEdit: true),
-            .catalog(cachedOffline: false, refreshError: nil)
+        let refreshing = ModelCatalogPresentation.surface(
+            loading: true,
+            error: nil,
+            instances: catalog,
+            canEdit: true
         )
+        XCTAssertEqual(
+            refreshing,
+            .catalog(cachedOffline: false, refreshError: nil, refreshing: true)
+        )
+        XCTAssertTrue(refreshing.selectionDisabled)
+        XCTAssertTrue(refreshing.isRefreshing)
+        XCTAssertTrue(refreshing.showsCatalogRows)
         XCTAssertEqual(
             ModelCatalogPresentation.surface(loading: false, error: "timeout", instances: [], canEdit: true),
             .error("timeout")
@@ -90,16 +100,21 @@ final class ModelSelectionPolicyTests: XCTestCase {
         )
         XCTAssertEqual(
             ModelCatalogPresentation.surface(loading: false, error: "timeout", instances: catalog, canEdit: false),
-            .catalog(cachedOffline: true, refreshError: nil)
+            .catalog(cachedOffline: true, refreshError: nil, refreshing: false)
         )
         XCTAssertTrue(
             ModelCatalogPresentation.surface(loading: false, error: nil, instances: catalog, canEdit: false)
                 .selectionDisabled
         )
-        XCTAssertFalse(
-            ModelCatalogPresentation.surface(loading: false, error: nil, instances: catalog, canEdit: true)
-                .selectionDisabled
+        let ready = ModelCatalogPresentation.surface(
+            loading: false,
+            error: nil,
+            instances: catalog,
+            canEdit: true
         )
+        XCTAssertEqual(ready, .catalog(cachedOffline: false, refreshError: nil, refreshing: false))
+        XCTAssertFalse(ready.selectionDisabled)
+        XCTAssertFalse(ready.isRefreshing)
 
         let stale = ModelCatalogPresentation.surface(
             loading: false,
@@ -107,10 +122,128 @@ final class ModelSelectionPolicyTests: XCTestCase {
             instances: catalog,
             canEdit: true
         )
-        XCTAssertEqual(stale, .catalog(cachedOffline: true, refreshError: "timeout"))
+        XCTAssertEqual(stale, .catalog(cachedOffline: true, refreshError: "timeout", refreshing: false))
         XCTAssertTrue(stale.selectionDisabled)
         XCTAssertEqual(stale.refreshError, "timeout")
         XCTAssertTrue(stale.showsCatalogRows)
+        XCTAssertFalse(stale.isRefreshing)
+    }
+
+    func testWarmCacheRefreshReenablesOnlyOnSuccess() {
+        let catalog = [Self.sampleInstance(id: "alpha", models: ["alpha-1"])]
+        let inFlight = ModelCatalogPresentation.surface(
+            loading: true,
+            error: nil,
+            instances: catalog,
+            canEdit: true
+        )
+        XCTAssertTrue(inFlight.selectionDisabled)
+        XCTAssertTrue(inFlight.isRefreshing)
+
+        let failed = ModelCatalogPresentation.surface(
+            loading: false,
+            error: "timeout",
+            instances: catalog,
+            canEdit: true
+        )
+        XCTAssertTrue(failed.selectionDisabled)
+        XCTAssertFalse(failed.isRefreshing)
+
+        let succeeded = ModelCatalogPresentation.surface(
+            loading: false,
+            error: nil,
+            instances: catalog,
+            canEdit: true
+        )
+        XCTAssertFalse(succeeded.selectionDisabled)
+        XCTAssertFalse(succeeded.isRefreshing)
+    }
+
+    func testEmptyAdvertisedCatalogHostUsesRailPolicyOrphan() {
+        let selection = ModelSelection(instanceId: "retired", model: "retired-1")
+        let orphaned = ModelCatalogPresentation.surface(
+            loading: false,
+            error: nil,
+            instances: [],
+            canEdit: true,
+            selection: selection
+        )
+        XCTAssertNotEqual(orphaned, .empty)
+        XCTAssertEqual(
+            orphaned,
+            .catalog(cachedOffline: false, refreshError: nil, refreshing: false)
+        )
+        XCTAssertTrue(orphaned.showsCatalogRows)
+        XCTAssertFalse(ModelPickerRailPolicy.isEmpty(advertised: [], selection: selection))
+
+        let genericEmpty = ModelCatalogPresentation.surface(
+            loading: false,
+            error: nil,
+            instances: [],
+            canEdit: true,
+            selection: ModelSelection(instanceId: "", model: "")
+        )
+        XCTAssertEqual(genericEmpty, .empty)
+
+        let offlineOrphan = ModelCatalogPresentation.surface(
+            loading: false,
+            error: nil,
+            instances: [],
+            canEdit: false,
+            selection: selection
+        )
+        XCTAssertEqual(
+            offlineOrphan,
+            .catalog(cachedOffline: true, refreshError: nil, refreshing: false)
+        )
+        XCTAssertTrue(offlineOrphan.selectionDisabled)
+    }
+
+    func testBusyRevertInvalidationIsScopedByMutationOwner() {
+        XCTAssertEqual(
+            InterruptedModelWritePolicy.invalidationTargets(
+                botId: "a",
+                mutationTarget: .openmaus,
+                inFlightRouterOwner: .settings
+            ),
+            [.advertisedBot("a")]
+        )
+        XCTAssertEqual(
+            InterruptedModelWritePolicy.invalidationTargets(
+                botId: "a",
+                mutationTarget: .openmaus,
+                inFlightRouterOwner: .bot("a")
+            ),
+            [.advertisedBot("a")]
+        )
+        XCTAssertEqual(
+            InterruptedModelWritePolicy.invalidationTargets(
+                botId: "a",
+                mutationTarget: .grokReconstructed,
+                inFlightRouterOwner: .settings
+            ),
+            [.advertisedBot("a")]
+        )
+        XCTAssertEqual(
+            InterruptedModelWritePolicy.invalidationTargets(
+                botId: "a",
+                mutationTarget: .grokReconstructed,
+                inFlightRouterOwner: .bot("b")
+            ),
+            [.advertisedBot("a")]
+        )
+        XCTAssertEqual(
+            InterruptedModelWritePolicy.invalidationTargets(
+                botId: "a",
+                mutationTarget: .grokReconstructed,
+                inFlightRouterOwner: .bot("a")
+            ),
+            [.advertisedBot("a"), .reconstructedRouter]
+        )
+        XCTAssertTrue(InterruptedModelWritePolicy.shouldForceHydrate(inFlightWriteInterrupted: true))
+        XCTAssertFalse(InterruptedModelWritePolicy.shouldForceHydrate(inFlightWriteInterrupted: false))
+        XCTAssertTrue(InterruptedModelWritePolicy.shouldHoldTurnUntilHydrate(unconfirmedWrite: true))
+        XCTAssertFalse(InterruptedModelWritePolicy.shouldHoldTurnUntilHydrate(unconfirmedWrite: false))
     }
 
     func testModelsDisabledFollowsAdvertisedFlagNotVendorName() {

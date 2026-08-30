@@ -4,12 +4,18 @@ import Foundation
 ///
 /// Concurrent `submit` calls for the same key never overlap `perform`. A newer
 /// intent replaces a queued one so the server and UI honor last user intent.
-/// `invalidate` drops queued work and prevents an in-flight result from applying.
+/// `invalidate` drops queued work, cancels the in-flight `perform` Task, and
+/// prevents that result from applying.
+///
+/// Cancellation cannot roll back a sidecar PATCH after the request body has
+/// already been sent. Callers must not treat a reverted local selection as
+/// authoritative: skip sending a new turn against it and hydrate first.
 public actor SerializedLatestWriter<Key: Hashable & Sendable, Intent: Sendable, Output: Sendable> {
     private var generation: [Key: Int] = [:]
     private var pending: [Key: Pending] = [:]
     private var waiters: [Key: [Int: CheckedContinuation<Output?, Never>]] = [:]
     private var running: Set<Key> = []
+    private var inFlight: [Key: Task<Output?, Never>] = [:]
 
     private struct Pending {
         var intent: Intent
@@ -21,6 +27,9 @@ public actor SerializedLatestWriter<Key: Hashable & Sendable, Intent: Sendable, 
     public func invalidate(key: Key) {
         generation[key] = EngineSyncPolicy.nextGeneration(after: generation[key] ?? 0)
         pending[key] = nil
+        if let task = inFlight.removeValue(forKey: key) {
+            task.cancel()
+        }
         resumeAll(key: key, value: nil)
     }
 
@@ -51,7 +60,19 @@ public actor SerializedLatestWriter<Key: Hashable & Sendable, Intent: Sendable, 
         perform: @escaping @Sendable (Intent) async -> Output?
     ) async {
         while let work = pending.removeValue(forKey: key) {
-            let output = await perform(work.intent)
+            guard EngineSyncPolicy.shouldApply(
+                startedGeneration: work.generation,
+                currentGeneration: generation[key] ?? 0
+            ) else {
+                resume(key: key, generation: work.generation, value: nil)
+                continue
+            }
+            let task = Task<Output?, Never> {
+                await perform(work.intent)
+            }
+            inFlight[key] = task
+            let output = await task.value
+            inFlight[key] = nil
             let apply = EngineSyncPolicy.shouldApply(
                 startedGeneration: work.generation,
                 currentGeneration: generation[key] ?? 0

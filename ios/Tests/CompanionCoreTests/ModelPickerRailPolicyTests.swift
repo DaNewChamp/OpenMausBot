@@ -72,6 +72,16 @@ final class ModelPickerRailPolicyTests: XCTestCase {
                 hostWideEngine: false
             )
         )
+
+        let host = ModelCatalogPresentation.surface(
+            loading: false,
+            error: nil,
+            instances: [],
+            canEdit: true,
+            selection: selection
+        )
+        XCTAssertTrue(host.showsCatalogRows)
+        XCTAssertNotEqual(host, .empty)
     }
 
     func testPickedInstanceComesFromDisplayCatalogNotAdvertisedFallback() {

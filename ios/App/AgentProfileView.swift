@@ -93,7 +93,7 @@ struct AgentProfileView: View {
         busy || !ModelSelectionPolicy.allowsSwitch(
             working: current.busy == true,
             saving: savingModel,
-            catalogLoading: instancesLoading
+            catalogLoading: instancesLoading || session.modelCatalogRefreshing
         )
     }
     private var botRoutines: [Routine] { routines.filter { $0.botId == current.id } }
@@ -700,7 +700,7 @@ struct AgentProfileView: View {
         VStack(alignment: .leading, spacing: 14) {
             ModelPickerCatalogHost(
                 instances: instances,
-                loading: instancesLoading,
+                loading: instancesLoading || session.modelCatalogRefreshing,
                 error: instancesError,
                 canEdit: canEdit,
                 working: current.busy == true,
@@ -828,9 +828,7 @@ struct AgentProfileView: View {
         if instances.isEmpty {
             instances = session.modelCatalog
         }
-        let hadCache = !instances.isEmpty
-        if !hadCache { instancesLoading = true }
-        defer { instancesLoading = false }
+        instancesLoading = true
 
         switch await session.loadModelCatalog() {
         case let .loaded(loaded):
@@ -841,10 +839,16 @@ struct AgentProfileView: View {
             pickedModel = preserved.model
             let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: loaded)?.capabilities?.effortLevels ?? []
             pickedEffort = current.modelSelection.effort.flatMap { levels.contains($0) ? $0 : nil }
+            instancesLoading = false
         case let .failed(message):
             instancesError = message
+            instancesLoading = false
         case .cancelled:
-            break
+            instances = session.modelCatalog
+            instancesError = session.modelCatalogError
+            if !session.modelCatalogRefreshing {
+                instancesLoading = false
+            }
         }
     }
 

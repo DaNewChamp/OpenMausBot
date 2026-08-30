@@ -759,9 +759,15 @@ public struct CompanionClient: Sendable {
     }
 
     private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        try Task.checkCancellation()
         do {
             return try await session.data(for: request)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
+            if Task.isCancelled || error.isCancellation {
+                throw CancellationError()
+            }
             throw APIError.transport(error.localizedDescription)
         }
     }
@@ -1015,7 +1021,8 @@ public struct CompanionClient: Sendable {
     }
 
     public func setReconstructedRouter(_ patch: VBotRouterPatch) async throws -> VBotRouterState {
-        try await send(
+        try Task.checkCancellation()
+        return try await send(
             try makeRequest("PUT", "/api/vbot/router", encodedBody: patch),
             as: VBotRouterState.self
         )
@@ -1252,7 +1259,8 @@ public struct CompanionClient: Sendable {
     /// An explicit effort key is rewritten by the sidecar onto the harness
     /// bot PATCH so the live desktop can persist reasoning level.
     public func updateModel(botId: String, patch: BotModelPatch) async throws -> Bot {
-        try await send(
+        try Task.checkCancellation()
+        return try await send(
             try makeRequest("PATCH", "/api/bots/\(botId)/model", encodedBody: patch),
             as: BotResponse.self
         ).bot

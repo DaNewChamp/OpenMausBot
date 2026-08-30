@@ -91,6 +91,7 @@ final class Session: ObservableObject {
     /// reconnects so pickers can show a disabled cache instead of going blank.
     @Published private(set) var modelCatalog: [Instance] = []
     @Published private(set) var modelCatalogError: String?
+    @Published private(set) var modelCatalogRefreshing = false
     /// Text staged from another screen (for example Computer paste) for the
     /// next opened chat composer to absorb.
     @Published var stagedComposerText: String?
@@ -122,6 +123,11 @@ final class Session: ObservableObject {
     private var routerWriteGeneration = 0
     private let modelWriter = SerializedLatestWriter<String, ModelWriteIntent, Bot>()
     private let routerWriter = SerializedLatestWriter<String, VBotRouterPatch, VBotRouterState>()
+    private var routerWriteOwner: InterruptedModelWritePolicy.RouterOwner?
+    private var advertisedWritesInFlight: Set<String> = []
+    private var routerWriteInFlight = false
+    private var unconfirmedModelWrites: Set<String> = []
+    private var unconfirmedRouterWrite = false
     /// Token bursts land here and publish on a frame cadence, so SwiftUI does
     /// not rebuild the chat on every provider delta.
     private var streamCoalescer = StreamCoalescer()
@@ -355,10 +361,12 @@ final class Session: ObservableObject {
         self.engineSync = nil
         self.modelCatalog = []
         self.modelCatalogError = nil
+        self.modelCatalogRefreshing = false
         engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
         modelCatalogGeneration = EngineSyncPolicy.nextGeneration(after: modelCatalogGeneration)
         routerWriteGeneration = EngineSyncPolicy.nextGeneration(after: routerWriteGeneration)
         modelUpdateGenerations.removeAll()
+        resetInterruptedModelWriteTracking()
         localVmStatuses.removeAll()
         localVmAccess = false
         localVmAccessDenied = false
@@ -427,10 +435,12 @@ final class Session: ObservableObject {
         engineSync = nil
         modelCatalog = []
         modelCatalogError = nil
+        modelCatalogRefreshing = false
         engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
         modelCatalogGeneration = EngineSyncPolicy.nextGeneration(after: modelCatalogGeneration)
         routerWriteGeneration = EngineSyncPolicy.nextGeneration(after: routerWriteGeneration)
         modelUpdateGenerations.removeAll()
+        resetInterruptedModelWriteTracking()
         rotation = CandidateRotation(hosts: [])
         resetStreamCoalescer()
         state = CompanionState()
@@ -910,6 +920,9 @@ final class Session: ObservableObject {
     ) async -> MessageDeliveryReceipt? {
         guard let client else { return nil }
         do {
+            if !(await reconcileInterruptedModelWriteIfNeeded(for: chat)) {
+                return nil
+            }
             switch chat {
             case let .bot(bot):
                 if VBotMutationRouting.target(for: engineSync) == .grokReconstructed {
@@ -1615,12 +1628,18 @@ final class Session: ObservableObject {
     func loadModelCatalog(quietly: Bool = false) async -> ModelCatalogLoadResult {
         modelCatalogGeneration = EngineSyncPolicy.nextGeneration(after: modelCatalogGeneration)
         let generation = modelCatalogGeneration
+        modelCatalogRefreshing = true
 
-        func publish(_ result: ModelCatalogLoadResult) -> ModelCatalogLoadResult {
-            guard EngineSyncPolicy.shouldApply(
+        func isCurrent() -> Bool {
+            EngineSyncPolicy.shouldApply(
                 startedGeneration: generation,
                 currentGeneration: modelCatalogGeneration
-            ) else { return .cancelled }
+            )
+        }
+
+        func publish(_ result: ModelCatalogLoadResult) -> ModelCatalogLoadResult {
+            guard isCurrent() else { return .cancelled }
+            modelCatalogRefreshing = false
             switch result {
             case let .loaded(instances):
                 modelCatalog = instances
@@ -1639,10 +1658,7 @@ final class Session: ObservableObject {
         if engineSync == nil {
             await refreshEngineSync(quietly: true)
         }
-        guard EngineSyncPolicy.shouldApply(
-            startedGeneration: generation,
-            currentGeneration: modelCatalogGeneration
-        ) else { return .cancelled }
+        guard isCurrent() else { return .cancelled }
 
         switch EngineSyncPolicy.catalogSource(for: engineSync) {
         case .unknown:
@@ -1656,10 +1672,7 @@ final class Session: ObservableObject {
             } else {
                 router = await reconstructedRouter()
             }
-            guard EngineSyncPolicy.shouldApply(
-                startedGeneration: generation,
-                currentGeneration: modelCatalogGeneration
-            ) else { return .cancelled }
+            guard isCurrent() else { return .cancelled }
             guard let router else {
                 return publish(.failed(actionError ?? "Could not load providers for the selected engine."))
             }
@@ -1671,7 +1684,7 @@ final class Session: ObservableObject {
             case let .failed(message):
                 return publish(.failed(message))
             case .cancelled:
-                return .cancelled
+                return publish(.cancelled)
             }
         }
     }
@@ -1770,7 +1783,12 @@ final class Session: ObservableObject {
         }
     }
 
-    func setReconstructedRouter(provider: String?, modelId: String?) async -> VBotRouterState? {
+    func setReconstructedRouter(
+        provider: String?,
+        modelId: String?,
+        owner: InterruptedModelWritePolicy.RouterOwner = .settings
+    ) async -> VBotRouterState? {
+        routerWriteOwner = owner
         routerWriteGeneration = EngineSyncPolicy.nextGeneration(after: routerWriteGeneration)
         let generation = routerWriteGeneration
         let patch = VBotRouterPatch(provider: provider, modelId: modelId)
@@ -1790,11 +1808,27 @@ final class Session: ObservableObject {
     }
 
     private func sendReconstructedRouter(_ patch: VBotRouterPatch) async -> VBotRouterState? {
+        if Task.isCancelled { return nil }
         guard let client else { return nil }
+        routerWriteInFlight = true
+        defer { routerWriteInFlight = false }
         do {
-            return try await client.setReconstructedRouter(patch)
+            let router = try await client.setReconstructedRouter(patch)
+            if Task.isCancelled {
+                if InterruptedModelWritePolicy.shouldForceHydrate(inFlightWriteInterrupted: true) {
+                    unconfirmedRouterWrite = true
+                }
+                return nil
+            }
+            return router
         } catch {
-            if !Task.isCancelled { actionError = error.localizedDescription }
+            if Task.isCancelled || error.isCancellation {
+                if InterruptedModelWritePolicy.shouldForceHydrate(inFlightWriteInterrupted: true) {
+                    unconfirmedRouterWrite = true
+                }
+                return nil
+            }
+            actionError = error.localizedDescription
             return nil
         }
     }
@@ -1819,13 +1853,38 @@ final class Session: ObservableObject {
     }
 
     func invalidateModelUpdates(for botId: String) {
-        modelUpdateGenerations[botId] = EngineSyncPolicy.nextGeneration(
-            after: modelUpdateGenerations[botId] ?? 0
+        let targets = InterruptedModelWritePolicy.invalidationTargets(
+            botId: botId,
+            mutationTarget: VBotMutationRouting.target(for: engineSync),
+            inFlightRouterOwner: routerWriteOwner
         )
-        routerWriteGeneration = EngineSyncPolicy.nextGeneration(after: routerWriteGeneration)
+        for target in targets {
+            switch target {
+            case let .advertisedBot(id):
+                modelUpdateGenerations[id] = EngineSyncPolicy.nextGeneration(
+                    after: modelUpdateGenerations[id] ?? 0
+                )
+                if advertisedWritesInFlight.contains(id),
+                   InterruptedModelWritePolicy.shouldForceHydrate(inFlightWriteInterrupted: true) {
+                    unconfirmedModelWrites.insert(id)
+                }
+            case .reconstructedRouter:
+                routerWriteGeneration = EngineSyncPolicy.nextGeneration(after: routerWriteGeneration)
+                if routerWriteInFlight,
+                   InterruptedModelWritePolicy.shouldForceHydrate(inFlightWriteInterrupted: true) {
+                    unconfirmedRouterWrite = true
+                }
+            }
+        }
         Task {
-            await modelWriter.invalidate(key: botId)
-            await routerWriter.invalidate(key: "router")
+            for target in targets {
+                switch target {
+                case let .advertisedBot(id):
+                    await modelWriter.invalidate(key: id)
+                case .reconstructedRouter:
+                    await routerWriter.invalidate(key: "router")
+                }
+            }
         }
     }
 
@@ -1836,7 +1895,8 @@ final class Session: ObservableObject {
         if VBotMutationRouting.target(for: engineSync) == .grokReconstructed {
             guard let router = await setReconstructedRouter(
                 provider: patch.instanceId,
-                modelId: patch.model
+                modelId: patch.model,
+                owner: .bot(bot.id)
             ) else { return nil }
             var next = state.bot(bot.id) ?? bot
             next.modelSelection = ModelSelection(
@@ -1860,15 +1920,61 @@ final class Session: ObservableObject {
     }
 
     private func sendAdvertisedModelPatch(_ intent: ModelWriteIntent) async -> Bot? {
+        if Task.isCancelled { return nil }
         guard let client else { return nil }
+        advertisedWritesInFlight.insert(intent.bot.id)
+        defer { advertisedWritesInFlight.remove(intent.bot.id) }
         do {
             let updated = try await client.updateModel(botId: intent.bot.id, patch: intent.patch)
-            guard !Task.isCancelled else { return nil }
+            if Task.isCancelled {
+                if InterruptedModelWritePolicy.shouldForceHydrate(inFlightWriteInterrupted: true) {
+                    unconfirmedModelWrites.insert(intent.bot.id)
+                }
+                return nil
+            }
             return updated
         } catch {
-            if !Task.isCancelled { actionError = error.localizedDescription }
+            if Task.isCancelled || error.isCancellation {
+                if InterruptedModelWritePolicy.shouldForceHydrate(inFlightWriteInterrupted: true) {
+                    unconfirmedModelWrites.insert(intent.bot.id)
+                }
+                return nil
+            }
+            actionError = error.localizedDescription
             return nil
         }
+    }
+
+    private func reconcileInterruptedModelWriteIfNeeded(for chat: Chat) async -> Bool {
+        let unconfirmed: Bool
+        switch chat {
+        case let .bot(bot):
+            unconfirmed = unconfirmedModelWrites.contains(bot.id) || unconfirmedRouterWrite
+        case .room:
+            unconfirmed = unconfirmedRouterWrite
+        }
+        guard InterruptedModelWritePolicy.shouldHoldTurnUntilHydrate(unconfirmedWrite: unconfirmed) else {
+            return true
+        }
+        do {
+            try await hydrate()
+            if case let .bot(bot) = chat {
+                unconfirmedModelWrites.remove(bot.id)
+            }
+            unconfirmedRouterWrite = false
+            return true
+        } catch {
+            if !Task.isCancelled { actionError = error.localizedDescription }
+            return false
+        }
+    }
+
+    private func resetInterruptedModelWriteTracking() {
+        routerWriteOwner = nil
+        advertisedWritesInFlight.removeAll()
+        routerWriteInFlight = false
+        unconfirmedModelWrites.removeAll()
+        unconfirmedRouterWrite = false
     }
 
     func updateComputerDestination(_ patch: BotComputerDestinationPatch, for bot: Bot) async -> Bot? {

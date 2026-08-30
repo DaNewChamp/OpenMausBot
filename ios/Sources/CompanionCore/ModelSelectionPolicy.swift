@@ -7,6 +7,7 @@ public enum ModelSelectionPolicy: Sendable {
     public static let busyExplanation = "Interrupt this agent before switching models."
     public static let idleHint = "Changes apply to the next message."
     public static let emptyCatalogExplanation = "No models on computer"
+    public static let refreshingExplanation = "Refreshing models."
     public static let engineEmptyExplanation = "No models advertised for this engine."
     public static let hostWideHint =
         "This engine uses one provider and model for every agent on this computer."
@@ -133,20 +134,27 @@ public enum ModelCatalogPresentation: Equatable, Sendable {
     case loading
     case error(String)
     case empty
-    case catalog(cachedOffline: Bool, refreshError: String?)
+    case catalog(cachedOffline: Bool, refreshError: String?, refreshing: Bool)
 
     public static func surface(
         loading: Bool,
         error: String?,
         instances: [Instance],
-        canEdit: Bool
+        canEdit: Bool,
+        selection: ModelSelection? = nil
     ) -> ModelCatalogPresentation {
-        let hasCache = !instances.isEmpty
+        let rows: [Instance]
+        if let selection, !selection.instanceId.isEmpty {
+            rows = ModelPickerRailPolicy.displayInstances(advertised: instances, selection: selection)
+        } else {
+            rows = instances
+        }
+        let hasCache = !AdvertisedModelCatalog.isEmpty(rows)
         if CalmSurfacePolicy.showsSkeleton(isLoading: loading, hasCachedRows: hasCache) {
             return .loading
         }
         if !canEdit {
-            if hasCache { return .catalog(cachedOffline: true, refreshError: nil) }
+            if hasCache { return .catalog(cachedOffline: true, refreshError: nil, refreshing: false) }
             if let error { return .error(error) }
             return .empty
         }
@@ -154,20 +162,23 @@ public enum ModelCatalogPresentation: Equatable, Sendable {
             return .error(error)
         }
         if let error, hasCache {
-            return .catalog(cachedOffline: true, refreshError: error)
+            return .catalog(cachedOffline: true, refreshError: error, refreshing: false)
         }
-        if !loading, error == nil, AdvertisedModelCatalog.isEmpty(instances) {
+        if loading, hasCache {
+            return .catalog(cachedOffline: false, refreshError: nil, refreshing: true)
+        }
+        if !loading, error == nil, AdvertisedModelCatalog.isEmpty(rows) {
             return .empty
         }
-        return .catalog(cachedOffline: false, refreshError: nil)
+        return .catalog(cachedOffline: false, refreshError: nil, refreshing: false)
     }
 
     public var selectionDisabled: Bool {
         switch self {
         case .loading, .error, .empty:
             return true
-        case let .catalog(cachedOffline, refreshError):
-            return cachedOffline || refreshError != nil
+        case let .catalog(cachedOffline, refreshError, refreshing):
+            return cachedOffline || refreshError != nil || refreshing
         }
     }
 
@@ -175,15 +186,60 @@ public enum ModelCatalogPresentation: Equatable, Sendable {
         switch self {
         case let .error(message):
             return message
-        case let .catalog(_, error):
+        case let .catalog(_, error, _):
             return error
         default:
             return nil
         }
     }
 
+    public var isRefreshing: Bool {
+        if case let .catalog(_, _, refreshing) = self { return refreshing }
+        return false
+    }
+
     public var showsCatalogRows: Bool {
         if case .catalog = self { return true }
         return false
+    }
+}
+
+/// Busy-revert write ownership and the URLSession cancel honesty boundary.
+///
+/// `URLSession` cancel aborts the client wait. It cannot roll back a sidecar
+/// PATCH after the request body has already been sent. Local UI must not
+/// treat a reverted selection as authoritative until hydrate lands, and a
+/// new turn must not ship against that contradictory local selection.
+public enum InterruptedModelWritePolicy: Sendable {
+    public enum RouterOwner: Equatable, Sendable {
+        case settings
+        case bot(String)
+    }
+
+    public enum InvalidationTarget: Equatable, Sendable {
+        case advertisedBot(String)
+        case reconstructedRouter
+    }
+
+    public static func shouldForceHydrate(inFlightWriteInterrupted: Bool) -> Bool {
+        inFlightWriteInterrupted
+    }
+
+    public static func shouldHoldTurnUntilHydrate(unconfirmedWrite: Bool) -> Bool {
+        unconfirmedWrite
+    }
+
+    public static func invalidationTargets(
+        botId: String,
+        mutationTarget: VBotPrimaryEngine,
+        inFlightRouterOwner: RouterOwner?
+    ) -> [InvalidationTarget] {
+        var targets: [InvalidationTarget] = [.advertisedBot(botId)]
+        if mutationTarget == .grokReconstructed,
+           case let .bot(ownerId)? = inFlightRouterOwner,
+           ownerId == botId {
+            targets.append(.reconstructedRouter)
+        }
+        return targets
     }
 }
