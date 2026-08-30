@@ -66,6 +66,10 @@ struct ChatView: View {
     @State private var lastDistanceFromBottom: CGFloat = 0
     @State private var viewportHeight: CGFloat = 0
     @State private var streamA11yPhase: StreamAccessibilityPhase = .idle
+    /// Rebuild the composer after returning from a pushed computer screen.
+    /// SwiftUI can retain the destination's keyboard-safe-area transaction,
+    /// leaving a focused field behind the keyboard on the next appearance.
+    @State private var composerLayoutRevision = 0
 
     /// The live bubble's scroll target. A constant because there is at most
     /// one per chat and it has no message id to borrow.
@@ -251,19 +255,23 @@ struct ChatView: View {
             }
     }
 
-    /// Full-height stack, then composer as a bottom safe-area inset.
-    /// Putting the inset on the ScrollView itself sized the transcript
-    /// to its content, so a short chat left the composer floating in the
-    /// middle. The outer frame is forced to fill, then the inset shrinks
-    /// it for the composer *and* the keyboard. `.ignoresSafeArea()` on
-    /// the canvas must stay `.container` so it never eats the keyboard.
+    /// Keep the composer as a sibling of the flexible transcript. A sibling
+    /// participates in the navigation container's keyboard-safe layout,
+    /// including the return from ComputerView, instead of relying on a
+    /// nested safe-area inset that can retain a stale keyboard transaction.
     private var chatCanvas: some View {
         VStack(spacing: 0) {
             transcriptPane
+            composer
+                .id(composerLayoutRevision)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .overlay(alignment: .top) { chatTopChrome }
-        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+        .onAppear { recoverComposerAfterNavigation() }
+        .onChange(of: showingComputer) { _, shown in
+            composerFocused = false
+            if !shown { recoverComposerAfterNavigation() }
+        }
         .onChange(of: session.stagedComposerText) { _, text in
             guard let text, !text.isEmpty else { return }
             if draft.isEmpty {
@@ -1156,6 +1164,10 @@ struct ChatView: View {
         let replyAtSubmission = replyingTo
         let text = (explicitText ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
         guard (!text.isEmpty || !selectedAttachments.isEmpty), composerRequestGate.begin() else { return }
+        // Acknowledge the tap immediately. The network receipt can arrive
+        // later (or wait for an attachment upload), so feedback belongs at
+        // the accepted-request boundary rather than after the await.
+        Haptics.impact(.soft)
         let target = current
         let mode = explicitMode ?? (target.busy ? selectedBusySendDefault.deliveryMode : .auto)
         showCommandHUD = false
@@ -1190,10 +1202,14 @@ struct ChatView: View {
                 selectedAttachments.removeAll()
                 attachmentError = nil
                 SoundEffects.playSent()
-                Haptics.impact(.medium)
             }
             composerRequestGate.end()
         }
+    }
+
+    private func recoverComposerAfterNavigation() {
+        composerFocused = false
+        composerLayoutRevision &+= 1
     }
 
     private func activatePrimaryAction() {
@@ -1506,8 +1522,8 @@ struct ChatView: View {
             }
         }
         .id(composerTrailingControlIdentity)
-        .frame(width: 36, height: 36)
-        .padding(.trailing, 10)
+        .frame(width: 44, height: 44)
+        .padding(.trailing, 6)
     }
 
     private var composerTrailingControlIdentity: String {
@@ -1527,10 +1543,10 @@ struct ChatView: View {
             Image(systemName: dictation.isListening ? "mic.fill" : "mic")
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(dictation.isListening ? Color.red : Color.secondary)
-                .frame(width: 36, height: 36)
+                .frame(width: 44, height: 44)
                 .symbolEffect(.pulse, isActive: dictation.isListening && !reduceMotion)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ComposerActionButtonStyle(reduceMotion: reduceMotion))
         .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
     }
 
@@ -1539,10 +1555,11 @@ struct ChatView: View {
             Image(systemName: "stop.fill")
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(Color.white)
-                .frame(width: 32, height: 32)
+                .frame(width: 34, height: 34)
                 .background(Circle().fill(Color.red))
+                .frame(width: 44, height: 44)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ComposerActionButtonStyle(reduceMotion: reduceMotion))
         .disabled(composerRequestGate.isInFlight)
         .accessibilityLabel(current.isBot ? "Stop current work" : "Stop active responder")
         .accessibilityHint(
@@ -1557,10 +1574,11 @@ struct ChatView: View {
             Image(systemName: "arrow.up")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color.black)
-                .frame(width: 32, height: 32)
+                .frame(width: 34, height: 34)
                 .background(Circle().fill(Color.white))
+                .frame(width: 44, height: 44)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ComposerActionButtonStyle(reduceMotion: reduceMotion))
         .disabled(composerRequestGate.isInFlight)
         .contextMenu {
             if composerCapabilities.steer {
@@ -1580,6 +1598,21 @@ struct ChatView: View {
         }
         .accessibilityLabel(mode == .steer ? "Send and steer" : mode == .queue ? "Send and queue" : "Send")
         .accessibilityHint("Touch and hold for explicit steer or queue choices")
+    }
+}
+
+private struct ComposerActionButtonStyle: ButtonStyle {
+    let reduceMotion: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Circle())
+            .scaleEffect(configuration.isPressed ? 0.88 : 1)
+            .opacity(configuration.isPressed ? 0.86 : 1)
+            .animation(
+                reduceMotion ? nil : .snappy(duration: 0.16, extraBounce: 0.02),
+                value: configuration.isPressed
+            )
     }
 }
 
