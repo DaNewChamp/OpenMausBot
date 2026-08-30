@@ -34,6 +34,10 @@ struct ChatChromeView: View {
         }
     }
 
+    private var avatarState: MausState {
+        MausState.forChat(current, in: session.state)
+    }
+
     var body: some View {
         ScrollEdgeChrome {
             headerBar
@@ -41,10 +45,10 @@ struct ChatChromeView: View {
     }
 
     /// Back and the agent sit on the leading edge so the face never covers
-    /// the transcript. Chrome is liquid glass; the name is the title, not a
-    /// second pill competing with the face.
+    /// the transcript. Chrome is liquid glass; the name and model share one
+    /// pill beside the back control.
     private var headerBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: ConversationLayoutPolicy.chromeButtonGap) {
             Button {
                 Haptics.selection()
                 dismiss()
@@ -52,7 +56,10 @@ struct ChatChromeView: View {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: "chevron.left")
                         .font(.body.weight(.semibold))
-                        .frame(width: 40, height: 40)
+                        .frame(
+                            width: ConversationLayoutPolicy.chromeButtonDiameter,
+                            height: ConversationLayoutPolicy.chromeButtonDiameter
+                        )
 
                     if unreadElsewhere > 0 {
                         Text(unreadElsewhere > 99 ? "99+" : "\(unreadElsewhere)")
@@ -73,52 +80,9 @@ struct ChatChromeView: View {
             .accessibilityLabel("Back")
             .accessibilityValue(unreadElsewhere > 0 ? "\(unreadElsewhere) unread elsewhere" : "")
 
-            Button {
-                Haptics.selection()
-                if current.isBot { showingProfile = true }
-                else if case let .room(room) = current { groupProfileRoom = room }
-            } label: {
-                HStack(spacing: 8) {
-                    ChatAvatarView(
-                        chat: current,
-                        size: 28,
-                        state: MausState.forChat(current, in: session.state),
-                        animated: !reduceMotion && MausState.forChat(current, in: session.state).showsActivity
-                    )
-                    Text(current.name)
-                        .font(.headline)
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .truncationMode(.tail)
-                }
-                .padding(.leading, 4)
-                .padding(.trailing, 12)
-                .frame(minHeight: 40)
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .glassCapsule()
-            .layoutPriority(1)
-            .contextMenu {
-                Button {
-                    session.togglePinned(current)
-                } label: {
-                    Label(
-                        current.pinned ? "Unpin" : "Pin",
-                        systemImage: current.pinned ? "pin.slash" : "pin"
-                    )
-                }
-                .disabled(session.pendingPinnedChats.contains(current.stableID))
-            }
-            .accessibilityLabel(current.isBot ? "Open \(current.name) profile" : "Open \(current.name) group profile")
-            .accessibilityHint(current.isBot ? "Edits this agent's identity, avatar, notifications, and voice" : "Shows group members, instructions, and routines")
+            identityPill
 
-            Spacer(minLength: 8)
-
-            if case let .bot(bot) = current {
-                ChatModelPickerButton(bot: bot, showingPicker: $showingModelPicker)
-            }
+            Spacer(minLength: ConversationLayoutPolicy.chromeButtonGap)
 
             if case .bot = current {
                 Button {
@@ -128,7 +92,10 @@ struct ChatChromeView: View {
                     Image(systemName: "display")
                         .font(.body.weight(.medium))
                         .foregroundStyle(Color.primary)
-                        .frame(width: 40, height: 40)
+                        .frame(
+                            width: ConversationLayoutPolicy.chromeButtonDiameter,
+                            height: ConversationLayoutPolicy.chromeButtonDiameter
+                        )
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -139,9 +106,95 @@ struct ChatChromeView: View {
                 overflowMenu
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 4)
-        .padding(.bottom, 8)
+        .padding(.horizontal, ConversationLayoutPolicy.chromeHorizontalPadding)
+        .padding(.top, ConversationLayoutPolicy.chromeTopPadding)
+        .padding(.bottom, ConversationLayoutPolicy.chromeBottomPadding)
+    }
+
+    @ViewBuilder
+    private var identityPill: some View {
+        Button {
+            Haptics.selection()
+            if current.isBot { showingProfile = true }
+            else if case let .room(room) = current { groupProfileRoom = room }
+        } label: {
+            HStack(spacing: 8) {
+                ZStack(alignment: .bottomTrailing) {
+                    ChatAvatarView(
+                        chat: current,
+                        size: ConversationLayoutPolicy.identityAvatar,
+                        state: avatarState,
+                        animated: !reduceMotion && avatarState.showsActivity
+                    )
+                    Circle()
+                        .fill(statusColor)
+                        .frame(
+                            width: ConversationLayoutPolicy.identityStatusDot,
+                            height: ConversationLayoutPolicy.identityStatusDot
+                        )
+                        .overlay {
+                            Circle()
+                                .stroke(VBotSurface.background, lineWidth: 1.5)
+                        }
+                        .offset(x: 2, y: 2)
+                        .accessibilityHidden(true)
+                }
+
+                Text(identityLabel)
+                    .font(.headline)
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .truncationMode(.tail)
+            }
+            .padding(.leading, 4)
+            .padding(.trailing, 12)
+            .frame(minHeight: ConversationLayoutPolicy.chromeButtonDiameter)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .glassCapsule()
+        .layoutPriority(1)
+        .contextMenu {
+            if case let .bot(bot) = current {
+                Button {
+                    showingModelPicker = true
+                } label: {
+                    Label("Change model", systemImage: "cpu")
+                }
+                .disabled(bot.busy == true)
+            }
+            Button {
+                session.togglePinned(current)
+            } label: {
+                Label(
+                    current.pinned ? "Unpin" : "Pin",
+                    systemImage: current.pinned ? "pin.slash" : "pin"
+                )
+            }
+            .disabled(session.pendingPinnedChats.contains(current.stableID))
+        }
+        .accessibilityLabel(current.isBot ? "Open \(current.name) profile" : "Open \(current.name) group profile")
+        .accessibilityHint(current.isBot ? "Edits this agent's identity, avatar, notifications, and voice" : "Shows group members, instructions, and routines")
+    }
+
+    private var identityLabel: String {
+        switch current {
+        case let .bot(bot):
+            let live = session.state.bot(bot.id) ?? bot
+            let model = AdvertisedModelCatalog.humanModelLabel(
+                selection: live.modelSelection,
+                instances: session.modelCatalog
+            )
+            return ConversationLayoutPolicy.identityTitle(name: live.name, modelLabel: model)
+        case .room:
+            return current.name
+        }
+    }
+
+    private var statusColor: Color {
+        if current.busy { return .orange }
+        return .green
     }
 
     @ViewBuilder
@@ -159,7 +212,10 @@ struct ChatChromeView: View {
             Image(systemName: "ellipsis")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(Color.primary)
-                .frame(width: 40, height: 40)
+                .frame(
+                    width: ConversationLayoutPolicy.chromeButtonDiameter,
+                    height: ConversationLayoutPolicy.chromeButtonDiameter
+                )
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)

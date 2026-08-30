@@ -15,7 +15,7 @@ enum VBotSurface {
 
     static let assistantBubble = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.110, green: 0.110, blue: 0.118, alpha: 1) // #1C1C1E
+            ? UIColor(red: 0.125, green: 0.125, blue: 0.125, alpha: 1) // #202020
             : UIColor(red: 0.898, green: 0.898, blue: 0.914, alpha: 1) // #E5E5E9
     })
 

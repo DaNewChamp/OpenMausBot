@@ -900,7 +900,16 @@ struct TextBubble: View {
     var tailed = true
     var showsSpeaker = false
     @Environment(\.conversationTypography) private var typography
+    @Environment(\.chatPaneWidth) private var paneWidth
     @EnvironmentObject private var session: Session
+
+    private var bubbleCornerRadius: CGFloat { ConversationLayoutPolicy.bubbleCornerRadius }
+    private var maxBubbleWidth: CGFloat {
+        ConversationLayoutPolicy.bubbleMaxWidth(paneWidth: paneWidth)
+    }
+    private var edgeReserve: CGFloat {
+        ConversationLayoutPolicy.bubbleEdgeReserve(paneWidth: paneWidth)
+    }
 
     private var parsedAttachments: (display: String, imagePaths: [String], filePaths: [String])? {
         guard message.role == .user, let text = message.text else { return nil }
@@ -988,7 +997,7 @@ struct TextBubble: View {
         // No face beside the bubble: the bot's face is in the header, and in
         // a room the name line says who spoke. The bubble sits at the edge.
         HStack(alignment: .bottom, spacing: 0) {
-            if mine { Spacer(minLength: 52) }
+            if mine { Spacer(minLength: edgeReserve) }
 
             VStack(alignment: .leading, spacing: 8) {
                 if !mine, showsSpeaker {
@@ -1035,20 +1044,21 @@ struct TextBubble: View {
             }
             .padding(.horizontal, customCard ? 0 : 16)
             .padding(.vertical, customCard ? 0 : 12)
+            .frame(maxWidth: customCard ? maxBubbleWidth : maxBubbleWidth, alignment: mine ? .trailing : .leading)
             .background {
                 if !customCard {
                     if mine {
-                        SpeechBubble(tail: tailed ? .trailing : .none, cornerRadius: 20)
+                        SpeechBubble(tail: tailed ? .trailing : .none, cornerRadius: bubbleCornerRadius)
                             .fill(BubbleColor.mine)
                     } else {
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        RoundedRectangle(cornerRadius: bubbleCornerRadius, style: .continuous)
                             .fill(BubbleColor.theirs)
                     }
                 }
             }
-            .padding(.bottom, mine && tailed && !customCard ? SpeechBubble.tailDrop(cornerRadius: 20) : 0)
+            .padding(.bottom, mine && tailed && !customCard ? SpeechBubble.tailDrop(cornerRadius: bubbleCornerRadius) : 0)
 
-            if !mine { Spacer(minLength: 36) }
+            if !mine { Spacer(minLength: edgeReserve) }
         }
     }
 
@@ -1492,7 +1502,6 @@ struct CommActivityRow: View {
 
     var body: some View {
         rowContent
-            .background(Capsule().fill(Color.secondary.opacity(0.1)))
             .accessibilityElement(children: .combine)
             .accessibilityLabel(accessibilityTitle)
             .accessibilityHint(accessibilityHint)
@@ -1511,37 +1520,34 @@ struct CommActivityRow: View {
     }
 
     private var contentLabel: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             if let peer {
                 BotAvatarView(bot: peer, size: 18, state: .happy, animated: false)
             } else {
-                // The server keeps the peer's display color on the activity,
-                // so a deleted/unloaded bot still has an honest visual identity.
                 MausAvatar(color: comm.withColor, size: 18, state: .happy, animated: false)
             }
             Text(presentation.title)
-                .font(typography.detail)
-                .foregroundStyle(Color.secondary)
-                .multilineTextAlignment(.leading)
-                .lineLimit(1)
+                .font(typography.compact)
+                .foregroundStyle(Color.secondary.opacity(0.58))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
                 .truncationMode(.tail)
             if !presentation.destinationAvailable {
                 Text("Conversation unavailable")
                     .font(typography.compact)
-                    .foregroundStyle(Color.secondary.opacity(0.75))
+                    .foregroundStyle(Color.secondary.opacity(0.5))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            Spacer(minLength: 8)
             if presentation.destinationAvailable {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Color.secondary.opacity(0.6))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Color.secondary.opacity(0.45))
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .contentShape(Capsule())
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
     }
 
     private var accessibilityTitle: String {

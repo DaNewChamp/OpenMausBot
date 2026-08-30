@@ -1,6 +1,47 @@
 {
   "bots": [
     {
+      "id": "preview-parity",
+      "threadId": "preview-thread-parity",
+      "name": "Scout",
+      "title": "Researcher",
+      "description": "Conversation parity fixture for visual QA.",
+      "notifications": true,
+      "color": "cyan",
+      "pinned": true,
+      "computer": "cloud",
+      "cloudBackend": "box",
+      "unread": false,
+      "busy": true,
+      "modelSelection": { "instanceId": "preview", "model": "preview" },
+      "createdAt": 1787000000000,
+      "activeLeafId": "parity-user-2",
+      "tasks": [
+        { "threadId": "preview-thread-parity", "title": "Membership research", "createdAt": 1787000000000 }
+      ],
+      "messages": [
+        { "id": "parity-user-1", "role": "user", "kind": "text", "at": 1788099600000, "text": "How do I get a membership?" },
+        {
+          "id": "parity-bot-1",
+          "role": "bot",
+          "kind": "text",
+          "at": 1788100020000,
+          "parentId": "parity-user-1",
+          "text": "You can get a membership in a few ways:\n\n1. **Buy a plan** on the website and complete checkout.\n2. **Use an invite link** from an existing member.\n3. **Ask in the group chat** and a curator can send a one-time link.\n4. **Renew** before your paid-through date so access stays uninterrupted."
+        },
+        {
+          "id": "parity-comm",
+          "role": "bot",
+          "kind": "activity",
+          "at": 1788100080000,
+          "parentId": "parity-bot-1",
+          "tool": { "name": "Messaged @Pixel", "ok": true },
+          "comm": { "groupId": "preview-room-lab", "withBotId": "preview-pixel", "withName": "Pixel", "withColor": "purple" }
+        },
+        { "id": "parity-user-2", "role": "user", "kind": "text", "at": 1788100140000, "text": "Ok ty" }
+      ]
+    },
+    {
       "id": "preview-scout",
       "threadId": "preview-thread-scout",
       "name": "Scout",

@@ -2684,6 +2684,7 @@ private enum StorePreviewHarness {
     private static let validScreenPNG = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAEElEQVR4nGNQ0HKBIwacHACAQwappO2xZwAAAABJRU5ErkJggg=="
 
     static func apply(arguments: [String], to state: inout CompanionState) {
+        applyConversation(arguments: arguments, to: &state)
         guard let argument = arguments.first(where: { $0.hasPrefix("-preview-computer=") }) else { return }
         let scenario = String(argument.dropFirst("-preview-computer=".count))
         guard let target = targetBotID(arguments: arguments, state: state),
@@ -2730,6 +2731,16 @@ private enum StorePreviewHarness {
         default:
             return
         }
+        state.bots[index] = bot
+    }
+
+    static func applyConversation(arguments: [String], to state: inout CompanionState) {
+        guard arguments.contains("-preview-conversation") else { return }
+        guard let target = targetBotID(arguments: arguments, state: state),
+              let index = state.bots.firstIndex(where: { $0.id == target })
+        else { return }
+        var bot = state.bots[index]
+        bot.busy = true
         state.bots[index] = bot
     }
 

@@ -75,20 +75,107 @@ struct ChatTranscriptView: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            applyingTranscriptScrollEffects(
-                to: transcriptScrollView(proxy: proxy),
-                proxy: proxy
-            )
+            GeometryReader { pane in
+                ZStack(alignment: .bottom) {
+                    applyingTranscriptScrollEffects(
+                        to: transcriptScrollView(proxy: proxy, paneWidth: pane.size.width),
+                        proxy: proxy
+                    )
+
+                    transcriptAdornments(proxy: proxy, paneWidth: pane.size.width)
+                }
+            }
         }
         .id(threadId)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func transcriptScrollView(proxy: ScrollViewProxy) -> some View {
-        ScrollView {
-            transcriptStack(proxy: proxy)
+    @ViewBuilder
+    private func transcriptAdornments(proxy: ScrollViewProxy, paneWidth: CGFloat) -> some View {
+        let showsScroll = ConversationLayoutPolicy.showsScrollToBottomButton(
+            followingLatest: followingLatest,
+            hasTranscript: !messages.isEmpty
+        )
+        let showsFloating = ConversationLayoutPolicy.showsFloatingWorkingAvatar(
+            showsWorkingRow: showsWorkingRow,
+            followingLatest: followingLatest
+        )
+        if showsScroll || showsFloating {
+            HStack(alignment: .bottom, spacing: 12) {
+                if showsFloating {
+                    Button {
+                        followingLatest = true
+                        scrollToLatest(proxy)
+                    } label: {
+                        Group {
+                            if let bot = floatingWorkingBot {
+                                BotAvatarView(
+                                    bot: bot,
+                                    size: ConversationLayoutPolicy.floatingAdornmentSize,
+                                    state: .working,
+                                    animated: !reduceMotion
+                                )
+                            } else {
+                                ChatAvatarView(
+                                    chat: current,
+                                    size: ConversationLayoutPolicy.floatingAdornmentSize,
+                                    state: .working,
+                                    animated: !reduceMotion
+                                )
+                            }
+                        }
+                        .frame(
+                            width: ConversationLayoutPolicy.floatingAdornmentSize,
+                            height: ConversationLayoutPolicy.floatingAdornmentSize
+                        )
+                        .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(streamingAccessibilityLabel)
+                }
+
+                Spacer(minLength: 0)
+
+                if showsScroll {
+                    Button {
+                        Haptics.selection()
+                        followingLatest = true
+                        scrollToLatest(proxy)
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Color.primary)
+                            .frame(
+                                width: ConversationLayoutPolicy.floatingAdornmentSize,
+                                height: ConversationLayoutPolicy.floatingAdornmentSize
+                            )
+                            .background(VBotSurface.controlSurface, in: Circle())
+                            .overlay {
+                                Circle()
+                                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                            }
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Scroll to latest messages")
+                }
+            }
+            .padding(.horizontal, ConversationLayoutPolicy.transcriptHorizontalMargin)
+            .padding(.bottom, ConversationLayoutPolicy.floatingAdornmentBottomPadding)
         }
-        .contentMargins(.top, 56, for: .scrollContent)
+    }
+
+    private var floatingWorkingBot: Bot? {
+        if let speakerBotId = workingBotId { return session.state.bot(speakerBotId) }
+        if case let .bot(bot) = current { return bot }
+        return nil
+    }
+
+    private func transcriptScrollView(proxy: ScrollViewProxy, paneWidth: CGFloat) -> some View {
+        ScrollView {
+            transcriptStack(proxy: proxy, paneWidth: paneWidth)
+        }
+        .contentMargins(.top, ConversationLayoutPolicy.scrollContentTopInset, for: .scrollContent)
         .scrollClipDisabled()
         .scrollDismissesKeyboard(.interactively)
         .defaultScrollAnchor(.bottom)
@@ -99,9 +186,9 @@ struct ChatTranscriptView: View {
         ))
     }
 
-    private func transcriptStack(proxy: ScrollViewProxy) -> some View {
+    private func transcriptStack(proxy: ScrollViewProxy, paneWidth: CGFloat) -> some View {
         let transcript = messages
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: ConversationLayoutPolicy.transcriptRowSpacing) {
             if session.state.hasMore[threadId] == true {
                 Button("Load earlier messages") {
                     let anchor = transcript.first?.id
@@ -129,9 +216,10 @@ struct ChatTranscriptView: View {
         .background(alignment: .bottom) {
             ChatScrollOffsetReader()
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, ConversationLayoutPolicy.transcriptHorizontalMargin)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .environment(\.chatPaneWidth, paneWidth)
     }
 
     @ViewBuilder
@@ -143,8 +231,8 @@ struct ChatTranscriptView: View {
                     .font(chatTypography.compact)
                     .foregroundStyle(Color.secondary.opacity(0.58))
                     .frame(maxWidth: .infinity)
-                    .padding(.top, 14)
-                    .padding(.bottom, 6)
+                    .padding(.top, ConversationLayoutPolicy.dateSeparatorTopPadding)
+                    .padding(.bottom, ConversationLayoutPolicy.dateSeparatorBottomPadding)
             }
             if showsNewDivider(before: row, in: transcript) {
                 NewMessagesDivider()
@@ -243,6 +331,11 @@ struct ChatTranscriptView: View {
                 if lastAnnouncedSettledId == nil {
                     lastAnnouncedSettledId = messages.last(where: { $0.role == .bot && $0.kind == .text })?.id
                 }
+#if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-preview-not-following") {
+                    followingLatest = false
+                }
+#endif
                 announceStreamPhase()
             }
             .onChange(of: liveTail) { _, _ in
@@ -282,6 +375,16 @@ struct ChatTranscriptView: View {
                 proxy.scrollTo(messageId, anchor: .center)
                 session.consumeFocus(messageId)
             }
+#if DEBUG
+            .task(id: "\(threadId)|preview-not-following") {
+                guard ProcessInfo.processInfo.arguments.contains("-preview-not-following"),
+                      messages.contains(where: { $0.id == "parity-bot-1" })
+                else { return }
+                followingLatest = false
+                try? await Task.sleep(nanoseconds: 220_000_000)
+                proxy.scrollTo("parity-user-1", anchor: .bottom)
+            }
+#endif
     }
 
     private func transcriptRows(in messages: [Message]) -> [ChatTranscriptRow] {

@@ -160,7 +160,9 @@ struct ChatListView: View {
 #if DEBUG
             // `-store-preview -open-first`: land on the first chat, for the
             // screenshot harness and for looking at the chat screen without
-            // a pairing.
+            // a pairing. Combine with `-preview-bot=preview-parity
+            // -preview-conversation -preview-not-following` for conversation
+            // parity captures.
             .task {
                 if ProcessInfo.processInfo.arguments.contains("-open-first"),
                    path.isEmpty {

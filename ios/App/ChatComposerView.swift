@@ -171,7 +171,7 @@ struct ChatComposerView: View {
                 .transition(reduceMotion ? .identity : .move(edge: .bottom).combined(with: .opacity))
             }
 
-            HStack(alignment: .center, spacing: 10) {
+            HStack(alignment: .center, spacing: ConversationLayoutPolicy.composerControlGap) {
                 Menu {
                     attachmentPickerMenuItems
                     Divider()
@@ -187,11 +187,14 @@ struct ChatComposerView: View {
                     Image(systemName: "plus")
                         .font(.system(size: 22, weight: .medium))
                         .foregroundStyle(Color.primary)
-                        .frame(width: 44, height: 44)
+                        .frame(
+                            width: ConversationLayoutPolicy.composerButtonDiameter,
+                            height: ConversationLayoutPolicy.composerButtonDiameter
+                        )
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .background(VBotSurface.composerSurface, in: Circle())
+                .glassCircle()
                 .accessibilityLabel("More")
 
                 HStack(alignment: .center, spacing: 2) {
@@ -244,11 +247,11 @@ struct ChatComposerView: View {
 
                     composerTrailingControl
                 }
-                .frame(minHeight: 44)
-                .background(VBotSurface.composerSurface, in: Capsule())
+                .frame(minHeight: ConversationLayoutPolicy.composerBarHeight)
+                .glassCapsuleBackdrop()
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, ConversationLayoutPolicy.composerHorizontalPadding)
         .padding(.top, 6)
         .padding(.bottom, 8)
         .background(VBotSurface.background.ignoresSafeArea(.container, edges: .bottom))

@@ -87,3 +87,14 @@ extension View {
         environment(\.conversationTypography, typography)
     }
 }
+
+private struct ChatPaneWidthKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 390
+}
+
+extension EnvironmentValues {
+    var chatPaneWidth: CGFloat {
+        get { self[ChatPaneWidthKey.self] }
+        set { self[ChatPaneWidthKey.self] = newValue }
+    }
+}
