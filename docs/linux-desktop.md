@@ -32,9 +32,9 @@ CUA supply-chain work is tracked in [issue #113](https://github.com/milind-soni/
 
 Choose one Ubuntu 24.04 x86_64 package from the latest release:
 
-- [Debian package (`OpenMausBot-amd64.deb`)](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-amd64.deb) — recommended; APT installs its desktop dependencies.
-- [Portable AppImage (`OpenMausBot.AppImage`)](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot.AppImage) — does not install system files.
-- [SHA-256 checksums](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/SHA256SUMS-ubuntu-x64.txt)
+- Debian package (`VBot-amd64.deb`) — recommended; APT installs its desktop dependencies.
+- Portable AppImage (`VBot.AppImage`) — does not install system files.
+- SHA-256 checksums are published beside each private V Bot release.
 
 Versioned packages and previous releases remain available on the
 [releases page](https://github.com/milind-soni/openmausbot-releases/releases).
@@ -57,8 +57,8 @@ pnpm package:linux
 
 The build creates:
 
-- `release/OpenMausBot-<version>-amd64.deb`
-- `release/OpenMausBot-<version>-x86_64.AppImage`
+- `release/VBot-<version>-amd64.deb`
+- `release/VBot-<version>-x86_64.AppImage`
 
 The AppImage uses a static runtime and does not require the legacy `libfuse2` package.
 
@@ -67,10 +67,10 @@ The AppImage uses a static runtime and does not require the legacy `libfuse2` pa
 Install a downloaded Debian package with APT so its desktop dependencies are resolved:
 
 ```sh
-sudo apt install ./OpenMausBot-amd64.deb
+sudo apt install ./VBot-amd64.deb
 ```
 
-Then open **OpenMausBot** from the GNOME application launcher. To remove it:
+Then open **V Bot** from the GNOME application launcher. To remove it:
 
 ```sh
 sudo apt remove openmausbot
@@ -79,11 +79,11 @@ sudo apt remove openmausbot
 The portable AppImage does not install system files:
 
 ```sh
-chmod +x release/OpenMausBot-*-x86_64.AppImage
-./release/OpenMausBot-*-x86_64.AppImage
+chmod +x release/VBot-*-x86_64.AppImage
+./release/VBot-*-x86_64.AppImage
 ```
 
-For a downloaded release AppImage, use `OpenMausBot.AppImage` in place of the versioned path above.
+For a downloaded release AppImage, use `VBot.AppImage` in place of the versioned path above.
 
 Application data remains local in `~/.openmausbot`. Electron browser data and window state use the normal XDG
 configuration directory (`~/.config/openmausbot` unless the environment overrides it).

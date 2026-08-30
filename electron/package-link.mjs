@@ -1,4 +1,5 @@
 const ALLOWED_PACKAGE_HOSTS = new Set(["github.com", "www.github.com", "raw.githubusercontent.com"]);
+const ALLOWED_PROTOCOLS = new Set(["vbot:", "openmausbot:"]);
 
 export function packageUrlFromDeepLink(rawValue) {
   let link;
@@ -7,7 +8,7 @@ export function packageUrlFromDeepLink(rawValue) {
   } catch {
     return null;
   }
-  if (link.protocol !== "openmausbot:" || link.hostname !== "install") return null;
+  if (!ALLOWED_PROTOCOLS.has(link.protocol) || link.hostname !== "install") return null;
   const rawPackage = link.searchParams.get("url");
   if (!rawPackage) return null;
   let packageUrl;

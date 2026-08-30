@@ -1,8 +1,29 @@
 # V Bot Desktop Architecture
 
-V Bot’s desktop app is a clean-room UI over the existing MIT/Apache OpenMausBot desktop, harness, companion, and bridge pipeline. This phase does not change bundle IDs, updater endpoints, package names, or network contracts.
+V Bot’s desktop app is a clean-room UI over the existing MIT/Apache OpenMausBot desktop, harness, companion, and bridge pipeline. The staged desktop migration changes the visible product name and artifacts while retaining the legacy bundle, protocol, data, and network contracts.
 
 Upstream license and attribution remain in `LICENSE`, `README.md`, and third-party notices. Visible product copy in this private tree says **V Bot**.
+
+## Desktop identity and rollback
+
+- New packages are branded **V Bot** and register `vbot://` package links.
+- `com.openmausbot.app` and `openmausbot://` remain registered for existing
+  installations, package links, CUA permissions, and companion clients.
+- When an `OpenMausBot` user-data directory already exists, V Bot continues to
+  use it in place. It does not copy, merge, delete, or silently split state;
+  credentials, pairings, transcripts, and window state therefore remain
+  available to the previous OpenMausBot build.
+- New installations use Electron's normal V Bot user-data directory. An
+  explicit migration can be added later after a backup/export contract is
+  agreed; until then rollback is simply reinstalling the prior OpenMausBot
+  build, which reads the same legacy directory.
+
+## Updates
+
+Desktop artifacts do not contain a public OpenMausBot release feed. The
+updater stays disabled unless `VBOT_UPDATE_FEED_URL` is explicitly set to a
+private HTTPS feed. The packaged app configures electron-updater for that
+generic feed only; credentials, query strings, and non-HTTPS URLs are rejected.
 
 ## Source of truth
 

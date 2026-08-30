@@ -21,6 +21,11 @@ import { buildDiagnosticsReport, decodeLogTail, diagnosticsFileName } from "./di
 import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace-credentials.mjs";
 import { activateExistingWindow } from "./single-instance.mjs";
 import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-link.mjs";
+import {
+  LEGACY_PROTOCOL,
+  PRODUCT_PROTOCOL,
+  resolveCompatibleUserDataPath,
+} from "./product-identity.mjs";
 import { defaultSaveName, withSavableFile } from "./save-file.mjs";
 import {
   ensureManagedComposioCredentials,
@@ -58,6 +63,25 @@ const { desktopViewerUrl, sameDesktopViewerOrigin } = require("./desktop-viewer.
 const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Product branding may change independently of the installed state. Keep an
+// existing OpenMausBot directory as the active userData path so a V Bot
+// upgrade cannot strand credentials, pairings, or transcripts in a second
+// directory. New installs use Electron's V Bot path.
+const defaultUserDataPath = app.getPath("userData");
+const compatibleUserDataPath = resolveCompatibleUserDataPath({
+  currentPath: defaultUserDataPath,
+  appDataPath: app.getPath("appData"),
+  exists: (candidate) => {
+    try {
+      return fs.existsSync(candidate);
+    } catch {
+      return false;
+    }
+  },
+});
+if (app.isPackaged && compatibleUserDataPath && compatibleUserDataPath !== defaultUserDataPath) {
+  app.setPath("userData", compatibleUserDataPath);
+}
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
 // resolve to ::1 and paint a black window
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
@@ -151,7 +175,7 @@ if (process.platform === "linux") {
 // harness server on a fallback port and splits data dirs in two. The loser
 // exits before any child or window exists; the winner surfaces itself.
 if (!app.requestSingleInstanceLock()) {
-  console.log("[desktop] OpenMausBot is already running — focusing that window");
+  console.log("[desktop] V Bot is already running — focusing that window");
   process.exit(0);
 }
 function deliverPackageInstall(win) {
@@ -805,7 +829,7 @@ function desktopViewerErrorPage(message, retryUrl) {
 }
 
 function openDesktopViewer(owner, rawUrl, rawTitle, contextId) {
-  if (!owner || owner.isDestroyed()) throw new Error("The OpenMausBot window is unavailable");
+  if (!owner || owner.isDestroyed()) throw new Error("The V Bot window is unavailable");
   const url = desktopViewerUrl(rawUrl);
   const titleCandidate = Object.prototype.toString.call(rawTitle) === "[object String]" ? rawTitle.trim() : "";
   const title = titleCandidate ? titleCandidate.slice(0, 80) : "Live desktop";
@@ -1441,7 +1465,12 @@ setCuaStateListener((connection) => {
 });
 
 app.whenReady().then(async () => {
-  if (app.isPackaged) app.setAsDefaultProtocolClient("openmausbot");
+  if (app.isPackaged) {
+    // vbot:// is the branded path for new installs; openmausbot:// remains
+    // registered so older package links and installed clients keep working.
+    app.setAsDefaultProtocolClient(PRODUCT_PROTOCOL);
+    app.setAsDefaultProtocolClient(LEGACY_PROTOCOL);
+  }
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
   // Show a window before keychain/server work. A Developer ID → Apple
   // Development signing swap makes safeStorage wait on an ACL prompt; if

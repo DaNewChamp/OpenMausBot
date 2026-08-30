@@ -1,22 +1,16 @@
 appId: com.openmausbot.app
-productName: OpenMausBot
-artifactName: OpenMausBot-${version}-${arch}.${ext}
+productName: V Bot
+artifactName: VBot-${version}-${arch}.${ext}
 
 protocols:
-  - name: OpenMausBot package install
-    schemes: [openmausbot]
+  - name: V Bot package install
+    schemes: [vbot, openmausbot]
 
-# In-app auto-update reads latest-mac.yml + the .zip (macOS) or latest.yml +
-# the NSIS .exe (Windows) from this PUBLIC releases repo (separate from the
-# source repo). Public → no token on users' machines. Baked into
-# app-update.yml; both metadata files are emitted here even with
-# --publish never, and must be uploaded to the GitHub release alongside the
-# artifacts — a release missing latest.yml leaves every Windows install
-# stranded on its installed version.
-publish:
-  - provider: github
-    owner: milind-soni
-    repo: openmausbot-releases
+# Updates are intentionally not baked into desktop artifacts. A packaged V Bot
+# build enables electron-updater only when VBOT_UPDATE_FEED_URL points at an
+# explicitly configured private HTTPS feed. This prevents an accidental fetch
+# from the public OpenMausBot release channel while the private feed is staged.
+publish: []
 
 directories:
   buildResources: build
@@ -50,9 +44,9 @@ asar: true
 extraResources:
   # Ship the app's own license terms in every desktop distribution.
   - from: LICENSE
-    to: licenses/OpenMausBot-LICENSE.txt
+    to: licenses/VBot-LICENSE.txt
   - from: NOTICE
-    to: licenses/OpenMausBot-NOTICE.txt
+    to: licenses/VBot-NOTICE.txt
   # cloudflared is distributed under Apache-2.0 as a separate executable.
   # OpenMausBot itself uses the same full license text; ship another named
   # copy so the third-party executable's terms remain unambiguous.
@@ -105,10 +99,10 @@ mac:
     - from: dist-native/cloudflared/darwin-${arch}/cloudflared
       to: cloudflared/cloudflared
   extendInfo:
-    NSMicrophoneUsageDescription: OpenMausBot uses the microphone for voice dictation into the composer.
-    NSSpeechRecognitionUsageDescription: OpenMausBot transcribes your voice on-device to type messages for you.
-    NSAccessibilityUsageDescription: OpenMausBot uses Accessibility when you let a bot control this Mac.
-    NSScreenCaptureUsageDescription: OpenMausBot uses Screen Recording so bots can see this Mac before acting.
+    NSMicrophoneUsageDescription: V Bot uses the microphone for voice dictation into the composer.
+    NSSpeechRecognitionUsageDescription: V Bot transcribes your voice on-device to type messages for you.
+    NSAccessibilityUsageDescription: V Bot uses Accessibility when you let a bot control this Mac.
+    NSScreenCaptureUsageDescription: V Bot uses Screen Recording so bots can see this Mac before acting.
   # Notarization runs manually after the build (notarytool + staple),
   # mirroring the BlueyLite ship_release.sh flow.
   notarize: false
@@ -118,7 +112,7 @@ dmg:
   # ${arch} is load-bearing: without it the x64 dmg silently overwrites
   # the arm64 one when both arches build (this section overrides both the
   # top-level and mac-level artifactName, so it must carry the arch itself)
-  artifactName: OpenMausBot-${version}-${arch}.dmg
+  artifactName: VBot-${version}-${arch}.dmg
 
 win:
   target:
@@ -143,11 +137,10 @@ win:
 nsis:
   oneClick: true
   perMachine: false
-  shortcutName: OpenMausBot
-  # Versioned, like the .dmg. The README's /latest/download/ button needs a
-  # STABLE filename, so ship a second copy named OpenMausBot-setup.exe on the
-  # release — the same trick as OpenMausBot.dmg beside OpenMausBot-${version}.dmg.
-  artifactName: OpenMausBot-${version}-setup.${ext}
+  shortcutName: V Bot
+  # Versioned, like the .dmg. A private release channel can add a stable
+  # VBot-setup.exe alias beside the versioned artifact when it publishes.
+  artifactName: VBot-${version}-setup.${ext}
 
 linux:
   target:
@@ -163,7 +156,7 @@ linux:
   synopsis: Your own team of AI bots, in a chat app
   description: A local-first chat app for running a team of AI agents.
   maintainer: Milind Soni <46266943+milind-soni@users.noreply.github.com>
-  vendor: OpenMausBot
+  vendor: V Bot
   syncDesktopName: true
   # The reviewed x64 CLI runtime is staged before packaging and remains
   # outside ASAR so executable modes and adjacent sidecars are preserved.
@@ -174,7 +167,7 @@ linux:
       to: cloudflared/cloudflared
   desktop:
     entry:
-      Name: OpenMausBot
+      Name: V Bot
       Comment: Your own team of AI bots, in a chat app
       Keywords: AI;Agents;Chat;Productivity;
 

@@ -93,25 +93,28 @@ function UpdateButton() {
   const working =
     pending || status === "checking" || status === "downloading" || status === "installing";
   const label =
-    status === "available"
-      ? `Version ${s?.version ?? ""} available — download`
-      : status === "downloading"
-        ? s?.percent == null
-          ? "Starting download…"
-          : `Downloading… ${Math.round(s.percent)}%`
-        : status === "downloaded"
-          ? `Version ${s?.version ?? ""} ready — restart to update`
-          : status === "installing"
-            ? "Restarting to update…"
-            : status === "checking"
-              ? "Checking for updates…"
-              : upToDate
-                ? "You're up to date"
-                : "Check for updates";
+    status === "disabled"
+      ? "Private update channel not configured"
+      : status === "available"
+        ? `Version ${s?.version ?? ""} available — download`
+        : status === "downloading"
+          ? s?.percent == null
+            ? "Starting download…"
+            : `Downloading… ${Math.round(s.percent)}%`
+          : status === "downloaded"
+            ? `Version ${s?.version ?? ""} ready — restart to update`
+            : status === "installing"
+              ? "Restarting to update…"
+              : status === "checking"
+                ? "Checking for updates…"
+                : upToDate
+                  ? "You're up to date"
+                  : "Check for updates";
 
   return (
     <button
       onClick={() => {
+        if (status === "disabled") return;
         if (status === "downloaded") {
           setPending(true);
           return void updater.install();

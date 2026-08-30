@@ -2,11 +2,10 @@
 
 One workflow builds everything: **Actions → Release → Run workflow**. It
 builds macOS (arm64 + x64, signed, notarized, stapled), Windows, and Ubuntu
-from a single pinned commit, verifies every artifact the way a user would
-receive it, assembles a complete draft on
-[openmausbot-releases](https://github.com/milind-soni/openmausbot-releases),
-and — if you ticked **publish** — flips it live. Leave publish unticked to
-review the draft notes first, then publish from the GitHub UI.
+from a single pinned commit and verifies every artifact the way a user would
+receive it. V Bot artifacts are staged for a private release channel; the
+desktop updater remains disabled until `VBOT_UPDATE_FEED_URL` is explicitly
+configured to the channel's HTTPS feed.
 
 The workflow refuses to overwrite an already-published version, so the only
 prerequisite per release is that `package.json`'s version is bumped on the
@@ -24,7 +23,7 @@ above it.
 
 ## One-time setup: four secrets
 
-Set these in **OpenMausBot → Settings → Secrets and variables → Actions**.
+Set these in **V Bot → Settings → Secrets and variables → Actions**.
 
 ### 1. `MAC_CERT_P12_BASE64` + `MAC_CERT_PASSWORD`
 
@@ -51,11 +50,11 @@ password for CI — revocable, scoped, no 2FA dance):
 base64 -i AuthKey_XXXXXXXX.p8 | pbcopy   # → APPLE_API_KEY_P8_BASE64
 ```
 
-### 3. `RELEASES_PAT`
+### 3. `RELEASES_PAT` (private channel only)
 
 A fine-grained personal access token that lets the workflow write to the
-separate releases repo: **GitHub → Settings → Developer settings →
-Fine-grained tokens** → repository access: only `openmausbot-releases` →
+separate private releases repo: **GitHub → Settings → Developer settings →
+Fine-grained tokens** → repository access: only the V Bot releases repo →
 permissions: **Contents: Read and write**. Set a long expiry and a calendar
 reminder.
 
@@ -65,5 +64,9 @@ The hand-cut path still works when Actions is down or a release needs
 surgery: `pnpm package:mac`, gate with `codesign --verify --deep --strict`,
 notarize with the local keychain profile (`xcrun notarytool submit …
 --keychain-profile AC_PASSWORD`), staple, re-zip, regenerate blockmaps and
-`node scripts/regenerate-mac-feed.mjs`, upload, publish, and always verify
-the published bytes against the published feed by downloading them back.
+`node scripts/regenerate-mac-feed.mjs`, upload to the private channel, and
+always verify the published bytes against its feed by downloading them back.
+
+Never point a V Bot build at the public OpenMausBot release feed. Update checks
+stay off until `VBOT_UPDATE_FEED_URL` is deliberately configured to a private
+HTTPS feed.

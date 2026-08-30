@@ -81,33 +81,38 @@ function UpdatesRow() {
   if (!window.ogb?.updater) return null;
   const updater = window.ogb.updater;
   const label =
-    s?.status === "checking"
-      ? "Checking…"
-      : s?.status === "available"
-        ? `${s.version} available`
-        : s?.status === "downloading"
-          ? `Downloading ${Math.round(s.percent ?? 0)}%`
-          : s?.status === "downloaded"
-            ? `${s.version} ready — restart to apply`
-            : s?.status === "error"
-              ? `Check failed: ${s.message ?? "unknown error"}`
-              : "You're on the latest version we know of.";
+    s?.status === "disabled"
+      ? "Private update channel not configured"
+      : s?.status === "checking"
+        ? "Checking…"
+        : s?.status === "available"
+          ? `${s.version} available`
+          : s?.status === "downloading"
+            ? `Downloading ${Math.round(s.percent ?? 0)}%`
+            : s?.status === "downloaded"
+              ? `${s.version} ready — restart to apply`
+              : s?.status === "error"
+                ? `Check failed: ${s.message ?? "unknown error"}`
+                : "You're on the latest version we know of.";
   return (
     <Card title="Updates" subtitle={label}>
       <button
         onClick={() => {
+          if (s?.status === "disabled") return;
           if (s?.status === "available") return void updater.download();
           if (s?.status === "downloaded") return void updater.install();
           void updater.check();
         }}
-        disabled={s?.status === "checking" || s?.status === "downloading"}
+        disabled={s?.status === "disabled" || s?.status === "checking" || s?.status === "downloading"}
         className="rounded-lg border border-hairline/40 px-3 py-1.5 text-[13px] text-ink hover:bg-control disabled:opacity-40"
       >
         {s?.status === "available"
           ? "Download"
           : s?.status === "downloaded"
             ? "Restart and install"
-            : "Check for updates"}
+            : s?.status === "disabled"
+              ? "Private channel required"
+              : "Check for updates"}
       </button>
     </Card>
   );

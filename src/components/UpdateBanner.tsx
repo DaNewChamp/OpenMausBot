@@ -38,7 +38,7 @@ export function UpdateBanner() {
   const status = s?.status;
   useEffect(() => setPending(null), [status]);
 
-  if (!s || s.status === "idle" || s.status === "checking") return null;
+  if (!s || s.status === "idle" || s.status === "disabled" || s.status === "checking") return null;
   const key = `${s.status}:${s.version ?? ""}`;
   if (dismissed === key) return null;
   const updater = window.ogb!.updater!;

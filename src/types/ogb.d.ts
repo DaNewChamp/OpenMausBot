@@ -215,6 +215,7 @@ export interface LinuxLocalControlStatus {
 export interface UpdaterState {
   status:
     | "idle"
+    | "disabled"
     | "checking"
     | "available"
     | "downloading"

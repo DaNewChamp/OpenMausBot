@@ -11,6 +11,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { createUpdaterCoordinator } from "./updater-coordinator.mjs";
+import { resolvePrivateUpdateFeed } from "./update-config.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -61,6 +62,12 @@ export function startUpdater(mainWindow) {
     setState({ status: "idle" });
     return;
   }
+  const feed = resolvePrivateUpdateFeed();
+  if (!feed.enabled) {
+    updaterCoordinator = null;
+    setState({ status: "disabled", message: feed.message });
+    return;
+  }
   try {
     ({ autoUpdater } = require("./vendor/electron-updater.cjs"));
   } catch {
@@ -68,6 +75,9 @@ export function startUpdater(mainWindow) {
     setState({ status: "error", message: "updater unavailable" });
     return;
   }
+  // Never inherit electron-builder's public/default feed. V Bot updates are
+  // opt-in and only use the explicitly configured private HTTPS channel.
+  autoUpdater.setFeedURL({ provider: "generic", url: feed.url });
   autoUpdater.autoDownload = false; // button-driven download
   // Squirrel.Mac has a second, native staging pass after the ZIP download.
   // Start it immediately so "Restart to update" never has to begin that slow

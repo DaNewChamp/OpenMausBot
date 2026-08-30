@@ -157,7 +157,7 @@ contextBridge.exposeInMainWorld("ogb", {
   setCredential: (name, value) => ipcRenderer.invoke("credential:set", name, value),
 
   /** In-app auto-update. State object:
-   *  { status: "idle"|"checking"|"available"|"downloading"|"downloaded"|"error",
+   *  { status: "idle"|"disabled"|"checking"|"available"|"downloading"|"downloaded"|"error",
    *    version?, percent?, message? }. onState fires immediately with the
    *    current state, then on every transition. Dormant in dev (no bridge). */
   updater: {

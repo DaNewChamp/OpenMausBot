@@ -8,6 +8,7 @@ describe("BotMRR package deep links", () => {
     const target = "https://raw.githubusercontent.com/acme/bots/main/reddit-lead-miner.md";
     assert.equal(packageUrlFromDeepLink(`openmausbot://install?url=${encodeURIComponent(target)}`), target);
     assert.equal(packageUrlFromCommandLine(["OpenMausBot", "--flag", `openmausbot://install?url=${encodeURIComponent(target)}`]), target);
+    assert.equal(packageUrlFromDeepLink(`vbot://install?url=${encodeURIComponent(target)}`), target);
   });
 
   it("rejects other commands, hosts, protocols, credentials, and unsupported file types", () => {
