@@ -57,7 +57,6 @@ struct RootView: View {
     @AppStorage("companion.onboarding.notificationsSeen") private var hasSeenNotificationPrompt = false
     @AppStorage(CompanionOnboardingPreferences.pendingNotificationOnboardingKey)
     private var notificationOnboardingPending = false
-    @State private var pairingRequested = false
 
     var body: some View {
         Group {
@@ -74,7 +73,7 @@ struct RootView: View {
         .onChange(of: session.pairingInvite) { _, invite in
             guard invite != nil else { return }
             hasSeenWelcome = true
-            pairingRequested = true
+            session.beginPairing()
         }
         .onAppear { reconcileNotificationOnboarding() }
         .onChange(of: session.notificationAuthorizationResolved) { _, _ in
@@ -108,17 +107,17 @@ struct RootView: View {
                 onConnect: startPairing,
                 onSkip: {
                     hasSeenWelcome = true
-                    pairingRequested = false
+                    session.endPairing()
                 }
             )
         case .pairing:
             PairingView {
                 hasSeenWelcome = true
-                pairingRequested = false
+                session.endPairing()
             }
             .onAppear {
                 hasSeenWelcome = true
-                pairingRequested = true
+                session.beginPairing()
             }
         case .unpairedHome:
             UnpairedHomeView(onConnect: startPairing)
@@ -126,7 +125,7 @@ struct RootView: View {
             NotificationOnboardingView {
                 hasSeenNotificationPrompt = true
                 notificationOnboardingPending = false
-                pairingRequested = false
+                session.endPairing()
             }
             .onAppear { hasSeenWelcome = true }
         case .chats:
@@ -136,7 +135,7 @@ struct RootView: View {
                     // This is either an existing pairing or a new pairing
                     // which needed no notification education. Do not let
                     // a later voluntary unpair reopen Pairing by itself.
-                    pairingRequested = false
+                    session.endPairing()
                     reconcileNotificationOnboarding()
                 }
         case .revoked:
@@ -159,7 +158,7 @@ struct RootView: View {
         return CompanionOnboardingRouter.route(for: .init(
             pairingState: pairingState,
             hasSeenWelcome: hasSeenWelcome,
-            pairingRequested: pairingRequested,
+            pairingRequested: session.pairingRequested,
             hasPendingPairingInvite: session.pairingInvite != nil,
             notificationOnboardingPending: notificationOnboardingPending,
             hasSeenNotificationPrompt: hasSeenNotificationPrompt,
@@ -187,7 +186,7 @@ struct RootView: View {
 
     private func startPairing() {
         hasSeenWelcome = true
-        pairingRequested = true
+        session.beginPairing()
     }
 }
 

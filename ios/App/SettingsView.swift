@@ -60,11 +60,11 @@ struct SettingsView: View {
         VBotSurfaceGroup(title: "Computer") {
             if let connection = session.connection {
                 NavigationLink {
-                    ConnectionSecurityView()
+                    ConnectedComputersView()
                 } label: {
                     ComputerSettingsRow(
                         name: connection.name,
-                        status: statusText,
+                        status: computerStatusText,
                         connected: session.status == .live
                     )
                 }
@@ -416,6 +416,11 @@ struct SettingsView: View {
     }
 
     private var statusText: String { session.status.settingsText(previouslyLive: session.previouslyLive) }
+
+    private var computerStatusText: String {
+        guard session.connections.count > 1 else { return statusText }
+        return "\(statusText) · \(session.connections.count) saved"
+    }
 }
 
 private struct ComputerSettingsRow: View {
@@ -473,6 +478,97 @@ private struct SettingsIcon: View {
             .frame(width: 28, height: 28)
             .background(color, in: RoundedRectangle(cornerRadius: VBotSurface.Radius.icon, style: .continuous))
             .accessibilityHidden(true)
+    }
+}
+
+/// Saved computer switcher. Pairings stay on this phone and each token
+/// remains isolated in Keychain; switching only changes the active stream.
+struct ConnectedComputersView: View {
+    @EnvironmentObject private var session: Session
+    @State private var pendingRemoval: Connection?
+
+    private var otherComputers: [Connection] {
+        session.connections.filter { $0.id != session.connection?.id }
+    }
+
+    var body: some View {
+        List {
+            if let active = session.connection {
+                Section("Current computer") {
+                    NavigationLink {
+                        ConnectionSecurityView()
+                    } label: {
+                        ComputerSettingsRow(
+                            name: active.name,
+                            status: session.status.settingsText(previouslyLive: session.previouslyLive),
+                            connected: session.status == .live
+                        )
+                    }
+                }
+            }
+
+            if !otherComputers.isEmpty {
+                Section("Other computers") {
+                    ForEach(otherComputers) { computer in
+                        Button {
+                            Haptics.selection()
+                            session.switchComputer(to: computer.id)
+                        } label: {
+                            HStack(spacing: 12) {
+                                ProfileAvatar(name: computer.name, size: 38)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(computer.name)
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                    Text("Tap to switch")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text("Use")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(MausPalette.color("blue"))
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .swipeActions {
+                            Button("Remove", role: .destructive) { pendingRemoval = computer }
+                        }
+                    }
+                }
+            }
+
+            Section {
+                Button {
+                    Haptics.selection()
+                    session.beginPairing()
+                } label: {
+                    Label("Connect another computer", systemImage: "plus.circle.fill")
+                }
+            } footer: {
+                Text("Each computer is paired separately. Only the selected computer is active at a time.")
+            }
+        }
+        .navigationTitle("Computers")
+        .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog(
+            "Remove \(pendingRemoval?.name ?? "this computer")?",
+            isPresented: Binding(
+                get: { pendingRemoval != nil },
+                set: { if !$0 { pendingRemoval = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove from this iPhone", role: .destructive) {
+                guard let pendingRemoval else { return }
+                session.forgetConnection(id: pendingRemoval.id)
+                self.pendingRemoval = nil
+            }
+            Button("Cancel", role: .cancel) { pendingRemoval = nil }
+        } message: {
+            Text("This removes the saved connection from this iPhone only.")
+        }
     }
 }
 

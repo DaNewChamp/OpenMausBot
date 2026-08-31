@@ -47,6 +47,9 @@ final class Session: ObservableObject {
     /// not mistake a reconnect for an authoritative refresh.
     @Published private(set) var authoritativeHydrationRevision = 0
     @Published private(set) var connection: Connection?
+    /// All computers paired to this phone. The selected connection remains
+    /// exposed through `connection` so existing screens keep their behavior.
+    @Published private(set) var connections: [Connection] = []
     @Published private(set) var status: Status = .unpaired
     /// Roster/settings projection of `status` plus whether this pairing has
     /// already been live. Views should not switch on Status for banner copy.
@@ -78,6 +81,8 @@ final class Session: ObservableObject {
     @Published private(set) var notificationAuthorizationResolved = false
     /// A short-lived desktop handoff waiting for PairingView to present it.
     @Published private(set) var pairingInvite: PairingInvite?
+    /// Pairing may be opened while another computer is still saved.
+    @Published private(set) var pairingRequested = false
 
     /// A notification response that should be pushed by the roster's
     /// NavigationStack after the exact detached task has been activated.
@@ -186,6 +191,8 @@ final class Session: ObservableObject {
     /// paired client can be rebuilt after unlock.
     private var pendingNotification: NotificationTarget?
 
+    private var registry = CompanionConnectionRegistry()
+    private static let connectionsKey = "companion.connections.v1"
     private static let connectionKey = "companion.connection"
     private static let pinnedOverridesKey = "companion.pinned-overrides"
     private static let appearanceOverridesBaseKey = "companion.appearance-overrides"
@@ -331,9 +338,24 @@ final class Session: ObservableObject {
     /// only the first should ever send someone back to the pairing screen.
     private func restore() {
         restorePending = false
-        guard let data = UserDefaults.standard.data(forKey: Self.connectionKey),
-              let saved = try? JSONDecoder().decode(Connection.self, from: data)
-        else { return }
+        let restored = CompanionConnectionRegistryMigration.restore(
+            registryData: UserDefaults.standard.data(forKey: Self.connectionsKey),
+            legacyConnectionData: UserDefaults.standard.data(forKey: Self.connectionKey)
+        )
+        registry = restored.registry
+        connections = registry.connections
+        if restored.migratedLegacyConnection {
+            persistRegistry()
+            UserDefaults.standard.removeObject(forKey: Self.connectionKey)
+        }
+        restoreSelectedConnection()
+    }
+
+    private func restoreSelectedConnection() {
+        guard let saved = registry.activeConnection else {
+            connection = nil
+            return
+        }
 
         let stored: String?
         do {
@@ -352,7 +374,13 @@ final class Session: ObservableObject {
             )
             return
         }
-        guard let stored else { return } // no token: genuinely not paired
+        guard let stored else {
+            registry.remove(id: saved.id)
+            persistRegistry()
+            connections = registry.connections
+            restoreSelectedConnection()
+            return
+        }
 
         connection = saved
         state.appearanceOverrides = Self.loadAppearanceOverrides(for: saved.id)
@@ -406,7 +434,16 @@ final class Session: ObservableObject {
             stored.hosts = Array(stored.orderedHosts.prefix(8))
         }
 
+        // Re-pairing an advertised route refreshes the existing record instead
+        // of creating a duplicate row. New computers become the active one.
+        if let existing = registry.matchingConnection(for: stored) {
+            stored.id = existing.id
+        }
+
         try Keychain.save(paired.token, for: stored.id)
+        let firstPairing = registry.connections.isEmpty
+        var updatedRegistry = registry
+        updatedRegistry.upsert(stored)
         // Write the first-pair education marker before making the connection
         // restorable. If the process stops between these writes, an orphan
         // marker is harmless while unpaired; the reverse order could restore
@@ -419,16 +456,17 @@ final class Session: ObservableObject {
                 forKey: CompanionOnboardingPreferences.pendingNotificationOnboardingKey
             )
         } saveConnection: {
-            UserDefaults.standard.set(
-                try? JSONEncoder().encode(stored),
-                forKey: Self.connectionKey
-            )
+            UserDefaults.standard.set(try? JSONEncoder().encode(updatedRegistry), forKey: Self.connectionsKey)
         }
 
         pairingInvite = CompanionPairingInvitePolicy.nextInvite(
             current: pairingInvite,
             after: .pairingSucceeded
         )
+        pairingRequested = false
+        registry = updatedRegistry
+        connections = registry.connections
+        UserDefaults.standard.removeObject(forKey: Self.connectionKey)
         self.connection = stored
         self.token = paired.token
         let liveRoutes = winner.map { route in
@@ -467,10 +505,7 @@ final class Session: ObservableObject {
             consumeShareInbox()
             return
         }
-        guard CompanionPairingInvitePolicy.allowsIncomingInvite(
-            hasConnection: connection != nil,
-            pairingStateIsUnpaired: status == .unpaired
-        ) else {
+        guard connection == nil || pairingRequested else {
             actionError = "This phone is already paired. Unpair it in Settings before connecting it to another computer."
             return
         }
@@ -482,6 +517,14 @@ final class Session: ObservableObject {
             current: pairingInvite,
             after: .received(invite)
         )
+        pairingRequested = true
+    }
+
+    func beginPairing() { pairingRequested = true }
+
+    func endPairing() {
+        pairingRequested = false
+        consumePairingInvite()
     }
 
     func consumePairingInvite() {
@@ -491,7 +534,61 @@ final class Session: ObservableObject {
         )
     }
 
+    func switchComputer(to id: String) {
+        guard let saved = registry.connection(id: id) else { return }
+        if connection?.id == id {
+            connect()
+            return
+        }
+        let stored: String?
+        do {
+            stored = try Keychain.token(for: id)
+        } catch {
+            actionError = (error as? KeychainError)?.isLocked == true
+                ? "Unlock this iPhone, then try switching computers again."
+                : error.localizedDescription
+            return
+        }
+        guard let stored else {
+            actionError = "This saved connection is no longer available on this iPhone. Remove it and pair again."
+            return
+        }
+        stopActiveRuntime()
+        registry.select(id: id)
+        persistRegistry()
+        connections = registry.connections
+        configureActiveConnection(saved, token: stored)
+        connect()
+    }
+
+    func forgetConnection(id: String) {
+        guard registry.connection(id: id) != nil else { return }
+        let wasActive = registry.activeConnectionID == id
+        if wasActive { stopActiveRuntime() }
+        Keychain.remove(id)
+        registry.remove(id: id)
+        persistRegistry()
+        connections = registry.connections
+        guard wasActive else { return }
+        connection = nil
+        client = nil
+        token = nil
+        rotation = CandidateRotation(hosts: [])
+        state = CompanionState()
+        resetAvatarCache()
+        NotificationCoordinator.shared.setBadge(0)
+        restoreSelectedConnection()
+        if connection != nil { connect() }
+        if connections.isEmpty {
+            UserDefaults.standard.removeObject(forKey: CompanionOnboardingPreferences.pendingNotificationOnboardingKey)
+        }
+    }
+
     func signOut() {
+        if let id = connection?.id ?? registry.activeConnectionID {
+            forgetConnection(id: id)
+            return
+        }
         streamGeneration = ConnectionResiliencePolicy.nextGeneration(after: streamGeneration)
         endpointRefreshGeneration = ConnectionResiliencePolicy.nextGeneration(after: endpointRefreshGeneration)
         streamTask?.cancel()
@@ -538,6 +635,57 @@ final class Session: ObservableObject {
         resetAvatarCache()
         NotificationCoordinator.shared.setBadge(0)
         status = .unpaired
+    }
+
+    private func configureActiveConnection(_ saved: Connection, token stored: String) {
+        connection = saved
+        state.appearanceOverrides = Self.loadAppearanceOverrides(for: saved.id)
+        state.readReceipts = Self.loadReadReceipts(for: saved.id)
+        token = stored
+        rotation = CandidateRotation(endpoints: saved.orderedEndpoints)
+        let first = rotation.currentEndpoint.map(saved.dialing) ?? saved
+        client = CompanionClient(connection: first, token: stored)
+        status = .connecting
+    }
+
+    private func stopActiveRuntime() {
+        streamGeneration = ConnectionResiliencePolicy.nextGeneration(after: streamGeneration)
+        endpointRefreshGeneration = ConnectionResiliencePolicy.nextGeneration(after: endpointRefreshGeneration)
+        streamTask?.cancel()
+        streamTask = nil
+        endpointRefreshTask?.cancel()
+        endpointRefreshTask = nil
+        restorePending = false
+        pendingNotification = nil
+        endLinger()
+        resetStreamCoalescer()
+        engineSync = nil
+        modelCatalog = []
+        modelCatalogError = nil
+        modelCatalogRefreshing = false
+        engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
+        modelCatalogGate.invalidate()
+        routerWriteGeneration = EngineSyncPolicy.nextGeneration(after: routerWriteGeneration)
+        modelUpdateGenerations.removeAll()
+        resetInterruptedModelWriteTracking()
+        localVmStatuses.removeAll()
+        localVmAccess = false
+        localVmAccessDenied = false
+        pendingLocalVmActions.removeAll()
+        state = CompanionState()
+        client = nil
+        token = nil
+        resetAvatarCache()
+        NotificationCoordinator.shared.setBadge(0)
+        status = .unpaired
+    }
+
+    private func persistRegistry() {
+        if registry.connections.isEmpty {
+            UserDefaults.standard.removeObject(forKey: Self.connectionsKey)
+        } else {
+            UserDefaults.standard.set(try? JSONEncoder().encode(registry), forKey: Self.connectionsKey)
+        }
     }
 
     // MARK: - Lifecycle
