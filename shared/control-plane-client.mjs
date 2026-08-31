@@ -1,13 +1,14 @@
+import {
+  RUNTIME_PROFILES as SHARED_RUNTIME_PROFILES,
+  WIRE_PLATFORMS as SHARED_WIRE_PLATFORMS,
+} from "./runtime-vocabulary.mjs";
+
 const INSTALLATION_CREDENTIAL =
   /^omb_install_[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/;
 const MAX_OPAQUE_ID_LENGTH = 256;
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const RUNTIME_PROFILES = new Set([
-  "desktop-hub",
-  "headless-hub",
-  "desktop-client",
-]);
-const WIRE_PLATFORMS = new Set(["darwin", "windows", "linux"]);
+const RUNTIME_PROFILES = new Set(SHARED_RUNTIME_PROFILES);
+const WIRE_PLATFORMS = new Set(SHARED_WIRE_PLATFORMS);
 const ENDPOINT_STATUSES = new Set([
   "pending",
   "provisioning",
@@ -18,6 +19,7 @@ const ENDPOINT_STATUSES = new Set([
 const CAPABILITY_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 const MAX_CAPABILITIES = 32;
 const MAX_FLEET_INSTALLATIONS = 100;
+const INSTALLATION_CREDENTIAL_PREFIX = "omb_install_";
 
 const stringValue = (value) => (typeof value === "string" ? value : null);
 
@@ -73,6 +75,16 @@ const boundedSecret = (value, maximum = 8_192) =>
   /^\S+$/.test(value)
     ? value
     : null;
+
+// Installation credentials are deliberately distinguishable from account
+// bearers. Reject the reserved prefix before any account-authenticated I/O so
+// a credential can never be replayed against an account or fleet endpoint.
+const boundedAccountToken = (value) => {
+  const token = boundedSecret(value);
+  return token !== null && !token.startsWith(INSTALLATION_CREDENTIAL_PREFIX)
+    ? token
+    : null;
+};
 
 export class ControlPlaneError extends Error {
   constructor(code, status = 0, requestId = "") {
@@ -417,7 +429,7 @@ export function createControlPlaneClient({
   };
 
   const accountInstallations = async (accountToken) => {
-    if (!boundedSecret(accountToken)) throw new ControlPlaneError("signed_out", 401);
+    if (!boundedAccountToken(accountToken)) throw new ControlPlaneError("signed_out", 401);
     const { payload } = await request("/v1/installations", { token: accountToken });
     if (!Array.isArray(payload.installations)) {
       throw new ControlPlaneError("invalid_response");
@@ -472,7 +484,7 @@ export function createControlPlaneClient({
       // Better Auth's response JSON includes its raw database token. The
       // signed bearer plugin intentionally publishes a different credential
       // in this header; only that signed value may cross our API boundary.
-      const accountToken = boundedSecret(response.headers.get("set-auth-token"));
+      const accountToken = boundedAccountToken(response.headers.get("set-auth-token"));
       const user = validatedUser(payload.user);
       if (!accountToken || !user || user.email !== email) {
         throw new ControlPlaneError("invalid_response", response.status);
@@ -481,7 +493,7 @@ export function createControlPlaneClient({
     },
 
     async me(accountToken) {
-      if (!boundedSecret(accountToken)) throw new ControlPlaneError("signed_out", 401);
+      if (!boundedAccountToken(accountToken)) throw new ControlPlaneError("signed_out", 401);
       const { payload } = await request("/v1/me", { token: accountToken });
       const user = validatedUser(payload.user);
       if (!user) throw new ControlPlaneError("invalid_response");
@@ -493,7 +505,7 @@ export function createControlPlaneClient({
     },
 
     async listFleet(accountToken) {
-      if (!boundedSecret(accountToken)) throw new ControlPlaneError("signed_out", 401);
+      if (!boundedAccountToken(accountToken)) throw new ControlPlaneError("signed_out", 401);
       const { payload } = await request("/v1/fleet", { token: accountToken });
       const installations = decodeFleetResponse(payload);
       if (!installations) throw new ControlPlaneError("invalid_response");
@@ -546,7 +558,7 @@ export function createControlPlaneClient({
         }
       }
 
-      if (!boundedSecret(accountToken)) throw new ControlPlaneError("signed_out", 401);
+      if (!boundedAccountToken(accountToken)) throw new ControlPlaneError("signed_out", 401);
       const installations = await accountInstallations(accountToken);
       const existing = installations.find((item) => item.clientInstanceId === clientInstanceId);
       const result = existing
@@ -607,7 +619,7 @@ export function createControlPlaneClient({
 
     async revokeInstallation(accountToken, installationId) {
       if (
-        !boundedSecret(accountToken) ||
+        !boundedAccountToken(accountToken) ||
         typeof installationId !== "string" ||
         !isValidOpaqueId(installationId)
       ) {
@@ -621,7 +633,7 @@ export function createControlPlaneClient({
     },
 
     async signOut(accountToken) {
-      if (!boundedSecret(accountToken)) return;
+      if (!boundedAccountToken(accountToken)) return;
       await request("/api/auth/sign-out", {
         method: "POST",
         token: accountToken,

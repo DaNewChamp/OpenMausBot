@@ -1,8 +1,6 @@
-export const RUNTIME_PROFILES = [
-  "desktop-hub",
-  "headless-hub",
-  "desktop-client",
-] as const;
+import { RUNTIME_PROFILES as SHARED_RUNTIME_PROFILES } from "./runtime-vocabulary.mjs";
+
+export const RUNTIME_PROFILES = SHARED_RUNTIME_PROFILES;
 
 export type RuntimeProfile = (typeof RUNTIME_PROFILES)[number];
 

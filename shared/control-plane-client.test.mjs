@@ -187,4 +187,26 @@ describe("shared control-plane fleet client", () => {
       capabilities: [],
     }), ControlPlaneError);
   });
+
+  it("rejects installation credentials before account or fleet I/O", async () => {
+    let calls = 0;
+    const client = createControlPlaneClient({
+      baseURL: "https://accounts.openmausbot.com",
+      fetchImpl: async () => {
+        calls += 1;
+        return jsonResponse({ installations: [] });
+      },
+    });
+
+    await assert.rejects(client.listFleet(INSTALL), (error) =>
+      error instanceof ControlPlaneError && error.code === "signed_out" && error.status === 401,
+    );
+    await assert.rejects(client.listInstallations(INSTALL), (error) =>
+      error instanceof ControlPlaneError && error.code === "signed_out" && error.status === 401,
+    );
+    await assert.rejects(client.me(INSTALL), (error) =>
+      error instanceof ControlPlaneError && error.code === "signed_out" && error.status === 401,
+    );
+    assert.equal(calls, 0);
+  });
 });

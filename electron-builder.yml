@@ -27,6 +27,11 @@ afterPack: ./scripts/after-pack.mjs
 # ELECTRON_RUN_AS_NODE (the agentcal-hq pattern).
 files:
   - electron/**
+  # Electron's compatibility entrypoint imports the pure client and the
+  # environment-neutral runtime vocabulary from the shared tree. Keep both in
+  # the ASAR or packaged startup will fail before the account UI opens.
+  - shared/control-plane-client.mjs
+  - shared/runtime-vocabulary.mjs
   - "!electron/**/*.test.*"
   - "!electron/resources/speech-helper"
   - "!electron/resources/speech-helper.swift"

@@ -1,4 +1,6 @@
-export const WIRE_PLATFORMS = ["darwin", "windows", "linux"] as const;
+import { WIRE_PLATFORMS as SHARED_WIRE_PLATFORMS } from "./runtime-vocabulary.mjs";
+
+export const WIRE_PLATFORMS = SHARED_WIRE_PLATFORMS;
 
 export type WirePlatform = (typeof WIRE_PLATFORMS)[number];
 
