@@ -189,6 +189,8 @@ export function createCompanionAccountService({
   newClientInstanceId,
   clientInstanceId,
   identityError = "",
+  credentialStoreUnavailable = false,
+  credentialStoreError = "",
   runtimeProfile = "desktop-hub",
   appVersion = "",
   capabilities = ["companion", "harness"],
@@ -206,6 +208,10 @@ export function createCompanionAccountService({
     ? clientInstanceId
     : identity?.clientInstanceId;
   const identityUnavailable = typeof identityError === "string" && identityError.length > 0;
+  const storeUnavailable = Boolean(credentialStoreUnavailable);
+  const storeUnavailableMessage = typeof credentialStoreError === "string" && credentialStoreError.length > 0
+    ? credentialStoreError
+    : "The operating-system credential store could not be read this launch";
   const presenceCapabilities = Object.freeze(
     [...new Set(Array.isArray(capabilities) ? capabilities : [])].sort(),
   );
@@ -218,6 +224,7 @@ export function createCompanionAccountService({
   let presenceTimerScheduled = false;
   let presenceActive = false;
   let presenceGeneration = 0;
+  let initialPresenceUnavailable = false;
   let disposed = false;
   let disposePromise = null;
   const inFlightPresence = new Set();
@@ -232,6 +239,10 @@ export function createCompanionAccountService({
   };
 
   const credentials = () => readCredentials?.() ?? {};
+
+  const requireCredentialStore = () => {
+    if (storeUnavailable) throw new Error(storeUnavailableMessage);
+  };
 
   const presenceError = (error, email, generation = presenceGeneration) => {
     if (generation !== presenceGeneration) return;
@@ -305,10 +316,16 @@ export function createCompanionAccountService({
         generation === presenceGeneration &&
         !(error instanceof ControlPlaneError && error.status === 401)
       ) {
-        schedulePresenceHeartbeat(account.installationCredential, account.email);
+        initialPresenceUnavailable = true;
+        phase = {
+          status: "error",
+          email: account.email,
+          message: friendlyCompanionAccountError(error),
+        };
       }
       throw error;
     }
+    initialPresenceUnavailable = false;
     if (!disposed && generation === presenceGeneration && presenceActive === false) {
       schedulePresenceHeartbeat(account.installationCredential, account.email);
     }
@@ -327,7 +344,7 @@ export function createCompanionAccountService({
   };
 
   const probeControlPlane = async ({ force = false } = {}) => {
-    if (!configured) return false;
+    if (!configured || storeUnavailable) return false;
     const checkedAt = now();
     if (
       !force &&
@@ -353,6 +370,7 @@ export function createCompanionAccountService({
   };
 
   const requireHealthyControlPlane = async () => {
+    requireCredentialStore();
     if (!(await probeControlPlane({ force: true }))) {
       throw new ControlPlaneError("control_plane_unavailable");
     }
@@ -364,6 +382,13 @@ export function createCompanionAccountService({
         available: false,
         status: "error",
         message: identityError,
+      });
+    }
+    if (storeUnavailable) {
+      return publicState({
+        available: false,
+        status: "error",
+        message: storeUnavailableMessage,
       });
     }
     if (!configured) {
@@ -389,6 +414,7 @@ export function createCompanionAccountService({
     if (
       phase &&
       ["connecting", "error"].includes(phase.status) &&
+      !initialPresenceUnavailable &&
       account &&
       persistedAccess &&
       !companionAccountCleanupPending(document) &&
@@ -455,6 +481,7 @@ export function createCompanionAccountService({
   };
 
   const ensureClientIdentity = async () => {
+    requireCredentialStore();
     const candidate = resolveClientIdentity();
     const current = credentials();
     if (current[COMPANION_CLIENT_INSTANCE_FIELD] === candidate) return candidate;
@@ -467,6 +494,7 @@ export function createCompanionAccountService({
   };
 
   const markCleanupPending = async () => {
+    requireCredentialStore();
     await updateCredentials((document) => ({
       ...document,
       [COMPANION_ACCOUNT_CLEANUP_PENDING_FIELD]: true,
@@ -474,6 +502,7 @@ export function createCompanionAccountService({
   };
 
   const clearAfterCleanup = async () => {
+    requireCredentialStore();
     await updateCredentials(withoutCompanionAccount);
     await stopManagedEndpoint();
     phase = null;
@@ -482,6 +511,7 @@ export function createCompanionAccountService({
   /** Returns true only when the installation was revoked (which schedules
    * endpoint cleanup) and it is safe to forget its local retry credentials. */
   const cleanupCurrentAccount = async ({ markPending = true } = {}) => {
+    requireCredentialStore();
     stopPresence();
     const document = credentials();
     const account = storedAccount(document);
@@ -545,6 +575,7 @@ export function createCompanionAccountService({
   };
 
   const provision = async ({ accountToken, user }) => {
+    requireCredentialStore();
     const clientInstanceId = await ensureClientIdentity();
     const before = credentials();
     const previous = storedAccount(before);
@@ -560,11 +591,66 @@ export function createCompanionAccountService({
     if (
       !INSTALLATION_CREDENTIAL.test(installation?.credential) ||
       !isValidOpaqueId(installation?.installation?.id) ||
-      !isValidOpaqueId(installation?.installation?.clientInstanceId)
+      !isValidOpaqueId(installation?.installation?.clientInstanceId) ||
+      installation.installation.clientInstanceId !== clientInstanceId
     ) {
       throw new ControlPlaneError("invalid_response");
     }
-    const endpoint = await client.ensureEndpoint(installation.credential);
+
+    const reusedExistingInstallation = Boolean(
+      previous?.userId === user.id &&
+      previous.installationId === installation.installation.id &&
+      previous.installationCredential === installation.credential,
+    );
+    const rollbackProvisioning = async ({
+      endpointProvisioned = false,
+      preserveExisting = reusedExistingInstallation,
+    } = {}) => {
+      stopPresence();
+      if (endpointProvisioned) {
+        await client.deleteEndpoint(installation.credential).catch(() => {});
+      }
+      if (!preserveExisting) {
+        await client.revokeInstallation(accountToken, installation.installation.id).catch(() => {});
+      }
+    };
+
+    try {
+      await ensurePresence({
+        installationCredential: installation.credential,
+        email: user.email,
+      });
+    } catch (error) {
+      if (error instanceof ControlPlaneError && error.status === 401) {
+        // Keep the returned credential as a recovery hint for the existing
+        // no-remint signed-out path. No endpoint is provisioned yet, and the
+        // canonical identity remains untouched.
+        await updateCredentials((document) => {
+          const next = {
+            ...document,
+            [COMPANION_INSTALLATION_ID_FIELD]: installation.installation.id,
+            [COMPANION_INSTALLATION_CREDENTIAL_FIELD]: installation.credential,
+          };
+          if (Number.isSafeInteger(installation.credentialExpiresAt)) {
+            next[COMPANION_INSTALLATION_EXPIRY_FIELD] = installation.credentialExpiresAt;
+          } else {
+            delete next[COMPANION_INSTALLATION_EXPIRY_FIELD];
+          }
+          return next;
+        }).catch(() => {});
+      } else {
+        await rollbackProvisioning();
+      }
+      throw error;
+    }
+
+    let endpoint;
+    try {
+      endpoint = await client.ensureEndpoint(installation.credential);
+    } catch (error) {
+      await rollbackProvisioning();
+      throw error;
+    }
     try {
       await updateCredentials((document) =>
         withProvisionedAccount(document, {
@@ -577,8 +663,7 @@ export function createCompanionAccountService({
     } catch (error) {
       // Persistence failed after remote allocation. Best effort cleanup avoids
       // an invisible tunnel; no secret is ever written to a log or exception.
-      await client.deleteEndpoint(installation.credential).catch(() => {});
-      await client.revokeInstallation(accountToken, installation.installation.id).catch(() => {});
+      await rollbackProvisioning({ endpointProvisioned: true });
       throw error;
     }
     const connection = await activatePersistedEndpoint();
@@ -595,10 +680,6 @@ export function createCompanionAccountService({
         message: "The address is ready, but this app could not start its secure connection. Local pairing still works.",
       };
     }
-    await ensurePresence({
-      installationCredential: installation.credential,
-      email: user.email,
-    });
     return settledState();
   };
 
@@ -620,6 +701,7 @@ export function createCompanionAccountService({
   };
 
   const requestCode = (rawEmail) => serialize(async () => {
+    requireCredentialStore();
     if (identityUnavailable) throw new Error(identityError);
     if (!configured) throw new Error(FRIENDLY_MESSAGES.control_plane_unavailable);
     const email = normalizeAccountEmail(rawEmail);
@@ -639,6 +721,7 @@ export function createCompanionAccountService({
   });
 
   const verifyCode = (rawEmail, rawCode) => serialize(async () => {
+    requireCredentialStore();
     if (identityUnavailable) throw new Error(identityError);
     if (!configured) throw new Error(FRIENDLY_MESSAGES.control_plane_unavailable);
     const email = normalizeAccountEmail(rawEmail);
@@ -691,6 +774,8 @@ export function createCompanionAccountService({
   });
 
   const retryWork = async () => {
+    if (storeUnavailable) return settledState();
+    requireCredentialStore();
     if (identityUnavailable) return settledState();
     if (!configured) return settledState();
     const account = storedAccount(credentials());
@@ -724,6 +809,8 @@ export function createCompanionAccountService({
   const retry = () => serialize(retryWork);
 
   const signOut = () => serialize(async () => {
+    if (storeUnavailable) return settledState();
+    requireCredentialStore();
     stopPresence();
     if (identityUnavailable) throw new Error(identityError);
     if (!storedAccount(credentials())) {
@@ -751,6 +838,8 @@ export function createCompanionAccountService({
   });
 
   const restore = () => serialize(async () => {
+    if (storeUnavailable) return settledState();
+    requireCredentialStore();
     if (identityUnavailable) return settledState();
     if (!configured) return settledState();
     if (!(await probeControlPlane({ force: true }))) return settledState();
@@ -765,12 +854,14 @@ export function createCompanionAccountService({
         presenceError(error, account.email);
       }
     }
-    if (phase?.status !== "signed-out") phase = null;
+    if (phase?.status !== "signed-out" && !initialPresenceUnavailable) phase = null;
     return settledState();
   });
 
   return Object.freeze({
     state: async () => {
+      if (storeUnavailable) return settledState();
+      await transition;
       await probeControlPlane();
       return settledState();
     },

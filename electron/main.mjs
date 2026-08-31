@@ -810,6 +810,8 @@ function ensureCompanionAccountService() {
     readCredentials: () => secureCredentialState?.read() ?? secureCredentials,
     updateCredentials: updateSecureCredentialDocument,
     identityError: hubIdentityError,
+    credentialStoreUnavailable,
+    credentialStoreError,
     identity: {
       name: installationDisplayName(),
       platform:
@@ -1792,11 +1794,12 @@ app.whenReady().then(async () => {
   if (serverReady && companionEnabledAtRest()) {
     void startDesktopCompanion({ waitForHosted: false, remember: false });
   }
-  loadMainWindow(mainWindow ?? win);
   // Reconcile incomplete setup and resume interrupted sign-out only after the
-  // local app is usable. This background network work never gates LAN pairing
-  // or the first window.
+  // local app is usable. The account service serializes state reads behind
+  // this transition, so the renderer cannot observe a false `ready` state
+  // while the first presence update is still in flight.
   void hostedAccount.restore().catch(() => {});
+  loadMainWindow(mainWindow ?? win);
   // Registration is optional network work. Start it only after the local
   // server and first window are usable, then update the server child over its
   // private parent port so Connected Apps becomes available without restart.

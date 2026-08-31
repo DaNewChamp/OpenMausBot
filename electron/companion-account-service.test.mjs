@@ -20,6 +20,7 @@ import {
 } from "./managed-companion-tunnel.mjs";
 
 const UUID = "11111111-1111-4111-8111-111111111111";
+const OTHER_UUID = "99999999-9999-4999-8999-999999999999";
 const INSTALLATION_ID = "22222222-2222-4222-8222-222222222222";
 const DUPLICATE_INSTALLATION_ID = "33333333-3333-4333-8333-333333333333";
 const ACCOUNT_TOKEN = `signed.${"a".repeat(80)}`;
@@ -172,6 +173,55 @@ describe("Companion account service", () => {
     expect(store.writes).toHaveLength(0);
   });
 
+  it("fails closed before any remote I/O when the credential store is unavailable", async () => {
+    const client = readyClient();
+    const { service, store } = serviceFixture({
+      client,
+      initial: { [COMPANION_CLIENT_INSTANCE_FIELD]: UUID },
+      credentialStoreUnavailable: true,
+      credentialStoreError: "credential store unavailable",
+      identity: {
+        name: "Test Mac",
+        platform: "darwin",
+        appVersion: "1.2.3",
+        clientInstanceId: UUID,
+      },
+    });
+
+    await expect(service.state()).resolves.toEqual({
+      available: false,
+      status: "error",
+      message: "credential store unavailable",
+    });
+    await expect(service.requestCode("ada@example.com")).rejects.toThrow(
+      "credential store unavailable",
+    );
+    await expect(service.verifyCode("ada@example.com", "12345678")).rejects.toThrow(
+      "credential store unavailable",
+    );
+    await expect(service.restore()).resolves.toEqual({
+      available: false,
+      status: "error",
+      message: "credential store unavailable",
+    });
+    await expect(service.retry()).resolves.toEqual({
+      available: false,
+      status: "error",
+      message: "credential store unavailable",
+    });
+    await expect(service.signOut()).resolves.toEqual({
+      available: false,
+      status: "error",
+      message: "credential store unavailable",
+    });
+    expect(client.health).not.toHaveBeenCalled();
+    expect(client.requestOTP).not.toHaveBeenCalled();
+    expect(client.verifyOTP).not.toHaveBeenCalled();
+    expect(client.ensureInstallation).not.toHaveBeenCalled();
+    expect(client.updatePresence).not.toHaveBeenCalled();
+    expect(store.writes).toHaveLength(0);
+  });
+
   it("discovers a control plane that becomes healthy without restarting the app", async () => {
     const health = vi
       .fn()
@@ -291,6 +341,37 @@ describe("Companion account service", () => {
     await expect(service.signOut()).resolves.toEqual({ available: true, status: "signed-out" });
     expect(client.revokeInstallation).toHaveBeenCalledWith(ACCOUNT_TOKEN, legacyInstallationId);
     expect(store.read()).toEqual({ [COMPANION_CLIENT_INSTANCE_FIELD]: legacyClientInstanceId });
+  });
+
+  it("rejects an installation bound to a different client identity before presence or endpoint work", async () => {
+    const client = readyClient({
+      ensureInstallation: vi.fn(async () => ({
+        installation: {
+          id: INSTALLATION_ID,
+          clientInstanceId: OTHER_UUID,
+          name: "Test Mac",
+          platform: "darwin",
+        },
+        credential: INSTALLATION_CREDENTIAL,
+      })),
+    });
+    const { service, store } = serviceFixture({ client });
+
+    await expect(service.verifyCode("ada@example.com", "12345678")).resolves.toMatchObject({
+      status: "error",
+      email: "ada@example.com",
+    });
+    expect(client.ensureInstallation).toHaveBeenCalledOnce();
+    expect(client.updatePresence).not.toHaveBeenCalled();
+    expect(client.ensureEndpoint).not.toHaveBeenCalled();
+    expect(client.revokeInstallation).not.toHaveBeenCalled();
+    expect(store.read()).toMatchObject({
+      [COMPANION_CLIENT_INSTANCE_FIELD]: UUID,
+      [COMPANION_ACCOUNT_TOKEN_FIELD]: ACCOUNT_TOKEN,
+      [COMPANION_ACCOUNT_USER_ID_FIELD]: "user-1",
+    });
+    expect(store.read()[COMPANION_INSTALLATION_ID_FIELD]).toBeUndefined();
+    expect(store.read()[COMPANION_INSTALLATION_CREDENTIAL_FIELD]).toBeUndefined();
   });
 
   it("fails closed instead of replacing an invalid persisted client ID", async () => {
@@ -761,6 +842,85 @@ describe("Companion account service", () => {
     expect(clearPresence).toHaveBeenCalledOnce();
     await heartbeat();
     expect(client.updatePresence).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends initial presence before endpoint provisioning", async () => {
+    const events = [];
+    const client = readyClient({
+      updatePresence: vi.fn(async () => {
+        events.push("presence");
+      }),
+      ensureEndpoint: vi.fn(async () => {
+        events.push("endpoint");
+        return { endpoint: { url: ENDPOINT }, connectorToken: CONNECTOR_TOKEN };
+      }),
+    });
+    const { service } = serviceFixture({ client });
+
+    await expect(service.verifyCode("ada@example.com", "12345678")).resolves.toMatchObject({
+      status: "ready",
+    });
+    expect(events).toEqual(["presence", "endpoint"]);
+  });
+
+  it("rolls back a failed initial presence without removing the canonical identity", async () => {
+    const updatePresence = vi
+      .fn()
+      .mockRejectedValueOnce(new ControlPlaneError("network_unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const client = readyClient({ updatePresence });
+    const schedulePresence = vi.fn();
+    const { service, store } = serviceFixture({ client, schedulePresence });
+
+    await expect(service.verifyCode("ada@example.com", "12345678")).resolves.toMatchObject({
+      available: true,
+      status: "error",
+      email: "ada@example.com",
+      message: expect.stringContaining("Check your internet"),
+    });
+    expect(client.ensureEndpoint).not.toHaveBeenCalled();
+    expect(client.revokeInstallation).toHaveBeenCalledWith(ACCOUNT_TOKEN, INSTALLATION_ID);
+    expect(schedulePresence).not.toHaveBeenCalled();
+    expect(store.read()).toMatchObject({
+      [COMPANION_CLIENT_INSTANCE_FIELD]: UUID,
+      [COMPANION_ACCOUNT_TOKEN_FIELD]: ACCOUNT_TOKEN,
+      [COMPANION_ACCOUNT_USER_ID_FIELD]: "user-1",
+    });
+    expect(store.read()[COMPANION_INSTALLATION_ID_FIELD]).toBeUndefined();
+    expect(store.read()[COMPANION_INSTALLATION_CREDENTIAL_FIELD]).toBeUndefined();
+
+    await expect(service.retry()).resolves.toMatchObject({
+      available: true,
+      status: "ready",
+      endpoint: ENDPOINT,
+    });
+    expect(client.ensureInstallation).toHaveBeenCalledTimes(2);
+    expect(client.ensureEndpoint).toHaveBeenCalledOnce();
+    expect(updatePresence).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps startup state unavailable until the initial restore presence completes", async () => {
+    let resolvePresence;
+    const presence = new Promise((resolve) => {
+      resolvePresence = resolve;
+    });
+    const client = readyClient({
+      updatePresence: vi.fn(() => presence),
+    });
+    const { service } = serviceFixture({ client, initial: signedCredentials() });
+
+    const restoring = service.restore();
+    await Promise.resolve();
+    const reading = service.state();
+    let settled = false;
+    void reading.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    resolvePresence();
+    await restoring;
+    await expect(reading).resolves.toMatchObject({ status: "ready" });
   });
 
   it("dispose is idempotent and waits for an in-flight heartbeat", async () => {
