@@ -295,7 +295,10 @@ final class Session: ObservableObject {
            let url = Bundle.main.url(forResource: "StorePreview", withExtension: "json"),
            let data = try? Data(contentsOf: url),
            let fleet = try? JSONDecoder().decode(Fleet.self, from: data) {
-            connection = Connection(name: "Preview Mac", host: "preview.tailnet.ts.net", port: 8810)
+            let preview = Connection(name: "Preview Mac", host: "preview.tailnet.ts.net", port: 8810)
+            connection = preview
+            registry = CompanionConnectionRegistry(connections: [preview], activeConnectionID: preview.id)
+            connections = registry.connections
             state.hydrate(fleet)
             state.reconcileReadReceiptsAfterHydrate()
             state.reconcileUnreadIndicators(visibleThreadId: nil)

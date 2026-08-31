@@ -139,10 +139,17 @@ struct RootView: View {
                     reconcileNotificationOnboarding()
                 }
         case .revoked:
-            UnpairedView {
-                session.signOut()
-                startPairing()
-            }
+            UnpairedView(
+                onPairAgain: {
+                    session.signOut()
+                    startPairing()
+                },
+                onChooseAnother: session.connections.first(where: {
+                    $0.id != session.connection?.id
+                }).map { computer in
+                    { session.switchComputer(to: computer.id) }
+                }
+            )
         }
     }
 
@@ -195,6 +202,12 @@ struct RootView: View {
 /// honest thing is to say so and offer to pair again.
 struct UnpairedView: View {
     let onPairAgain: () -> Void
+    let onChooseAnother: (() -> Void)?
+
+    init(onPairAgain: @escaping () -> Void, onChooseAnother: (() -> Void)? = nil) {
+        self.onPairAgain = onPairAgain
+        self.onChooseAnother = onChooseAnother
+    }
 
     var body: some View {
         NavigationStack {
@@ -206,6 +219,11 @@ struct UnpairedView: View {
                 Button("Pair again", action: onPairAgain)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
+                if let onChooseAnother {
+                    Button("Use another computer", action: onChooseAnother)
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                }
             }
         }
     }
