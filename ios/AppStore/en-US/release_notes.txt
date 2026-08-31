@@ -1,4 +1,4 @@
-V Bot build 66: smoother computer control and a lighter send tap.
+V Bot build 67: clean approvals and clearer computer states.
 
 • Trackpad mode now moves the remote pointer naturally by relative motion
 • Trackpad and touch controls no longer open the Create Local VM prompt accidentally
@@ -7,3 +7,6 @@ V Bot build 66: smoother computer control and a lighter send tap.
 • Global and per-bot Ask, Allow, or Deny permission policies now sync securely
 • Sending a message now uses a crisp, keyboard-light haptic instead of a heavy tap
 • Switching between Touch and Trackpad no longer sends a stray desktop click or opens an error
+• Approval requests are compact and explain the requested action in plain language
+• Approval details show exactly Deny and Allow, with Always allow kept separate
+• Computer unavailable, Local VM, VPS, and cloud states now show one accurate next step without duplicate copy
