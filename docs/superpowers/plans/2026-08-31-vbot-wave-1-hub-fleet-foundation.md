@@ -1125,8 +1125,10 @@ State explicitly:
 - the control plane has no chats or provider secrets;
 - headless secrets live in the encrypted host store;
 - Electron's canonical hub directory is the final `app.getPath("userData")`;
-- headless commands require an explicit absolute `--data-dir` (with
-  `OMB_DATA_DIR` allowed only for local tests);
+- headless commands require an explicit absolute `--data-dir`; `OMB_DATA_DIR`
+  remains a legacy explicit override for existing server and Electron
+  consumers, while the `vbotctl` fixture passes its temporary path directly
+  and does not read the environment;
 - `hub.json` and the encrypted secret-store files are included in hub backups
   and migrations;
 - `stopPresence()` and `dispose()` are called on sign-out and app quit;
@@ -1150,13 +1152,14 @@ For non-interactive local tests, pipe only the short-lived verification code thr
 
 ```bash
 printf '%s\n' '12345678' | \
-  pnpm run vbotctl -- --data-dir "$OMB_DATA_DIR" account verify-code --email owner@example.com --stdin
+  pnpm run vbotctl -- --data-dir /tmp/vbot-local-fixture account verify-code --email owner@example.com --stdin
 ```
 
-`--data-dir` is required for a headless runtime and must be absolute. Set
-`OMB_DATA_DIR` only in local tests when the CLI's dependency-injected fixture
-explicitly permits it. Do not claim a background heartbeat service exists in
-Wave 1.
+`--data-dir` is required for a headless runtime and must be absolute. The
+`vbotctl` fixture passes its temporary path directly and does not read
+`OMB_DATA_DIR`; that variable remains a legacy explicit override for existing
+server and Electron consumers. Do not claim a background heartbeat service
+exists in Wave 1.
 
 - [ ] **Step 3: Audit for secret leakage and unfinished markers**
 
@@ -1208,7 +1211,7 @@ The iOS test suite must remain unchanged and pass because this wave does not mod
 Use only local Wrangler/D1 and a temporary data directory:
 
 ```bash
-export OMB_DATA_DIR="$(mktemp -d)"
+DATA_DIR="$(mktemp -d)"
 export CONTROL_PLANE_PORT=8787
 export OMB_CONTROL_PLANE_URL="http://127.0.0.1:${CONTROL_PLANE_PORT}"
 pnpm --filter @openmausbot/control-plane exec wrangler d1 migrations apply DB \
@@ -1231,12 +1234,12 @@ build. Then:
 
 1. request an OTP over `OMB_CONTROL_PLANE_URL` and read the short-lived code
    through `readLatestOtp(email)`;
-2. pipe that code to `pnpm run vbotctl -- --data-dir "$OMB_DATA_DIR" account
+2. pipe that code to `pnpm run vbotctl -- --data-dir "$DATA_DIR" account
    verify-code` with the same explicit URL;
 3. run headless register;
 4. run one heartbeat;
 5. list fleet;
-6. restart the CLI with the same `OMB_DATA_DIR` and confirm no second
+6. restart the CLI with the same explicit `--data-dir "$DATA_DIR"` and confirm no second
    installation is created;
 7. stop the Worker and confirm fleet/presence failures do not alter `hub.json`
    or the stored installation credential.

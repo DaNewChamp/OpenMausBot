@@ -116,7 +116,7 @@ pass the fixture's temporary path explicitly with `--data-dir`:
 
 ```sh
 printf '%s\n' '12345678' | \
-  pnpm run vbotctl -- --data-dir "$OMB_DATA_DIR" account verify-code \
+  pnpm run vbotctl -- --data-dir /tmp/vbot-local-fixture account verify-code \
   --email owner@example.com --stdin
 ```
 
