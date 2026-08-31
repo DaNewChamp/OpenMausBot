@@ -1649,134 +1649,283 @@ struct CardView: View {
     @EnvironmentObject private var session: Session
     @Environment(\.conversationTypography) private var typography
     @State private var answering = false
-
-    /// The option this card offers that means "go ahead".
-    ///
-    /// Deliberately not the literal string "Allow". `options` is whatever the
-    /// harness sent, and it only falls back to ["Allow", "Deny"] when the
-    /// provider event named no choices of its own (`server/index.ts`) — a card
-    /// is free to say "Yes", "Approve", "Allow once". Answering with a string
-    /// the card never offered writes the grant and then hands the harness a
-    /// choice it can reject, so the bot stays stopped with nothing on screen
-    /// to explain it. The conventional label wins when it is present, which
-    /// keeps the ordinary permission card behaving exactly as before.
-    private var allowChoice: String? {
-        guard let options = message.card?.options else { return nil }
-        return options.first { $0.caseInsensitiveCompare("Allow") == .orderedSame }
-            ?? options.first { !Self.isRefusal($0) }
-    }
-
-    /// One definition of "the refusal", shared by the button tint and the
-    /// choice above so the two cannot drift apart.
-    private static func isRefusal(_ option: String) -> Bool { OptionCard.isRefusal(option) }
+    @State private var showingApprovalDetails = false
 
     private var tint: Color { MausPalette.color(chat.color) }
 
     var body: some View {
         if let card = message.card {
-            VStack(alignment: .leading, spacing: 10) {
-                if card.isPending {
-                    Label("\(chat.name) is waiting on you", systemImage: "hand.raised.fill")
-                        .font(typography.detail.weight(.semibold))
-                        .foregroundStyle(tint)
-                }
-                Text(card.title)
-                    .font(typography.font(size: 16, relativeTo: .headline, weight: .semibold))
-                    .foregroundStyle(Color.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if card.isPermission {
-                    Text(card.actionSummary ?? "This will let the requested tool run.")
-                        .font(typography.font(size: 15, relativeTo: .subheadline))
-                        .foregroundStyle(Color.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let details = card.details ?? (!card.subtitle.isEmpty ? card.subtitle : nil), !details.isEmpty {
-                        DisclosureGroup("Show command/details") {
-                            Text(details)
-                                .font(typography.font(size: 14, relativeTo: .footnote))
-                                .foregroundStyle(Color.secondary)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.top, 4)
-                        }
-                        .font(typography.compact.weight(.medium))
-                        .foregroundStyle(Color.secondary)
-                    }
-                } else if !card.subtitle.isEmpty {
-                    Text(card.subtitle)
-                        .font(typography.font(size: 15, relativeTo: .subheadline))
-                        .foregroundStyle(Color.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if let held = card.held {
-                    Label(held, systemImage: "exclamationmark.shield")
-                        .font(typography.detail)
-                        .foregroundStyle(.orange)
-                }
-
-                if card.isPending {
-                    HStack(spacing: 8) {
-                        ForEach(card.options, id: \.self) { option in
-                            Button {
-                                answering = true
-                                Task {
-                                    await session.answer(chat: chat, card: card, choice: option)
-                                    answering = false
-                                }
-                            } label: {
-                                Text(card.displayLabel(for: option))
-                                    .font(typography.font(size: 15, relativeTo: .subheadline, weight: .semibold))
-                                    .foregroundStyle(Self.isRefusal(option) ? Color.primary : .white)
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 40)
-                                    .background(
-                                        Capsule().fill(Self.isRefusal(option) ? Color.secondary.opacity(0.18) : tint)
-                                    )
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(answering)
-                        }
-                    }
-                    .padding(.top, 2)
-
-                    // The grant key comes from the card. The phone never
-                    // derives its own, so it cannot permit something subtly
-                    // wider than the computer would have. The same goes for
-                    // the answer: it is one of the options the card offered,
-                    // never a string invented here.
-                    if card.allowKey != nil, let allow = allowChoice, case let .bot(bot) = chat {
-                        Button("Always allow this tool") {
-                            answering = true
-                            Task {
-                                await session.alwaysAllow(bot: bot, card: card)
-                                await session.answer(
-                                    chat: chat,
-                                    card: card,
-                                    choice: allow,
-                                    rememberingPermission: false
-                                )
-                                answering = false
-                            }
-                        }
-                        .font(typography.compact)
-                        .foregroundStyle(Color.secondary)
-                        .frame(maxWidth: .infinity)
-                        .disabled(answering)
-                    }
-                } else if let answered = card.answered {
-                    Label(answered, systemImage: "checkmark.circle")
-                        .font(typography.font(size: 14, relativeTo: .footnote))
-                        .foregroundStyle(Color.secondary)
-                }
-            }
+            cardContent(card)
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(card.isPending ? tint.opacity(0.12) : VBotSurface.assistantBubble)
+                    .fill(card.isPending && card.isPermission ? tint.opacity(0.11) : VBotSurface.assistantBubble)
             )
+            .sheet(isPresented: $showingApprovalDetails) {
+                ApprovalDetailSheet(chat: chat, card: card)
+                    .environmentObject(session)
+            }
         }
+    }
+
+    @ViewBuilder
+    private func cardContent(_ card: OptionCard) -> some View {
+        if card.isPermission && card.isPending {
+            Button {
+                Haptics.soft()
+                showingApprovalDetails = true
+            } label: {
+                VStack(alignment: .leading, spacing: 5) {
+                    Label("\(chat.name) needs your approval", systemImage: "hand.raised.fill")
+                        .font(typography.detail.weight(.semibold))
+                        .foregroundStyle(tint)
+                    Text(actionSummary(for: card))
+                        .font(typography.font(size: 16, relativeTo: .body, weight: .medium))
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 5) {
+                        Text("Tap to review")
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .font(typography.compact)
+                    .foregroundStyle(Color.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(chat.name) needs your approval")
+            .accessibilityValue(actionSummary(for: card))
+            .accessibilityHint("Opens details and approval actions")
+        } else if card.isPermission {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(resolvedTitle(for: card))
+                    .font(typography.font(size: 16, relativeTo: .headline, weight: .semibold))
+                    .foregroundStyle(card.answered?.lowercased().contains("deny") == true ? Color.red.opacity(0.9) : Color.primary)
+                Text(actionSummary(for: card))
+                    .font(typography.font(size: 15, relativeTo: .subheadline))
+                    .foregroundStyle(Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            questionContent(card)
+        }
+    }
+
+    private func questionContent(_ card: OptionCard) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if card.isPending {
+                Label("\(chat.name) is waiting on you", systemImage: "hand.raised.fill")
+                    .font(typography.detail.weight(.semibold))
+                    .foregroundStyle(tint)
+            }
+            Text(OptionCard.sanitizedPresentation(card.title))
+                .font(typography.font(size: 16, relativeTo: .headline, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !card.subtitle.isEmpty {
+                Text(card.subtitle)
+                    .font(typography.font(size: 15, relativeTo: .subheadline))
+                    .foregroundStyle(Color.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let held = card.held {
+                Label(held, systemImage: "exclamationmark.shield")
+                    .font(typography.detail)
+                    .foregroundStyle(.orange)
+            }
+            if card.isPending {
+                HStack(spacing: 8) {
+                    ForEach(card.options, id: \.self) { option in
+                        Button {
+                            answering = true
+                            Task {
+                                await session.answer(chat: chat, card: card, choice: option)
+                                answering = false
+                            }
+                        } label: {
+                            Text(option)
+                                .font(typography.font(size: 15, relativeTo: .subheadline, weight: .semibold))
+                                .foregroundStyle(Color.primary)
+                                .frame(maxWidth: .infinity)
+                                .frame(minHeight: 44)
+                                .background(Capsule().fill(Color.secondary.opacity(0.18)))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(answering)
+                    }
+                }
+            } else if let answered = card.answered {
+                Label(answered, systemImage: "checkmark.circle")
+                    .font(typography.font(size: 14, relativeTo: .footnote))
+                    .foregroundStyle(Color.secondary)
+            }
+        }
+    }
+
+    private func actionSummary(for card: OptionCard) -> String {
+        if let summary = card.actionSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+            return OptionCard.sanitizedPresentation(summary)
+        }
+        if let toolLabel = card.toolLabel, let hostLabel = card.hostLabel {
+            return OptionCard.sanitizedPresentation("Run \(toolLabel.lowercased()) on \(hostLabel)")
+        }
+        return OptionCard.sanitizedPresentation(card.title.replacingOccurrences(of: "?", with: ""))
+    }
+
+    private func resolvedTitle(for card: OptionCard) -> String {
+        guard let answered = card.answered?.lowercased() else { return OptionCard.sanitizedPresentation(card.title) }
+        return answered.contains("deny") ? "Bot’s request denied" : "Request approved"
+    }
+}
+
+/// Full details for a pending permission request. The transcript remains
+/// compact; this sheet is the only place that exposes bounded command text.
+private struct ApprovalDetailSheet: View {
+    let chat: Chat
+    let card: OptionCard
+    @EnvironmentObject private var session: Session
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.conversationTypography) private var typography
+    @State private var answering = false
+
+    private var allowChoice: String { card.permissionAllowChoice ?? "Allow" }
+    private var denyChoice: String { card.permissionDenyChoice ?? "Deny" }
+    private var actionSummary: String {
+        if let summary = card.actionSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty { return OptionCard.sanitizedPresentation(summary) }
+        if let toolLabel = card.toolLabel, let hostLabel = card.hostLabel { return OptionCard.sanitizedPresentation("Run \(toolLabel.lowercased()) on \(hostLabel)") }
+        return OptionCard.sanitizedPresentation(card.title.replacingOccurrences(of: "?", with: ""))
+    }
+    private var details: String? {
+        let value = OptionCard.sanitizedPresentation(card.details ?? card.subtitle)
+        return value.isEmpty ? nil : value
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("Bot needs your approval")
+                        .font(typography.font(size: 24, relativeTo: .title2, weight: .bold))
+                    Text(actionSummary)
+                        .font(typography.font(size: 18, relativeTo: .body, weight: .medium))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let held = card.held {
+                        Label(held, systemImage: "exclamationmark.shield")
+                            .font(typography.detail)
+                            .foregroundStyle(.orange)
+                    }
+
+                    if let details {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Details")
+                                .font(typography.compact.weight(.semibold))
+                                .foregroundStyle(Color.secondary)
+                            Text(details)
+                                .font(typography.code)
+                                .foregroundStyle(Color.primary.opacity(0.86))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(14)
+                                .background(VBotSurface.controlSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Request")
+                            .font(typography.compact.weight(.semibold))
+                            .foregroundStyle(Color.secondary)
+                        Text(OptionCard.sanitizedPresentation(card.title))
+                            .font(typography.font(size: 16, relativeTo: .body))
+                            .foregroundStyle(Color.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, 18)
+                .padding(.bottom, 140)
+            }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 10) {
+                    HStack(spacing: 12) {
+                        Button("Deny") { answer(denyChoice) }
+                            .buttonStyle(ApprovalActionButtonStyle(role: .deny))
+                            .accessibilityHint("Declines this request")
+                        Button("Allow") { answer(allowChoice) }
+                            .buttonStyle(ApprovalActionButtonStyle(role: .allow))
+                            .accessibilityHint("Allows this request once")
+                    }
+                    if card.allowKey != nil, case .bot = chat {
+                        Button("Always allow this tool") {
+                            answering = true
+                            Task {
+                                if case let .bot(bot) = chat { await session.alwaysAllow(bot: bot, card: card) }
+                                await session.answer(chat: chat, card: card, choice: allowChoice, rememberingPermission: false)
+                                answering = false
+                                dismiss()
+                            }
+                        }
+                        .font(typography.compact)
+                        .foregroundStyle(Color.secondary)
+                        .frame(minHeight: 44)
+                        .disabled(answering)
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 10)
+                .padding(.bottom, 8)
+                .background(.ultraThinMaterial)
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .accessibilityLabel("Close approval details")
+                }
+            }
+            .toolbarBackground(.hidden, for: .navigationBar)
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(VBotSurface.background)
+        }
+    }
+
+    private func answer(_ choice: String) {
+        guard !answering else { return }
+        answering = true
+        Haptics.soft()
+        Task {
+            await session.answer(chat: chat, card: card, choice: choice, rememberingPermission: false)
+            answering = false
+            dismiss()
+        }
+    }
+}
+
+private struct ApprovalActionButtonStyle: ButtonStyle {
+    enum Role { case allow, deny }
+    let role: Role
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(role == .allow ? Color.black : .white)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 52)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(role == .allow ? Color.white : Color.red)
+                    .opacity(configuration.isPressed ? 0.78 : 1)
+            )
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.98 : 1))
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

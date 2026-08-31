@@ -82,8 +82,9 @@ describe("bridge approval card lifecycle", () => {
     expect(card!.card!.allowKey).toBe(approvalKey("run_on_bridge", "echo hi", "bridge"));
     expect(card!.card!.options).toEqual(["Allow", "Deny", "Always allow"]);
     expect(card!.card!.subtitle).toBe("echo hi");
-    expect(card!.card!.title).toContain("mini");
-    expect(card!.card!.title).toContain("br-mini");
+    expect(card!.card!.title).toBe("Worker needs your approval");
+    expect(card!.card!.actionSummary).toBe("Run a read-only command on mini");
+    expect(card!.card!.title).not.toContain("br-mini");
 
     expect(resolveBridgeApproval(bus, card!.card!.requestId!, "allow", ownerOf())).toEqual({
       handled: true,
@@ -109,8 +110,9 @@ describe("bridge approval card lifecycle", () => {
     expect(card).toBeTruthy();
     expect(card!.card!.tool).toBe("run_on_ssh_target");
     expect(card!.card!.allowKey).toBe("bridge:run_on_ssh_target:uptime");
-    expect(card!.card!.title).toContain("nas");
-    expect(card!.card!.title).toContain("br-mini");
+    expect(card!.card!.title).toBe("Worker needs your approval");
+    expect(card!.card!.actionSummary).toBe("Run a read-only command on SSH target nas");
+    expect(card!.card!.title).not.toContain("br-mini");
     expect(store.messagesFor("some-other-thread")).toHaveLength(0);
 
     const pendingGrant = store.messagesFor(bot.threadId).some(
@@ -162,7 +164,7 @@ describe("bridge approval card lifecycle", () => {
       execute,
     });
     expect(pendingCards(store, bot)).toHaveLength(6);
-    expect(echoCard.card!.title).toContain("br-mini");
+    expect(echoCard.card!.actionSummary).toContain("mini");
 
     expect(resolveBridgeApproval(bus, echoCard.card!.requestId!, "allow", ownerOf())).toEqual({
       handled: true,
@@ -191,7 +193,7 @@ describe("bridge approval card lifecycle", () => {
 
     const second = requestBridgeApproval(bus, shellReq({ bridgeId: "br-new", bridgeName: "mini", execute }));
     expect(pendingCard(store, bot)).toBeTruthy();
-    expect(pendingCard(store, bot)!.card!.title).toContain("br-new");
+    expect(pendingCard(store, bot)!.card!.title).toBe("Worker needs your approval");
     cancelBridgeApprovalsFor(bot.id);
     await expect(second).resolves.toEqual({ outcome: "deny" });
     expect(execute).toHaveBeenCalledTimes(1);

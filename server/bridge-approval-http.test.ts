@@ -203,7 +203,8 @@ posixOnly("internal bridge approval over HTTP", () => {
     const card = await waitForCard(bot.id);
     expect(card, "missing grant must hold a real card").not.toBeNull();
     expect(card.card.allowKey).toBe("bridge:run_on_bridge:echo");
-    expect(card.card.title).toContain(bridgeId);
+    expect(card.card.title).toMatch(/needs your approval$/);
+    expect(card.card.title).not.toContain(bridgeId);
 
     const wrongBot = await api("POST", `/api/bots/${other.id}/respond`, {
       requestId: card.card.requestId,

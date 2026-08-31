@@ -43,10 +43,36 @@ public struct OptionCard: Codable, Hashable, Sendable {
     /// Permission cards carry a tool; questions do not.
     public var isPermission: Bool { tool != nil }
 
+    /// The wire keeps provider wording for backwards compatibility, but the
+    /// phone presents one calm pair of actions. Standing grants are kept
+    /// separate so "Always allow" can never turn into a second one-shot
+    /// button.
+    public var permissionAllowChoice: String? {
+        guard isPermission else { return nil }
+        return options.first {
+            !Self.isRefusal($0) && !Self.isStandingGrant($0) &&
+            Self.isOneShotAllow($0)
+        } ?? options.first {
+            !Self.isRefusal($0) && !Self.isStandingGrant($0)
+        } ?? options.first { !Self.isRefusal($0) }
+    }
+
+    public var permissionDenyChoice: String? {
+        guard isPermission else { return nil }
+        return options.first(where: Self.isRefusal)
+    }
+
+    public var permissionStandingGrantChoice: String? {
+        guard isPermission else { return nil }
+        return options.first(where: Self.isStandingGrant)
+    }
+
     /// The calm label shown for the one-shot approval action. The wire keeps
     /// provider-specific option strings for backwards compatibility.
     public func displayLabel(for choice: String) -> String {
-        guard isPermission, !Self.isRefusal(choice) else { return choice }
+        guard isPermission else { return choice }
+        if Self.isRefusal(choice) { return "Deny" }
+        if Self.isStandingGrant(choice) { return "Always allow" }
         return "Allow once"
     }
 
@@ -67,8 +93,48 @@ public struct OptionCard: Codable, Hashable, Sendable {
 
     /// Shared by all of the app's card surfaces and by Live Activities.
     public static func isRefusal(_ choice: String) -> Bool {
-        choice.trimmingCharacters(in: .whitespacesAndNewlines)
-            .caseInsensitiveCompare("Deny") == .orderedSame
+        let normalized = choice.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "deny" || normalized.hasPrefix("deny ") ||
+            normalized == "no" || normalized.hasPrefix("reject")
+    }
+
+    public static func isStandingGrant(_ choice: String) -> Bool {
+        let normalized = choice.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.contains("always allow") || normalized.contains("remember") ||
+            normalized.contains("trust this") || normalized.contains("allow future")
+    }
+
+    /// Last-line client protection for cards written by an older companion.
+    /// New servers already redact these fields, but a phone may read a
+    /// persisted card from before that rollout. Keep host ids and local URLs
+    /// out of headings and the detail sheet without changing ordinary text.
+    public static func sanitizedPresentation(_ value: String) -> String {
+        var output = value
+        output = output.replacingOccurrences(
+            of: #"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"#,
+            with: "",
+            options: .regularExpression
+        )
+        output = output.replacingOccurrences(
+            of: #"\[[A-Za-z0-9_-]{12,}\]"#,
+            with: "",
+            options: .regularExpression
+        )
+        output = output.replacingOccurrences(
+            of: #"(?i)\b(?:https?|vnc|rfb)://\S+"#,
+            with: "[redacted link]",
+            options: .regularExpression
+        )
+        return output
+            .replacingOccurrences(of: "[]", with: "")
+            .replacingOccurrences(of: "  ", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func isOneShotAllow(_ choice: String) -> Bool {
+        let normalized = choice.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "allow" || normalized == "allow once" ||
+            normalized == "approve" || normalized == "yes" || normalized == "continue"
     }
 
     /// A provider may include the standing grant as an option of its own.

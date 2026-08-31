@@ -80,12 +80,19 @@ function pushApprovalCard(
   sourceThreadId: string,
 ): Message {
   const subtitle = message.length > 200 ? `${message.slice(0, 200)}…` : message;
+  const actionSummary = action === "ask_bot"
+    ? `Send a message to ${target.name}`
+    : `Delegate a task to ${target.name}`;
   const note = bus.store.appendMessage(sourceThreadId, {
     role: "bot",
     kind: "options",
     card: {
-      title: `@${from.name} wants to ${action === "ask_bot" ? "contact" : "delegate to"} @${target.name}`,
+      title: `${from.name} needs your approval`,
       subtitle,
+      actionSummary,
+      details: subtitle,
+      toolLabel: action === "ask_bot" ? "Agent message" : "Delegation",
+      hostLabel: target.name,
       options: ["Allow", "Deny", "Always allow"],
       requestId,
       tool: action,

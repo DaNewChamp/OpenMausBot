@@ -80,7 +80,6 @@ struct NeedsYouIsland: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shown: ChatUpdate?
     @State private var dismissedCardIds = Set<String>()
-    @State private var answering = false
     // The comet face is the costliest draw in the app. It earns a beat of
     // motion when the island appears; an approval left unattended overnight
     // must not keep a 30fps orbit running until morning.
@@ -126,31 +125,24 @@ struct NeedsYouIsland: View {
                         }
 
                         if let card = shown.card, card.isPending {
-                            HStack(spacing: 8) {
-                                ForEach(card.options, id: \.self) { option in
-                                    Button {
-                                        answering = true
-                                        Task {
-                                            await session.answer(chat: shown.chat, card: card, choice: option)
-                                            answering = false
-                                            dismiss()
-                                        }
-                                    } label: {
-                                        Text(option)
-                                            .font(.system(size: 15, weight: .semibold))
-                                            .foregroundStyle(CardStyle.isRefusal(option) ? .white : .white)
-                                            .frame(maxWidth: .infinity)
-                                            .frame(height: 40)
-                                            .background(
-                                                Capsule().fill(CardStyle.isRefusal(option) ? Color.white.opacity(0.16) : MausPalette.color(shown.chat.color))
-                                            )
-                                    }
-                                    .buttonStyle(.plain)
-                                    .disabled(answering)
-                                }
+                            Button {
+                                Haptics.soft()
+                                open(shown.chat)
+                                dismiss()
+                            } label: {
+                                Text("Review request")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(minHeight: 44)
+                                    .background(
+                                        Capsule().fill(MausPalette.color(shown.chat.color))
+                                    )
                             }
+                            .buttonStyle(.plain)
                             .padding(.horizontal, 20)
                             .padding(.bottom, 18)
+                            .accessibilityHint("Opens the conversation to review this request")
                         }
                     }
                 }

@@ -73,8 +73,6 @@ private struct UpdateRow: View {
     let update: ChatUpdate
     let open: () -> Void
     @EnvironmentObject private var session: Session
-    @State private var answering = false
-
     var body: some View {
         Button(action: open) {
             HStack(alignment: .top, spacing: 12) {
@@ -90,36 +88,12 @@ private struct UpdateRow: View {
                         .lineLimit(update.kind == .needsYou ? 3 : 1)
                         .multilineTextAlignment(.leading)
 
-                    if update.kind == .needsYou, let card = update.card, card.isPending {
-                        // The answers, as pills, exactly the options the card
-                        // offered — never a choice invented here.
-                        HStack(spacing: 8) {
-                            ForEach(card.options, id: \.self) { option in
-                                Button {
-                                    answering = true
-                                    Task {
-                                        await session.answer(chat: update.chat, card: card, choice: option)
-                                        answering = false
-                                    }
-                                } label: {
-                                    Text(option)
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundStyle(CardStyle.isRefusal(option) ? Color.primary : .white)
-                                        .padding(.horizontal, 14)
-                                        .frame(height: 32)
-                                        .background(
-                                            Capsule().fill(
-                                                CardStyle.isRefusal(option)
-                                                    ? Color.secondary.opacity(0.18)
-                                                    : MausPalette.color(update.chat.color)
-                                            )
-                                        )
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(answering)
-                            }
-                        }
-                        .padding(.top, 6)
+                    if let card = update.card, card.isPending, card.isPermission {
+                        Text(card.actionSummary.map(OptionCard.sanitizedPresentation) ?? OptionCard.sanitizedPresentation(card.title.replacingOccurrences(of: "?", with: "")))
+                            .font(.system(size: 13))
+                            .foregroundStyle(Color.secondary)
+                            .lineLimit(2)
+                            .padding(.top, 2)
                     }
                 }
 
@@ -145,13 +119,5 @@ private struct UpdateRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-}
-
-/// One definition of "the refusal", shared by every place a card's options
-/// are drawn as buttons, so the tints cannot drift apart.
-enum CardStyle {
-    static func isRefusal(_ option: String) -> Bool {
-        OptionCard.isRefusal(option)
     }
 }

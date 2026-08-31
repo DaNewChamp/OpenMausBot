@@ -349,7 +349,8 @@ describe("drainDelegations", () => {
     const card = await waitFor(() =>
       store.messagesFor(from.threadId).find((m) => m.card?.requestId),
     );
-    expect(card.card?.title).toContain("delegate to @Helper");
+    expect(card.card?.title).toContain("needs your approval");
+    expect(card.card?.actionSummary).toBe("Delegate a task to Helper");
     expect(card.card?.tool).toBe("delegate_bot");
     expect(card.card?.allowKey).toBe(peerAllowKey("delegate_bot", target.id));
     expect(card.card?.options).toEqual(["Allow", "Deny", "Always allow"]);

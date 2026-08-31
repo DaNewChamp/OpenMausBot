@@ -18,6 +18,7 @@ import { DATA_DIR } from "./config.ts";
 import { newId } from "./contracts.ts";
 import { appendDecision } from "./decision-log.ts";
 import { buildNotification } from "./notify.ts";
+import { sanitizeLocalVmInvokeText } from "./local-vm-invoke.ts";
 import type { ApprovalBus } from "./peer-approval.ts";
 import type { BotRecord, Message } from "./store.ts";
 
@@ -255,17 +256,26 @@ function pushApprovalCard(
   requestId: string,
   allowKey: string | undefined,
 ): Message {
-  const title =
-    req.tool === "run_on_ssh_target"
-      ? `@${bot.name} wants to SSH to ${req.sshAlias || "a target"} via ${req.bridgeName} [${req.bridgeId}]`
-      : `@${bot.name} wants to run on ${req.bridgeName} [${req.bridgeId}]`;
-  const subtitle = req.command.length > 200 ? `${req.command.slice(0, 200)}…` : req.command;
+  // The bridge id is an internal routing fingerprint, not a user-facing
+  // detail. Keep it in the approval key and execution closure, never in the
+  // transcript where it adds noise and leaks host internals to the phone.
+  const hostLabel = req.tool === "run_on_ssh_target"
+    ? `SSH target ${req.sshAlias || "target"}`
+    : req.bridgeName || "computer";
+  const readOnly = !looksDestructive(req.command) && !looksSensitive(req.command);
+  const actionSummary = `${readOnly ? "Run a read-only command" : "Run a command"} on ${hostLabel}`;
+  const safeCommand = sanitizeLocalVmInvokeText(req.command).slice(0, 16_000);
+  const subtitle = safeCommand.length > 200 ? `${safeCommand.slice(0, 200)}…` : safeCommand;
   return bus.store.appendMessage(bot.threadId, {
     role: "bot",
     kind: "options",
     card: {
-      title,
+      title: `${bot.name} needs your approval`,
       subtitle,
+      actionSummary,
+      details: subtitle,
+      toolLabel: "Terminal",
+      hostLabel,
       options: allowKey ? ["Allow", "Deny", "Always allow"] : ["Allow", "Deny"],
       requestId,
       tool: req.tool,

@@ -342,7 +342,15 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(card.details, "git status --short")
         XCTAssertEqual(card.displayLabel(for: "Allow"), "Allow once")
         XCTAssertEqual(card.displayLabel(for: "Deny"), "Deny")
-        XCTAssertEqual(card.displayLabel(for: "Always allow"), "Allow once")
+        XCTAssertEqual(card.displayLabel(for: "Always allow"), "Always allow")
+        XCTAssertEqual(card.permissionAllowChoice, "Allow")
+        XCTAssertEqual(card.permissionDenyChoice, "Deny")
+        XCTAssertNil(card.permissionStandingGrantChoice)
+
+        var standing = card
+        standing.options = ["Allow", "Deny", "Always allow"]
+        XCTAssertEqual(standing.permissionStandingGrantChoice, "Always allow")
+        XCTAssertEqual(standing.displayLabel(for: "Always allow"), "Always allow")
     }
 
     func testAQuestionSendsItsChoiceAsAnAnswer() throws {
@@ -351,6 +359,14 @@ final class DecodingTests: XCTestCase {
         XCTAssertFalse(card.isPermission)
         XCTAssertEqual(card.responseBehavior(for: "Anything"), "answer")
         XCTAssertFalse(card.shouldRememberPermission(for: "Always allow"))
+    }
+
+    func testPermissionPresentationRemovesLegacyHostInternals() {
+        let raw = "Run on mini [bd3ebe13-54d5-4cf7-9bbe-1b17ea4ac4b5] via http://127.0.0.1:5900/?token=secret"
+        let clean = OptionCard.sanitizedPresentation(raw)
+        XCTAssertEqual(clean, "Run on mini via [redacted link]")
+        XCTAssertFalse(clean.contains("bd3ebe13"))
+        XCTAssertFalse(clean.contains("127.0.0.1"))
     }
 
     func testDecodesAMessageThatGainedAFieldWeDoNotKnow() throws {

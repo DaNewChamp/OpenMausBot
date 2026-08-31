@@ -693,8 +693,8 @@ describe("comms e2e (fake ACP fleet)", () => {
       // into bot.alwaysAllow, and offers Allow / Deny / Always allow.
       expect(card.card.allowKey).toBe(`ask_bot:${helper.id}`);
       expect(card.card.options).toEqual(["Allow", "Deny", "Always allow"]);
-      expect(card.card.title).toContain("@Asker");
-      expect(card.card.title).toContain("@Helper");
+      expect(card.card.title).toBe("Asker needs your approval");
+      expect(card.card.actionSummary).toBe("Send a message to Helper");
 
       // Allow → B runs, A's reply folds the peer reply, channel mirrors both
       const allow = await api(

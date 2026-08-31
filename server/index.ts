@@ -933,7 +933,14 @@ function approvalPresentation(tool: string, summary: string, scope?: "local-comp
       ? "Terminal"
       : bare ? bare.replace(/\b\w/g, (letter) => letter.toUpperCase()).slice(0, 48) : "Tool";
   const hostLabel = scope === "local-computer" ? "Mac mini" : scope === "bridge" ? "Bridge" : "bot workspace";
-  const actionSummary = `This will let ${toolLabel.toLowerCase()} run on ${hostLabel}.`;
+  const readOnlyCommand =
+    /^(?:cat|cut|echo|find|git\s+(?:status|log|diff)|head|ls|pwd|rg|sed|tail|type|which|wc)\b/i.test(summary.trim()) &&
+    !/\b(?:curl|docker\s+(?:rm|stop|kill|exec)|install|mkdir|mv|npm\s+publish|pnpm\s+publish|rm|rmdir|scp|ssh|touch|write)\b/i.test(summary);
+  const actionSummary = toolLabel === "Terminal"
+    ? `${readOnlyCommand ? "Run a read-only command" : "Run a command"} on ${hostLabel}`
+    : toolLabel === "Computer"
+      ? `Use the computer on ${hostLabel}`
+      : `${toolLabel} on ${hostLabel}`;
   // Preserve the command's shape for the disclosure, while applying the
   // same local-VM redaction used for tool output so paths, private URLs,
   // viewer tokens, and credential-shaped values never cross the phone link.
