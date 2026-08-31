@@ -1191,6 +1191,71 @@ public struct PermissionPolicyStatus: Codable, Sendable {
     }
 }
 
+public enum ApprovalReviewerMode: String, Codable, CaseIterable, Sendable {
+    case off
+    case whenUnclear = "when-unclear"
+    case always
+
+    public var label: String {
+        switch self {
+        case .off: return "Off"
+        case .whenUnclear: return "When unclear"
+        case .always: return "Always"
+        }
+    }
+}
+
+public struct ApprovalReviewerModel: Codable, Hashable, Identifiable, Sendable {
+    public var id: String
+    public var label: String
+}
+
+public struct ApprovalReviewerProvider: Codable, Hashable, Identifiable, Sendable {
+    public var id: String
+    public var label: String
+    public var instanceId: String
+    public var available: Bool
+    public var configured: Bool
+    public var reason: String?
+    public var models: [ApprovalReviewerModel]
+
+    public var pickerId: String { "\(instanceId)|\(id)" }
+}
+
+public struct ApprovalReviewerSelection: Codable, Hashable, Sendable {
+    public var instanceId: String
+    public var model: String
+}
+
+public struct ApprovalReviewerStatus: Codable, Sendable {
+    public var mode: ApprovalReviewerMode
+    public var selection: ApprovalReviewerSelection?
+    public var providers: [ApprovalReviewerProvider]
+}
+
+public struct ApprovalReviewerPatch: Encodable, Sendable {
+    public var mode: ApprovalReviewerMode
+    public var instanceId: String?
+    public var model: String?
+
+    public init(mode: ApprovalReviewerMode, instanceId: String? = nil, model: String? = nil) {
+        self.mode = mode
+        self.instanceId = instanceId
+        self.model = model
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mode, forKey: .mode)
+        try container.encodeIfPresent(instanceId, forKey: .instanceId)
+        try container.encodeIfPresent(model, forKey: .model)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mode, instanceId, model
+    }
+}
+
 // MARK: - Agent profiles, voices, routines, and notifications
 
 public struct BotModelPatch: Encodable, Sendable {

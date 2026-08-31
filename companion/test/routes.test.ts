@@ -16,6 +16,7 @@ import {
   validateLocalVmActionBody,
   validatePermissionPolicyBody,
   validateBotPermissionModeBody,
+  validateApprovalReviewerBody,
 } from "../src/routes.ts";
 
 const ask = (method: string, path: string, authenticated = true) =>
@@ -74,6 +75,8 @@ describe("what the app may do", () => {
     ["GET", "/api/config"],
     ["GET", "/api/permissions"],
     ["PATCH", "/api/permissions"],
+    ["GET", "/api/approval-reviewer"],
+    ["PUT", "/api/approval-reviewer"],
     ["GET", "/api/events"],
     ["GET", "/api/instances"],
     ["GET", "/api/vbot/engine-sync"],
@@ -433,6 +436,36 @@ describe("permission policy", () => {
       patch: { mode: "inherit" },
     });
     expect(validateBotPermissionModeBody("PATCH", "/api/bots/bot_123/permission-mode", { mode: "allow", autoApprove: true })).toMatchObject({
+      denial: { status: 400 },
+    });
+  });
+});
+
+describe("approval reviewer", () => {
+  it("allows only the narrow GET/PUT surface", () => {
+    expect(allowed("GET", "/api/approval-reviewer")).toBe(true);
+    expect(allowed("PUT", "/api/approval-reviewer")).toBe(true);
+    expect(allowed("PATCH", "/api/approval-reviewer")).toBe(false);
+    expect(allowed("GET", "/api/approval-reviewer/extra")).toBe(false);
+  });
+
+  it("validates reviewer bodies without accepting keys, URLs, or CLI metadata", () => {
+    expect(validateApprovalReviewerBody("PUT", "/api/approval-reviewer", { mode: "when-unclear" })).toEqual({
+      patch: { mode: "when-unclear" },
+    });
+    expect(validateApprovalReviewerBody("PUT", "/api/approval-reviewer", {
+      mode: "always",
+      instanceId: "openaiCompat",
+      model: "llama",
+      key: "sk-secret",
+    })).toMatchObject({ denial: { status: 400 } });
+    expect(validateApprovalReviewerBody("PUT", "/api/approval-reviewer", {
+      mode: "always",
+      instanceId: "openaiCompat",
+      model: "llama",
+      url: "https://example.invalid",
+    })).toMatchObject({ denial: { status: 400 } });
+    expect(validateApprovalReviewerBody("PUT", "/api/approval-reviewer", { mode: "yolo" })).toMatchObject({
       denial: { status: 400 },
     });
   });

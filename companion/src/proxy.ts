@@ -29,6 +29,8 @@ import {
   isComputerDestination,
   isPermissionPolicy,
   isPermissionPolicyStatus,
+  isApprovalReviewer,
+  isApprovalReviewerStatus,
   isBotPermissionMode,
   botPermissionModeBotId,
   isConnectorCardAction,
@@ -47,6 +49,7 @@ import {
   validateBotVisibilityBody,
   validateComputerDestinationBody,
   validatePermissionPolicyBody,
+  validateApprovalReviewerBody,
   validateBotPermissionModeBody,
   validateConnectorCardBody,
   validateConnectorCardThreadId,
@@ -402,6 +405,25 @@ export function createProxyHandler(options: ProxyOptions) {
       return;
     }
     if (isPermissionPolicyStatus(method, path)) {
+      forward();
+      return;
+    }
+    if (isApprovalReviewer(method, path)) {
+      const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+      if (!contentType.startsWith("application/json")) {
+        return sendJson(res, 415, { error: "approval reviewer requires application/json" });
+      }
+      readJson(req, 64 * 1024, true).then(
+        (body) => {
+          const parsed = validateApprovalReviewerBody(method, path, body);
+          if ("denial" in parsed) return sendJson(res, parsed.denial.status, { error: parsed.denial.error });
+          forward(Buffer.from(JSON.stringify(parsed.patch), "utf8"));
+        },
+        (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
+      return;
+    }
+    if (isApprovalReviewerStatus(method, path)) {
       forward();
       return;
     }

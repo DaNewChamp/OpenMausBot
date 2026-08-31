@@ -12,6 +12,8 @@ struct SettingsView: View {
     @AppStorage(CompanionPreferences.soundsKey) private var soundsEnabled = true
     @State private var permissionDefault: PermissionMode = .ask
     @State private var permissionPolicyLoaded = false
+    @State private var approvalReviewer: ApprovalReviewerStatus?
+    @State private var approvalReviewerLoaded = false
     @State private var enablingNotifications = false
     private let onConnect: (() -> Void)?
 
@@ -30,6 +32,7 @@ struct SettingsView: View {
                     appearanceSection
                     busySection
                     permissionsSection
+                    approvalReviewerSection
                 }
             }
             .padding(.horizontal, VBotSurface.Space.page)
@@ -45,6 +48,10 @@ struct SettingsView: View {
             if let policy = await session.permissionPolicy() {
                 permissionDefault = policy.defaultMode
                 permissionPolicyLoaded = true
+            }
+            if let reviewer = await session.approvalReviewer() {
+                approvalReviewer = reviewer
+                approvalReviewerLoaded = true
             }
         }
     }
@@ -241,6 +248,113 @@ struct SettingsView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .frame(minHeight: VBotSurface.Hit.row)
+        }
+    }
+
+    private var approvalReviewerSection: some View {
+        VBotSurfaceGroup(
+            title: "Approval summaries",
+            footer: approvalReviewerFooter
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("Approval summaries", selection: approvalReviewerModeBinding) {
+                    ForEach(ApprovalReviewerMode.allCases, id: \.self) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .disabled(!approvalReviewerLoaded)
+
+                if let reviewer = approvalReviewer, !reviewer.providers.isEmpty {
+                    Picker("Reviewer", selection: approvalReviewerProviderBinding) {
+                        ForEach(reviewer.providers, id: \.pickerId) { provider in
+                            Text(provider.available ? provider.label : "\(provider.label) — unavailable")
+                                .tag(provider.pickerId)
+                        }
+                    }
+                    .disabled(!approvalReviewerLoaded)
+                    if let active = selectedReviewerProvider, active.models.count > 1 {
+                        Picker("Model", selection: approvalReviewerModelBinding) {
+                            ForEach(active.models) { model in
+                                Text(model.label).tag(model.id)
+                            }
+                        }
+                        .disabled(!approvalReviewerLoaded || !active.available)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(minHeight: VBotSurface.Hit.row)
+        }
+    }
+
+    private var approvalReviewerFooter: String {
+        if let reason = selectedReviewerProvider?.reason, selectedReviewerProvider?.available == false {
+            return reason
+        }
+        return "Optional summaries only. This never approves or denies, and it cannot lower the local risk."
+    }
+
+    private var selectedReviewerProvider: ApprovalReviewerProvider? {
+        guard let reviewer = approvalReviewer else { return nil }
+        if let selection = reviewer.selection {
+            return reviewer.providers.first {
+                $0.instanceId == selection.instanceId && $0.models.contains(where: { $0.id == selection.model })
+            }
+        }
+        return reviewer.providers.first(where: \.available) ?? reviewer.providers.first
+    }
+
+    private var approvalReviewerModeBinding: Binding<ApprovalReviewerMode> {
+        Binding(
+            get: { approvalReviewer?.mode ?? .whenUnclear },
+            set: { mode in
+                guard approvalReviewerLoaded else { return }
+                Task { await saveApprovalReviewer(mode: mode, provider: selectedReviewerProvider, modelId: selectedReviewerProvider.flatMap { modelId(in: $0) }) }
+            }
+        )
+    }
+
+    private var approvalReviewerProviderBinding: Binding<String> {
+        Binding(
+            get: { selectedReviewerProvider?.pickerId ?? "" },
+            set: { pickerId in
+                guard approvalReviewerLoaded, let reviewer = approvalReviewer,
+                      let provider = reviewer.providers.first(where: { $0.pickerId == pickerId })
+                else { return }
+                Task { await saveApprovalReviewer(mode: reviewer.mode, provider: provider, modelId: provider.models.first?.id) }
+            }
+        )
+    }
+
+    private var approvalReviewerModelBinding: Binding<String> {
+        Binding(
+            get: { selectedReviewerProvider.flatMap { modelId(in: $0) } ?? "" },
+            set: { modelId in
+                guard approvalReviewerLoaded, let reviewer = approvalReviewer, let provider = selectedReviewerProvider else { return }
+                Task { await saveApprovalReviewer(mode: reviewer.mode, provider: provider, modelId: modelId) }
+            }
+        )
+    }
+
+    private func modelId(in provider: ApprovalReviewerProvider) -> String? {
+        if let selected = approvalReviewer?.selection, selected.instanceId == provider.instanceId,
+           provider.models.contains(where: { $0.id == selected.model }) {
+            return selected.model
+        }
+        return provider.models.first?.id
+    }
+
+    private func saveApprovalReviewer(mode: ApprovalReviewerMode, provider: ApprovalReviewerProvider?, modelId: String?) async {
+        var patch = ApprovalReviewerPatch(mode: mode)
+        if let provider, let modelId, provider.available {
+            patch.instanceId = provider.instanceId
+            patch.model = modelId
+        }
+        if let saved = await session.updateApprovalReviewer(patch) {
+            approvalReviewer = saved
         }
     }
 

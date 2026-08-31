@@ -23,6 +23,10 @@ export interface Pending {
   allowKey?: string;
   detail: string;
   held?: string;
+  executiveSummary?: string;
+  changeSummary?: string;
+  resourceSummary?: string;
+  riskLevel?: "low" | "medium" | "high";
 }
 
 /** Open approvals on a thread, oldest first — answered/dismissed drop out. */
@@ -36,6 +40,10 @@ export function pendingApprovals(messages: Message[]): Pending[] {
       allowKey: m.card!.allowKey,
       detail: m.card!.subtitle,
       held: m.card!.held,
+      executiveSummary: m.card!.executiveSummary,
+      changeSummary: m.card!.changeSummary,
+      resourceSummary: m.card!.resourceSummary,
+      riskLevel: m.card!.riskLevel,
     }));
 }
 
@@ -74,6 +82,21 @@ export const PendingApprovalPanel = memo(function PendingApprovalPanel({
         <span className="text-[13px] text-ink">{label(pending.tool)}</span>
         <span className="font-mono text-[11px] text-ink-secondary">{pending.tool}</span>
       </div>
+      {pending.executiveSummary && (
+        <div className="mt-2 text-[13px] leading-relaxed text-ink">{pending.executiveSummary}</div>
+      )}
+      {(pending.changeSummary || pending.resourceSummary) && (
+        <div className="mt-1 text-[12px] leading-relaxed text-ink-secondary">
+          {pending.changeSummary}
+          {pending.changeSummary && pending.resourceSummary ? " · " : ""}
+          {pending.resourceSummary}
+        </div>
+      )}
+      {pending.riskLevel && (
+        <div className="mt-1 text-[11px] uppercase tracking-[0.12em] text-ink-secondary">
+          Risk: {pending.riskLevel}
+        </div>
+      )}
       {/* never truncated — long commands wrap and scroll */}
       <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-ink">
         {pending.detail}

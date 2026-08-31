@@ -72,6 +72,13 @@ const permissionConfigSchema = z.object({
   /** App-wide default for permission requests. Per-bot overrides win. */
   defaultMode: z.enum(PERMISSION_MODES).optional(),
 });
+const APPROVAL_REVIEWER_MODES = ["off", "when-unclear", "always"] as const;
+const approvalReviewerConfigSchema = z.object({
+  /** When to ask a model to rewrite the display-only approval summary. */
+  mode: z.enum(APPROVAL_REVIEWER_MODES).optional(),
+  instanceId: z.string().min(1).max(200).optional(),
+  model: z.string().min(1).max(500).optional(),
+}).strict();
 const vbotConfigSchema = z.object({
   primaryEngine: z.enum(["openmaus", "grokReconstructed"]).optional(),
 });
@@ -114,6 +121,7 @@ const appConfigSchema = z.object({
   localVm: localVmConfigSchema.optional(),
   features: featureConfigSchema.optional(),
   permissions: permissionConfigSchema.optional(),
+  approvalReviewer: approvalReviewerConfigSchema.optional(),
   vbot: vbotConfigSchema.optional(),
   bridgeSshTargets: bridgeSshTargetsConfigSchema.optional(),
   instances: instanceConfigMapSchema.optional(),
@@ -140,6 +148,12 @@ export interface AppConfig {
   features?: { skillRecorder?: boolean };
   /** App-wide permission behavior. Missing means ask every time. */
   permissions?: { defaultMode?: PermissionMode };
+  /** Display-only approval summaries. Credentials are never stored here. */
+  approvalReviewer?: {
+    mode?: "off" | "when-unclear" | "always";
+    instanceId?: string;
+    model?: string;
+  };
   /** V Bot engine selection. OpenMaus remains the default fallback. */
   vbot?: { primaryEngine?: "openmaus" | "grokReconstructed" };
   /** Named SSH targets executed through home bridges (alias from ~/.ssh/config). */
@@ -333,7 +347,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     /* first write */
   }
   const checkedPatch = appConfigSchema.partial().parse(patch);
-  for (const key of ["xai", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm", "features", "permissions"] as const) {
+  for (const key of ["xai", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm", "features", "permissions", "approvalReviewer"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);

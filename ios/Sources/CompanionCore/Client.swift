@@ -1197,6 +1197,17 @@ public struct CompanionClient: Sendable {
         )
     }
 
+    public func approvalReviewer() async throws -> ApprovalReviewerStatus {
+        try await send(try makeRequest("GET", "/api/approval-reviewer"), as: ApprovalReviewerStatus.self)
+    }
+
+    public func setApprovalReviewer(_ patch: ApprovalReviewerPatch) async throws -> ApprovalReviewerStatus {
+        try await send(
+            try makeRequest("PUT", "/api/approval-reviewer", encodedBody: patch),
+            as: ApprovalReviewerStatus.self
+        )
+    }
+
     public func connectorCatalog() async throws -> ConnectorCatalog {
         try await send(try makeRequest("GET", "/api/connectors/catalog"), as: ConnectorCatalog.self)
     }

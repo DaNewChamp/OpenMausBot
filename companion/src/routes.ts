@@ -155,6 +155,7 @@ export const BOT_PERMISSION_MODE_ROUTE = {
   path: /^\/api\/bots\/[\w-]+\/permission-mode$/,
 } as const;
 const PERMISSION_MODES = new Set(["ask", "allow", "deny"]);
+const APPROVAL_REVIEWER_MODES = new Set(["off", "when-unclear", "always"]);
 
 export function isPermissionPolicy(method: string, path: string): boolean {
   return PERMISSION_POLICY_ROUTE.method === method && PERMISSION_POLICY_ROUTE.path.test(path);
@@ -164,6 +165,60 @@ export function isPermissionPolicyStatus(method: string, path: string): boolean 
 }
 export function isBotPermissionMode(method: string, path: string): boolean {
   return BOT_PERMISSION_MODE_ROUTE.method === method && BOT_PERMISSION_MODE_ROUTE.path.test(path);
+}
+
+export const APPROVAL_REVIEWER_STATUS_ROUTE = {
+  method: "GET",
+  path: /^\/api\/approval-reviewer$/,
+} as const;
+export const APPROVAL_REVIEWER_ROUTE = {
+  method: "PUT",
+  path: /^\/api\/approval-reviewer$/,
+} as const;
+
+export function isApprovalReviewerStatus(method: string, path: string): boolean {
+  return APPROVAL_REVIEWER_STATUS_ROUTE.method === method && APPROVAL_REVIEWER_STATUS_ROUTE.path.test(path);
+}
+export function isApprovalReviewer(method: string, path: string): boolean {
+  return APPROVAL_REVIEWER_ROUTE.method === method && APPROVAL_REVIEWER_ROUTE.path.test(path);
+}
+
+export function validateApprovalReviewerBody(
+  method: string,
+  path: string,
+  body: unknown,
+): { denial: Denial } | { patch: { mode: string; instanceId?: string; model?: string } } {
+  if (!isApprovalReviewer(method, path)) return { patch: { mode: "" } };
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { denial: { status: 400, error: "approval reviewer requires a JSON object" } };
+  }
+  const values = body as Record<string, unknown>;
+  const keys = Object.keys(values);
+  const allowed = new Set(["mode", "instanceId", "model"]);
+  const extra = keys.find((key) => !allowed.has(key));
+  if (extra) {
+    return { denial: { status: 400, error: `unsupported approval reviewer field: ${extra}` } };
+  }
+  if (typeof values.mode !== "string" || !APPROVAL_REVIEWER_MODES.has(values.mode)) {
+    return { denial: { status: 400, error: "mode must be off, when-unclear, or always" } };
+  }
+  const patch: { mode: string; instanceId?: string; model?: string } = { mode: values.mode };
+  if (values.instanceId !== undefined) {
+    if (typeof values.instanceId !== "string" || values.instanceId.length < 1 || values.instanceId.length > 200) {
+      return { denial: { status: 400, error: "instanceId must be a string" } };
+    }
+    patch.instanceId = values.instanceId;
+  }
+  if (values.model !== undefined) {
+    if (typeof values.model !== "string" || values.model.length < 1 || values.model.length > 500) {
+      return { denial: { status: 400, error: "model must be a string" } };
+    }
+    patch.model = values.model;
+  }
+  if ((patch.instanceId && !patch.model) || (!patch.instanceId && patch.model)) {
+    return { denial: { status: 400, error: "instanceId and model must be set together" } };
+  }
+  return { patch };
 }
 export function botPermissionModeBotId(path: string): string | null {
   return /^\/api\/bots\/([\w-]+)\/permission-mode$/.exec(path)?.[1] ?? null;
@@ -524,6 +579,8 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "GET", path: /^\/api\/config$/ },
   PERMISSION_POLICY_STATUS_ROUTE,
   PERMISSION_POLICY_ROUTE,
+  APPROVAL_REVIEWER_STATUS_ROUTE,
+  APPROVAL_REVIEWER_ROUTE,
   { method: "GET", path: /^\/api\/events$/ },
   { method: "GET", path: /^\/api\/instances$/ },
   { method: "GET", path: /^\/api\/vbot\/engine-sync$/ },

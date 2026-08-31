@@ -51,6 +51,13 @@ export interface OptionCardData {
   /** the narrow grant "always allow" remembers, e.g. "Bash:git" */
   allowKey?: string;
   approvalScope?: "local-computer";
+  /** Display-only explanation for permission cards. */
+  executiveSummary?: string;
+  changeSummary?: string;
+  resourceSummary?: string;
+  riskLevel?: "low" | "medium" | "high";
+  explanationConfidence?: "high" | "medium" | "low";
+  explanationSource?: "local" | "ai-reviewed";
 }
 
 export interface ConnectorCardData {

@@ -38,6 +38,7 @@ export type ApprovalExplanationReviewer = (
 
 const REVIEW_CACHE_TTL_MS = 30_000;
 const reviewCaches = new WeakMap<ApprovalExplanationReviewer, Map<string, { expiresAt: number; result: ApprovalExplanation }>>();
+const identityCaches = new Map<string, Map<string, { expiresAt: number; result: ApprovalExplanation }>>();
 
 function riskRank(level: ApprovalRiskLevel): number {
   return level === "high" ? 3 : level === "medium" ? 2 : 1;
@@ -74,15 +75,19 @@ export async function reviewApproval(
   hostLabel: string,
   reviewer?: ApprovalExplanationReviewer,
   timeoutMs = 1_500,
+  cacheIdentity = "",
 ): Promise<ApprovalExplanation> {
   const deterministic = explainApproval(tool, summary, hostLabel);
   if (!reviewer) return deterministic;
   const command = sanitizeLocalVmInvokeText(String(summary ?? "").slice(0, 16_000));
   const safeTool = String(tool ?? "").replace(/[^A-Za-z0-9 _:-]/g, "").slice(0, 80);
   const safeHost = String(hostLabel ?? "").replace(/[^A-Za-z0-9 .:_-]/g, "").slice(0, 80);
-  const key = createHash("sha256").update(JSON.stringify([safeTool, command, safeHost])).digest("hex");
-  const reviewCache = reviewCaches.get(reviewer) ?? new Map<string, { expiresAt: number; result: ApprovalExplanation }>();
-  reviewCaches.set(reviewer, reviewCache);
+  const key = createHash("sha256").update(JSON.stringify([cacheIdentity, safeTool, command, safeHost])).digest("hex");
+  const reviewCache = cacheIdentity
+    ? (identityCaches.get(cacheIdentity) ?? new Map<string, { expiresAt: number; result: ApprovalExplanation }>())
+    : (reviewCaches.get(reviewer) ?? new Map<string, { expiresAt: number; result: ApprovalExplanation }>());
+  if (cacheIdentity) identityCaches.set(cacheIdentity, reviewCache);
+  else reviewCaches.set(reviewer, reviewCache);
   const cached = reviewCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.result;
   reviewCache.delete(key);

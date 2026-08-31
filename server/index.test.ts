@@ -2129,6 +2129,34 @@ describe("harness HTTP API", () => {
     await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 5 } });
   });
 
+  it("exposes a strict approval-reviewer setting without keys or CLI metadata", async () => {
+    const listed = await api("GET", "/api/approval-reviewer");
+    expect(listed.status).toBe(200);
+    expect(listed.body.mode).toBe("when-unclear");
+    expect(listed.body.selection).toBeNull();
+    expect(Array.isArray(listed.body.providers)).toBe(true);
+    const serialized = JSON.stringify(listed.body);
+    expect(serialized).not.toMatch(/api[_-]?key/i);
+    expect(serialized).not.toContain("cliCandidates");
+    expect(serialized).not.toContain("cliDefault");
+    expect(serialized).not.toMatch(/https?:\/\//);
+
+    const extra = await api("PUT", "/api/approval-reviewer", {
+      mode: "always",
+      instanceId: "openaiCompat",
+      model: "llama",
+      key: "sk-secret",
+    });
+    expect(extra.status).toBe(400);
+
+    const off = await api("PUT", "/api/approval-reviewer", { mode: "off" });
+    expect(off.status).toBe(200);
+    expect(off.body.mode).toBe("off");
+    const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
+    expect(disk.approvalReviewer).toEqual({ mode: "off" });
+    expect(JSON.stringify(disk.approvalReviewer ?? {})).not.toContain("sk-");
+  });
+
   it("keeps Teach a skill off by default and persists an explicit opt-in", async () => {
     const before = await api("GET", "/api/config");
     expect(before.status).toBe(200);

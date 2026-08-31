@@ -16,6 +16,7 @@ import { Card } from "./SettingsPrimitives";
 import { UsageSection } from "./UsageSection";
 import { SkinPicker } from "./SkinPicker";
 import { RoomTurnTimeoutSettings } from "./RoomTurnTimeoutSettings";
+import { ApprovalReviewerSettings } from "./ApprovalReviewerSettings";
 import { TranscriptionSettings } from "./TranscriptionSettings";
 import { cn } from "@/lib/cn";
 
@@ -25,7 +26,7 @@ const SECTIONS: Array<{
   icon: typeof User;
   keywords: string[];
 }> = [
-  { id: "general", label: "General", icon: User, keywords: ["profile", "name", "email", "skin", "theme", "appearance", "analytics", "updates"] },
+  { id: "general", label: "General", icon: User, keywords: ["profile", "name", "email", "skin", "theme", "appearance", "analytics", "updates", "approval", "reviewer"] },
   { id: "connections", label: "Connections", icon: KeyRound, keywords: ["keys", "api", "composio", "box", "xai", "vps"] },
   { id: "engines", label: "Engines", icon: Terminal, keywords: ["models", "claude", "grok", "providers", "cli"] },
   { id: "companion", label: "Phone", icon: Smartphone, keywords: ["companion", "phone", "pair", "mobile"] },
@@ -388,6 +389,12 @@ export function SettingsModal() {
                 </Card>
                 <Card title="Channel turns" subtitle="Set one maximum duration for every bot turn in a channel.">
                   <RoomTurnTimeoutSettings />
+                </Card>
+                <Card
+                  title="Approval summaries"
+                  subtitle="Optionally rewrite approval cards in plain language. The local explanation still decides risk, and you still approve or deny."
+                >
+                  <ApprovalReviewerSettings />
                 </Card>
                 <ExperimentalFeaturesRow />
                 <UpdatesRow />

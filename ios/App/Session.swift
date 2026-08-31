@@ -2458,6 +2458,18 @@ final class Session: ObservableObject {
         catch { actionError = error.localizedDescription; return nil }
     }
 
+    func approvalReviewer() async -> ApprovalReviewerStatus? {
+        guard let client else { return nil }
+        do { return try await client.approvalReviewer() }
+        catch { actionError = error.localizedDescription; return nil }
+    }
+
+    func updateApprovalReviewer(_ patch: ApprovalReviewerPatch) async -> ApprovalReviewerStatus? {
+        guard let client else { return nil }
+        do { return try await client.setApprovalReviewer(patch) }
+        catch { actionError = error.localizedDescription; return nil }
+    }
+
     /// Set an explicit per-bot override and fold the server response into the
     /// shared roster so every open view reflects it immediately.
     func updatePermissionMode(_ mode: PermissionMode?, for bot: Bot) async -> Bot? {

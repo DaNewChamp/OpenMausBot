@@ -16,6 +16,7 @@
 
 import { newId } from "./contracts.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
+import { explainApproval } from "./approval-explainer.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 
 export { peerAllowKey } from "./peer-approval-key.ts";
@@ -27,6 +28,15 @@ export interface ApprovalBus {
   store: Store;
   /** SSE broadcast (kind: "message" envelope). */
   broadcast: (payload: Record<string, unknown>) => void;
+  /** Optional display-only rewrite of an already-shown approval card. */
+  reviewApprovalCard?: (
+    threadId: string,
+    messageId: string,
+    tool: string,
+    details: string,
+    hostLabel: string,
+    confidence: "high" | "medium" | "low",
+  ) => void;
 }
 
 interface Pending {
@@ -83,6 +93,7 @@ function pushApprovalCard(
   const actionSummary = action === "ask_bot"
     ? `Send a message to ${target.name}`
     : `Delegate a task to ${target.name}`;
+  const explanation = explainApproval(action, subtitle, target.name);
   const note = bus.store.appendMessage(sourceThreadId, {
     role: "bot",
     kind: "options",
@@ -96,12 +107,19 @@ function pushApprovalCard(
       details: subtitle,
       toolLabel: action === "ask_bot" ? "Agent message" : "Delegation",
       hostLabel: target.name,
+      executiveSummary: explanation.executiveSummary,
+      changeSummary: explanation.changeSummary,
+      resourceSummary: explanation.resourceSummary,
+      riskLevel: explanation.riskLevel,
+      explanationConfidence: explanation.confidence,
+      explanationSource: explanation.source ?? "local",
       options: ["Allow", "Deny", "Always allow"],
       requestId,
       tool: action,
       allowKey: peerAllowKey(action, target.id),
     },
   });
+  bus.reviewApprovalCard?.(sourceThreadId, note.id, action, subtitle, target.name, explanation.confidence);
   return note;
 }
 

@@ -128,7 +128,18 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
 import { searchMessages } from "./message-db.ts";
 import { promptWithReply, transcriptText } from "./replies.ts";
-import { explainApproval } from "./approval-explainer.ts";
+import { explainApproval, reviewApproval } from "./approval-explainer.ts";
+import {
+  approvalReviewerSelection,
+  parseApprovalReviewerPatch,
+  shouldReviewApproval,
+  validateReviewerSelection,
+} from "./approval-reviewer.ts";
+import {
+  bindApprovalReviewer,
+  credentialsFromConfig,
+  liveApprovalReviewerStatus,
+} from "./approval-reviewer-bind.ts";
 import { _loadPending, discardDelegations, drainDelegations, pendingDelegationSnapshot, pendingThreads, queueDelegation, type QueueResult } from "./delegations.ts";
 import { drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { EventBus } from "./harness/bus.ts";
@@ -974,6 +985,49 @@ export function approvalPresentation(tool: string, summary: string, scope?: "loc
   };
 }
 
+async function maybeReviewApprovalCard(
+  threadId: string,
+  messageId: string,
+  tool: string,
+  details: string,
+  hostLabel: string,
+  confidence: "high" | "medium" | "low",
+): Promise<void> {
+  const selection = approvalReviewerSelection(cfg);
+  if (!shouldReviewApproval(selection.mode, { confidence })) return;
+  try {
+    const instances = await registry.describe();
+    const status = await liveApprovalReviewerStatus(cfg, instances);
+    const effectiveSelection = status.selection
+      ? { ...selection, ...status.selection }
+      : selection;
+    const bound = bindApprovalReviewer({
+      selection: effectiveSelection,
+      providers: status.providers,
+      instances,
+      credentials: credentialsFromConfig(cfg),
+    });
+    if (!bound) return;
+    const reviewed = await reviewApproval(tool, details, hostLabel, bound.review, 1_500, bound.identity);
+    if (reviewed.source !== "ai-reviewed") return;
+    const existing = store.messagesFor(threadId).find((message) => message.id === messageId);
+    if (!existing?.card || existing.card.answered || existing.card.dismissed) return;
+    store.patchMessage(threadId, messageId, {
+      card: {
+        ...existing.card,
+        executiveSummary: reviewed.executiveSummary,
+        changeSummary: reviewed.changeSummary,
+        resourceSummary: reviewed.resourceSummary,
+        riskLevel: reviewed.riskLevel,
+        explanationConfidence: reviewed.confidence,
+        explanationSource: reviewed.source,
+      },
+    });
+  } catch {
+    // The local card is already visible. Review failures stay fail-closed.
+  }
+}
+
 bus.subscribe((event: RuntimeEvent) => {
   if (event.type === "request.opened") watchdog.setWaitingOnHuman(event.threadId, true);
   else if (event.type === "request.resolved") watchdog.setWaitingOnHuman(event.threadId, false);
@@ -1328,27 +1382,23 @@ bus.subscribe((event: RuntimeEvent) => {
           } catch {
             // couldn't answer it for them — hand it back to the human
             // rather than leaving the bot waiting on nobody
+            const presentation = approvalPresentation(tool, summary, event.approvalScope);
             const card = pushMessage({
               role: "bot",
               kind: "options",
               card: {
-                ...(() => {
-                  const presentation = approvalPresentation(tool, summary, event.approvalScope);
-                  return {
-                    title: `Allow ${presentation.toolLabel} on ${presentation.hostLabel}?`,
-                    subtitle: presentation.actionSummary,
-                    reason: presentation.reason,
-                    details: presentation.details,
-                    toolLabel: presentation.toolLabel,
-                    hostLabel: presentation.hostLabel,
-                    executiveSummary: presentation.executiveSummary,
-                    changeSummary: presentation.changeSummary,
-                    resourceSummary: presentation.resourceSummary,
-                    riskLevel: presentation.riskLevel,
-                    explanationConfidence: presentation.explanationConfidence,
-                    explanationSource: presentation.explanationSource,
-                  };
-                })(),
+                title: `Allow ${presentation.toolLabel} on ${presentation.hostLabel}?`,
+                subtitle: presentation.actionSummary,
+                reason: presentation.reason,
+                details: presentation.details,
+                toolLabel: presentation.toolLabel,
+                hostLabel: presentation.hostLabel,
+                executiveSummary: presentation.executiveSummary,
+                changeSummary: presentation.changeSummary,
+                resourceSummary: presentation.resourceSummary,
+                riskLevel: presentation.riskLevel,
+                explanationConfidence: presentation.explanationConfidence,
+                explanationSource: presentation.explanationSource,
                 options: ["Allow", "Deny"],
                 requestId,
                 tool,
@@ -1359,6 +1409,14 @@ bus.subscribe((event: RuntimeEvent) => {
                 approvalScope: event.approvalScope,
               },
             });
+            void maybeReviewApprovalCard(
+              event.threadId,
+              card.id,
+              tool,
+              presentation.details,
+              presentation.hostLabel,
+              presentation.explanationConfidence,
+            );
             askMessageByRequest.set(`${event.threadId}:${requestId}`, card.id);
             appendDecision(DATA_DIR, {
               threadId: event.threadId,
@@ -1375,28 +1433,28 @@ bus.subscribe((event: RuntimeEvent) => {
         })();
         break;
       }
+      const presentation = permission
+        ? approvalPresentation(event.tool, event.summary, event.approvalScope)
+        : null;
       const message = pushMessage({
         role: "bot",
         kind: "options",
         card: {
-          ...(permission
-            ? (() => {
-              const presentation = approvalPresentation(event.tool, event.summary, event.approvalScope);
-              return {
-                title: `Allow ${presentation.toolLabel} on ${presentation.hostLabel}?`,
-                subtitle: presentation.actionSummary,
-                reason: presentation.reason,
-                details: presentation.details,
-                toolLabel: presentation.toolLabel,
-                hostLabel: presentation.hostLabel,
-                executiveSummary: presentation.executiveSummary,
-                changeSummary: presentation.changeSummary,
-                resourceSummary: presentation.resourceSummary,
-                riskLevel: presentation.riskLevel,
-                explanationConfidence: presentation.explanationConfidence,
-                explanationSource: presentation.explanationSource,
-              };
-            })()
+          ...(presentation
+            ? {
+              title: `Allow ${presentation.toolLabel} on ${presentation.hostLabel}?`,
+              subtitle: presentation.actionSummary,
+              reason: presentation.reason,
+              details: presentation.details,
+              toolLabel: presentation.toolLabel,
+              hostLabel: presentation.hostLabel,
+              executiveSummary: presentation.executiveSummary,
+              changeSummary: presentation.changeSummary,
+              resourceSummary: presentation.resourceSummary,
+              riskLevel: presentation.riskLevel,
+              explanationConfidence: presentation.explanationConfidence,
+              explanationSource: presentation.explanationSource,
+            }
             : {
               title: "Your bot has a question",
               subtitle: event.summary,
@@ -1418,6 +1476,16 @@ bus.subscribe((event: RuntimeEvent) => {
           approvalScope: event.approvalScope,
         },
       });
+      if (presentation) {
+        void maybeReviewApprovalCard(
+          event.threadId,
+          message.id,
+          event.tool,
+          presentation.details,
+          presentation.hostLabel,
+          presentation.explanationConfidence,
+        );
+      }
       if (event.requestId) askMessageByRequest.set(`${event.threadId}:${event.requestId}`, message.id);
       // Every card that reaches a human is a decision too — "a rule sent
       // this to you, and here is which one". `question` marks the cards no
@@ -2600,7 +2668,9 @@ const commsBus: CommsBus = { store, broadcast };
 // approval bus: peer-approval.ts only needs to push cards and broadcast
 // them — its pending map lives in the module so the two respond endpoints
 // can call resolvePeerComms without holding a reference back to here.
-const approvalBus: ApprovalBus = { store, broadcast };
+const approvalBus: ApprovalBus = { store, broadcast, reviewApprovalCard: (threadId, messageId, tool, details, hostLabel, confidence) => {
+  void maybeReviewApprovalCard(threadId, messageId, tool, details, hostLabel, confidence);
+} };
 
 // Approvals live only in memory, so any peer card still open on disk is one
 // whose resolver died with the previous process. Left alone it can never be
@@ -6963,6 +7033,26 @@ const server = createServer(async (req, res) => {
     // bots and becomes the default for new ones.
     if (method === "GET" && path === "/api/permissions") {
       return json(res, 200, { defaultMode: defaultPermissionMode(cfg) });
+    }
+    if (method === "GET" && path === "/api/approval-reviewer") {
+      const instances = await registry.describe();
+      try {
+        return json(res, 200, await liveApprovalReviewerStatus(cfg, instances));
+      } catch (error) {
+        return json(res, 500, { error: error instanceof Error ? error.message : "approval reviewer status failed" });
+      }
+    }
+    if ((method === "PUT" || method === "PATCH") && path === "/api/approval-reviewer") {
+      const body = await readBody(req);
+      const parsed = parseApprovalReviewerPatch(body);
+      if (!parsed.ok) return json(res, 400, { error: parsed.error });
+      const instances = await registry.describe();
+      const status = await liveApprovalReviewerStatus(cfg, instances);
+      const valid = validateReviewerSelection(parsed.patch, status.providers);
+      if (!valid.ok) return json(res, 400, { error: valid.error });
+      saveConfig({ approvalReviewer: parsed.patch });
+      Object.assign(cfg, loadConfig());
+      return json(res, 200, await liveApprovalReviewerStatus(cfg, instances));
     }
     if (method === "PATCH" && path === "/api/permissions") {
       const body = await readBody(req);

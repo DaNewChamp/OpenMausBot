@@ -268,7 +268,7 @@ function pushApprovalCard(
   const safeCommand = sanitizeLocalVmInvokeText(req.command).slice(0, 16_000);
   const subtitle = safeCommand.length > 200 ? `${safeCommand.slice(0, 200)}…` : safeCommand;
   const explanation = explainApproval(req.tool, safeCommand, hostLabel);
-  return bus.store.appendMessage(bot.threadId, {
+  const message = bus.store.appendMessage(bot.threadId, {
     role: "bot",
     kind: "options",
     card: {
@@ -291,6 +291,8 @@ function pushApprovalCard(
       ...(allowKey ? { allowKey } : {}),
     },
   });
+  bus.reviewApprovalCard?.(bot.threadId, message.id, req.tool, safeCommand, hostLabel, explanation.confidence);
+  return message;
 }
 
 function attachWaiter<T>(pending: Pending<T>, signal: AbortSignal | undefined): Promise<BridgeRunDecision<T>> {

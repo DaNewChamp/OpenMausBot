@@ -103,6 +103,19 @@ describe("configuration boundaries", () => {
     );
   });
 
+  it("persists a nonsecret approval reviewer selection and defaults to when-unclear", () => {
+    expect(parseStoredConfig({})).toEqual({});
+    expect(parseConfigPatch({
+      approvalReviewer: { mode: "always", instanceId: "openaiCompat", model: "llama" },
+    })).toEqual({
+      approvalReviewer: { mode: "always", instanceId: "openaiCompat", model: "llama" },
+    });
+    expect(() => parseConfigPatch({ approvalReviewer: { mode: "whenever" } })).toThrow("approvalReviewer.mode");
+    expect(() => parseConfigPatch({
+      approvalReviewer: { mode: "always", instanceId: "openaiCompat", model: "llama", key: "sk-secret" },
+    })).toThrow();
+  });
+
   it.each([0, 1.5, 5, "2", null])("rejects an invalid per-bot VM limit: %j", (maxInstances) => {
     expect(() => parseConfigPatch({ localVm: { maxInstances } })).toThrow("localVm.maxInstances");
   });
