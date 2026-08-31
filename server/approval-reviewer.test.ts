@@ -46,6 +46,7 @@ import {
 import {
   assertCodexNoToolsPayload,
   createCodexOAuthReviewer,
+  parseCodexSseFinalText,
   readCodexOAuthCredentialsSync,
   refreshCodexOAuthCredentials,
 } from "./approval-reviewer-codex.ts";
@@ -77,6 +78,23 @@ const GROK_HELP = `
   -p, --single <PROMPT>
   --tools <TOOLS>  Built-in tools to allow
 `;
+
+function codexSseBody(text: string, options: { itemType?: string; finalText?: string } = {}): string {
+  const finalText = options.finalText ?? text;
+  const itemType = options.itemType ?? "message";
+  const events = [
+    ["response.created", { type: "response.created", response: { id: "resp_test" } }],
+    ["response.in_progress", { type: "response.in_progress" }],
+    ["response.output_item.added", { type: "response.output_item.added", item: { type: itemType, role: "assistant", content: [] } }],
+    ["response.content_part.added", { type: "response.content_part.added", part: { type: "output_text", text: "" } }],
+    ["response.output_text.delta", { type: "response.output_text.delta", delta: text }],
+    ["response.output_text.done", { type: "response.output_text.done", text: finalText }],
+    ["response.content_part.done", { type: "response.content_part.done", part: { type: "output_text", text: finalText } }],
+    ["response.output_item.done", { type: "response.output_item.done", item: { type: itemType, role: "assistant", content: [{ type: "output_text", text: finalText }] } }],
+    ["response.completed", { type: "response.completed", response: { status: "completed", output: [{ type: itemType, role: "assistant", content: [{ type: "output_text", text: finalText }] }] } }],
+  ] as const;
+  return events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join("");
+}
 
 describe("approval reviewer selection", () => {
   it("defaults to when-unclear and stores only nonsecret selection", () => {
@@ -466,12 +484,13 @@ describe("Codex OAuth reviewer", () => {
         env: { HOME: home, CODEX_HOME: home, PATH: process.env.PATH },
         fetchImpl: async (_url, init) => {
           headers.push(new Headers(init?.headers).get("authorization") ?? "");
-          return new Response(JSON.stringify({ output_text: JSON.stringify({
+          const text = JSON.stringify({
             purpose: "Reads the requested file",
             change: "Nothing; read-only",
             where: "README.md on Mac mini",
             risk: "low",
-          }) }), { status: 200 });
+          });
+          return new Response(codexSseBody(text), { status: 200, headers: { "content-type": "text/event-stream" } });
         },
       });
       const input = {
@@ -499,14 +518,13 @@ describe("Codex OAuth reviewer", () => {
         seen.url = String(url);
         seen.headers = new Headers(init?.headers);
         seen.body = String(init?.body);
-        return new Response(JSON.stringify({
-          output_text: JSON.stringify({
-            purpose: "Reads the requested file",
-            change: "Nothing; read-only",
-            where: "README.md on Mac mini",
-            risk: "low",
-          }),
-        }), { status: 200 });
+        const text = JSON.stringify({
+          purpose: "Reads the requested file",
+          change: "Nothing; read-only",
+          where: "README.md on Mac mini",
+          risk: "low",
+        });
+        return new Response(codexSseBody(text), { status: 200, headers: { "content-type": "text/event-stream" } });
       },
     });
     const value = await reviewer({
@@ -525,7 +543,7 @@ describe("Codex OAuth reviewer", () => {
     expect(payload.functions).toBeUndefined();
     expect(payload.input?.[0]?.content?.[0]?.type).toBe("input_text");
     expect(payload.store).toBe(false);
-    expect(payload.stream).toBe(false);
+    expect(payload.stream).toBe(true);
     expect(seen.body).not.toContain("oauth-secret");
   });
 
@@ -547,14 +565,22 @@ describe("Codex OAuth reviewer", () => {
       model: "gpt-5.6-sol",
       accessToken: "oauth-secret",
       accountId: "account-123",
-      fetchImpl: async () => new Response(JSON.stringify({ output_text: "not json" }), { status: 200 }),
+      fetchImpl: async () => new Response(codexSseBody("not json"), { status: 200, headers: { "content-type": "text/event-stream" } }),
     });
     await expect(malformed({
       tool: "terminal",
       command: "pwd",
       host: "Mac mini",
       deterministic: explainApproval("terminal", "pwd", "Mac mini"),
-    }, new AbortController().signal)).resolves.toBeNull();
+    }, new AbortController().signal)).rejects.toThrow(/strict JSON/i);
+  });
+
+  it("accepts the first-party event sequence and rejects tool or conflicting output", () => {
+    const text = JSON.stringify({ purpose: "Read", change: "None", where: "README", risk: "low" });
+    expect(JSON.parse(parseCodexSseFinalText(codexSseBody(text)))).toEqual(JSON.parse(text));
+    expect(() => parseCodexSseFinalText(codexSseBody(text, { itemType: "function_call" }))).toThrow(/non-message|text/i);
+    expect(() => parseCodexSseFinalText(codexSseBody(text, { finalText: `${text} ` }))).toThrow(/disagrees|strict/i);
+    expect(() => parseCodexSseFinalText(codexSseBody(text).replace("event: response.completed", "event: response.unknown"))).toThrow(/not allowed/i);
   });
 });
 

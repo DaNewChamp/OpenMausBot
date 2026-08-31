@@ -9,7 +9,6 @@ import {
   APPROVAL_REVIEW_JSON_SCHEMA,
   APPROVAL_REVIEW_SYSTEM,
   buildApprovalReviewPrompt,
-  extractReviewedJson,
 } from "./approval-reviewer.ts";
 import { readResponseTextCapped } from "./approval-reviewer-direct.ts";
 import { killCliTree, spawnCli } from "./procs.ts";
@@ -21,6 +20,18 @@ export const CODEX_REVIEW_ENDPOINT = "https://chatgpt.com/backend-api/codex/resp
 export const CODEX_REVIEW_ORIGINATOR = "codex_cli_rs";
 export const DEFAULT_CODEX_REVIEW_RESPONSE_MAX_BYTES = 64 * 1024;
 export const DEFAULT_CODEX_REFRESH_TIMEOUT_MS = 8_000;
+
+const CODEX_SSE_EVENTS = new Set([
+  "response.created",
+  "response.in_progress",
+  "response.output_item.added",
+  "response.content_part.added",
+  "response.output_text.delta",
+  "response.output_text.done",
+  "response.content_part.done",
+  "response.output_item.done",
+  "response.completed",
+]);
 
 export interface CodexOAuthCredentials {
   accessToken: string;
@@ -282,7 +293,9 @@ export function codexReviewPayload(model: string, prompt: string): Record<string
     tool_choice: "none",
     parallel_tool_calls: false,
     store: false,
-    stream: false,
+    // The ChatGPT Codex endpoint is an SSE-only transport. A non-streaming
+    // request is rejected with HTTP 400 ("Stream must be set to true").
+    stream: true,
     include: [],
     text: {
       format: {
@@ -301,33 +314,200 @@ export function assertCodexNoToolsPayload(payload: Record<string, unknown>): voi
   ]) {
     if (key in payload) throw new Error(`Codex approval review payload must not include ${key}`);
   }
-  if (payload.tool_choice !== "none" || payload.parallel_tool_calls !== false || payload.store !== false || payload.stream !== false) {
-    throw new Error("Codex approval review payload must disable tools and persistence");
+  if (payload.tool_choice !== "none" || payload.parallel_tool_calls !== false || payload.store !== false || payload.stream !== true) {
+    throw new Error("Codex approval review payload must disable tools and use streaming transport");
   }
 }
 
-function extractResponseText(value: unknown): string | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = value as JsonRecord;
-  if (typeof record.output_text === "string") return record.output_text;
-  const output = record.output;
-  if (!Array.isArray(output)) return null;
-  for (const item of output) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const content = (item as JsonRecord).content;
-    if (!Array.isArray(content)) continue;
-    for (const part of content) {
-      if (!part || typeof part !== "object" || Array.isArray(part)) continue;
-      const text = (part as JsonRecord).text;
-      if (typeof text === "string") return text;
-    }
+function record(value: unknown, label: string): JsonRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Codex SSE ${label} is invalid`);
+  return value as JsonRecord;
+}
+
+function outputTextPart(value: unknown, label: string): string {
+  const part = record(value, label);
+  if (part.type !== "output_text") throw new Error(`Codex SSE ${label} is not text`);
+  if (part.text !== undefined && typeof part.text !== "string") throw new Error(`Codex SSE ${label} text is invalid`);
+  return typeof part.text === "string" ? part.text : "";
+}
+
+function outputMessage(value: unknown, label: string): { text: string } {
+  const item = record(value, label);
+  if (item.type !== "message" || item.role !== "assistant") {
+    throw new Error(`Codex SSE ${label} contains a non-message output`);
   }
-  return null;
+  if (item.content !== undefined && !Array.isArray(item.content)) throw new Error(`Codex SSE ${label} content is invalid`);
+  let text = "";
+  for (const part of (item.content ?? [])) text += outputTextPart(part, `${label} content`);
+  return { text };
+}
+
+interface CodexSseState {
+  created: boolean;
+  inProgress: boolean;
+  outputItemAdded: boolean;
+  contentPartAdded: boolean;
+  outputTextDone: boolean;
+  contentPartDone: boolean;
+  outputItemDone: boolean;
+  completed: boolean;
+  deltaText: string;
+  finalText: string | null;
+  outputItemText: string | null;
+}
+
+function newCodexSseState(): CodexSseState {
+  return {
+    created: false,
+    inProgress: false,
+    outputItemAdded: false,
+    contentPartAdded: false,
+    outputTextDone: false,
+    contentPartDone: false,
+    outputItemDone: false,
+    completed: false,
+    deltaText: "",
+    finalText: null,
+    outputItemText: null,
+  };
+}
+
+function validateCompletedResponse(value: unknown): void {
+  if (value === undefined) return;
+  const response = record(value, "response");
+  if (response.status !== undefined && response.status !== "completed") {
+    throw new Error("Codex SSE response.completed has an unexpected status");
+  }
+  if (response.output !== undefined) {
+    if (!Array.isArray(response.output)) throw new Error("Codex SSE response output is invalid");
+    for (const item of response.output) outputMessage(item, "response output");
+  }
+}
+
+function handleCodexSseEvent(eventName: string, data: string, state: CodexSseState): void {
+  if (!CODEX_SSE_EVENTS.has(eventName)) throw new Error(`Codex SSE event is not allowed: ${eventName || "(missing)"}`);
+  let value: unknown;
+  try {
+    value = JSON.parse(data);
+  } catch {
+    throw new Error("Codex SSE event data is not valid JSON");
+  }
+  const parsed = record(value, "event");
+  if (parsed.type !== eventName) throw new Error("Codex SSE event type does not match its data");
+  switch (eventName) {
+    case "response.created":
+      if (state.created) throw new Error("Codex SSE response.created was repeated");
+      state.created = true;
+      record(parsed.response, "created response");
+      return;
+    case "response.in_progress":
+      if (state.inProgress) throw new Error("Codex SSE response.in_progress was repeated");
+      state.inProgress = true;
+      return;
+    case "response.output_item.added":
+      if (state.outputItemAdded) throw new Error("Codex SSE output item was repeated");
+      state.outputItemAdded = true;
+      outputMessage(parsed.item, "output item");
+      return;
+    case "response.content_part.added":
+      if (state.contentPartAdded) throw new Error("Codex SSE content part was repeated");
+      state.contentPartAdded = true;
+      outputTextPart(parsed.part, "content part");
+      return;
+    case "response.output_text.delta":
+      if (state.outputTextDone) throw new Error("Codex SSE text delta arrived after text.done");
+      if (typeof parsed.delta !== "string") throw new Error("Codex SSE text delta is invalid");
+      state.deltaText += parsed.delta;
+      return;
+    case "response.output_text.done":
+      if (state.outputTextDone) throw new Error("Codex SSE output text was repeated");
+      if (typeof parsed.text !== "string") throw new Error("Codex SSE output text is invalid");
+      if (parsed.text !== state.deltaText) throw new Error("Codex SSE final text disagrees with its deltas");
+      state.outputTextDone = true;
+      state.finalText = parsed.text;
+      return;
+    case "response.content_part.done":
+      if (state.contentPartDone) throw new Error("Codex SSE content part was repeated");
+      state.contentPartDone = true;
+      outputTextPart(parsed.part, "content part");
+      return;
+    case "response.output_item.done": {
+      if (state.outputItemDone) throw new Error("Codex SSE output item was repeated");
+      const item = outputMessage(parsed.item, "output item");
+      if (state.finalText !== null && item.text !== state.finalText) {
+        throw new Error("Codex SSE output item text disagrees with final text");
+      }
+      state.outputItemDone = true;
+      state.outputItemText = item.text;
+      return;
+    }
+    case "response.completed":
+      if (state.completed) throw new Error("Codex SSE response.completed was repeated");
+      validateCompletedResponse(parsed.response);
+      state.completed = true;
+      return;
+  }
+}
+
+/** Parse one complete Codex Responses SSE body. Only the assistant's final
+ * output_text is accepted; tool calls, reasoning-only output, unknown events,
+ * malformed JSON, and conflicting duplicate output are rejected. */
+export function parseCodexSseFinalText(body: string): string {
+  const state = newCodexSseState();
+  let eventName: string | null = null;
+  let dataLines: string[] = [];
+  let sawEvent = false;
+  const flush = () => {
+    if (eventName === null && dataLines.length === 0) return;
+    if (eventName === null || dataLines.length === 0) throw new Error("Codex SSE event is incomplete");
+    handleCodexSseEvent(eventName, dataLines.join("\n"), state);
+    sawEvent = true;
+    eventName = null;
+    dataLines = [];
+  };
+  const lines = body.split("\n");
+  for (let line of lines) {
+    if (line.endsWith("\r")) line = line.slice(0, -1);
+    if (line === "") {
+      flush();
+      continue;
+    }
+    if (line.startsWith(":")) continue;
+    if (line.startsWith("event:")) {
+      if (eventName !== null) throw new Error("Codex SSE event name was repeated");
+      eventName = line.slice(6).trim();
+      continue;
+    }
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).startsWith(" ") ? line.slice(6) : line.slice(5));
+      continue;
+    }
+    throw new Error("Codex SSE contained an unexpected field");
+  }
+  if (eventName !== null || dataLines.length > 0) throw new Error("Codex SSE ended before an event boundary");
+  if (!sawEvent || !state.created || !state.inProgress || !state.outputTextDone || !state.completed || state.finalText === null) {
+    throw new Error("Codex SSE ended before a completed text response");
+  }
+  if (state.outputItemDone && state.outputItemText !== state.finalText) {
+    throw new Error("Codex SSE output item text disagrees with final text");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(state.finalText);
+  } catch {
+    throw new Error("Codex SSE final output is not strict JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Codex SSE final output must be a JSON object");
+  return state.finalText;
+}
+
+export async function readCodexSseFinalText(response: Response, maxBytes: number): Promise<string> {
+  return parseCodexSseFinalText(await readResponseTextCapped(response, maxBytes));
 }
 
 export function extractCodexReviewedJson(body: unknown): unknown {
-  const text = extractResponseText(body);
-  return text ? extractReviewedJson(text) : extractReviewedJson(JSON.stringify(body));
+  if (typeof body !== "string") throw new Error("Codex approval reviewer requires an SSE response");
+  return JSON.parse(parseCodexSseFinalText(body));
 }
 
 function endpointUrl(raw: string): URL {
@@ -363,7 +543,7 @@ export async function reviewViaCodexOAuth(
       authorization: `Bearer ${accessToken}`,
       "chatgpt-account-id": accountId,
       originator: CODEX_REVIEW_ORIGINATOR,
-      accept: "application/json",
+      accept: "text/event-stream",
       "content-type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -373,14 +553,8 @@ export async function reviewViaCodexOAuth(
   if (response.redirected || response.type === "opaqueredirect") throw new Error("Codex approval reviewer refused a redirect");
   if (response.url && new URL(response.url).origin !== endpoint.origin) throw new Error("Codex approval reviewer response changed origin");
   if (!response.ok) throw new Error(`Codex approval reviewer HTTP ${response.status}`);
-  const body = await readResponseTextCapped(response, Math.min(maxBytes, DEFAULT_CODEX_REVIEW_RESPONSE_MAX_BYTES));
-  let json: unknown;
-  try {
-    json = JSON.parse(body);
-  } catch {
-    throw new Error("Codex approval reviewer returned invalid JSON");
-  }
-  return extractCodexReviewedJson(json);
+  const finalText = await readCodexSseFinalText(response, Math.min(maxBytes, DEFAULT_CODEX_REVIEW_RESPONSE_MAX_BYTES));
+  return JSON.parse(finalText);
 }
 
 export function createCodexOAuthReviewer(request: CodexOAuthReviewRequest): ApprovalExplanationReviewer {
