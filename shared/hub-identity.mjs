@@ -2,18 +2,24 @@ import {
   closeSync,
   chmodSync,
   fsyncSync,
-  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join } from "node:path";
+import { TextDecoder } from "node:util";
 
 const HUB_FILENAME = "hub.json";
+const PUBLICATION_LOCK_FILENAME = `.${HUB_FILENAME}.lock`;
 const MAX_ID_LENGTH = 256;
+const PUBLICATION_LOCK_ATTEMPTS = 100;
+const PUBLICATION_LOCK_WAIT_MS = 5;
+const publicationWaitCell = new Int32Array(new SharedArrayBuffer(4));
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 export class HubIdentityUnavailableError extends Error {
   constructor(message = "Hub identity is unavailable") {
@@ -72,6 +78,10 @@ function hubPath(dataDir) {
   return join(dataDir, HUB_FILENAME);
 }
 
+function publicationLockPath(dataDir) {
+  return join(dataDir, PUBLICATION_LOCK_FILENAME);
+}
+
 /**
  * Read-only identity lookup. Missing is distinct from unavailable: callers
  * may create only after they have established that legacy credential state is
@@ -83,15 +93,22 @@ export function readHubIdentity(options = {}) {
 
   let bytes;
   try {
-    bytes = readFileSync(hubPath(dataDir), "utf8");
+    bytes = readFileSync(hubPath(dataDir));
   } catch (error) {
     if (error?.code === "ENOENT") return { status: "missing" };
     return unavailable("Hub identity could not be read");
   }
 
+  let text;
+  try {
+    text = utf8Decoder.decode(bytes);
+  } catch {
+    return unavailable("Hub identity is malformed");
+  }
+
   let parsed;
   try {
-    parsed = JSON.parse(bytes);
+    parsed = JSON.parse(text);
   } catch {
     return unavailable("Hub identity is malformed");
   }
@@ -147,44 +164,85 @@ function temporaryPath(dataDir) {
 }
 
 /**
- * Publish without replacing a concurrently-created identity. A hard link is
- * the filesystem's atomic no-replace operation; the temporary inode was
- * already fsynced and has mode 0600. If another process wins, its final file
- * is reread and adopted unchanged.
+ * Wait for another publisher to finish or acquire the portable sidecar lock.
+ * All writers in this module serialize the check-and-rename sequence, so the
+ * rename never replaces a valid identity created by a concurrent writer. A
+ * stale lock fails closed rather than being removed speculatively.
  */
+function acquirePublicationLock(dataDir) {
+  const lockPath = publicationLockPath(dataDir);
+  for (let attempt = 0; attempt < PUBLICATION_LOCK_ATTEMPTS; attempt += 1) {
+    const current = readHubIdentity({ dataDir });
+    if (current.status === "ok") return { identity: current.identity };
+    if (current.status === "unavailable") throwUnavailable(current.error);
+
+    try {
+      return { fd: openSync(lockPath, "wx", 0o600) };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throwUnavailable("Hub identity publication could not be locked");
+      if (attempt + 1 < PUBLICATION_LOCK_ATTEMPTS) {
+        Atomics.wait(publicationWaitCell, 0, 0, PUBLICATION_LOCK_WAIT_MS);
+      }
+    }
+  }
+  throwUnavailable("Hub identity publication raced with another writer");
+}
+
+function releasePublicationLock(dataDir, fd) {
+  try {
+    closeSync(fd);
+  } catch {
+    // A closed descriptor is still safe to clean up below.
+  }
+  try {
+    unlinkSync(publicationLockPath(dataDir));
+  } catch {
+    // A stale lock is fail-closed for future creation; reads remain available.
+  }
+}
+
 function publishIdentity(dataDir, identity) {
+  const acquired = acquirePublicationLock(dataDir);
+  if (acquired.identity) return acquired.identity;
+
   const filePath = hubPath(dataDir);
   const tempPath = temporaryPath(dataDir);
-  writeDurableTemp(tempPath, `${JSON.stringify(identity)}\n`);
-
   try {
-    linkSync(tempPath, filePath);
-  } catch (error) {
+    // Recheck after acquiring the lock in case a non-cooperating writer won
+    // between acquirePublicationLock's final read and lock creation.
+    const beforeWrite = readHubIdentity({ dataDir });
+    if (beforeWrite.status === "ok") return beforeWrite.identity;
+    if (beforeWrite.status === "unavailable") throwUnavailable(beforeWrite.error);
+
+    writeDurableTemp(tempPath, `${JSON.stringify(identity)}\n`);
+
+    // Keep no-overwrite semantics even if an external writer does not use our
+    // sidecar lock but appears before the atomic rename.
+    const beforeRename = readHubIdentity({ dataDir });
+    if (beforeRename.status === "ok") return beforeRename.identity;
+    if (beforeRename.status === "unavailable") throwUnavailable(beforeRename.error);
+
+    try {
+      renameSync(tempPath, filePath);
+    } catch {
+      const raced = readHubIdentity({ dataDir });
+      if (raced.status === "ok") return raced.identity;
+      if (raced.status === "unavailable") throwUnavailable(raced.error);
+      throwUnavailable("Hub identity could not be published");
+    }
+
+    const persisted = readHubIdentity({ dataDir });
+    if (persisted.status === "ok") return persisted.identity;
+    if (persisted.status === "unavailable") throwUnavailable(persisted.error);
+    throwUnavailable("Hub identity disappeared after publication");
+  } finally {
     try {
       unlinkSync(tempPath);
     } catch {
-      // The link succeeded and only temporary cleanup failed, or the file
-      // was already removed after a race.
+      // The temp path is absent after rename or a failed durable write.
     }
-    if (error?.code !== "EEXIST") throwUnavailable("Hub identity could not be published");
-
-    const raced = readHubIdentity({ dataDir });
-    if (raced.status === "ok") return raced.identity;
-    if (raced.status === "unavailable") throwUnavailable(raced.error);
-    throwUnavailable("Hub identity publication raced with another writer");
+    releasePublicationLock(dataDir, acquired.fd);
   }
-
-  try {
-    unlinkSync(tempPath);
-  } catch {
-    // The final hard link is already durable; an orphaned temporary inode is
-    // harmless and will not affect subsequent identity reads.
-  }
-
-  const persisted = readHubIdentity({ dataDir });
-  if (persisted.status === "ok") return persisted.identity;
-  if (persisted.status === "unavailable") throwUnavailable(persisted.error);
-  throwUnavailable("Hub identity disappeared after publication");
 }
 
 /**

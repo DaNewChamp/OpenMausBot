@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +17,44 @@ function makeDataDir() {
   const dataDir = mkdtempSync(join(tmpdir(), "vbot-hub-identity-"));
   directories.push(dataDir);
   return dataDir;
+}
+
+function runConcurrentCreator(moduleUrl, dataDir, preferredId) {
+  const script = `import { loadOrCreateHubIdentity } from ${JSON.stringify(moduleUrl)};
+const identity = loadOrCreateHubIdentity({
+  dataDir: process.env.HUB_DATA_DIR,
+  preferredId: process.env.HUB_PREFERRED_ID,
+  now: () => 123,
+});
+process.stdout.write(JSON.stringify(identity));`;
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      env: { ...process.env, HUB_DATA_DIR: dataDir, HUB_PREFERRED_ID: preferredId },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`concurrent creator exited ${code}: ${stderr}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (error) {
+        reject(new Error(`concurrent creator returned invalid JSON: ${error.message}`));
+      }
+    });
+  });
 }
 
 afterEach(() => {
@@ -75,6 +114,25 @@ describe("stable hub identity", () => {
     assert.equal(readHubIdentity({ dataDir }).status, "unavailable");
   });
 
+  it("fails closed on malformed UTF-8 without reminting or changing bytes", () => {
+    const dataDir = makeDataDir();
+    // Replace the escaped sequence with an invalid UTF-8 byte sequence inside
+    // an otherwise valid JSON object. Replacement decoding would incorrectly
+    // accept this as an opaque ID.
+    const invalidBytes = Buffer.from(
+      '{"schemaVersion":1,"id":"legacy',
+      "utf8",
+    );
+    const suffix = Buffer.from('","createdAt":123}', "utf8");
+    const bytes = Buffer.concat([invalidBytes, Buffer.from([0xc3, 0x28]), suffix]);
+    writeFileSync(join(dataDir, "hub.json"), bytes, { mode: 0o600 });
+    const before = readFileSync(join(dataDir, "hub.json"));
+
+    assert.equal(readHubIdentity({ dataDir }).status, "unavailable");
+    assert.throws(() => loadOrCreateHubIdentity({ dataDir }), HubIdentityUnavailableError);
+    assert.deepEqual(readFileSync(join(dataDir, "hub.json")), before);
+  });
+
   it("refuses first creation while the legacy credential state is unknown", () => {
     const dataDir = makeDataDir();
     assert.throws(
@@ -125,6 +183,19 @@ describe("stable hub identity", () => {
     });
     assert.deepEqual(identity, raced);
     assert.deepEqual(JSON.parse(readFileSync(join(dataDir, "hub.json"), "utf8")), raced);
+  });
+
+  it("serializes concurrent creators and adopts one identity without replacement", async () => {
+    const dataDir = makeDataDir();
+    const moduleUrl = new URL("./hub-identity.mjs", import.meta.url).href;
+    const [first, second] = await Promise.all([
+      runConcurrentCreator(moduleUrl, dataDir, "concurrent-first"),
+      runConcurrentCreator(moduleUrl, dataDir, "concurrent-second"),
+    ]);
+
+    assert.deepEqual(second, first);
+    assert.deepEqual(readHubIdentity({ dataDir }), { status: "ok", identity: first });
+    assert.equal(existsSync(join(dataDir, ".hub.json.lock")), false);
   });
 
   it("falls back to the injected random id when preferredId is invalid", () => {
