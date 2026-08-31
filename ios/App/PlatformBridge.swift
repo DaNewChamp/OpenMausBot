@@ -103,7 +103,7 @@ public enum Haptics {
         guard CompanionPreferences.hapticsEnabled else { return }
         let generator = UIImpactFeedbackGenerator(style: .light)
         generator.prepare()
-        generator.impactOccurred(intensity: 0.35)
+        generator.impactOccurred(intensity: 0.5)
         #endif
     }
 
