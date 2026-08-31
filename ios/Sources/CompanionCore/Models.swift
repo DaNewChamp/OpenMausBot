@@ -27,6 +27,7 @@ public struct OptionCard: Codable, Hashable, Sendable {
     /// shown only after the user opens the disclosure.
     public var toolLabel: String?
     public var hostLabel: String?
+    public var reason: String?
     public var actionSummary: String?
     public var details: String?
     /// Why auto mode stopped to ask anyway.

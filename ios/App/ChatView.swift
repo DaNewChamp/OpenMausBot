@@ -1804,6 +1804,15 @@ private struct ApprovalDetailSheet: View {
         let value = OptionCard.sanitizedPresentation(card.details ?? card.subtitle)
         return value.isEmpty ? nil : value
     }
+    private var reason: String {
+        if let value = card.reason?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+            return OptionCard.sanitizedPresentation(value)
+        }
+        return "This action needs your permission before the bot can continue. Nothing happens unless you approve."
+    }
+    private var detailsLabel: String {
+        card.toolLabel?.caseInsensitiveCompare("Terminal") == .orderedSame ? "Command" : "Details"
+    }
 
     var body: some View {
         NavigationStack {
@@ -1811,9 +1820,18 @@ private struct ApprovalDetailSheet: View {
                 VStack(alignment: .leading, spacing: 20) {
                     Text("Bot needs your approval")
                         .font(typography.font(size: 24, relativeTo: .title2, weight: .bold))
-                    Text(actionSummary)
-                        .font(typography.font(size: 18, relativeTo: .body, weight: .medium))
-                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Reason")
+                            .font(typography.font(size: 16, relativeTo: .headline, weight: .semibold))
+                        Text(reason)
+                            .font(typography.font(size: 16, relativeTo: .body))
+                            .foregroundStyle(Color.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .background(VBotSurface.assistantBubble, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
                     if let held = card.held {
                         Label(held, systemImage: "exclamationmark.shield")
@@ -1823,7 +1841,7 @@ private struct ApprovalDetailSheet: View {
 
                     if let details {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Details")
+                            Text(detailsLabel)
                                 .font(typography.compact.weight(.semibold))
                                 .foregroundStyle(Color.secondary)
                             Text(details)
@@ -1840,7 +1858,7 @@ private struct ApprovalDetailSheet: View {
                         Text("Request")
                             .font(typography.compact.weight(.semibold))
                             .foregroundStyle(Color.secondary)
-                        Text(OptionCard.sanitizedPresentation(card.title))
+                        Text(actionSummary)
                             .font(typography.font(size: 16, relativeTo: .body))
                             .foregroundStyle(Color.primary)
                             .fixedSize(horizontal: false, vertical: true)

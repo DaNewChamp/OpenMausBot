@@ -89,6 +89,9 @@ function pushApprovalCard(
     card: {
       title: `${from.name} needs your approval`,
       subtitle,
+      reason: action === "ask_bot"
+        ? `This will let ${from.name} contact ${target.name}. Nothing is sent unless you approve.`
+        : `This will let ${from.name} hand work to ${target.name}. Nothing starts unless you approve.`,
       actionSummary,
       details: subtitle,
       toolLabel: action === "ask_bot" ? "Agent message" : "Delegation",

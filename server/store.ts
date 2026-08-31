@@ -59,6 +59,8 @@ export interface OptionCardData {
    * behind the client's collapsed disclosure. */
   toolLabel?: string;
   hostLabel?: string;
+  /** Plain-language explanation shown before the exact action details. */
+  reason?: string;
   actionSummary?: string;
   details?: string;
   /** why this stopped despite auto mode (destructive-looking command) */

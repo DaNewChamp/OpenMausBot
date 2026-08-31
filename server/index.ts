@@ -923,6 +923,7 @@ watchdog.start();
 function approvalPresentation(tool: string, summary: string, scope?: "local-computer" | "bridge"): {
   toolLabel: string;
   hostLabel: string;
+  reason: string;
   actionSummary: string;
   details: string;
 } {
@@ -933,6 +934,11 @@ function approvalPresentation(tool: string, summary: string, scope?: "local-comp
       ? "Terminal"
       : bare ? bare.replace(/\b\w/g, (letter) => letter.toUpperCase()).slice(0, 48) : "Tool";
   const hostLabel = scope === "local-computer" ? "Mac mini" : scope === "bridge" ? "Bridge" : "bot workspace";
+  const reason = scope === "local-computer"
+    ? "This action needs permission because it will use your Mac mini. Nothing runs unless you approve."
+    : scope === "bridge"
+      ? "This action needs permission because it will run through your paired computer. Nothing runs unless you approve."
+      : "This action needs permission before the bot can continue. Nothing runs unless you approve.";
   const readOnlyCommand =
     /^(?:cat|cut|echo|find|git\s+(?:status|log|diff)|head|ls|pwd|rg|sed|tail|type|which|wc)\b/i.test(summary.trim()) &&
     !/\b(?:curl|docker\s+(?:rm|stop|kill|exec)|install|mkdir|mv|npm\s+publish|pnpm\s+publish|rm|rmdir|scp|ssh|touch|write)\b/i.test(summary);
@@ -945,7 +951,7 @@ function approvalPresentation(tool: string, summary: string, scope?: "local-comp
   // same local-VM redaction used for tool output so paths, private URLs,
   // viewer tokens, and credential-shaped values never cross the phone link.
   const details = sanitizeLocalVmInvokeText(String(summary ?? "").slice(0, 16_000));
-  return { toolLabel, hostLabel, actionSummary, details };
+  return { toolLabel, hostLabel, reason, actionSummary, details };
 }
 
 bus.subscribe((event: RuntimeEvent) => {
@@ -1311,6 +1317,7 @@ bus.subscribe((event: RuntimeEvent) => {
                   return {
                     title: `Allow ${presentation.toolLabel} on ${presentation.hostLabel}?`,
                     subtitle: presentation.actionSummary,
+                    reason: presentation.reason,
                     details: presentation.details,
                     toolLabel: presentation.toolLabel,
                     hostLabel: presentation.hostLabel,
@@ -1352,6 +1359,7 @@ bus.subscribe((event: RuntimeEvent) => {
               return {
                 title: `Allow ${presentation.toolLabel} on ${presentation.hostLabel}?`,
                 subtitle: presentation.actionSummary,
+                reason: presentation.reason,
                 details: presentation.details,
                 toolLabel: presentation.toolLabel,
                 hostLabel: presentation.hostLabel,

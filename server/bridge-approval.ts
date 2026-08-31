@@ -272,6 +272,7 @@ function pushApprovalCard(
     card: {
       title: `${bot.name} needs your approval`,
       subtitle,
+      reason: `This command will run on ${hostLabel}. Nothing runs unless you approve.`,
       actionSummary,
       details: subtitle,
       toolLabel: "Terminal",
