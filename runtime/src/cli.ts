@@ -119,14 +119,30 @@ function writeLine(target: Output, value: string): void {
 
 function parseFlagValue(args: string[], name: string): string | undefined {
   const prefix = `${name}=`;
-  const inline = args.filter((value) => value.startsWith(prefix));
-  const separate = args.filter((value, index) => value === name && index + 1 < args.length);
-  if (inline.length + separate.length > 1) throw usageError(`duplicate ${name}`);
-  if (inline.length === 1) return inline[0].slice(prefix.length);
-  const index = args.indexOf(name);
-  if (index < 0) return undefined;
-  if (index + 1 >= args.length || args[index + 1].startsWith("--")) throw usageError(`missing ${name}`);
-  return args[index + 1];
+  let occurrences = 0;
+  let inlineValue: string | undefined;
+  let separateIndex = -1;
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index];
+    if (value.startsWith(prefix)) {
+      occurrences += 1;
+      if (occurrences === 1) inlineValue = value.slice(prefix.length);
+      continue;
+    }
+    if (value === name) {
+      occurrences += 1;
+      if (occurrences === 1) separateIndex = index;
+    }
+  }
+  if (occurrences > 1) throw usageError(`duplicate ${name}`);
+  if (occurrences === 0) return undefined;
+  if (separateIndex >= 0) {
+    if (separateIndex + 1 >= args.length || args[separateIndex + 1].startsWith("--")) {
+      throw usageError(`missing ${name}`);
+    }
+    return args[separateIndex + 1];
+  }
+  return inlineValue;
 }
 
 function removeFlag(args: string[], name: string): string[] {

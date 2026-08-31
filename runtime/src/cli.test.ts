@@ -119,6 +119,54 @@ describe("vbotctl parser and output", () => {
     expect(deps.io.read().stderr).toContain("duplicate --stdin");
   });
 
+  it("rejects every duplicate email and name occurrence, including value-less and mixed forms", async () => {
+    const cases: Array<{ argv: string[]; message: string }> = [
+      {
+        argv: ["account", "request-code", "--email", "owner@example.com", "--email"],
+        message: "duplicate --email",
+      },
+      {
+        argv: ["account", "request-code", "--email", "--email", "owner@example.com"],
+        message: "duplicate --email",
+      },
+      {
+        argv: ["account", "request-code", "--email=owner@example.com", "--email", "other@example.com"],
+        message: "duplicate --email",
+      },
+      {
+        argv: ["hub", "register", "--name", "Home Hub", "--name"],
+        message: "duplicate --name",
+      },
+      {
+        argv: ["hub", "register", "--name=Home Hub", "--name", "Other Hub"],
+        message: "duplicate --name",
+      },
+    ];
+    for (const { argv, message } of cases) {
+      const deps = baseDependencies();
+      await expect(runVbotctl(["--data-dir", deps.dataDir, ...argv], deps)).resolves.toBe(2);
+      expect(deps.service.requestCode).not.toHaveBeenCalled();
+      expect(deps.service.register).not.toHaveBeenCalled();
+      expect(deps.io.read().stderr).toContain(message);
+    }
+  });
+
+  it("rejects a value-less email or name as a usage error", async () => {
+    const emailDeps = baseDependencies();
+    await expect(runVbotctl([
+      "--data-dir", emailDeps.dataDir,
+      "account", "request-code", "--email",
+    ], emailDeps)).resolves.toBe(2);
+    expect(emailDeps.io.read().stderr).toContain("missing --email");
+
+    const nameDeps = baseDependencies();
+    await expect(runVbotctl([
+      "--data-dir", nameDeps.dataDir,
+      "hub", "register", "--name",
+    ], nameDeps)).resolves.toBe(2);
+    expect(nameDeps.io.read().stderr).toContain("missing --name");
+  });
+
   it("caps stdin and prompt input without echoing the supplied value", async () => {
     const stdinDeps = baseDependencies();
     const oversizedStdin = "SECRET-" + "x".repeat(80);
