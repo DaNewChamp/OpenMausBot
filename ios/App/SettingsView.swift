@@ -209,9 +209,9 @@ struct SettingsView: View {
             title: "Chat",
             footer: "These preferences stay on this iPhone and do not change the desktop.") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Activity detail")
+                Text("Tool activity")
                     .font(.body)
-                Picker("Activity detail", selection: $activityDetail) {
+                Picker("Tool activity", selection: $activityDetail) {
                     ForEach(ActivityDetail.allCases, id: \.rawValue) { detail in
                         Text(detail.label).tag(detail.rawValue)
                     }

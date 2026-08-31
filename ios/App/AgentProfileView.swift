@@ -138,6 +138,7 @@ struct AgentProfileView: View {
                         instructionsRow
                         routinesSection
                         notificationsRow
+                        toolActivitySection
                         secondaryControls
                     }
                     .padding(.horizontal, VBotSurface.Space.page)
@@ -653,6 +654,16 @@ struct AgentProfileView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 18)
+        }
+        .padding(.top, 18)
+    }
+
+    private var toolActivitySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            profileSectionLabel("Chat")
+            ActivityDetailOverridePicker(threadId: current.threadId)
+                .padding(18)
+                .profileCard()
         }
         .padding(.top, 18)
     }

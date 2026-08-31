@@ -105,6 +105,21 @@ final class ChatPreferencesTests: XCTestCase {
         }
     }
 
+    func testActivityDetailOverridesRoundTripAndRemove() {
+        let hidden = ActivityDetailOverrides.setting(.hidden, for: "thread-a", in: "{}")
+        XCTAssertEqual(ActivityDetailOverrides.detail(for: "thread-a", in: hidden), .hidden)
+        XCTAssertNil(ActivityDetailOverrides.detail(for: "thread-b", in: hidden))
+
+        let removed = ActivityDetailOverrides.setting(nil, for: "thread-a", in: hidden)
+        XCTAssertNil(ActivityDetailOverrides.detail(for: "thread-a", in: removed))
+    }
+
+    func testCorruptActivityOverrideStoreFallsBackToGlobal() {
+        XCTAssertNil(ActivityDetailOverrides.detail(for: "thread-a", in: "not json"))
+        let full = ActivityDetailOverrides.setting(.full, for: "thread-a", in: "not json")
+        XCTAssertEqual(ActivityDetailOverrides.detail(for: "thread-a", in: full), .full)
+    }
+
     // MARK: - Quick replies
 
     func testDefaultsAreTheFourChipsTheComposerAlreadyShows() {

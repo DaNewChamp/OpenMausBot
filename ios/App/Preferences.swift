@@ -12,7 +12,53 @@ enum PrefKey {
     static let islandIntro = "companion.prefs.islandIntro"
     static let islandSeen = "companion.prefs.islandSeen"
     static let activityDetail = "companion.prefs.activityDetail"
+    static let activityDetailOverrides = "companion.prefs.activityDetailOverrides"
     static let quickReplies = "companion.prefs.quickReplies"
+}
+
+struct ActivityDetailOverridePicker: View {
+    let threadId: String
+
+    @AppStorage(PrefKey.activityDetail) private var globalDetail = ActivityDetail.reduced.rawValue
+    @AppStorage(PrefKey.activityDetailOverrides) private var overrides = "{}"
+
+    private var selection: Binding<String> {
+        Binding(
+            get: { ActivityDetailOverrides.detail(for: threadId, in: overrides)?.rawValue ?? "" },
+            set: { raw in
+                overrides = ActivityDetailOverrides.setting(
+                    ActivityDetail(rawValue: raw),
+                    for: threadId,
+                    in: overrides
+                )
+            }
+        )
+    }
+
+    private var effectiveDetail: ActivityDetail {
+        ActivityDetailOverrides.detail(for: threadId, in: overrides)
+            ?? ActivityDetail(rawValue: globalDetail)
+            ?? .reduced
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Tool activity")
+                .font(.body)
+            Picker("Tool activity", selection: selection) {
+                Text("Use global").tag("")
+                ForEach(ActivityDetail.allCases, id: \.rawValue) { detail in
+                    Text(detail.label).tag(detail.rawValue)
+                }
+            }
+            .pickerStyle(.menu)
+            Text(selection.wrappedValue.isEmpty
+                ? "Using global: \(effectiveDetail.label)."
+                : effectiveDetail.caption)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
 }
 
 /// The set of chats whose island intro has already played.

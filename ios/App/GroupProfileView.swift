@@ -70,6 +70,7 @@ struct GroupProfileView: View {
                 membersCard
                 instructionsCard
                 defaultResponderCard
+                toolActivityCard
                 routinesCard
             }
             .padding(.horizontal, VBotSurface.Space.page)
@@ -97,6 +98,12 @@ struct GroupProfileView: View {
         .sheet(isPresented: $showingResponderPicker) {
             responderPicker
         }
+    }
+
+    private var toolActivityCard: some View {
+        ActivityDetailOverridePicker(threadId: currentRoom.threadId)
+            .padding(18)
+            .vbotCard()
     }
 
     private var topBar: some View {

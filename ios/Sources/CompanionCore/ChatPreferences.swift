@@ -32,6 +32,33 @@ public enum ActivityDetail: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// Per-conversation overrides for the global activity-detail preference.
+/// A missing entry means the conversation follows the global setting.
+public enum ActivityDetailOverrides {
+    public static func detail(for threadId: String, in json: String) -> ActivityDetail? {
+        guard let raw = decode(json)[threadId] else { return nil }
+        return ActivityDetail(rawValue: raw)
+    }
+
+    public static func setting(_ detail: ActivityDetail?, for threadId: String, in json: String) -> String {
+        var values = decode(json)
+        if let detail {
+            values[threadId] = detail.rawValue
+        } else {
+            values.removeValue(forKey: threadId)
+        }
+        guard let data = try? JSONEncoder().encode(values) else { return json }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func decode(_ json: String) -> [String: String] {
+        guard let data = json.data(using: .utf8),
+              let values = try? JSONDecoder().decode([String: String].self, from: data)
+        else { return [:] }
+        return values
+    }
+}
+
 /// When the island plays a bot's face on opening a chat.
 public enum IslandIntro: String, CaseIterable, Codable, Sendable {
     case always

@@ -22,6 +22,7 @@ struct ChatTranscriptView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationTypography) private var chatTypography
     @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.reduced.rawValue
+    @AppStorage(PrefKey.activityDetailOverrides) private var activityDetailOverrides = "{}"
 
     @State private var lastAnnouncedSettledId: String?
 
@@ -42,10 +43,16 @@ struct ChatTranscriptView: View {
     }
 
     private var renderedMessages: [Message] {
-        if let detail = ActivityDetail(rawValue: activityDetail), detail == .hidden {
+        if effectiveActivityDetail == .hidden {
             return messages.filter { $0.kind != .activity }
         }
         return messages
+    }
+
+    private var effectiveActivityDetail: ActivityDetail {
+        ActivityDetailOverrides.detail(for: threadId, in: activityDetailOverrides)
+            ?? ActivityDetail(rawValue: activityDetail)
+            ?? .reduced
     }
 
     private var liveTail: LiveTailKind {
@@ -403,7 +410,7 @@ struct ChatTranscriptView: View {
 
     private func transcriptRows(in messages: [Message]) -> [ChatTranscriptRow] {
         var startIndex = 0
-        let detail = ActivityDetail(rawValue: activityDetail) ?? .reduced
+        let detail = effectiveActivityDetail
         let segments: [TranscriptSegment]
         if detail == .full {
             segments = messages.map(TranscriptSegment.message)
