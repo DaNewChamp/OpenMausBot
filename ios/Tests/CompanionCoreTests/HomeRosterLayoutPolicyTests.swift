@@ -2,6 +2,23 @@ import XCTest
 @testable import CompanionCore
 
 final class HomeRosterLayoutPolicyTests: XCTestCase {
+    func testHomeChromeUsesCompactReferenceMetrics() {
+        XCTAssertEqual(HomeRosterLayoutPolicy.profileDiameter, 36)
+        XCTAssertEqual(HomeRosterLayoutPolicy.profileTapDiameter, 44)
+        XCTAssertEqual(HomeRosterLayoutPolicy.chromeButtonDiameter, 44)
+        XCTAssertEqual(HomeRosterLayoutPolicy.chromeButtonSymbolSize, 17)
+        XCTAssertEqual(HomeRosterLayoutPolicy.chromeButtonGap, 8)
+    }
+
+    func testSinglePinHeroUsesTwentyPercentOfPaneWidth() {
+        XCTAssertEqual(PinnedChatShelfLayout.heroAvatarWidthFraction, 0.20, accuracy: 0.001)
+        XCTAssertEqual(
+            PinnedChatShelfLayout.metrics(paneWidth: 402, pinCount: 1).avatar,
+            80.4,
+            accuracy: 0.5
+        )
+    }
+
     func testReferenceCanvasDimensions() {
         XCTAssertEqual(HomeRosterLayoutPolicy.referenceWidth, 590)
         XCTAssertEqual(HomeRosterLayoutPolicy.referenceHeight, 1280)
@@ -9,23 +26,21 @@ final class HomeRosterLayoutPolicyTests: XCTestCase {
     }
 
     func testHeaderChromeMatchesReferenceControls() {
-        XCTAssertEqual(HomeRosterLayoutPolicy.profileDiameter, 40)
+        XCTAssertEqual(HomeRosterLayoutPolicy.profileDiameter, 36)
         XCTAssertEqual(HomeRosterLayoutPolicy.profileTapDiameter, 44)
         XCTAssertLessThan(HomeRosterLayoutPolicy.profileDiameter, HomeRosterLayoutPolicy.chromeButtonDiameter)
         XCTAssertGreaterThanOrEqual(
             HomeRosterLayoutPolicy.profileTapDiameter,
             HomeRosterLayoutPolicy.profileDiameter
         )
-        XCTAssertEqual(HomeRosterLayoutPolicy.chromeButtonDiameter, 58)
-        XCTAssertEqual(HomeRosterLayoutPolicy.chromeButtonGap, 12)
-        XCTAssertEqual(HomeRosterLayoutPolicy.headerChromeHeight, 58 + 8 + 12)
+        XCTAssertEqual(HomeRosterLayoutPolicy.chromeButtonDiameter, 44)
+        XCTAssertEqual(HomeRosterLayoutPolicy.chromeButtonGap, 8)
+        XCTAssertEqual(HomeRosterLayoutPolicy.headerChromeHeight, 44 + 8 + 12)
     }
 
     func testProfileAvatarMatchesReferenceScaleAgainstChrome() {
-        // Grok home reference: profile ~59px, search ~80px on the 589px canvas.
-        let referenceRatio: CGFloat = 59 / 80
-        let scaled = HomeRosterLayoutPolicy.chromeButtonDiameter * referenceRatio
-        XCTAssertEqual(HomeRosterLayoutPolicy.profileDiameter, scaled, accuracy: 3)
+        // The home chrome keeps the avatar visually smaller than its 44pt control.
+        XCTAssertEqual(HomeRosterLayoutPolicy.profileDiameter, 36)
     }
 
     func testRowMetricsMatchReferenceCadence() {
@@ -54,15 +69,14 @@ final class HomeRosterLayoutPolicyTests: XCTestCase {
             pinCount: 1
         )
         XCTAssertEqual(layout.mode, .hero)
-        XCTAssertEqual(layout.avatar, 590 * 0.22, accuracy: 1)
+        XCTAssertEqual(layout.avatar, 590 * 0.20, accuracy: 1)
         XCTAssertEqual(layout.spacing, 0)
     }
 
     func testPinnedHeroAvatarTargetsPhoneWidthBand() {
         let layout = PinnedChatShelfLayout.metrics(paneWidth: 402, pinCount: 1)
-        XCTAssertEqual(layout.avatar, 88.44, accuracy: 0.5)
-        XCTAssertGreaterThanOrEqual(layout.avatar / 402, 0.21)
-        XCTAssertLessThanOrEqual(layout.avatar / 402, 0.23)
+        XCTAssertEqual(layout.avatar, 80.4, accuracy: 0.5)
+        XCTAssertEqual(layout.avatar / 402, 0.20, accuracy: 0.001)
     }
 
     func testPinnedHeroGroupCentersUpToThreePins() {
@@ -80,7 +94,7 @@ final class HomeRosterLayoutPolicyTests: XCTestCase {
     func testSinglePinKeepsHeroAvatarOnNarrowPhone() {
         let layout = PinnedChatShelfLayout.metrics(paneWidth: 390, pinCount: 1)
         XCTAssertEqual(layout.mode, .hero)
-        XCTAssertEqual(layout.avatar, 85.8, accuracy: 0.5)
+        XCTAssertEqual(layout.avatar, 78, accuracy: 0.5)
         XCTAssertEqual(layout.spacing, 0)
         XCTAssertTrue(heroGroupFits(paneWidth: 390, pinCount: 1))
     }
@@ -88,13 +102,13 @@ final class HomeRosterLayoutPolicyTests: XCTestCase {
     func testTwoPinsKeepHeroAvatarWhenTheGroupFits() {
         let layout = PinnedChatShelfLayout.metrics(paneWidth: 390, pinCount: 2)
         XCTAssertEqual(layout.mode, .hero)
-        XCTAssertEqual(layout.avatar, 85.8, accuracy: 0.5)
+        XCTAssertEqual(layout.avatar, 78, accuracy: 0.5)
         XCTAssertGreaterThan(layout.spacing, 0)
         XCTAssertTrue(heroGroupFits(paneWidth: 390, pinCount: 2))
     }
 
     func testThreePinsShrinkToFitNarrowPhoneWithoutClipping() {
-        let pane: CGFloat = 190
+        let pane: CGFloat = 150
         let layout = PinnedChatShelfLayout.metrics(paneWidth: pane, pinCount: 3)
         XCTAssertEqual(layout.mode, .hero)
         XCTAssertLessThan(layout.avatar, PinnedChatShelfLayout.heroAvatarSize(paneWidth: pane))
@@ -119,7 +133,7 @@ final class HomeRosterLayoutPolicyTests: XCTestCase {
         let name = PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: 13)
         let reserved = PinnedChatShelfLayout.reservedHeight(nameBlockHeight: name)
         XCTAssertEqual(reserved, PinnedChatShelfLayout.heroAvatar + 7 + name)
-        XCTAssertEqual(reserved, 123.44, accuracy: 0.5)
+        XCTAssertEqual(reserved, 115.4, accuracy: 0.5)
         XCTAssertLessThan(reserved, 249)
     }
 
@@ -176,7 +190,7 @@ final class HomeRosterLayoutPolicyTests: XCTestCase {
         let shown = PinnedChatShelfLayout.reservedHeight(
             nameBlockHeight: PinnedChatShelfLayout.nameBlockHeight(captionLineHeight: 13)
         )
-        XCTAssertEqual(shown, 123.44, accuracy: 0.5)
+        XCTAssertEqual(shown, 115.4, accuracy: 0.5)
         XCTAssertNotEqual(
             PinnedChatShelfLayout.reservedHeight(
                 pinCount: 0,
@@ -203,7 +217,7 @@ final class HomeRosterLayoutPolicyTests: XCTestCase {
             nameBlockHeight: name
         )
         XCTAssertEqual(one, three)
-        XCTAssertEqual(one, 123.44, accuracy: 0.5)
+        XCTAssertEqual(one, 115.4, accuracy: 0.5)
         let collapsing = PinnedChatShelfLayout.reservedHeight(
             pinCount: 0,
             rosterResolved: true,
@@ -229,14 +243,14 @@ final class HomeRosterLayoutPolicyTests: XCTestCase {
             pointY: firstRowPt,
             paneWidth: 402
         )
-        // 88pt hero + 56pt chrome cannot land on image-y 400; do not stretch
+        // 80pt hero + compact chrome cannot land on image-y 400; do not stretch
         // empty shelf to fake it. Content-sized reservation sits in-band.
-        XCTAssertEqual(firstRowPt, 276.44, accuracy: 2)
-        XCTAssertEqual(y590, 403, accuracy: 12)
-        XCTAssertGreaterThan(y590, 380)
-        XCTAssertLessThan(y590, 430)
-        XCTAssertEqual(HomeRosterLayoutPolicy.profileDiameter, 40)
-        XCTAssertEqual(HomeRosterLayoutPolicy.chromeButtonDiameter, 58)
+        XCTAssertEqual(firstRowPt, 254.4, accuracy: 2)
+        XCTAssertEqual(y590, 373, accuracy: 12)
+        XCTAssertGreaterThan(y590, 350)
+        XCTAssertLessThan(y590, 400)
+        XCTAssertEqual(HomeRosterLayoutPolicy.profileDiameter, 36)
+        XCTAssertEqual(HomeRosterLayoutPolicy.chromeButtonDiameter, 44)
         XCTAssertEqual(HomeRosterLayoutPolicy.rowAvatar, 58)
         XCTAssertEqual(HomeRosterLayoutPolicy.rowMinHeight, 104)
         XCTAssertEqual(

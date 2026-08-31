@@ -9,6 +9,7 @@ public enum ConnectionResiliencePolicy: Sendable {
     public static let unauthorizedCopy = "This phone was unpaired on the computer."
     public static let reconnectingAccessibility = "Reconnecting to your computer"
     public static let connectingAccessibility = "Connecting to your computer"
+    public static let offlineAccessibility = "Offline"
 
     public enum BannerKind: Equatable, Sendable {
         case hidden
@@ -24,7 +25,11 @@ public enum ConnectionResiliencePolicy: Sendable {
         public var systemImage: String
         public var accessibilityLabel: String
 
-        public var isVisible: Bool { kind != .hidden }
+        public var isVisible: Bool { showsRosterText }
+        /// Initial connection is represented by the avatar halo, not a
+        /// persistent text banner that pushes the roster down.
+        public var showsConnectingHalo: Bool { kind == .connecting }
+        public var showsRosterText: Bool { kind != .hidden && kind != .connecting }
     }
 
     /// What the roster and settings should show for a stream phase.
@@ -74,7 +79,7 @@ public enum ConnectionResiliencePolicy: Sendable {
                 kind: .offline,
                 text: text,
                 systemImage: "wifi.slash",
-                accessibilityLabel: text
+                accessibilityLabel: offlineAccessibility
             )
         }
         return Banner(

@@ -247,10 +247,15 @@ struct ChatListView: View {
                         Haptics.selection()
                         showingAccount = true
                     } label: {
-                        ProfileAvatar(
-                            name: session.connection?.name ?? "You",
-                            size: HomeRosterLayoutPolicy.profileDiameter
-                        )
+                        ZStack {
+                            ProfileAvatar(
+                                name: session.connection?.name ?? "You",
+                                size: HomeRosterLayoutPolicy.profileDiameter
+                            )
+                            if session.connectionBanner.showsConnectingHalo {
+                                ConnectionHalo(reduceMotion: reduceMotion)
+                            }
+                        }
                         .frame(
                             width: HomeRosterLayoutPolicy.profileTapDiameter,
                             height: HomeRosterLayoutPolicy.profileTapDiameter
@@ -260,6 +265,7 @@ struct ChatListView: View {
                     .buttonStyle(.plain)
                     .glassCircle()
                     .accessibilityLabel("Account and settings")
+                    .accessibilityValue(session.connectionBanner.accessibilityLabel)
                     .contextMenu {
                         if !session.state.updates.isEmpty {
                             Button {
@@ -296,7 +302,10 @@ struct ChatListView: View {
                                 }
                             } label: {
                                 Image(systemName: "plus")
-                                    .font(.system(size: 19, weight: .medium))
+                                    .font(.system(
+                                        size: HomeRosterLayoutPolicy.chromeButtonSymbolSize,
+                                        weight: .medium
+                                    ))
                                     .foregroundStyle(Color.primary)
                                     .frame(
                                         width: HomeRosterLayoutPolicy.chromeButtonDiameter,
@@ -394,7 +403,10 @@ private struct RosterHeaderButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 19, weight: .medium))
+                .font(.system(
+                    size: HomeRosterLayoutPolicy.chromeButtonSymbolSize,
+                    weight: .medium
+                ))
                 .foregroundStyle(Color.primary)
                 .frame(
                     width: HomeRosterLayoutPolicy.chromeButtonDiameter,
@@ -405,6 +417,35 @@ private struct RosterHeaderButton: View {
         .buttonStyle(.plain)
         .glassCircle()
         .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+/// A quiet connection indicator that keeps the initial connection state in
+/// the profile control instead of adding a roster-shifting text banner.
+private struct ConnectionHalo: View {
+    let reduceMotion: Bool
+
+    var body: some View {
+        if reduceMotion {
+            Circle()
+                .stroke(Color.secondary.opacity(0.42), lineWidth: 1.5)
+                .frame(width: 42, height: 42)
+                .accessibilityHidden(true)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                let phase = context.date.timeIntervalSinceReferenceDate
+                    .truncatingRemainder(dividingBy: 1.4) / 1.4
+                Circle()
+                    .trim(from: 0.08, to: 0.72)
+                    .stroke(
+                        Color.secondary.opacity(0.50),
+                        style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+                    )
+                    .frame(width: 42, height: 42)
+                    .rotationEffect(.degrees(phase * 360))
+                    .accessibilityHidden(true)
+            }
+        }
     }
 }
 
@@ -614,15 +655,19 @@ struct StatusBanner: View {
 
     var body: some View {
         Group {
-            switch session.connectionBanner.kind {
-            case .hidden:
+            if session.connectionBanner.showsRosterText {
+                switch session.connectionBanner.kind {
+                case .hidden, .connecting:
+                    EmptyView()
+                case .reconnecting:
+                    banner(session.connectionBanner, tint: .secondary)
+                case .offline:
+                    banner(session.connectionBanner, tint: .orange)
+                case .unauthorized:
+                    banner(session.connectionBanner, tint: .red)
+                }
+            } else {
                 EmptyView()
-            case .connecting, .reconnecting:
-                banner(session.connectionBanner, tint: .secondary)
-            case .offline:
-                banner(session.connectionBanner, tint: .orange)
-            case .unauthorized:
-                banner(session.connectionBanner, tint: .red)
             }
         }
         .animation(reduceMotion ? nil : .default, value: session.connectionBanner.kind)

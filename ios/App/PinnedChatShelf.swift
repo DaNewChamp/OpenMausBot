@@ -3,7 +3,8 @@ import CompanionCore
 
 /// The small, always-at-hand set of conversations the user chose to keep
 /// close. Grok Bot sizes this as three cells across the pane: the face
-/// fills the cell minus a little padding, and extra pins scroll.
+/// fills the cell minus a little padding, and extra pins scroll. A single
+/// hero uses the reference-scale 20% pane width metric from CompanionCore.
 struct PinnedChatShelf: View {
     let summaries: [ChatSummary]
     let open: (Chat) -> Void
@@ -121,6 +122,7 @@ private struct PinnedChatTile: View {
                 }
             }
             .frame(width: tileWidth)
+            .frame(minHeight: PinnedChatShelfLayout.nameBlock, alignment: .center)
         }
         .frame(width: tileWidth)
         .contentShape(Rectangle())

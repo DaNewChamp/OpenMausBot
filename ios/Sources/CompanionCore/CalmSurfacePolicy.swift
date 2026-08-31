@@ -50,8 +50,8 @@ public struct PinnedChatShelfLayout: Equatable, Sendable {
     public static let columns = 3
     public static let heroPinLimit = 3
     public static let gutter: CGFloat = 10
-    /// Single-pin hero diameter as a fraction of pane width (~88pt on 402pt).
-    public static let heroAvatarWidthFraction: CGFloat = 0.22
+    /// Single-pin hero diameter as a fraction of pane width (~80pt on 402pt).
+    public static let heroAvatarWidthFraction: CGFloat = HomeRosterLayoutPolicy.singlePinHeroWidthFraction
     public static let referencePhonePaneWidth: CGFloat = 402
     public static var heroAvatar: CGFloat {
         heroAvatarSize(paneWidth: referencePhonePaneWidth)
