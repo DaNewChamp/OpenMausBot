@@ -1203,7 +1203,7 @@ cd ios && swift test
 
 The iOS test suite must remain unchanged and pass because this wave does not modify the phone contract.
 
-- [ ] **Step 5: Perform a local fixture smoke test**
+- [x] **Step 5: Perform a local fixture smoke test**
 
 Use only local Wrangler/D1 and a temporary data directory:
 
@@ -1245,6 +1245,16 @@ Do not use production credentials or endpoint provisioning in this smoke test.
 The fixture must not add a static OTP, bypass signature/rate-limit checks, or
 expose a test-only HTTP endpoint. Delete the temporary `.dev.vars`, data
 directory, and mail capture after the run.
+
+The automated Workers-pool equivalent is
+`cloudflare/control-plane/test/vbotctl-local-smoke.test.ts`. It runs the same
+route sequence through `createWorker().fetch` with the explicit loopback client
+origin, captures the generated OTP only through `readLatestOtp(email)`, pipes
+it through `runVbotctl` stdin, and uses a disposable in-memory headless store
+because the Workers pool has no host filesystem. The test covers restart
+identity/credential retention, one-installation fleet state, Worker outage
+failure semantics, and output redaction without a static OTP, environment
+bypass, or external network call.
 
 - [ ] **Step 6: Review the final diff**
 

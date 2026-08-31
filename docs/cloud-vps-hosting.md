@@ -93,6 +93,12 @@ does not accept OTPs, account bearers, or installation credentials as argv
 values. It emits safe JSON only and exits `0` on success, `1` on an operational
 failure, or `2` for a usage error.
 
+The local route/CLI regression is automated by
+`pnpm --filter @openmausbot/control-plane exec vitest run test/vbotctl-local-smoke.test.ts`.
+It uses `createWorker().fetch`, an in-memory mail capture, and dependency-
+injected `runVbotctl` in the Workers pool; no VPS or deployed control plane is
+involved.
+
 ## Bot computers
 
 Cloud bots use **Self-hosted VPS** with `vps.sshAlias: openmaus-docker` — Docker on the

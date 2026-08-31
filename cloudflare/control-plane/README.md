@@ -209,6 +209,12 @@ remove the temporary variables, data directory, and capture afterward. Never
 use a production account, static OTP, or endpoint provisioning in local smoke.
 The focused in-memory auth proof is
 `pnpm --filter @openmausbot/control-plane exec vitest run test/local-mail-fixture.test.ts`.
+The end-to-end route and CLI proof is
+`pnpm --filter @openmausbot/control-plane exec vitest run test/vbotctl-local-smoke.test.ts`.
+It invokes `createWorker().fetch` through the explicit loopback client URL,
+uses an in-memory D1/mail fixture and dependency-injected `runVbotctl`, and
+clears all fixture state after the test; it does not start a public or
+production Worker.
 
 ## Production blockers
 

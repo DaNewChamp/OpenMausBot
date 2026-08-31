@@ -118,6 +118,12 @@ The CLI never accepts a verification code, bearer, or installation credential
 as an argument and redacts credential-shaped output. A usage error exits `2`,
 an operational failure exits `1`, and a successful command exits `0`.
 
+The automated local route/CLI smoke is
+`pnpm --filter @openmausbot/control-plane exec vitest run test/vbotctl-local-smoke.test.ts`.
+It keeps the Worker, D1, mail capture, and headless service in the test-only
+Workers pool and uses the explicit `http://127.0.0.1` client origin; it does
+not contact a deployed control plane.
+
 ### What works on the phone today
 
 - QR / manual / Tailscale / **hosted HTTPS** pairing (`openmaus.posival.com`-style routes)
