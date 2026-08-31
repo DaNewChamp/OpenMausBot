@@ -1,8 +1,4 @@
-V Bot build 70: more capable, safer, and easier to use across computers.
+V Bot build 71: a crisper message send.
 
-• Reuses your existing OpenAI/Codex sign-in for plain-language approval reviews
-• Supports multiple paired computers with quick switching and removal
-• Adds chat detail preferences, message copying, and custom quick replies
-• Improves pairing warnings and validates device credentials more strictly
-• Adds safer browser controls, staged skill learning, and custom desktop engines
-• Keeps approval summaries advisory while local facts and risk stay authoritative
+• Makes the send-button haptic feel closer to a clean iOS keyboard tap
+• Keeps feedback immediate without becoming a heavy impact
