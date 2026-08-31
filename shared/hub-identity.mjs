@@ -1,25 +1,30 @@
 import {
   closeSync,
   chmodSync,
+  constants,
+  copyFileSync,
   fsyncSync,
+  fstatSync,
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
+  statSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { randomUUID as cryptoRandomUUID } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 import { TextDecoder } from "node:util";
 
 const HUB_FILENAME = "hub.json";
+const { COPYFILE_EXCL } = constants;
 const PUBLICATION_LOCK_FILENAME = `.${HUB_FILENAME}.lock`;
 const MAX_ID_LENGTH = 256;
 const PUBLICATION_LOCK_ATTEMPTS = 100;
 const PUBLICATION_LOCK_WAIT_MS = 5;
 const publicationWaitCell = new Int32Array(new SharedArrayBuffer(4));
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
+let publicationLockSequence = 0;
 
 export class HubIdentityUnavailableError extends Error {
   constructor(message = "Hub identity is unavailable") {
@@ -133,15 +138,17 @@ function ensureDataDir(dataDir) {
 
 function writeDurableTemp(tempPath, serialized) {
   let fd;
+  let created = false;
   try {
     fd = openSync(tempPath, "wx", 0o600);
+    created = true;
     const bytes = Buffer.from(serialized, "utf8");
     let offset = 0;
     while (offset < bytes.length) offset += writeSync(fd, bytes, offset);
+    chmodSync(tempPath, 0o600);
     fsyncSync(fd);
     closeSync(fd);
     fd = undefined;
-    chmodSync(tempPath, 0o600);
   } catch {
     if (fd !== undefined) {
       try {
@@ -150,24 +157,25 @@ function writeDurableTemp(tempPath, serialized) {
         // Preserve the durable-write error below.
       }
     }
-    try {
-      unlinkSync(tempPath);
-    } catch {
-      // The temporary file may not have been created.
+    if (created) {
+      try {
+        unlinkSync(tempPath);
+      } catch {
+        // The temporary file may already have been removed.
+      }
     }
     throwUnavailable("Hub identity could not be written");
   }
 }
 
-function temporaryPath(dataDir) {
-  return join(dataDir, `.${HUB_FILENAME}.${process.pid}.${randomUUID()}.tmp`);
+function temporaryPath(dataDir, randomUuid) {
+  return join(dataDir, `.${HUB_FILENAME}.${process.pid}.${randomUuid()}.tmp`);
 }
 
 /**
  * Wait for another publisher to finish or acquire the portable sidecar lock.
- * All writers in this module serialize the check-and-rename sequence, so the
- * rename never replaces a valid identity created by a concurrent writer. A
- * stale lock fails closed rather than being removed speculatively.
+ * A stale lock fails closed rather than being removed speculatively. The lock
+ * token and inode are retained so release cannot remove a replacement lock.
  */
 function acquirePublicationLock(dataDir) {
   const lockPath = publicationLockPath(dataDir);
@@ -177,8 +185,25 @@ function acquirePublicationLock(dataDir) {
     if (current.status === "unavailable") throwUnavailable(current.error);
 
     try {
-      return { fd: openSync(lockPath, "wx", 0o600) };
+      const fd = openSync(lockPath, "wx", 0o600);
+      try {
+        const token = `${process.pid}:${Date.now()}:${publicationLockSequence++}`;
+        const bytes = Buffer.from(token, "utf8");
+        let offset = 0;
+        while (offset < bytes.length) offset += writeSync(fd, bytes, offset);
+        fsyncSync(fd);
+        const owner = fstatSync(fd);
+        return { lock: { fd, token, dev: owner.dev, ino: owner.ino } };
+      } catch {
+        try {
+          closeSync(fd);
+        } catch {
+          // Preserve the lock acquisition error below.
+        }
+        throwUnavailable("Hub identity publication could not be locked");
+      }
     } catch (error) {
+      if (error instanceof HubIdentityUnavailableError) throw error;
       if (error?.code !== "EEXIST") throwUnavailable("Hub identity publication could not be locked");
       if (attempt + 1 < PUBLICATION_LOCK_ATTEMPTS) {
         Atomics.wait(publicationWaitCell, 0, 0, PUBLICATION_LOCK_WAIT_MS);
@@ -188,25 +213,50 @@ function acquirePublicationLock(dataDir) {
   throwUnavailable("Hub identity publication raced with another writer");
 }
 
-function releasePublicationLock(dataDir, fd) {
+function releasePublicationLock(dataDir, lock) {
+  const lockPath = publicationLockPath(dataDir);
+  let owned = false;
   try {
-    closeSync(fd);
+    const current = statSync(lockPath);
+    if (current.dev === lock.dev && current.ino === lock.ino) {
+      const token = readFileSync(lockPath, "utf8");
+      const confirmed = statSync(lockPath);
+      owned = confirmed.dev === lock.dev && confirmed.ino === lock.ino && token === lock.token;
+    }
+  } catch {
+    // A missing or replaced lock is not ours to remove.
+  }
+  if (owned) {
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // A stale lock is fail-closed for future creation; reads remain available.
+    }
+  }
+  try {
+    closeSync(lock.fd);
   } catch {
     // A closed descriptor is still safe to clean up below.
   }
+}
+
+function syncPublishedFile(filePath) {
+  let fd;
   try {
-    unlinkSync(publicationLockPath(dataDir));
-  } catch {
-    // A stale lock is fail-closed for future creation; reads remain available.
+    fd = openSync(filePath, "r");
+    fsyncSync(fd);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
 }
 
-function publishIdentity(dataDir, identity) {
+function publishIdentity(dataDir, identity, { tempPathFactory, beforePublish }) {
   const acquired = acquirePublicationLock(dataDir);
   if (acquired.identity) return acquired.identity;
 
   const filePath = hubPath(dataDir);
-  const tempPath = temporaryPath(dataDir);
+  let tempPath;
+  let tempCreated = false;
   try {
     // Recheck after acquiring the lock in case a non-cooperating writer won
     // between acquirePublicationLock's final read and lock creation.
@@ -214,20 +264,40 @@ function publishIdentity(dataDir, identity) {
     if (beforeWrite.status === "ok") return beforeWrite.identity;
     if (beforeWrite.status === "unavailable") throwUnavailable(beforeWrite.error);
 
+    try {
+      tempPath = tempPathFactory(dataDir);
+    } catch {
+      throwUnavailable("Hub identity temporary path could not be generated");
+    }
+    if (tempPath === filePath) throwUnavailable("Hub identity temporary path is invalid");
     writeDurableTemp(tempPath, `${JSON.stringify(identity)}\n`);
+    tempCreated = true;
 
     // Keep no-overwrite semantics even if an external writer does not use our
-    // sidecar lock but appears before the atomic rename.
+    // sidecar lock but appears before the exclusive copy.
     const beforeRename = readHubIdentity({ dataDir });
     if (beforeRename.status === "ok") return beforeRename.identity;
     if (beforeRename.status === "unavailable") throwUnavailable(beforeRename.error);
 
+    if (beforePublish !== undefined) {
+      try {
+        beforePublish();
+      } catch {
+        throwUnavailable("Hub identity publication could not be prepared");
+      }
+    }
+
     try {
-      renameSync(tempPath, filePath);
-    } catch {
+      copyFileSync(tempPath, filePath, COPYFILE_EXCL);
+      chmodSync(filePath, 0o600);
+      syncPublishedFile(filePath);
+    } catch (error) {
       const raced = readHubIdentity({ dataDir });
       if (raced.status === "ok") return raced.identity;
       if (raced.status === "unavailable") throwUnavailable(raced.error);
+      if (error?.code === "EEXIST") {
+        throwUnavailable("Hub identity publication raced with another writer");
+      }
       throwUnavailable("Hub identity could not be published");
     }
 
@@ -236,12 +306,14 @@ function publishIdentity(dataDir, identity) {
     if (persisted.status === "unavailable") throwUnavailable(persisted.error);
     throwUnavailable("Hub identity disappeared after publication");
   } finally {
-    try {
-      unlinkSync(tempPath);
-    } catch {
-      // The temp path is absent after rename or a failed durable write.
+    if (tempCreated) {
+      try {
+        unlinkSync(tempPath);
+      } catch {
+        // The temporary file may already have been removed.
+      }
     }
-    releasePublicationLock(dataDir, acquired.fd);
+    releasePublicationLock(dataDir, acquired.lock);
   }
 }
 
@@ -256,7 +328,10 @@ export function loadOrCreateHubIdentity(options = {}) {
     preferredId,
     allowCreate = true,
     now = () => Date.now(),
-    randomId = randomUUID,
+    randomId = cryptoRandomUUID,
+    randomUUID = cryptoRandomUUID,
+    tempPathFactory = (directory) => temporaryPath(directory, randomUUID),
+    beforePublish,
   } = options ?? {};
   if (!validDataDir(dataDir)) throwUnavailable("Hub data directory is invalid");
 
@@ -291,5 +366,8 @@ export function loadOrCreateHubIdentity(options = {}) {
   }
   if (!isValidCreatedAt(createdAt)) throwUnavailable("Hub identity timestamp is invalid");
 
-  return publishIdentity(dataDir, Object.freeze({ schemaVersion: 1, id, createdAt }));
+  return publishIdentity(dataDir, Object.freeze({ schemaVersion: 1, id, createdAt }), {
+    tempPathFactory,
+    beforePublish,
+  });
 }

@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -185,6 +193,21 @@ describe("stable hub identity", () => {
     assert.deepEqual(JSON.parse(readFileSync(join(dataDir, "hub.json"), "utf8")), raced);
   });
 
+  it("adopts a valid identity created after the final publication check", () => {
+    const dataDir = makeDataDir();
+    const raced = { schemaVersion: 1, id: "winner-after-final-check", createdAt: 789 };
+    const identity = loadOrCreateHubIdentity({
+      dataDir,
+      preferredId: "loser-that-must-not-overwrite",
+      now: () => 123,
+      beforePublish: () => {
+        writeFileSync(join(dataDir, "hub.json"), JSON.stringify(raced), { mode: 0o600 });
+      },
+    });
+    assert.deepEqual(identity, raced);
+    assert.deepEqual(JSON.parse(readFileSync(join(dataDir, "hub.json"), "utf8")), raced);
+  });
+
   it("serializes concurrent creators and adopts one identity without replacement", async () => {
     const dataDir = makeDataDir();
     const moduleUrl = new URL("./hub-identity.mjs", import.meta.url).href;
@@ -207,6 +230,65 @@ describe("stable hub identity", () => {
       now: () => 123,
     });
     assert.equal(identity.id, "generated-after-invalid-preference");
+  });
+
+  it("releases its lock when temporary-path generation throws", () => {
+    const dataDir = makeDataDir();
+    assert.throws(
+      () =>
+        loadOrCreateHubIdentity({
+          dataDir,
+          preferredId: "stable-id",
+          now: () => 123,
+          tempPathFactory: () => {
+            throw new Error("injected temporary path failure");
+          },
+        }),
+      HubIdentityUnavailableError,
+    );
+    assert.equal(existsSync(join(dataDir, ".hub.json.lock")), false);
+    assert.deepEqual(
+      loadOrCreateHubIdentity({ dataDir, preferredId: "recovered", now: () => 456 }),
+      { schemaVersion: 1, id: "recovered", createdAt: 456 },
+    );
+  });
+
+  it("releases its lock when UUID-based temporary-path generation throws", () => {
+    const dataDir = makeDataDir();
+    assert.throws(
+      () =>
+        loadOrCreateHubIdentity({
+          dataDir,
+          preferredId: "stable-id",
+          now: () => 123,
+          randomUUID: () => {
+            throw new Error("injected UUID failure");
+          },
+        }),
+      HubIdentityUnavailableError,
+    );
+    assert.equal(existsSync(join(dataDir, ".hub.json.lock")), false);
+  });
+
+  it("does not remove a replacement lock owned by another publisher", () => {
+    const dataDir = makeDataDir();
+    const lockPath = join(dataDir, ".hub.json.lock");
+    assert.throws(
+      () =>
+        loadOrCreateHubIdentity({
+          dataDir,
+          preferredId: "stable-id",
+          now: () => 123,
+          beforePublish: () => {
+            unlinkSync(lockPath);
+            writeFileSync(lockPath, "replacement-owner", { mode: 0o600, flag: "wx" });
+            throw new Error("stop before publication");
+          },
+        }),
+      HubIdentityUnavailableError,
+    );
+    assert.equal(readFileSync(lockPath, "utf8"), "replacement-owner");
+    unlinkSync(lockPath);
   });
 
   it("rejects an invalid generated id instead of persisting it", () => {
