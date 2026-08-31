@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import CompanionCore
 
 /// Screenshot-based Local VM input: pinch/pan the preview, tap to click,
 /// long-press for right click, vertical drag to scroll. Shows a desktop
@@ -13,6 +14,8 @@ struct RemoteDesktopCanvas: View {
     @State private var scale: CGFloat = 1
     @State private var offset: CGSize = .zero
     @State private var cursorPoint: CGPoint?
+    @State private var trackpadStartLocation: CGPoint?
+    @State private var trackpadStartCursor: CGPoint?
     @GestureState private var dragOffset: CGSize = .zero
     @GestureState private var pinchScale: CGFloat = 1
 
@@ -40,8 +43,16 @@ struct RemoteDesktopCanvas: View {
             }
             .onAppear {
                 if cursorPoint == nil {
-                    cursorPoint = CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                    cursorPoint = clampedCursor(
+                        CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2),
+                        fitted: fitted,
+                        container: proxy.size
+                    )
                 }
+            }
+            .onChange(of: pointerMode) { _, _ in
+                trackpadStartLocation = nil
+                trackpadStartCursor = nil
             }
         }
         .clipped()
@@ -62,26 +73,41 @@ struct RemoteDesktopCanvas: View {
 
         let pan = DragGesture(minimumDistance: pointerMode == .trackpad ? 0 : 12)
             .updating($dragOffset) { value, state, _ in
-                if pointerMode == .trackpad {
-                    cursorPoint = value.location
-                } else {
+                if pointerMode != .trackpad {
                     state = value.translation
                 }
             }
+            .onChanged { value in
+                guard pointerMode == .trackpad else { return }
+                if trackpadStartLocation == nil {
+                    trackpadStartLocation = value.startLocation
+                    trackpadStartCursor = cursorPoint ?? CGPoint(x: container.width / 2, y: container.height / 2)
+                }
+                guard let startLocation = trackpadStartLocation,
+                      let startCursor = trackpadStartCursor
+                else { return }
+                cursorPoint = VmInteractionPolicy.trackpadCursor(
+                    initialCursor: startCursor,
+                    startLocation: startLocation,
+                    location: value.location,
+                    bounds: desktopRect(fitted: fitted, container: container).insetBy(dx: 1, dy: 1)
+                )
+            }
             .onEnded { value in
                 if pointerMode == .trackpad {
-                    cursorPoint = value.location
+                    trackpadStartLocation = nil
+                    trackpadStartCursor = nil
                     return
                 }
                 if value.translation.height < -24, abs(value.translation.width) < 40 {
                     let point = desktopPoint(from: value.startLocation, fitted: fitted, container: container)
-                    cursorPoint = value.startLocation
+                    cursorPoint = clampedCursor(value.startLocation, fitted: fitted, container: container)
                     onScroll("up", 3, point.x, point.y)
                     return
                 }
                 if value.translation.height > 24, abs(value.translation.width) < 40 {
                     let point = desktopPoint(from: value.startLocation, fitted: fitted, container: container)
-                    cursorPoint = value.startLocation
+                    cursorPoint = clampedCursor(value.startLocation, fitted: fitted, container: container)
                     onScroll("down", 3, point.x, point.y)
                     return
                 }
@@ -95,7 +121,7 @@ struct RemoteDesktopCanvas: View {
                     let point = desktopPoint(from: cursorPoint, fitted: fitted, container: container)
                     onClick(point.x, point.y, "left")
                 } else {
-                    cursorPoint = value.location
+                    cursorPoint = clampedCursor(value.location, fitted: fitted, container: container)
                     let point = desktopPoint(from: value.location, fitted: fitted, container: container)
                     onClick(point.x, point.y, "left")
                 }
@@ -106,7 +132,7 @@ struct RemoteDesktopCanvas: View {
             .onEnded { value in
                 guard case .second(true, let drag?) = value else { return }
                 let location = pointerMode == .trackpad ? (cursorPoint ?? drag.startLocation) : drag.startLocation
-                cursorPoint = location
+                cursorPoint = clampedCursor(location, fitted: fitted, container: container)
                 let point = desktopPoint(from: location, fitted: fitted, container: container)
                 onClick(point.x, point.y, "right")
             }
@@ -117,15 +143,31 @@ struct RemoteDesktopCanvas: View {
     }
 
     private func desktopPoint(from location: CGPoint, fitted: CGSize, container: CGSize) -> (x: Int, y: Int) {
-        let rendered = CGSize(width: fitted.width * scale * pinchScale, height: fitted.height * scale * pinchScale)
-        let origin = CGPoint(
-            x: (container.width - rendered.width) / 2 + offset.width,
-            y: (container.height - rendered.height) / 2 + offset.height
-        )
+        let rect = desktopRect(fitted: fitted, container: container)
+        let rendered = rect.size
+        let origin = rect.origin
         let localX = max(0, min(rendered.width, location.x - origin.x))
         let localY = max(0, min(rendered.height, location.y - origin.y))
         let x = Int((localX / rendered.width) * image.size.width)
         let y = Int((localY / rendered.height) * image.size.height)
         return (max(0, x), max(0, y))
+    }
+
+    private func desktopRect(fitted: CGSize, container: CGSize) -> CGRect {
+        let rendered = CGSize(width: fitted.width * scale * pinchScale, height: fitted.height * scale * pinchScale)
+        return CGRect(
+            x: (container.width - rendered.width) / 2 + offset.width,
+            y: (container.height - rendered.height) / 2 + offset.height,
+            width: rendered.width,
+            height: rendered.height
+        )
+    }
+
+    private func clampedCursor(_ location: CGPoint, fitted: CGSize, container: CGSize) -> CGPoint {
+        let bounds = desktopRect(fitted: fitted, container: container).insetBy(dx: 1, dy: 1)
+        return CGPoint(
+            x: min(max(location.x, bounds.minX), bounds.maxX),
+            y: min(max(location.y, bounds.minY), bounds.maxY)
+        )
     }
 }

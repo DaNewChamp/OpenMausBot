@@ -129,9 +129,7 @@ private struct PinnedChatTile: View {
     }
 
     private var pinnedCaption: String {
-        let subtitle = chat.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !subtitle.isEmpty else { return chat.name }
-        return "\(chat.name) · \(subtitle)"
+        PinnedChatCaptionPolicy.caption(name: chat.name, title: chat.subtitle)
     }
 
     private var accessibilityStatus: String {

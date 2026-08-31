@@ -48,12 +48,21 @@ struct LocalVmInteractionChrome: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 10)
+        // Keep the controls above the desktop surface. Without a concrete
+        // hit-test region, a tap near the segmented control can fall through
+        // to an underlying Create Local VM action while the safe-area inset
+        // is being recomputed.
+        .frame(maxWidth: .infinity)
+        .background(VBotSurface.background.opacity(0.001))
+        .contentShape(Rectangle())
+        .zIndex(1)
     }
 
     private var pointerModeToggle: some View {
         HStack(spacing: 8) {
             ForEach(VmPointerMode.allCases) { mode in
                 Button {
+                    guard pointerMode != mode else { return }
                     pointerMode = mode
                     Haptics.selection()
                 } label: {
@@ -63,6 +72,7 @@ struct LocalVmInteractionChrome: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
                         .background(
                             pointerMode == mode
                                 ? Color.primary.opacity(0.12)
