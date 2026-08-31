@@ -100,6 +100,10 @@ const instanceConfigSchema = z.object({
 });
 const instanceConfigMapSchema = z.record(z.string(), instanceConfigSchema);
 const appConfigSchema = z.object({
+  /** User-configured stdio MCP servers mounted into capable engines. Kept
+   * loosely typed so one malformed entry can be skipped without discarding
+   * the rest of the persisted configuration. */
+  mcpServers: z.record(z.string(), z.unknown()).optional(),
   xai: z.object({ key: optionalText, url: optionalText }).optional(),
   openaiCompat: z.object({ key: optionalText, url: optionalText }).optional(),
   /** Project key used for Sessions, catalog and agent tools. userId/sessionId
@@ -126,10 +130,11 @@ const appConfigSchema = z.object({
   bridgeSshTargets: bridgeSshTargetsConfigSchema.optional(),
   instances: instanceConfigMapSchema.optional(),
 });
-const appConfigPatchSchema = appConfigSchema.omit({ instances: true });
+const appConfigPatchSchema = appConfigSchema.omit({ instances: true, mcpServers: true });
 const jsonObjectSchema = z.record(z.string(), z.json());
 
 export interface AppConfig {
+  mcpServers?: Record<string, unknown>;
   xai?: { key?: string; url?: string };
   openaiCompat?: { key?: string; url?: string };
   composio?: { apiKey?: string; userId?: string; sessionId?: string };
@@ -530,4 +535,63 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     }
   }
   return map;
+}
+
+// ── user-configured MCP servers ─────────────────────────────────────────
+// stdio only for now. Invalid entries are skipped individually so one bad
+// server cannot take down the fleet; the diagnostic doubles as a setup hint.
+export interface CustomMcpServer {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
+
+const customMcpEntrySchema = z.object({
+  command: z.string().min(1),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  enabled: z.boolean().optional(),
+}).strict();
+const CUSTOM_MCP_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
+const RESERVED_MCP_NAMES = new Set([
+  "ogb", "computer", "agents", "composio", "browser", "phone", "dweb",
+  "openmausbot_connectors", "openmausbot_phone",
+]);
+const reportedMcpSkips = new Set<string>();
+function skipMcpEntry(name: string, why: string): void {
+  const key = `${name}: ${why}`;
+  if (reportedMcpSkips.has(key)) return;
+  reportedMcpSkips.add(key);
+  console.error(`mcpServers.${JSON.stringify(name)} skipped — ${why}`);
+}
+
+/** Validated custom stdio MCP servers from config, or an empty map. */
+export function customMcpServers(cfg: AppConfig): Record<string, CustomMcpServer> {
+  const out: Record<string, CustomMcpServer> = {};
+  for (const [name, raw] of Object.entries(cfg.mcpServers ?? {})) {
+    if (!CUSTOM_MCP_NAME.test(name)) {
+      skipMcpEntry(name, "server names are lowercase letters, digits, _ or - (max 32 chars), starting with a letter");
+      continue;
+    }
+    if (RESERVED_MCP_NAMES.has(name)) {
+      skipMcpEntry(name, "that name is reserved for a built-in server — pick another");
+      continue;
+    }
+    if (raw && typeof raw === "object" && "url" in raw) {
+      skipMcpEntry(name, 'only stdio servers ("command") are supported so far');
+      continue;
+    }
+    const parsed = customMcpEntrySchema.safeParse(raw);
+    if (!parsed.success) {
+      skipMcpEntry(name, `invalid entry (${parsed.error.issues[0]?.message ?? "schema mismatch"}) — expected { "command": "npx", "args": [...], "env": { ... } }`);
+      continue;
+    }
+    if (parsed.data.enabled === false) continue;
+    out[name] = {
+      command: parsed.data.command,
+      args: parsed.data.args ?? [],
+      env: parsed.data.env ?? {},
+    };
+  }
+  return out;
 }

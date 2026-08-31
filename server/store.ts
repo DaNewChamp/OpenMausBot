@@ -82,6 +82,8 @@ export interface OptionCardData {
   allowKey?: string;
   /** Local actions never share remembered grants with cloud/tool approvals. */
   approvalScope?: "local-computer";
+  /** Staged skill draft awaiting the user's explicit Enable/Dismiss choice. */
+  skillRequest?: import("../shared/skill-request.ts").SkillRequestCardData;
 }
 
 export interface ConnectorCardData {
@@ -827,6 +829,38 @@ export class Store {
     // transcript is just the greeting plus what they said. Cards with a
     // requestId are permission/question prompts and stay until answered.
     if (full.role === "user" && full.kind === "text") this.dismissOnboardingCard(threadId);
+    return full;
+  }
+
+  /** Insert a late-arriving turn artifact directly after its turn anchor.
+   * If follow-up messages have already chained from the anchor, re-parent
+   * those children under the artifact so the active leaf and transcript order
+   * remain stable (turn → artifact → follow-up). */
+  insertMessageAfter(
+    threadId: string,
+    anchorId: string | undefined,
+    message: Omit<Message, "id" | "at">,
+  ): Message {
+    const t = this.thread(threadId);
+    const anchorExists = anchorId !== undefined && t.messages.some((m) => m.id === anchorId);
+    if (!anchorExists || t.activeLeafId === anchorId) return this.appendMessage(threadId, message);
+    const full: Message = {
+      id: newId(),
+      at: Date.now(),
+      ...redactBotAuthored(message),
+      parentId: anchorId,
+    };
+    const children = t.messages.filter((m) => m.parentId === anchorId);
+    t.messages.push(full);
+    mdb.appendMessage(threadId, full);
+    if (full.kind === "screen") {
+      for (const pruned of this.pruneScreenFrames(t)) {
+        mdb.updateMessage(threadId, pruned);
+        this.emit({ type: "message.patch", threadId, message: pruned });
+      }
+    }
+    this.emit({ type: "message", threadId, message: full });
+    for (const child of children) this.patchMessage(threadId, child.id, { parentId: full.id });
     return full;
   }
 

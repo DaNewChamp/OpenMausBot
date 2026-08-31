@@ -194,6 +194,9 @@ export interface SendTurnInput {
     /** dweb network daemon: an MCP proxy exposing dweb status, repo, and
      * opencode model access as tools. url is the dweb HTTP base. */
     dweb?: { url: string };
+    /** User-configured stdio MCP servers from config.json. Custom servers
+     * intentionally remain on each driver's normal permission path. */
+    custom?: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
   };
   cwd?: string;
 }
@@ -239,6 +242,8 @@ export interface ProviderAdapter {
     /** True only when local MCP calls can reach the human approval channel.
      * Full-auto/bypass provider instances must leave this false. */
     localComputerMcp?: boolean;
+    /** True when this driver mounts turn.integrations.custom. */
+    customMcp?: boolean;
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;

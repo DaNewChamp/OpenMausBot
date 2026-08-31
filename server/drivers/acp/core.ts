@@ -279,6 +279,13 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             env: acpEnv(local.env ?? {}),
           });
         }
+        // User-configured servers are appended after built-ins and never
+        // shadow a built-in name. Their calls stay on the normal permission
+        // path rather than being pre-approved.
+        for (const [name, server] of Object.entries(turn.integrations?.custom ?? {})) {
+          if (servers.some((existing) => existing.name === name)) continue;
+          servers.push({ name, command: server.command, args: server.args, env: acpEnv(server.env) });
+        }
         return servers;
       };
 
@@ -687,7 +694,15 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             const reason = result?.stopReason;
             if (reason === "end_turn") settle(true, null);
             else if (reason === "cancelled") settle(true, "cancelled");
-            else settle(false, reason ?? "failed");
+            else {
+              const errorMessage = typeof result?.error === "string" && result.error
+                ? result.error
+                : typeof result?.message === "string" && result.message
+                  ? result.message
+                  : `Model turn failed: ${reason ?? "unknown error"}`;
+              emit({ ...base(threadId, turnId), type: "runtime.error", message: errorMessage });
+              settle(false, reason ?? "failed");
+            }
           } catch (e) {
             if (!state.settled) {
               const message = e instanceof Error ? e.message : String(e);
@@ -737,6 +752,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           capabilities: {
             sessionModelSwitch: "unsupported",
             agentsMcp: true,
+            customMcp: true,
             computerMcp: true,
             composioMcp: true,
             images: support.images !== false,

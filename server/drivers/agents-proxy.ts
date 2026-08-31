@@ -262,6 +262,34 @@ const TOOLS = [
       required: ["credential_id"],
     },
   },
+  {
+    name: "skills_list",
+    description: "List this bot's imported skills and staged skill drafts awaiting your approval.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "skill_view",
+    description: "Read an imported skill's SKILL.md before deciding whether to update it.",
+    inputSchema: {
+      type: "object",
+      properties: { name: { type: "string", description: "Skill name from skills_list." } },
+      required: ["name"],
+    },
+  },
+  {
+    name: "skill_manage",
+    description: "Stage a new or updated SKILL.md for the user to review. It is never enabled until the user confirms the in-app card.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["create", "update"] },
+        skill_md: { type: "string", description: "Complete SKILL.md including YAML frontmatter." },
+        gist: { type: "string", description: "Short summary shown on the approval card." },
+        source: { type: "string", description: "What workflow, URL, folder, or conversation this came from." },
+      },
+      required: ["action", "skill_md"],
+    },
+  },
 ];
 
 type Json = Record<string, unknown>;
@@ -538,6 +566,33 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     });
     const run = (r.run ?? r) as Json;
     return { text: `Routine run queued [run id: ${run.id}, status: ${run.status ?? "queued"}].` };
+  }
+  if (name === "skills_list") {
+    const r = await api(`/api/internal/skills?fromBotId=${encodeURIComponent(BOT_ID)}&fromThreadId=${encodeURIComponent(THREAD_ID)}`);
+    const skills = Array.isArray(r.skills) ? (r.skills as Json[]) : [];
+    const staged = Array.isArray(r.staged) ? (r.staged as Json[]) : [];
+    if (!skills.length && !staged.length) return { text: "No imported or staged skills yet." };
+    const lines = skills.map((s) => `- ${s.name}${s.enabled ? " (enabled)" : " (disabled)"}: ${s.description ?? ""}`);
+    const drafts = staged.map((s) => `- staged ${s.name} (${s.action}): ${s.gist ?? "awaiting review"}`);
+    return { text: [...lines, ...drafts].join("\n") };
+  }
+  if (name === "skill_view") {
+    const skill = String(args.name ?? "").trim();
+    if (!skill) return { text: "skill_view needs name.", isError: true };
+    const r = await api(`/api/internal/skills/${encodeURIComponent(skill)}?fromBotId=${encodeURIComponent(BOT_ID)}&fromThreadId=${encodeURIComponent(THREAD_ID)}`);
+    return { text: String(r.text ?? "") };
+  }
+  if (name === "skill_manage") {
+    const action = args.action === "update" ? "update" : args.action === "create" ? "create" : "";
+    const skillMd = typeof args.skill_md === "string" ? args.skill_md : "";
+    if (!action || !skillMd.trim()) return { text: 'skill_manage needs action "create" or "update" and the full skill_md.', isError: true };
+    const body: Record<string, unknown> = {
+      fromBotId: BOT_ID, fromThreadId: THREAD_ID, action, skill_md: skillMd,
+      ...(typeof args.gist === "string" ? { gist: args.gist } : {}),
+      ...(typeof args.source === "string" ? { source: args.source } : {}),
+    };
+    const r = await api("/api/internal/skills/stage", { method: "POST", body: JSON.stringify(body) });
+    return { text: `Staged ${r.action ?? action} skill "${r.name ?? "skill"}". It remains disabled until you confirm the Enable card.` };
   }
   if (name === "request_credential") {
     const credentialId = args.credential_id;

@@ -14,6 +14,7 @@ import { CursorAgentDriver } from "./acp/cursor.ts";
 import { OpenCodeDriver } from "./acp/opencode-go.ts";
 import { QwenAgentDriver } from "./acp/qwen.ts";
 import { HermesAgentDriver } from "./acp/hermes.ts";
+import { CustomAcpDriver } from "./acp/custom.ts";
 import { OpenAICompatDriver } from "./openai-compat.ts";
 import { PiDriver } from "./pi.ts";
 import { MinimaxDriver } from "./minimax.ts";
@@ -30,6 +31,7 @@ export const BUILT_IN_DRIVERS: readonly AnyProviderDriver[] = [
   OpenCodeDriver,
   QwenAgentDriver,
   HermesAgentDriver,
+  CustomAcpDriver,
   PiDriver,
   OpenAICompatDriver,
   ClaudeDriver,

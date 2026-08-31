@@ -59,6 +59,7 @@ export interface OptionCardData {
   explanationConfidence?: "high" | "medium" | "low";
   explanationSource?: "local" | "ai-reviewed";
   advisorySummary?: string;
+  skillRequest?: import("../../shared/skill-request").SkillRequestCardData;
 }
 
 export interface ConnectorCardData {

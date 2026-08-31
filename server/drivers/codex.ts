@@ -60,6 +60,7 @@ function mountMcpServer(
   env: Record<string, string | undefined>,
   name: string,
   server: StdioMcpServer,
+  preApproved = true,
 ): void {
   Object.assign(env, server.env);
   const prefix = `mcp_servers.${name}`;
@@ -69,8 +70,10 @@ function mountMcpServer(
     // Values stay in the child environment; argv contains names only so
     // credentials never appear in process listings or diagnostics.
     "-c", `${prefix}.env_vars=${JSON.stringify(Object.keys(server.env))}`,
-    "-c", `${prefix}.default_tools_approval_mode="auto"`,
   );
+  if (preApproved) {
+    appServerArgs.push("-c", `${prefix}.default_tools_approval_mode=\"auto\"`);
+  }
 }
 
 export const CodexDriver: ProviderDriver<CodexConfig> = {
@@ -176,6 +179,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           // The host daemon and isolated Local VM both arrive as a direct Cua
           // Driver stdio MCP server. Codex sees the same computer tool surface.
           mountMcpServer(appServerArgs, env, "computer", turn.integrations.localComputer);
+        }
+        for (const [name, server] of Object.entries(turn.integrations?.custom ?? {})) {
+          mountMcpServer(appServerArgs, env, name, server, false);
         }
         if (turn.integrations?.phone) {
           const bridge = turn.integrations.phone;
@@ -616,6 +622,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         localComputerMcp: true,
         composioMcp: true,
         agentsMcp: true,
+        customMcp: true,
         phoneMcp: true,
         images: true,
         effortLevels: ["low", "medium", "high", "xhigh", "max"],

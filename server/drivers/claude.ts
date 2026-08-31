@@ -609,6 +609,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         };
         allowed.push("mcp__dweb");
       }
+      // User-configured MCP servers are mounted without pre-allowing their
+      // tools. Calls therefore flow through OpenMausBot's approval broker in
+      // the same way as any other unlisted tool.
+      for (const [name, server] of Object.entries(turn.integrations?.custom ?? {})) {
+        if (name in mcpServers) continue;
+        mcpServers[name] = { ...server };
+      }
       // permission broker: anything acceptEdits would silently deny becomes
       // an Allow/Deny card in chat, and the agent gets ask_user. Skipped in
       // bypassPermissions (fullAuto) — nothing would ever ask.
@@ -1026,6 +1033,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         capabilities: {
           sessionModelSwitch: "in-session",
           agentsMcp: true,
+          customMcp: true,
           computerMcp: true,
           composioMcp: true,
           phoneMcp: true,

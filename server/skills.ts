@@ -20,11 +20,12 @@
 // system prompt, and the files themselves sit in the workspace where the
 // CLI's own file tools — or its native .claude/skills discovery — read
 // them on demand.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { workspaceDir } from "./workspace.ts";
+import { LEARN_SOURCE_PREFIX } from "./skill-learn.ts";
 
 /** Spec rule: lowercase alphanumerics with single hyphens, 1-64 chars,
  * folder name must equal it. The regex IS the traversal gate — no dots, no
@@ -37,6 +38,8 @@ export const SKILL_FILE_MAX_BYTES = 256 * 1024;
 /** Index budget: name+description lines only, ~100 tokens per skill. */
 export const INDEX_MAX_SKILLS = 15;
 export const INDEX_MAX_BYTES = 4_000;
+export const MAX_STAGED_SKILLS = 20;
+export const STAGED_GIST_MAX = 240;
 
 export function isSkillName(name: string): boolean {
   return name.length >= 1 && name.length <= SKILL_NAME_MAX && SKILL_NAME.test(name);
@@ -278,6 +281,124 @@ export function removeSkill(botId: string, name: string): { removed: true } | { 
   rmSync(join(skillsDir(botId), name), { recursive: true, force: true });
   syncSkillLinks(botId);
   return { removed: true };
+}
+
+export type StagedSkillAction = "create" | "update";
+export interface StagedSkillWrite {
+  id: string;
+  action: StagedSkillAction;
+  name: string;
+  gist: string;
+  source: string;
+  files: Array<{ path: string; content: string }>;
+  warnings: string[];
+  skippedFiles: string[];
+  createdAt: string;
+}
+interface StagedStore { writes: Record<string, StagedSkillWrite> }
+function stagedPath(botId: string): string { return join(skillsDir(botId), "staged.json"); }
+function readStaged(botId: string): StagedStore {
+  try {
+    const parsed = JSON.parse(readFileSync(stagedPath(botId), "utf8")) as { writes?: unknown };
+    if (parsed && typeof parsed.writes === "object" && parsed.writes && !Array.isArray(parsed.writes)) {
+      return { writes: parsed.writes as Record<string, StagedSkillWrite> };
+    }
+  } catch {}
+  return { writes: {} };
+}
+function writeStaged(botId: string, store: StagedStore): void {
+  mkdirSync(skillsDir(botId), { recursive: true, mode: 0o700 });
+  writeFileSync(stagedPath(botId), `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+}
+
+function preparedSkillFiles(files: Array<{ path: string; content: string }>):
+  | { files: Array<{ path: string; content: string }>; parsed: ParsedSkill; warnings: string[]; skippedFiles: string[] }
+  | { error: string } {
+  const skillMd = files.find((file) => file.path === "SKILL.md" || file.path.endsWith("/SKILL.md"));
+  if (!skillMd) return { error: "no SKILL.md found at that location" };
+  if (Buffer.byteLength(skillMd.content, "utf8") > SKILL_FILE_MAX_BYTES) return { error: `SKILL.md is larger than ${SKILL_FILE_MAX_BYTES / 1024}KB` };
+  const parsed = parseSkillMd(skillMd.content);
+  if ("error" in parsed) return parsed;
+  const prefix = skillMd.path.slice(0, skillMd.path.length - "SKILL.md".length);
+  const siblings = files.filter((file) => file !== skillMd && file.path.startsWith(prefix));
+  const markdown = siblings.filter((file) => file.path.toLowerCase().endsWith(".md") && Buffer.byteLength(file.content, "utf8") <= SKILL_FILE_MAX_BYTES);
+  const skippedFiles = siblings.filter((file) => !markdown.includes(file)).map((file) => file.path.slice(prefix.length));
+  const warnings = [
+    ...scanSkillText(skillMd.content),
+    ...markdown.flatMap((file) => scanSkillText(file.content).map((w) => `${file.path.slice(prefix.length)}: ${w}`)),
+  ];
+  const normalized: Array<{ path: string; content: string }> = [{ path: "SKILL.md", content: skillMd.content }];
+  for (const file of markdown) {
+    const relative = file.path.slice(prefix.length);
+    if (!/^[\w][\w .-]{0,199}\.md$/i.test(relative)) { skippedFiles.push(relative); continue; }
+    normalized.push({ path: relative, content: file.content });
+  }
+  return { files: normalized, parsed, warnings, skippedFiles };
+}
+
+function writeSkillFiles(botId: string, name: string, files: Array<{ path: string; content: string }>): void {
+  const dir = join(skillsDir(botId), name);
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const file of files) writeFileSync(join(dir, file.path), file.content, { mode: 0o600 });
+}
+
+export function stageSkillWrite(botId: string, input: {
+  action: StagedSkillAction;
+  files: Array<{ path: string; content: string }>;
+  gist?: string;
+  source?: string;
+}): StagedSkillWrite | { error: string } {
+  const prepared = preparedSkillFiles(input.files);
+  if ("error" in prepared) return prepared;
+  const { parsed } = prepared;
+  const manifest = readManifest(botId);
+  if (input.action === "create" && manifest[parsed.name]) return { error: `a skill named "${parsed.name}" is already imported — use action "update" to stage a replacement` };
+  if (input.action === "update" && !manifest[parsed.name]) return { error: `no imported skill named "${parsed.name}" — use action "create" to stage a new skill` };
+  const store = readStaged(botId);
+  if (Object.keys(store.writes).length >= MAX_STAGED_SKILLS) return { error: `confirm or reject an existing staged skill first (max ${MAX_STAGED_SKILLS})` };
+  const gist = (input.gist ?? parsed.description).replace(/\s+/g, " ").trim().slice(0, STAGED_GIST_MAX);
+  const source = input.source?.trim() || `${LEARN_SOURCE_PREFIX}${parsed.name}`;
+  const entry: StagedSkillWrite = {
+    id: randomUUID(), action: input.action, name: parsed.name,
+    gist: gist || parsed.description.slice(0, STAGED_GIST_MAX), source,
+    files: prepared.files, warnings: prepared.warnings, skippedFiles: prepared.skippedFiles,
+    createdAt: new Date().toISOString(),
+  };
+  store.writes[entry.id] = entry; writeStaged(botId, store); return entry;
+}
+export function listStagedSkillWrites(botId: string): StagedSkillWrite[] {
+  return Object.values(readStaged(botId).writes).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+export function getStagedSkillWrite(botId: string, id: string): StagedSkillWrite | null { return readStaged(botId).writes[id] ?? null; }
+export function rejectStagedSkillWrite(botId: string, id: string): { rejected: true } | { error: string } {
+  const store = readStaged(botId); if (!store.writes[id]) return { error: "no such staged skill" };
+  delete store.writes[id]; writeStaged(botId, store); return { rejected: true };
+}
+
+export function applyStagedSkillWrite(botId: string, id: string): SkillListing | { error: string } {
+  const store = readStaged(botId); const staged = store.writes[id];
+  if (!staged) return { error: "no such staged skill" };
+  if (staged.action === "create") {
+    const installed = installSkill(botId, staged.source, staged.files);
+    if ("error" in installed) return installed;
+    delete store.writes[id]; writeStaged(botId, store); return installed;
+  }
+  const prepared = preparedSkillFiles(staged.files);
+  if ("error" in prepared) return prepared;
+  if (prepared.parsed.name !== staged.name) return { error: `staged skill name "${prepared.parsed.name}" does not match "${staged.name}"` };
+  const manifest = readManifest(botId); const existing = manifest[staged.name];
+  if (!existing) return { error: `no imported skill named "${staged.name}"` };
+  writeSkillFiles(botId, staged.name, prepared.files);
+  manifest[staged.name] = {
+    ...existing, description: prepared.parsed.description, source: staged.source,
+    sha256: createHash("sha256").update(prepared.files.find((file) => file.path === "SKILL.md")!.content).digest("hex"),
+    license: prepared.parsed.license, compatibility: prepared.parsed.compatibility,
+    warnings: prepared.warnings, skippedFiles: prepared.skippedFiles,
+  };
+  writeManifest(botId, manifest); syncSkillLinks(botId);
+  delete store.writes[id]; writeStaged(botId, store);
+  return { name: staged.name, ...manifest[staged.name] };
 }
 
 /** The skills block appended to a bot's system prompt: enabled skills only,
