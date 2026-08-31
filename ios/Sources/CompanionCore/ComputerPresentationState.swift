@@ -12,6 +12,28 @@ public enum ComputerPresentationState: Equatable, Sendable {
     case unavailable(message: String)
     case cloudViewerAvailable
 
+    /// The calm, single-copy card shown when a computer cannot be opened yet.
+    /// Keeping title/body/action together prevents a destination hint from
+    /// being rendered twice by the SwiftUI surface.
+    public struct CardCopy: Equatable, Sendable {
+        public enum Action: String, Equatable, Sendable {
+            case createLocalVm
+            case recreateLocalVm
+            case retry
+            case openCloudDesktop
+        }
+
+        public let title: String
+        public let body: String
+        public let action: Action?
+
+        public init(title: String, body: String, action: Action? = nil) {
+            self.title = title
+            self.body = body
+            self.action = action
+        }
+    }
+
     /// Maps the authoritative bot record and the latest optional frame to a
     /// display state. Configuration and failures win over a cached frame:
     /// showing a screen after the computer was disabled, stopped, or lost is
@@ -106,6 +128,149 @@ public enum ComputerPresentationState: Equatable, Sendable {
     }
 
     public static let idleWaitingMessage = "No live screen is available until this agent is working."
+
+    /// Whether the destination can only be watched while a turn is running.
+    public static func isVpsWatchOnly(_ bot: Bot) -> Bool {
+        bot.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "cloud"
+            && bot.cloudBackend?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "vps"
+    }
+
+    /// The one card copy used by ComputerView. Inputs are projections only;
+    /// no raw command, URL, token, or backend error is placed in the card.
+    public static func cardCopy(
+        for state: Self,
+        bot: Bot,
+        localVm: LocalVmDesktopPolicy.Snapshot? = nil,
+        localVmDestinationEnabled: Bool = true,
+        localVmDestinationReason: String? = nil,
+        canRetry: Bool = false
+    ) -> CardCopy {
+        if state == .cloudViewerAvailable {
+            return CardCopy(
+                title: CloudViewerPolicy.boxReadyTitle,
+                body: "Open the secure cloud desktop to control it in the in-app browser.",
+                action: .openCloudDesktop
+            )
+        }
+
+        if isVpsWatchOnly(bot) {
+            return CardCopy(
+                title: "Watch-only desktop",
+                body: "Send a message to start a turn, then watch the VPS desktop here while the agent works."
+            )
+        }
+
+        if let localVm, LocalVmDesktopPolicy.isLocalVm(bot) {
+            if !localVm.accessGranted {
+                return CardCopy(
+                    title: "Enable Local VM access",
+                    body: LocalVmDesktopPolicy.accessOffMessage
+                )
+            }
+
+            if !localVmDestinationEnabled,
+               localVm.instanceResolved,
+               let reason = localVmDestinationReason,
+               !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               !reason.localizedCaseInsensitiveContains("checking") {
+                if reason.localizedCaseInsensitiveContains("grok reconstructed") {
+                    return CardCopy(
+                        title: "Local VM isn't available for this engine",
+                        body: "Grok Reconstructed uses its own desktop. Choose a Local VM-capable engine in the profile."
+                    )
+                }
+                return CardCopy(
+                    title: "Local VM isn't available",
+                    body: "Choose a Local VM-capable engine in the profile, then select Local from ···."
+                )
+            }
+
+            if let status = localVm.status {
+                switch status.state {
+                case .missing:
+                    return CardCopy(
+                        title: "Create a Local VM",
+                        body: "Create a Local VM from ···. Once it starts, this screen will show the desktop.",
+                        action: status.canCreate ? .createLocalVm : nil
+                    )
+                case .stopped:
+                    return CardCopy(
+                        title: "Restart the Local VM",
+                        body: "This Local VM is stopped. Recreate it from ··· to start a fresh desktop.",
+                        action: status.canRecreate ? .recreateLocalVm : nil
+                    )
+                case .unavailable:
+                    return CardCopy(
+                        title: "Local VM unavailable",
+                        body: "The desktop could not be reached. Try again, or recreate it from ···.",
+                        action: canRetry ? .retry : (status.canRecreate ? .recreateLocalVm : nil)
+                    )
+                case .ready, .running, .unknown:
+                    if state == .starting {
+                        switch status.state {
+                        case .ready:
+                            return CardCopy(
+                                title: "Opening Local VM",
+                                body: localVm.viewerURLPresent
+                                    ? LocalVmDesktopPolicy.openingLiveDesktopMessage
+                                    : LocalVmDesktopPolicy.loadingPreviewMessage
+                            )
+                        case .running:
+                            return CardCopy(
+                                title: "Starting Local VM",
+                                body: LocalVmDesktopPolicy.startingDesktopMessage
+                            )
+                        case .unknown:
+                            return CardCopy(
+                                title: "Checking Local VM",
+                                body: LocalVmDesktopPolicy.checkingMessage
+                            )
+                        case .missing, .stopped, .unavailable:
+                            break
+                        }
+                    }
+                }
+            }
+        }
+
+        switch state {
+        case .starting:
+            return CardCopy(
+                title: "Preparing desktop",
+                body: startingCopy(for: bot)
+            )
+        case .watching:
+            return CardCopy(title: "Desktop", body: "The desktop is live.")
+        case .cloudViewerAvailable:
+            // Handled above; keep this exhaustive for future state additions.
+            return CardCopy(title: CloudViewerPolicy.boxReadyTitle, body: CloudViewerPolicy.boxReadyCopy, action: .openCloudDesktop)
+        case let .unavailable(message):
+            if message == idleWaitingMessage {
+                return CardCopy(
+                    title: "Waiting for agent",
+                    body: "The desktop appears here while the agent is working."
+                )
+            }
+            return CardCopy(
+                title: "Computer unavailable",
+                body: message,
+                action: canRetry ? .retry : nil
+            )
+        }
+    }
+
+    /// Returns a secondary hint only when it adds information to the card.
+    /// This is deliberately case-insensitive so server wording changes do not
+    /// reintroduce the duplicated VPS copy seen on older builds.
+    public static func distinctSecondaryCopy(primary: String, secondary: String?) -> String? {
+        guard let secondary else { return nil }
+        let normalizedPrimary = primary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedSecondary = secondary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedSecondary.isEmpty,
+              normalizedPrimary.caseInsensitiveCompare(normalizedSecondary) != .orderedSame
+        else { return nil }
+        return normalizedSecondary
+    }
 
     public static func unavailableMessage(for bot: Bot) -> String {
         guard let computer = bot.computer?.trimmingCharacters(in: .whitespacesAndNewlines), !computer.isEmpty else {

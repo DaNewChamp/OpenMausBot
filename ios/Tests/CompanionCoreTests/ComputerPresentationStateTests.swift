@@ -554,4 +554,104 @@ final class ComputerPresentationStateTests: XCTestCase {
             CloudViewerPolicy.vpsWatchCopy
         )
     }
+
+    func testCardCopyKeepsComputerStateToOneCalmAction() {
+        let cloud = bot(computer: "cloud")
+        let cloudCopy = ComputerPresentationState.cardCopy(
+            for: .cloudViewerAvailable,
+            bot: cloud
+        )
+        XCTAssertEqual(cloudCopy.title, CloudViewerPolicy.boxReadyTitle)
+        XCTAssertEqual(cloudCopy.action, .openCloudDesktop)
+        XCTAssertFalse(cloudCopy.body.localizedCaseInsensitiveContains("OpenMausBot"))
+
+        let vps = bot(computer: "cloud", cloudBackend: "vps", busy: true)
+        let vpsCopy = ComputerPresentationState.cardCopy(for: .starting, bot: vps)
+        XCTAssertEqual(vpsCopy.title, "Watch-only desktop")
+        XCTAssertNil(vpsCopy.action)
+        XCTAssertTrue(vpsCopy.body.localizedCaseInsensitiveContains("send a message"))
+    }
+
+    func testCardCopySelectsLocalVmLifecycleAction() {
+        let vm = bot(computer: "vm", busy: false)
+        let missing = LocalVmStatus(
+            mode: .perBot,
+            maxInstances: 1,
+            state: .missing,
+            container: "missing",
+            daemonUp: true,
+            imageReady: true,
+            desktopReady: false,
+            ready: false,
+            createSupported: true,
+            busy: false,
+            canCreate: true,
+            canStop: false,
+            canRecreate: false,
+            problem: nil
+        )
+        let create = ComputerPresentationState.cardCopy(
+            for: .unavailable(message: "ignored"),
+            bot: vm,
+            localVm: .init(status: missing, accessGranted: true),
+            localVmDestinationEnabled: true
+        )
+        XCTAssertEqual(create.title, "Create a Local VM")
+        XCTAssertEqual(create.action, .createLocalVm)
+
+        var stopped = missing
+        stopped.state = .stopped
+        stopped.canCreate = false
+        stopped.canRecreate = true
+        let restart = ComputerPresentationState.cardCopy(
+            for: .unavailable(message: "ignored"),
+            bot: vm,
+            localVm: .init(status: stopped, accessGranted: true),
+            localVmDestinationEnabled: true
+        )
+        XCTAssertEqual(restart.title, "Restart the Local VM")
+        XCTAssertEqual(restart.action, .recreateLocalVm)
+    }
+
+    func testCardCopyExplainsAccessOffAndUnsupportedReconstructedEngine() {
+        let vm = bot(computer: "vm", busy: false)
+        let accessOff = ComputerPresentationState.cardCopy(
+            for: .unavailable(message: LocalVmDesktopPolicy.accessOffMessage),
+            bot: vm,
+            localVm: .init(accessGranted: false)
+        )
+        XCTAssertEqual(accessOff.title, "Enable Local VM access")
+        XCTAssertTrue(accessOff.body.localizedCaseInsensitiveContains("V Bot"))
+        XCTAssertNil(accessOff.action)
+
+        let unsupported = ComputerPresentationState.cardCopy(
+            for: .starting,
+            bot: vm,
+            localVm: .init(accessGranted: true, instanceResolved: true),
+            localVmDestinationEnabled: false,
+            localVmDestinationReason: "Grok Reconstructed cannot use Local VM."
+        )
+        XCTAssertEqual(unsupported.title, "Local VM isn't available for this engine")
+        XCTAssertTrue(unsupported.body.localizedCaseInsensitiveContains("Grok Reconstructed"))
+        XCTAssertNil(unsupported.action)
+    }
+
+    func testDistinctSecondaryCopySuppressesDuplicateHelp() {
+        XCTAssertNil(
+            ComputerPresentationState.distinctSecondaryCopy(
+                primary: "Watch-only desktop",
+                secondary: " watch-only desktop "
+            )
+        )
+        XCTAssertEqual(
+            ComputerPresentationState.distinctSecondaryCopy(
+                primary: "Watch-only desktop",
+                secondary: "Send a message to start a turn."
+            ),
+            "Send a message to start a turn."
+        )
+        XCTAssertNil(
+            ComputerPresentationState.distinctSecondaryCopy(primary: "Body", secondary: "   ")
+        )
+    }
 }

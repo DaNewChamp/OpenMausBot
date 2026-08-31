@@ -254,6 +254,22 @@ struct ComputerView: View {
         return false
     }
 
+    private var presentationCopy: ComputerPresentationState.CardCopy {
+        ComputerPresentationState.cardCopy(
+            for: presentationState,
+            bot: current,
+            localVm: isLocalVm ? localVmSnapshot : nil,
+            localVmDestinationEnabled: localVmDestinationEnabled,
+            localVmDestinationReason: localVmDestinationDisabledReason,
+            canRetry: canRetryScreen
+        )
+    }
+
+    private var showsStartingCard: Bool {
+        ComputerPresentationState.isVpsWatchOnly(current)
+            || (isLocalVm && !localVmDestinationEnabled && instanceResolved)
+    }
+
     private var computerSignature: String {
         let computer = current.computer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "auto"
         let backend = current.cloudBackend?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "legacy"
@@ -772,164 +788,100 @@ struct ComputerView: View {
 
     @ViewBuilder
     private var stateCard: some View {
+        let copy = presentationCopy
         switch presentationState {
         case .starting:
-            CalmDesktopSkeleton(message: localVmStartingMessage)
+            if showsStartingCard {
+                desktopStateCard(copy: copy, systemImage: "eye")
+            } else {
+                CalmDesktopSkeleton(message: copy.body)
+            }
 
         case .cloudViewerAvailable:
-            VStack(spacing: 14) {
-                Image(systemName: "display.and.arrow.down")
-                    .font(.system(size: 30, weight: .medium))
-                    .foregroundStyle(.primary.opacity(0.9))
-                Text(CloudViewerPolicy.boxReadyTitle)
-                    .font(.body.weight(.semibold))
-                Text(CloudViewerPolicy.boxReadyCopy)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 28)
-                Text(CloudViewerPolicy.externalSemantics)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 28)
-                Button(CloudViewerPolicy.openDesktopTitle) {
-                    Haptics.selection()
-                    confirmingDesktop = true
-                }
-                .buttonStyle(.borderedProminent)
-                .frame(minHeight: VBotSurface.Hit.minimum)
-                .disabled(openingDesktop)
-                .accessibilityLabel(CloudViewerPolicy.openDesktopTitle)
-                .accessibilityHint(CloudViewerPolicy.externalSemantics)
-                if openingDesktop {
-                    ProgressView()
-                        .padding(.top, 4)
-                        .accessibilityLabel("Opening cloud desktop")
-                }
-            }
-            .foregroundStyle(Color.primary)
-            .padding(VBotSurface.Space.section)
-            .vbotCard()
-            .padding(.horizontal, VBotSurface.Space.page)
+            desktopStateCard(copy: copy, systemImage: "display.and.arrow.down")
 
         case let .unavailable(message) where message == ComputerPresentationState.idleWaitingMessage:
-            VStack(spacing: 14) {
-                Image(systemName: "clock")
-                    .font(.system(size: 28, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Text("Waiting for agent")
-                    .font(.body.weight(.semibold))
-                Text(message)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
-                Text(destinationHelp)
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
-                    .padding(.top, 4)
-            }
-            .foregroundStyle(Color.primary)
-            .padding(VBotSurface.Space.section)
-            .vbotCard()
-            .padding(.horizontal, VBotSurface.Space.page)
+            desktopStateCard(copy: copy, systemImage: "clock")
 
-        case let .unavailable(message):
-            VStack(spacing: 14) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 28, weight: .medium))
-                    .foregroundStyle(Color.orange)
-                Text("Computer unavailable")
-                    .font(.body.weight(.semibold))
-                Text(message)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
-                Text(destinationHelp)
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
-                    .padding(.top, 4)
-                if localVmDestinationEnabled, canShowLocalVmControls, localVmStatus?.canCreate == true {
-                    Button("Create Local VM") {
-                        confirmingLocalVmAction = .create
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .frame(minHeight: VBotSurface.Hit.minimum)
-                    .disabled(pendingLocalVmAction || savingDestination)
-                }
-                if localVmDestinationEnabled, canShowLocalVmControls, localVmStatus?.canRecreate == true {
-                    Button("Recreate Local VM") {
-                        confirmingLocalVmAction = .recreate
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .frame(minHeight: VBotSurface.Hit.minimum)
-                    .disabled(pendingLocalVmAction || savingDestination)
-                }
-                if canRetryScreen {
-                    Button("Try again", action: retryScreen)
-                        .buttonStyle(.borderedProminent)
-                        .frame(minHeight: VBotSurface.Hit.minimum)
-                }
-            }
-            .foregroundStyle(Color.primary)
-            .padding(VBotSurface.Space.section)
-            .vbotCard()
-            .padding(.horizontal, VBotSurface.Space.page)
+        case .unavailable:
+            desktopStateCard(copy: copy, systemImage: "exclamationmark.triangle")
 
         case .watching:
             EmptyView()
         }
     }
 
-    private var localVmStartingMessage: String {
-        if isLocalVm {
-            if localVmStatus?.ready == true {
-                return openingLiveViewer ? "Opening live desktop…" : "Loading desktop preview…"
+    @ViewBuilder
+    private func desktopStateCard(
+        copy: ComputerPresentationState.CardCopy,
+        systemImage: String
+    ) -> some View {
+        VStack(spacing: 14) {
+            Image(systemName: systemImage)
+                .font(.system(size: 28, weight: .medium))
+                .foregroundStyle(copy.action == .retry ? Color.orange : .secondary)
+            Text(copy.title)
+                .font(.body.weight(.semibold))
+            Text(copy.body)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+            if let action = copy.action {
+                desktopStateAction(action)
             }
-            if let problem = localVmStatus?.problem, !(problem.isEmpty) {
-                return problem
+            if openingDesktop {
+                ProgressView()
+                    .padding(.top, 4)
+                    .accessibilityLabel("Opening cloud desktop")
             }
-            return localVmStateTitle == "Checking…" ? "Checking Local VM…" : localVmStateTitle
         }
-        return "Starting desktop..."
+        .foregroundStyle(Color.primary)
+        .padding(VBotSurface.Space.section)
+        .vbotCard()
+        .padding(.horizontal, VBotSurface.Space.page)
+    }
+
+    @ViewBuilder
+    private func desktopStateAction(_ action: ComputerPresentationState.CardCopy.Action) -> some View {
+        switch action {
+        case .createLocalVm:
+            Button("Create Local VM") {
+                confirmingLocalVmAction = .create
+            }
+            .buttonStyle(.borderedProminent)
+            .frame(minHeight: VBotSurface.Hit.minimum)
+            .disabled(pendingLocalVmAction || savingDestination)
+        case .recreateLocalVm:
+            Button("Recreate Local VM") {
+                confirmingLocalVmAction = .recreate
+            }
+            .buttonStyle(.borderedProminent)
+            .frame(minHeight: VBotSurface.Hit.minimum)
+            .disabled(pendingLocalVmAction || savingDestination)
+        case .retry:
+            Button("Try again", action: retryScreen)
+                .buttonStyle(.borderedProminent)
+                .frame(minHeight: VBotSurface.Hit.minimum)
+        case .openCloudDesktop:
+            Button(CloudViewerPolicy.openDesktopTitle) {
+                Haptics.selection()
+                confirmingDesktop = true
+            }
+            .buttonStyle(.borderedProminent)
+            .frame(minHeight: VBotSurface.Hit.minimum)
+            .disabled(openingDesktop)
+            .accessibilityLabel(CloudViewerPolicy.openDesktopTitle)
+            .accessibilityHint(CloudViewerPolicy.externalSemantics)
+        }
+    }
+
+    private var localVmStartingMessage: String {
+        presentationCopy.body
     }
 
     private var startingMessage: String {
-        if isLocalVm {
-            return "Waiting for a desktop preview from the Local VM."
-        }
-        return ComputerPresentationState.startingCopy(
-            computer: current.computer,
-            cloudBackend: current.cloudBackend,
-            busy: current.busy
-        )
-    }
-
-    private var destinationHelp: String {
-        switch destination {
-        case "vm":
-            if !localVmDestinationEnabled {
-                return "\(localVmDestinationDisabledReason) Then pick Local and Create."
-            }
-            if canShowLocalVmControls, localVmStatus?.canCreate == true {
-                return "Local VM is not created yet. Create it below, then open this screen again."
-            }
-            if canShowLocalVmControls, localVmStatus?.canRecreate == true {
-                return "Recreate the Local VM below to start a fresh desktop."
-            }
-            return "Running on Local VM. The desktop updates while this screen is open."
-        default:
-            return ComputerPresentationState.destinationHelp(
-                computer: destination,
-                cloudBackend: current.cloudBackend
-            ) ?? "Use ··· to choose Local or Cloud."
-        }
+        presentationCopy.body
     }
 
     private var clipboardPasteBar: some View {
@@ -1020,9 +972,9 @@ struct ComputerView: View {
                         .vbotRowSurface()
                 }
                 Section("How to use Local VM") {
-                    Text("Tap ··· and choose Local, then Create Local VM. The desktop is a Linux container on the paired Mac. This phone shows that desktop while this screen is open.")
+                    Text("Tap ··· and choose Local, then Create Local VM. The desktop is an isolated Linux workspace on the paired Mac. This phone shows it while this screen is open.")
                         .vbotRowSurface()
-                    Text("Grok Reconstructed cannot use Local VM as an OpenMaus mount. It still has Grok’s own Mac tools, which is why “open your VM” reached this computer. Use Claude, Codex, or an ACP engine for Local VM.")
+                    Text("Grok Reconstructed uses its own desktop and cannot use the Local VM workspace. Choose a Local VM-capable engine in the profile when you need this phone-controlled desktop.")
                         .vbotRowSurface()
                 }
                 if let localVmStatus {
@@ -1135,11 +1087,6 @@ struct ComputerView: View {
                         retryScreen()
                     }
                     .vbotRowSurface()
-                }
-                if !canOpenCloudViewer && !canShowLocalVmControls {
-                    Text(destinationHelp)
-                        .foregroundStyle(.secondary)
-                        .vbotRowSurface()
                 }
             }
             .navigationTitle("Controls")

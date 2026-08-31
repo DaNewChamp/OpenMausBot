@@ -19,7 +19,7 @@ public enum LocalVmDesktopPolicy: Sendable {
     public static let loadingPreviewMessage = "Loading desktop preview…"
     public static let notCreatedMessage = "Local VM is not created yet. Create it from ···, then this screen will show the desktop."
     public static let stoppedMessage = "This Local VM is stopped. Recreate it to start a fresh desktop."
-    public static let accessOffMessage = "Local VM access is off for this phone. Enable it in OpenMausBot → Settings → Companion."
+    public static let accessOffMessage = "Local VM access is off for this phone. Turn it on in V Bot → Settings → Companion, then return here."
     public static let viewerConnectFailureMessage = "The live desktop viewer could not connect. Try again, or Recreate from ···."
     public static let staleTicketMessage = "The live desktop session expired. Retry to reconnect."
     public static let viewerNotReadyMessage = "The Local VM desktop is not ready yet."
