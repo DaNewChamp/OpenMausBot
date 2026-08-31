@@ -1,9 +1,8 @@
-V Bot build 69: professional approval reviews.
+V Bot build 70: more capable, safer, and easier to use across computers.
 
-• Approval requests explain what an action does, what changes, where it runs, and its risk
-• Read-only commands identify the specific files or resources being reviewed
-• Exact commands stay available in a clean collapsed detail section
-• Optional AI review can use an explicitly selected provider from your own deployment
-• Local facts and risk remain authoritative even when AI review is enabled
-• Provider credentials remain on the server and are never sent to the phone
-• Unsafe or unsupported reviewer connections are clearly unavailable instead of silently running
+• Reuses your existing OpenAI/Codex sign-in for plain-language approval reviews
+• Supports multiple paired computers with quick switching and removal
+• Adds chat detail preferences, message copying, and custom quick replies
+• Improves pairing warnings and validates device credentials more strictly
+• Adds safer browser controls, staged skill learning, and custom desktop engines
+• Keeps approval summaries advisory while local facts and risk stay authoritative
