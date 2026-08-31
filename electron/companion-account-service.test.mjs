@@ -309,6 +309,16 @@ describe("Companion account service", () => {
     expect(store.writes).toHaveLength(2);
   });
 
+  it("mints a client identity only when the legacy field is truly absent", async () => {
+    const newClientInstanceId = vi.fn(() => UUID);
+    const { service, store } = serviceFixture({ newClientInstanceId });
+
+    await service.restore();
+
+    expect(newClientInstanceId).toHaveBeenCalledOnce();
+    expect(store.read()[COMPANION_CLIENT_INSTANCE_FIELD]).toBe(UUID);
+  });
+
   it("accepts opaque legacy IDs through provisioning and cleanup", async () => {
     const legacyClientInstanceId = "legacy/client.instance: A_01+stable";
     const legacyInstallationId = "legacy/installation.id: A_01+stable";
@@ -374,15 +384,22 @@ describe("Companion account service", () => {
     expect(store.read()[COMPANION_INSTALLATION_CREDENTIAL_FIELD]).toBeUndefined();
   });
 
-  it("fails closed instead of replacing an invalid persisted client ID", async () => {
+  it.each([
+    "",
+    "bad\u0000id",
+    "x".repeat(257),
+    42,
+    null,
+  ])("fails closed instead of replacing an invalid persisted client ID (%j)", async (legacyId) => {
     const newClientInstanceId = vi.fn(() => "replacement-id");
-    const { service } = serviceFixture({
-      initial: { [COMPANION_CLIENT_INSTANCE_FIELD]: "bad\u0000id" },
+    const { service, store } = serviceFixture({
+      initial: { [COMPANION_CLIENT_INSTANCE_FIELD]: legacyId },
       newClientInstanceId,
     });
 
     await expect(service.restore()).rejects.toMatchObject({ code: "invalid_client_identity" });
     expect(newClientInstanceId).not.toHaveBeenCalled();
+    expect(store.read()[COMPANION_CLIENT_INSTANCE_FIELD]).toBe(legacyId);
   });
 
   it("never exposes any bearer, connector token, installation ID, or credential", async () => {

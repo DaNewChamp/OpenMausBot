@@ -71,7 +71,7 @@ describe("createFileEnvelopeSecretStore", () => {
     });
   });
 
-  it("uses mode 0600 for key and envelope", () => {
+  it.skipIf(process.platform === "win32")("uses mode 0600 for key and envelope", () => {
     const store = createFileEnvelopeSecretStore({ dataDir });
     store.set("x", "12345678901234567890");
     expect(statSync(join(dataDir, "host-secret.key")).mode & 0o777).toBe(0o600);
@@ -97,7 +97,7 @@ describe("createFileEnvelopeSecretStore", () => {
     );
   });
 
-  it("rejects unsafe key and envelope modes and fails mutations closed", () => {
+  it.skipIf(process.platform === "win32")("rejects unsafe key and envelope modes and fails mutations closed", () => {
     const store = createFileEnvelopeSecretStore({ dataDir });
     writeFileSync(join(dataDir, "host-secret.key"), Buffer.alloc(32), { mode: 0o644 });
     expect(store.read().status).toBe("unavailable");

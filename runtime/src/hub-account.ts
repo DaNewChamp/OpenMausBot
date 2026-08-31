@@ -342,7 +342,8 @@ export function createHubAccountService({
     if (
       !id ||
       !credential ||
-      (returnedClientInstanceId !== undefined && returnedClientInstanceId !== identity.id)
+      !isValidOpaqueId(returnedClientInstanceId) ||
+      returnedClientInstanceId !== identity.id
     ) {
       throw new ControlPlaneError("invalid_response");
     }

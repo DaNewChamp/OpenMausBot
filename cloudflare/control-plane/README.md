@@ -24,9 +24,10 @@ desktop credentials in the OS-backed store under its final
 The stable `hub.json` identity is the installation `clientInstanceId`. Electron
 uses the final `app.getPath("userData")` after compatibility-path adoption;
 headless runtimes require an explicit absolute `--data-dir`. The `vbotctl`
-compatibility override `OMB_DATA_DIR` is limited to injected local/headless
-test fixtures; production runtimes and other consumers must use their explicit
-data directory. Backups and migrations must
+entry point does not read `OMB_DATA_DIR`; its local fixture passes an explicit
+temporary path through `--data-dir`. `OMB_DATA_DIR` remains a legacy, explicit
+override for existing server and Electron consumers, not a new headless
+default. Backups and migrations must
 retain `hub.json` plus the encrypted secret-store files. Deleting `hub.json`
 mints a new identity and is not a troubleshooting procedure.
 

@@ -6,6 +6,8 @@ import { join } from "node:path";
 import {
   ACCOUNT_TOKEN as ACCOUNT_TOKEN_FIELD,
   createHubAccountService,
+  INSTALLATION_CREDENTIAL as INSTALLATION_CREDENTIAL_FIELD,
+  INSTALLATION_ID as INSTALLATION_ID_FIELD,
 } from "./hub-account.ts";
 import { createFileEnvelopeSecretStore, HostSecretStoreUnavailableError } from "../../server/host-secret-store.ts";
 import { loadOrCreateHubIdentity } from "../../shared/hub-identity.mjs";
@@ -94,6 +96,32 @@ describe("headless hub account service", () => {
     }));
     expect(JSON.stringify(await f.service.register())).not.toContain(ACCOUNT_TOKEN);
     expect(JSON.stringify(await f.service.register())).not.toContain(INSTALLATION_CREDENTIAL);
+  });
+
+  it("rejects a response that omits the canonical client identity before persistence or presence", async () => {
+    const f = fixture({
+      ensureInstallation: vi.fn(async () => ({
+        installation: { ...fleet, clientInstanceId: undefined },
+        credential: INSTALLATION_CREDENTIAL,
+        credentialExpiresAt: 12345,
+      })),
+    });
+    directories.push(f.dataDir);
+    await f.service.verifyCode(EMAIL, "12345678");
+
+    await expect(f.service.register()).rejects.toMatchObject({ code: "invalid_response" });
+    const snapshot = f.secrets.read();
+    expect(snapshot).toMatchObject({
+      status: "ok",
+      values: {
+        [ACCOUNT_TOKEN_FIELD]: ACCOUNT_TOKEN,
+      },
+    });
+    if (snapshot.status === "ok") {
+      expect(snapshot.values[INSTALLATION_ID_FIELD]).toBeUndefined();
+      expect(snapshot.values[INSTALLATION_CREDENTIAL_FIELD]).toBeUndefined();
+    }
+    expect(f.client.updatePresence).not.toHaveBeenCalled();
   });
 
   it("reuses a valid stored installation credential and allows recovery after definitive self 401", async () => {

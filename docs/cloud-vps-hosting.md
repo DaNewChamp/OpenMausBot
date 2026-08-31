@@ -36,7 +36,10 @@ The headless runtime has one explicit data directory, normally
 home directory, and never delete `hub.json` as troubleshooting: deletion mints
 a new hub identity and can strand the existing installation. Electron uses its
 final `app.getPath("userData")` instead; its archive includes `hub.json` and
-the OS-encrypted credential file there.
+the OS-encrypted credential file there. POSIX runtimes enforce owner-only
+directory/file metadata and reject symlinks or non-regular files; Windows keeps
+the type/read checks and relies on its ACLs because POSIX uid/mode bits are not
+available.
 
 Presence is explicit and one-shot in Wave 1. `stopPresence()` runs during
 sign-out and `dispose()` runs during app quit. There is no background heartbeat
@@ -87,11 +90,13 @@ printf '%s\n' '12345678' | \
   --email owner@example.com --stdin
 ```
 
-`OMB_DATA_DIR` is a `vbotctl` compatibility override for injected local/headless
-test fixtures only, not a production or general-consumer default. The CLI
-does not accept OTPs, account bearers, or installation credentials as argv
-values. It emits safe JSON only and exits `0` on success, `1` on an operational
-failure, or `2` for a usage error.
+`OMB_DATA_DIR` remains a legacy, explicit override for existing server and
+Electron consumers; it is not a `vbotctl` default. `vbotctl` requires
+`--data-dir` and does not read `OMB_DATA_DIR`; the injected local fixture passes
+its temporary path directly through that option. The CLI does not accept OTPs,
+account bearers, or installation credentials as argv values. It emits safe JSON
+only and exits `0` on success, `1` on an operational failure, or `2` for a usage
+error.
 
 The local route/CLI regression is automated by
 `pnpm --filter @openmausbot/control-plane exec vitest run test/vbotctl-local-smoke.test.ts`.

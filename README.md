@@ -77,12 +77,18 @@ V Bot keeps account discovery separate from access to a hub:
 Each runtime has one canonical data directory. Electron resolves its existing
 compatibility path first, then uses the final `app.getPath("userData")` for
 `hub.json`, desktop credentials, and runtime state. A headless runtime must be
-given an explicit absolute `--data-dir`; the `vbotctl` compatibility override
-`OMB_DATA_DIR` is limited to injected local/headless test fixtures and is not a
-production or general-consumer default. `hub.json`,
+given an explicit absolute `--data-dir`. `OMB_DATA_DIR` remains a legacy,
+explicit override for existing server and Electron consumers; it is not an
+implicit default for new headless commands. `vbotctl` never reads that
+environment variable: its injected fixture passes the temporary path directly
+through `--data-dir`. `hub.json`,
 `host-secret.key`, and `host-secrets.bin` are part of a headless hub backup or
 migration; an Electron archive includes `hub.json` and its OS-encrypted
-credential file under the final `app.getPath("userData")`.
+credential file under the final `app.getPath("userData")`. On POSIX hosts the
+runtime requires the directory and files to remain owner-controlled with
+private modes; Windows has no reliable POSIX uid/mode bits, so it retains the
+symlink, regular-file, and read-error checks while relying on the OS ACL for
+access control.
 
 Presence has an explicit lifecycle. Sign-out calls `stopPresence()`, and app
 quit calls `dispose()` so no heartbeat survives teardown. `Node Only` and
@@ -106,7 +112,7 @@ pnpm run vbotctl -- --data-dir /var/lib/vbot fleet list --json
 
 The verification code is entered through a hidden TTY prompt. For a
 non-interactive local test, pipe only the short-lived code through stdin and
-set `OMB_DATA_DIR` only when the injected fixture explicitly permits it:
+pass the fixture's temporary path explicitly with `--data-dir`:
 
 ```sh
 printf '%s\n' '12345678' | \

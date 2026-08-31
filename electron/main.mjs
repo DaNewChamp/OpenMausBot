@@ -44,7 +44,7 @@ import {
 import { createSecureCredentialState } from "./secure-credential-state.mjs";
 import { readSecureCredentials, withCredentialStoreTimeout } from "./secure-credentials.mjs";
 import { probeOwnedPackagedServer } from "./packaged-server.mjs";
-import { createControlPlaneClient } from "./control-plane-client.mjs";
+import { createControlPlaneClient, isValidOpaqueId } from "./control-plane-client.mjs";
 import { loadOrCreateHubIdentity, readHubIdentity } from "../shared/hub-identity.mjs";
 import {
   companionAccountCleanupPending,
@@ -571,7 +571,15 @@ async function prepareHubIdentity() {
         "The operating-system credential store could not be read this launch";
       return;
     }
-    const preferredId = Object.hasOwn(secureCredentials, COMPANION_CLIENT_INSTANCE_FIELD)
+    const hasLegacyIdentity = Object.hasOwn(secureCredentials, COMPANION_CLIENT_INSTANCE_FIELD);
+    if (hasLegacyIdentity && !isValidOpaqueId(secureCredentials[COMPANION_CLIENT_INSTANCE_FIELD])) {
+      // A missing hub file may mint exactly once, but an explicitly persisted
+      // legacy field is an identity commitment. Never replace malformed state
+      // with a fresh ID: doing so would strand the existing installation.
+      hubIdentityError = "Hub identity is malformed";
+      return;
+    }
+    const preferredId = hasLegacyIdentity
       ? secureCredentials[COMPANION_CLIENT_INSTANCE_FIELD]
       : undefined;
     try {

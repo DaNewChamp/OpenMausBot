@@ -399,13 +399,16 @@ function hasCode(error: unknown, code: string): boolean {
 
 function assertSecureFile(stat: Stats): void {
   if (!stat.isFile()) throw unavailableError();
-  // 0600 or stricter: only owner read/write bits are permitted. An operator
-  // may reduce those bits further, but execute, special, group, and other
-  // permissions are all rejected.
-  const permissions = stat.mode & 0o7777;
-  if ((permissions & ~FILE_MODE) !== 0) throw unavailableError();
-  if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
-    throw unavailableError();
+  if (process.platform !== "win32") {
+    // 0600 or stricter: only owner read/write bits are permitted. An operator
+    // may reduce those bits further, but execute, special, group, and other
+    // permissions are all rejected. Windows does not expose POSIX mode bits;
+    // lstat/open/fstat still reject symlinks, non-regular files, and races.
+    const permissions = stat.mode & 0o7777;
+    if ((permissions & ~FILE_MODE) !== 0) throw unavailableError();
+    if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
+      throw unavailableError();
+    }
   }
 }
 

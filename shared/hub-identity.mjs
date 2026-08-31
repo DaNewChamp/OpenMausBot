@@ -22,11 +22,25 @@ const { COPYFILE_EXCL } = constants;
 const PUBLICATION_LOCK_FILENAME = `.${HUB_FILENAME}.lock`;
 const MAX_ID_LENGTH = 256;
 const PRIVATE_DIRECTORY_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
 const PUBLICATION_LOCK_ATTEMPTS = 100;
 const PUBLICATION_LOCK_WAIT_MS = 5;
 const publicationWaitCell = new Int32Array(new SharedArrayBuffer(4));
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 let publicationLockSequence = 0;
+
+function isPosixPlatform() {
+  return process.platform !== "win32";
+}
+
+function hasCurrentPosixOwner(stat) {
+  return !isPosixPlatform() || typeof process.getuid !== "function" || stat.uid === process.getuid();
+}
+
+function hasPrivatePosixMetadata(stat, mode) {
+  if (!isPosixPlatform()) return true;
+  return hasCurrentPosixOwner(stat) && (stat.mode & 0o7777 & ~mode) === 0;
+}
 
 export class HubIdentityUnavailableError extends Error {
   constructor(message = "Hub identity is unavailable") {
@@ -65,9 +79,7 @@ export function inspectPrivateDataDir(dataDir) {
     return "unavailable";
   }
   if (!directory.isDirectory() || directory.isSymbolicLink()) return "unavailable";
-  if (typeof process.getuid === "function" && directory.uid !== process.getuid()) {
-    return "unavailable";
-  }
+  if (!hasCurrentPosixOwner(directory)) return "unavailable";
   if ((directory.mode & 0o7777 & ~PRIVATE_DIRECTORY_MODE) !== 0) return "needs-repair";
   return "ok";
 }
@@ -97,20 +109,19 @@ export function ensurePrivateDataDir(dataDir) {
   if (!before.isDirectory() || before.isSymbolicLink()) {
     throwUnavailable("Hub data directory is unavailable");
   }
-  if (typeof process.getuid === "function" && before.uid !== process.getuid()) {
+  if (isPosixPlatform() && typeof process.getuid === "function" && before.uid !== process.getuid()) {
     throwUnavailable("Hub data directory is unavailable");
   }
 
   try {
-    chmodSync(directoryPath, PRIVATE_DIRECTORY_MODE);
+    if (isPosixPlatform()) chmodSync(directoryPath, PRIVATE_DIRECTORY_MODE);
     const after = lstatSync(directoryPath);
     if (
       !after.isDirectory() ||
       after.isSymbolicLink() ||
       after.dev !== before.dev ||
       after.ino !== before.ino ||
-      (after.mode & 0o7777 & ~PRIVATE_DIRECTORY_MODE) !== 0 ||
-      (typeof process.getuid === "function" && after.uid !== process.getuid())
+      !hasPrivatePosixMetadata(after, PRIVATE_DIRECTORY_MODE)
     ) {
       throwUnavailable("Hub data directory is unavailable");
     }
@@ -174,12 +185,49 @@ export function readHubIdentity(options = {}) {
   if (directoryStatus === "missing") return { status: "missing" };
   if (directoryStatus !== "ok") return unavailable("Hub data directory is unavailable");
 
-  let bytes;
+  const filePath = hubPath(dataDir);
+  let initial;
   try {
-    bytes = readFileSync(hubPath(dataDir));
+    initial = lstatSync(filePath);
   } catch (error) {
     if (error?.code === "ENOENT") return { status: "missing" };
     return unavailable("Hub identity could not be read");
+  }
+
+  if (!initial.isFile() || initial.isSymbolicLink() || !hasPrivatePosixMetadata(initial, PRIVATE_FILE_MODE)) {
+    return unavailable("Hub identity could not be read");
+  }
+
+  let bytes;
+  let fd;
+  try {
+    const noFollow = isPosixPlatform() ? constants.O_NOFOLLOW ?? 0 : 0;
+    fd = openSync(filePath, constants.O_RDONLY | noFollow);
+    const opened = fstatSync(fd);
+    if (
+      !opened.isFile() ||
+      opened.isSymbolicLink() ||
+      opened.dev !== initial.dev ||
+      opened.ino !== initial.ino ||
+      !hasPrivatePosixMetadata(opened, PRIVATE_FILE_MODE)
+    ) {
+      return unavailable("Hub identity could not be read");
+    }
+    bytes = readFileSync(fd);
+    const final = lstatSync(filePath);
+    if (
+      !final.isFile() ||
+      final.isSymbolicLink() ||
+      final.dev !== opened.dev ||
+      final.ino !== opened.ino ||
+      !hasPrivatePosixMetadata(final, PRIVATE_FILE_MODE)
+    ) {
+      return unavailable("Hub identity could not be read");
+    }
+  } catch {
+    return unavailable("Hub identity could not be read");
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
 
   let text;
@@ -212,7 +260,7 @@ function writeDurableTemp(tempPath, serialized) {
     const bytes = Buffer.from(serialized, "utf8");
     let offset = 0;
     while (offset < bytes.length) offset += writeSync(fd, bytes, offset);
-    chmodSync(tempPath, 0o600);
+    if (isPosixPlatform()) chmodSync(tempPath, PRIVATE_FILE_MODE);
     fsyncSync(fd);
     closeSync(fd);
     fd = undefined;
@@ -356,7 +404,7 @@ function publishIdentity(dataDir, identity, { tempPathFactory, beforePublish }) 
 
     try {
       copyFileSync(tempPath, filePath, COPYFILE_EXCL);
-      chmodSync(filePath, 0o600);
+      if (isPosixPlatform()) chmodSync(filePath, PRIVATE_FILE_MODE);
       syncPublishedFile(filePath);
     } catch (error) {
       const raced = readHubIdentity({ dataDir });

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -95,7 +96,9 @@ describe("stable hub identity", () => {
       randomId: () => "22222222-2222-4222-8222-222222222222",
     });
     assert.deepEqual(second, first);
-    assert.equal(statSync(join(dataDir, "hub.json")).mode & 0o777, 0o600);
+    if (process.platform !== "win32") {
+      assert.equal(statSync(join(dataDir, "hub.json")).mode & 0o777, 0o600);
+    }
   });
 
   it("adopts an existing opaque Electron client instance id only on first creation", () => {
@@ -171,7 +174,9 @@ describe("stable hub identity", () => {
     const root = makeDataDir();
     const dataDir = join(root, "nested", "runtime");
     loadOrCreateHubIdentity({ dataDir, now: () => 123, randomId: () => "opaque" });
-    assert.equal(statSync(dataDir).mode & 0o777, 0o700);
+    if (process.platform !== "win32") {
+      assert.equal(statSync(dataDir).mode & 0o777, 0o700);
+    }
   });
 
   it("never changes a persisted id when a later preferred id differs", () => {
@@ -321,6 +326,33 @@ describe("stable hub identity", () => {
     }
   });
 
+  it("fails closed on symlink, non-regular, or broad-mode hub files", () => {
+    const valid = JSON.stringify({ schemaVersion: 1, id: "persisted", createdAt: 123 });
+
+    if (process.platform !== "win32") {
+      const symlinkDir = makeDataDir();
+      const symlinkTarget = join(symlinkDir, "hub-target.json");
+      writeFileSync(symlinkTarget, valid, { mode: 0o600 });
+      symlinkSync(symlinkTarget, join(symlinkDir, "hub.json"));
+      assert.equal(readHubIdentity({ dataDir: symlinkDir }).status, "unavailable");
+      assert.throws(() => loadOrCreateHubIdentity({ dataDir: symlinkDir }), HubIdentityUnavailableError);
+    }
+
+    const nonRegularDir = makeDataDir();
+    mkdirSync(join(nonRegularDir, "hub.json"));
+    assert.equal(readHubIdentity({ dataDir: nonRegularDir }).status, "unavailable");
+    assert.throws(() => loadOrCreateHubIdentity({ dataDir: nonRegularDir }), HubIdentityUnavailableError);
+
+    const broadModeDir = makeDataDir();
+    writeFileSync(join(broadModeDir, "hub.json"), valid, { mode: 0o644 });
+    if (process.platform !== "win32") {
+      assert.equal(readHubIdentity({ dataDir: broadModeDir }).status, "unavailable");
+      assert.throws(() => loadOrCreateHubIdentity({ dataDir: broadModeDir }), HubIdentityUnavailableError);
+    } else {
+      assert.equal(readHubIdentity({ dataDir: broadModeDir }).status, "ok");
+    }
+  });
+
   it("rejects empty, overlong, and non-printable existing ids", () => {
     for (const id of ["", "x".repeat(257), "has\ttab", "has\u0000nul"]) {
       const dataDir = makeDataDir();
@@ -344,6 +376,7 @@ describe("stable hub identity", () => {
   it("repairs existing directory modes before identity creation", () => {
     const dataDir = makeDataDir();
     chmodSync(dataDir, 0o755);
+    if (process.platform === "win32") return;
     assert.equal(inspectPrivateDataDir(dataDir), "needs-repair");
     ensurePrivateDataDir(dataDir);
     assert.equal(inspectPrivateDataDir(dataDir), "ok");
