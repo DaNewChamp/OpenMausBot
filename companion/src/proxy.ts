@@ -27,6 +27,10 @@ import {
   isBotUnread,
   isBotVisibility,
   isComputerDestination,
+  isPermissionPolicy,
+  isPermissionPolicyStatus,
+  isBotPermissionMode,
+  botPermissionModeBotId,
   isConnectorCardAction,
   isConnectorCardStatus,
   isGroupSetup,
@@ -42,6 +46,8 @@ import {
   validateBotModelBody,
   validateBotVisibilityBody,
   validateComputerDestinationBody,
+  validatePermissionPolicyBody,
+  validateBotPermissionModeBody,
   validateConnectorCardBody,
   validateConnectorCardThreadId,
   validateGroupSetupBody,
@@ -375,6 +381,46 @@ export function createProxyHandler(options: ProxyOptions) {
     // default-deny checks above and never send it to the harness.
     if (method === "GET" && path === "/api/companion/endpoints") {
       return sendJson(res, 200, endpointSnapshot(options));
+    }
+
+    // Permission policy is intentionally a tiny, device-safe config surface.
+    // Validate the exact body here before forwarding; the harness still owns
+    // persistence and effective-policy resolution.
+    if (isPermissionPolicy(method, path)) {
+      const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+      if (!contentType.startsWith("application/json")) {
+        return sendJson(res, 415, { error: "permission policy requires application/json" });
+      }
+      readJson(req, 64 * 1024, true).then(
+        (body) => {
+          const parsed = validatePermissionPolicyBody(method, path, body);
+          if ("denial" in parsed) return sendJson(res, parsed.denial.status, { error: parsed.denial.error });
+          forward(Buffer.from(JSON.stringify(parsed.patch), "utf8"));
+        },
+        (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
+      return;
+    }
+    if (isPermissionPolicyStatus(method, path)) {
+      forward();
+      return;
+    }
+    if (isBotPermissionMode(method, path)) {
+      const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+      if (!contentType.startsWith("application/json")) {
+        return sendJson(res, 415, { error: "permission mode requires application/json" });
+      }
+      const botId = botPermissionModeBotId(path);
+      if (!botId) return sendJson(res, 404, { error: `no route: ${method} ${path}` });
+      readJson(req, 64 * 1024, true).then(
+        (body) => {
+          const parsed = validateBotPermissionModeBody(method, path, body);
+          if ("denial" in parsed) return sendJson(res, parsed.denial.status, { error: parsed.denial.error });
+          forward(Buffer.from(JSON.stringify(parsed.patch), "utf8"));
+        },
+        (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
+      return;
     }
 
     // Connector-card mutations are the one JSON body this proxy validates

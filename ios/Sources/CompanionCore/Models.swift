@@ -23,6 +23,12 @@ public struct OptionCard: Codable, Hashable, Sendable {
     /// it answerable rather than historical.
     public var requestId: String?
     public var tool: String?
+    /// Human-readable permission headline metadata. Raw provider details are
+    /// shown only after the user opens the disclosure.
+    public var toolLabel: String?
+    public var hostLabel: String?
+    public var actionSummary: String?
+    public var details: String?
     /// Why auto mode stopped to ask anyway.
     public var held: String?
     /// The narrow grant "always allow" would remember, e.g. `Bash:git`.
@@ -36,6 +42,13 @@ public struct OptionCard: Codable, Hashable, Sendable {
 
     /// Permission cards carry a tool; questions do not.
     public var isPermission: Bool { tool != nil }
+
+    /// The calm label shown for the one-shot approval action. The wire keeps
+    /// provider-specific option strings for backwards compatibility.
+    public func displayLabel(for choice: String) -> String {
+        guard isPermission, !Self.isRefusal(choice) else { return choice }
+        return "Allow once"
+    }
 
     /// The wire API accepts an approval behavior rather than the button's
     /// display text. Treat the one refusal as deny and every other offered
@@ -286,6 +299,7 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
     public var hidden: Bool?
     public var chiefOfStaff: Bool?
     public var autoApprove: Bool?
+    public var permissionMode: PermissionMode?
     public var fastMode: Bool?
     public var alwaysAllow: [String]?
     public var computer: String?
@@ -1061,6 +1075,7 @@ public struct ConfigStatus: Codable, Sendable {
     public var tts: ConfigFlag?
     public var imageGen: ConfigFlag?
     public var profile: Profile?
+    public var permissions: PermissionPolicyStatus?
 
     /// Whether the shared synthesis credential exists on the paired
     /// computer. The credential itself never appears in this response.
@@ -1077,6 +1092,28 @@ public struct ConfigStatus: Codable, Sendable {
     public func canSpeak(agentVoice: String?) -> Bool {
         let hasAgentVoice = !(agentVoice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         return isTTSConfigured && (hasAgentVoice || hasWorkspaceDefaultVoice)
+    }
+}
+
+/// Server-authoritative permission behavior. A bot may override the app
+/// default; `nil` on Bot means it inherits this value.
+public enum PermissionMode: String, Codable, CaseIterable, Sendable {
+    case ask, allow, deny
+
+    public var label: String {
+        switch self {
+        case .ask: return "Ask every time"
+        case .allow: return "Allow automatically"
+        case .deny: return "Deny automatically"
+        }
+    }
+}
+
+public struct PermissionPolicyStatus: Codable, Sendable {
+    public var defaultMode: PermissionMode
+
+    public init(defaultMode: PermissionMode = .ask) {
+        self.defaultMode = defaultMode
     }
 }
 
@@ -1123,6 +1160,22 @@ public struct BotFastModePatch: Encodable, Sendable {
 
     public init(fastMode: Bool) {
         self.fastMode = fastMode
+    }
+}
+
+public struct BotPermissionModePatch: Encodable, Sendable {
+    public let mode: String
+
+    public init(mode: PermissionMode?) {
+        self.mode = mode?.rawValue ?? "inherit"
+    }
+}
+
+public struct PermissionPolicyPatch: Encodable, Sendable {
+    public let defaultMode: PermissionMode
+
+    public init(defaultMode: PermissionMode) {
+        self.defaultMode = defaultMode
     }
 }
 

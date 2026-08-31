@@ -30,6 +30,8 @@ const SENSITIVE = [
   /\bcredentials?\.json\b|\bserviceaccount\b/i,
 ];
 
+import type { PermissionMode } from "./config.ts";
+
 /** First matching pattern's source, so a verdict can NAME the rule that
  * made it — the decision log's whole value is "which rule", and deriving
  * the match a second time at the call site is how the log and the verdict
@@ -82,6 +84,19 @@ export function approvalKey(tool: string, summary: string, scope?: "local-comput
 export interface AutoApprover {
   autoApprove?: boolean;
   alwaysAllow?: string[];
+  /** Explicit per-bot policy. Missing inherits the app-wide default. */
+  permissionMode?: PermissionMode;
+  /** App-wide default, supplied by the harness at the decision boundary. */
+  defaultPermissionMode?: PermissionMode;
+}
+
+/** Resolve the effective policy without rewriting legacy records. Explicit
+ * per-bot values win; old autoApprove=true remains an allow grant, while old
+ * false/absent records inherit the app default (ask when unset). */
+export function permissionMode(bot: AutoApprover): PermissionMode {
+  if (bot.permissionMode) return bot.permissionMode;
+  if (bot.autoApprove === true) return "allow";
+  return bot.defaultPermissionMode ?? "ask";
 }
 
 /** Why a verdict landed the way it did. `unattended-block` exists only in
@@ -106,6 +121,8 @@ export interface AutoVerdict {
    * the granted key (always-allow, and unattended-block over one). Auto
    * mode has no narrower identity than the mode itself, so it carries none. */
   rule?: string;
+  /** A deny policy answers the provider with `deny` rather than `allow`. */
+  deny?: boolean;
 }
 
 /** The verdict AND its provenance. The decision itself is unchanged from
@@ -123,6 +140,7 @@ export function autoVerdict(
     scope?: "local-computer" | "bridge";
   },
 ): AutoVerdict {
+  const mode = permissionMode(bot);
   // the guards outrank the grants, so an "always allow" can never widen
   // into them
   const destructive = matchFirst(DESTRUCTIVE, summary) ?? matchFirst(DESTRUCTIVE, tool);
@@ -137,9 +155,12 @@ export function autoVerdict(
       ? null
       : bot.alwaysAllow?.includes(key)
         ? { approve: `auto-approved ${key} (always allowed)`, source: "always-allow" as const, rule: key }
-        : bot.autoApprove
+      : mode === "allow"
           ? { approve: `auto-approved ${tool}`, source: "auto-mode" as const, rule: undefined }
           : null;
+  if (mode === "deny" && !destructive && !sensitive) {
+    return { approve: "auto-denied by permission policy", source: "auto-mode", rule: "permission-mode:deny", deny: true };
+  }
   if (context?.unattended) {
     // Auto mode is something a person switched on for turns they are present
     // for. A webhook turn begins with nobody watching, on a payload someone
@@ -163,7 +184,7 @@ export function autoVerdict(
     }
     return { approve: null, source: "no-grant" };
   }
-  if (context?.scope === "local-computer" && !bot.autoApprove) {
+  if (context?.scope === "local-computer" && mode !== "allow") {
     // Host control is not covered by a remembered always-allow grant.
     // After the Auto-on-this-computer warning, unclassified GUI actions
     // (click/type) may auto-approve; destructive/sensitive still card.
@@ -171,6 +192,12 @@ export function autoVerdict(
     if (destructive) return { approve: null, source: "destructive-guard", rule: destructive };
     if (sensitive) return { approve: null, source: "sensitive-guard", rule: sensitive };
     return { approve: null, source: "no-grant" };
+  }
+  if (context?.scope === "local-computer" && bot.autoApprove !== true) {
+    // The local-computer warning/grant is a separate consent boundary from
+    // the policy mode. A global or per-bot allow may cover ordinary tools,
+    // but it must not silently grant control of the user's computer.
+    return { approve: null, source: "local-computer-block", rule: "local-computer-grant-required" };
   }
   if (destructive) return { approve: null, source: "destructive-guard", rule: destructive };
   if (sensitive) return { approve: null, source: "sensitive-guard", rule: sensitive };

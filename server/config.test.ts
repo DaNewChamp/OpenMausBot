@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   DATA_DIR,
+  defaultPermissionMode,
   instanceConfigs,
   isValidSshAlias,
   loadConfig,
@@ -88,6 +89,17 @@ describe("configuration boundaries", () => {
     expect(skillRecorderEnabled({ features: { skillRecorder: true } })).toBe(true);
     expect(() => parseConfigPatch({ features: { skillRecorder: "yes" } })).toThrow(
       "features.skillRecorder",
+    );
+  });
+
+  it("accepts a global permission default and safely falls back to ask", () => {
+    expect(defaultPermissionMode({})).toBe("ask");
+    expect(parseConfigPatch({ permissions: { defaultMode: "allow" } })).toEqual({
+      permissions: { defaultMode: "allow" },
+    });
+    expect(defaultPermissionMode({ permissions: { defaultMode: "deny" } })).toBe("deny");
+    expect(() => parseConfigPatch({ permissions: { defaultMode: "always" } })).toThrow(
+      "permissions.defaultMode",
     );
   });
 

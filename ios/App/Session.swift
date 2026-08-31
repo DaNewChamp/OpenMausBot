@@ -2444,6 +2444,35 @@ final class Session: ObservableObject {
         return try? await client.config()
     }
 
+    /// Read the server-authoritative app-wide permission default. Preferences
+    /// never live only on this phone.
+    func permissionPolicy() async -> PermissionPolicyStatus? {
+        guard let client else { return nil }
+        do { return try await client.permissionPolicy() }
+        catch { actionError = error.localizedDescription; return nil }
+    }
+
+    func updatePermissionPolicy(_ mode: PermissionMode) async -> PermissionPolicyStatus? {
+        guard let client else { return nil }
+        do { return try await client.setPermissionPolicy(defaultMode: mode) }
+        catch { actionError = error.localizedDescription; return nil }
+    }
+
+    /// Set an explicit per-bot override and fold the server response into the
+    /// shared roster so every open view reflects it immediately.
+    func updatePermissionMode(_ mode: PermissionMode?, for bot: Bot) async -> Bot? {
+        guard let client else { return nil }
+        do {
+            let updated = try await client.setPermissionMode(botId: bot.id, mode: mode)
+            guard !Task.isCancelled else { return nil }
+            state.apply(.bot(updated))
+            return updated
+        } catch {
+            if !Task.isCancelled { actionError = error.localizedDescription }
+            return nil
+        }
+    }
+
     // MARK: - Routines
 
     func loadRoutines() async -> (routines: [Routine], runs: [RoutineRun]) {

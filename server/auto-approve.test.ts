@@ -137,6 +137,27 @@ describe("autoDecision", () => {
     ).toBeNull();
   });
 
+  it("resolves explicit permission modes and keeps deny from widening grants", () => {
+    expect(autoDecision({ permissionMode: "allow" }, "Bash", "ls -la")).toBe("auto-approved Bash");
+    expect(autoDecision({ permissionMode: "deny", alwaysAllow: ["Bash:git"] }, "Bash", "git status")).toBe(
+      "auto-denied by permission policy",
+    );
+    expect(autoDecision({ permissionMode: "deny" }, "Bash", "rm -rf /")).toBeNull();
+    expect(autoDecision({ defaultPermissionMode: "allow" }, "Bash", "ls -la")).toBe("auto-approved Bash");
+    expect(autoDecision({ defaultPermissionMode: "deny" }, "Bash", "ls -la")).toBe(
+      "auto-denied by permission policy",
+    );
+  });
+
+  it("does not let a global or per-bot allow bypass local-computer consent", () => {
+    const context = { scope: "local-computer" as const };
+    expect(autoDecision({ defaultPermissionMode: "allow" }, "mcp__computer__click", "Click Submit", context)).toBeNull();
+    expect(autoDecision({ permissionMode: "allow" }, "mcp__computer__click", "Click Submit", context)).toBeNull();
+    expect(autoDecision({ permissionMode: "allow", autoApprove: true }, "mcp__computer__click", "Click Submit", context)).toBe(
+      "auto-approved mcp__computer__click",
+    );
+  });
+
   it("allows a scoped always-allow grant for one bridge program", () => {
     const key = approvalKey("run_on_bridge", "echo hi", "bridge");
     expect(key).toBe("bridge:run_on_bridge:echo");

@@ -7,7 +7,8 @@ import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
-import { DATA_DIR } from "./config.ts";
+import { DATA_DIR, PERMISSION_MODES } from "./config.ts";
+import type { PermissionMode } from "./config.ts";
 import * as mdb from "./message-db.ts";
 import { workspaceDir } from "./workspace.ts";
 import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./contracts.ts";
@@ -54,6 +55,12 @@ export interface OptionCardData {
   /** permission cards: the tool being requested, so the card can show what
    * is actually being asked and offer "always allow this tool". */
   tool?: string;
+  /** Human-readable permission headline metadata. Raw provider details stay
+   * behind the client's collapsed disclosure. */
+  toolLabel?: string;
+  hostLabel?: string;
+  actionSummary?: string;
+  details?: string;
   /** why this stopped despite auto mode (destructive-looking command) */
   held?: string;
   /** the narrow grant "always allow" remembers, e.g. "Bash:git" */
@@ -238,6 +245,7 @@ function redactBotAuthored<T extends Omit<Message, "id" | "at"> & { at?: number 
     card.title = redactSecretsInText(card.title);
     if (typeof card.subtitle === "string") card.subtitle = redactSecretsInText(card.subtitle);
     if (typeof card.summary === "string") card.summary = redactSecretsInText(card.summary);
+    if (typeof card.details === "string") card.details = redactSecretsInText(card.details);
     out.card = card;
   }
   if (out.connector) {
@@ -326,6 +334,9 @@ export interface BotRecord {
    * working instead of stopping to ask. Questions it asks YOU still come
    * through, and a short list of destructive commands still stops it. */
   autoApprove?: boolean;
+  /** Explicit per-bot permission behavior. Missing inherits the app default;
+   * legacy autoApprove=true is treated as `allow`. */
+  permissionMode?: PermissionMode;
   /** Tools this bot may always use without asking, even outside auto mode
    * (set by "Always allow" on an approval card). */
   alwaysAllow?: string[];
@@ -542,6 +553,10 @@ export class Store {
       }
       if (b.autoStartVps !== undefined && b.autoStartVps !== true && b.autoStartVps !== false) {
         delete b.autoStartVps;
+        botsMigrated = true;
+      }
+      if (b.permissionMode !== undefined && !PERMISSION_MODES.includes(b.permissionMode as PermissionMode)) {
+        delete b.permissionMode;
         botsMigrated = true;
       }
       if (!botMascotColorSchema.safeParse(b.color).success) {

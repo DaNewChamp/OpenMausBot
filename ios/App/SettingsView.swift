@@ -10,6 +10,8 @@ struct SettingsView: View {
     @AppStorage("busySendDefault") private var busySendDefault = BusySendDefault.steer.rawValue
     @AppStorage(CompanionPreferences.hapticsKey) private var hapticsEnabled = true
     @AppStorage(CompanionPreferences.soundsKey) private var soundsEnabled = true
+    @State private var permissionDefault: PermissionMode = .ask
+    @State private var permissionPolicyLoaded = false
     @State private var enablingNotifications = false
     private let onConnect: (() -> Void)?
 
@@ -27,6 +29,7 @@ struct SettingsView: View {
                     workspaceSection
                     appearanceSection
                     busySection
+                    permissionsSection
                 }
             }
             .padding(.horizontal, VBotSurface.Space.page)
@@ -37,7 +40,13 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .vbotCanvas()
         .tint(Color.accentColor)
-        .task { await session.refreshNotificationAuthorization() }
+        .task {
+            await session.refreshNotificationAuthorization()
+            if let policy = await session.permissionPolicy() {
+                permissionDefault = policy.defaultMode
+                permissionPolicyLoaded = true
+            }
+        }
     }
 
     private var computerSection: some View {
@@ -200,6 +209,34 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(minHeight: VBotSurface.Hit.row)
+        }
+    }
+
+    private var permissionsSection: some View {
+        VBotSurfaceGroup(
+            title: "Permissions",
+            footer: "Applies to every bot unless that bot has its own setting. Safety checks, computer warnings, and questions are never bypassed."
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("Permission behavior", selection: $permissionDefault) {
+                    ForEach(PermissionMode.allCases, id: \.self) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .onChange(of: permissionDefault) { _, mode in
+                    guard permissionPolicyLoaded else { return }
+                    Task {
+                        if let saved = await session.updatePermissionPolicy(mode) {
+                            permissionDefault = saved.defaultMode
+                        }
+                    }
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)

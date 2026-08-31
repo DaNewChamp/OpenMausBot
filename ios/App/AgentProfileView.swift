@@ -32,6 +32,7 @@ struct AgentProfileView: View {
     @State private var pickedModel: String
     @State private var pickedEffort: String?
     @State private var fastMode: Bool
+    @State private var permissionMode: PermissionMode?
     @State private var busy = false
     @State private var savingModel = false
     @State private var modelSaveTask: Task<Void, Never>?
@@ -66,6 +67,7 @@ struct AgentProfileView: View {
         _pickedModel = State(initialValue: bot.modelSelection.model)
         _pickedEffort = State(initialValue: bot.modelSelection.effort)
         _fastMode = State(initialValue: bot.fastMode == true)
+        _permissionMode = State(initialValue: bot.permissionMode)
         _baseline = State(initialValue: ProfileFormSnapshot(bot: bot))
         _selectedColor = State(initialValue: bot.color)
         _selectedShape = State(initialValue: MascotMark(rawValue: bot.mascotShape?.rawValue ?? MascotMark.droplet.rawValue) ?? .droplet)
@@ -132,6 +134,7 @@ struct AgentProfileView: View {
                         }
                         identityCard
                         characterSection
+                        permissionSection
                         instructionsRow
                         routinesSection
                         notificationsRow
@@ -182,6 +185,9 @@ struct AgentProfileView: View {
                 pickedInstanceId = selection.instanceId
                 pickedModel = selection.model
                 pickedEffort = selection.effort
+            }
+            .onChange(of: current.permissionMode) { _, mode in
+                permissionMode = mode
             }
             .onChange(of: current.busy) { was, isBusy in
                 if ModelSelectionPolicy.shouldRevertDraft(wasWorking: was == true, isWorking: isBusy == true) {
@@ -446,6 +452,34 @@ struct AgentProfileView: View {
         }
         .padding(.top, 18)
         .disabled(!canEdit)
+    }
+
+    private var permissionSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            profileSectionLabel("Permissions")
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Permission behavior", selection: $permissionMode) {
+                    Text("Use app default").tag(Optional<PermissionMode>.none)
+                    ForEach(PermissionMode.allCases, id: \.self) { mode in
+                        Text(mode.label).tag(Optional(mode))
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(!canEdit)
+                Text("Controls whether this bot asks before using tools. Safety checks and computer warnings always remain active.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .profileCard()
+            .onChange(of: permissionMode) { _, mode in
+                guard canEdit, mode != current.permissionMode else { return }
+                Task {
+                    _ = await session.updatePermissionMode(mode, for: current)
+                }
+            }
+        }
     }
 
     private var photoCropBinding: Binding<AvatarCrop> {

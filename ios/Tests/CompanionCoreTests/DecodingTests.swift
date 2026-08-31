@@ -321,6 +321,30 @@ final class DecodingTests: XCTestCase {
         XCTAssertFalse(dismissed.isPending)
     }
 
+    func testPermissionCardKeepsFriendlyHeadlineAndDisclosureDetailsSeparate() throws {
+        let json = """
+        {
+          "id": "m-permission", "role": "bot", "kind": "options", "at": 1,
+          "card": {
+            "title": "Allow Terminal on Mac mini?",
+            "subtitle": "This will let Terminal run on Mac mini.",
+            "options": ["Allow", "Deny"], "requestId": "req-2", "tool": "Bash",
+            "toolLabel": "Terminal", "hostLabel": "Mac mini",
+            "actionSummary": "This will let Terminal run on Mac mini.",
+            "details": "git status --short", "allowKey": "Bash:git"
+          }
+        }
+        """
+        let card = try XCTUnwrap(try JSONDecoder().decode(Message.self, from: Data(json.utf8)).card)
+        XCTAssertEqual(card.toolLabel, "Terminal")
+        XCTAssertEqual(card.hostLabel, "Mac mini")
+        XCTAssertEqual(card.actionSummary, "This will let Terminal run on Mac mini.")
+        XCTAssertEqual(card.details, "git status --short")
+        XCTAssertEqual(card.displayLabel(for: "Allow"), "Allow once")
+        XCTAssertEqual(card.displayLabel(for: "Deny"), "Deny")
+        XCTAssertEqual(card.displayLabel(for: "Always allow"), "Allow once")
+    }
+
     func testAQuestionSendsItsChoiceAsAnAnswer() throws {
         let message = try decode(Message.self, "options-card")
         let card = try XCTUnwrap(message.card)

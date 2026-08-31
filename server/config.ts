@@ -21,6 +21,10 @@ export const DEFAULT_LOCAL_VM_MAX_INSTANCES = 2;
 export const MIN_LOCAL_VM_MAX_INSTANCES = 1;
 export const MAX_LOCAL_VM_MAX_INSTANCES = 4;
 
+/** How the harness handles provider permission requests by default. */
+export const PERMISSION_MODES = ["ask", "allow", "deny"] as const;
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
 export function isValidSshAlias(value: unknown): value is string {
   return typeof value === "string" && SSH_ALIAS.test(value);
 }
@@ -64,6 +68,10 @@ const featureConfigSchema = z.object({
   /** Experimental desktop workflow recorder. Hidden unless explicitly enabled. */
   skillRecorder: z.boolean().optional(),
 });
+const permissionConfigSchema = z.object({
+  /** App-wide default for permission requests. Per-bot overrides win. */
+  defaultMode: z.enum(PERMISSION_MODES).optional(),
+});
 const vbotConfigSchema = z.object({
   primaryEngine: z.enum(["openmaus", "grokReconstructed"]).optional(),
 });
@@ -105,6 +113,7 @@ const appConfigSchema = z.object({
   rooms: roomConfigSchema.optional(),
   localVm: localVmConfigSchema.optional(),
   features: featureConfigSchema.optional(),
+  permissions: permissionConfigSchema.optional(),
   vbot: vbotConfigSchema.optional(),
   bridgeSshTargets: bridgeSshTargetsConfigSchema.optional(),
   instances: instanceConfigMapSchema.optional(),
@@ -129,6 +138,8 @@ export interface AppConfig {
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
   /** Opt-in product experiments. Every flag defaults to disabled. */
   features?: { skillRecorder?: boolean };
+  /** App-wide permission behavior. Missing means ask every time. */
+  permissions?: { defaultMode?: PermissionMode };
   /** V Bot engine selection. OpenMaus remains the default fallback. */
   vbot?: { primaryEngine?: "openmaus" | "grokReconstructed" };
   /** Named SSH targets executed through home bridges (alias from ~/.ssh/config). */
@@ -178,6 +189,12 @@ export function localVmMaxInstances(cfg: AppConfig): number {
 
 export function skillRecorderEnabled(cfg: AppConfig): boolean {
   return cfg.features?.skillRecorder === true;
+}
+
+/** Return the app-wide permission default, keeping older config files in the
+ * safest mode until an owner explicitly chooses another behavior. */
+export function defaultPermissionMode(cfg: AppConfig): PermissionMode {
+  return cfg.permissions?.defaultMode ?? "ask";
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.
@@ -316,7 +333,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     /* first write */
   }
   const checkedPatch = appConfigSchema.partial().parse(patch);
-  for (const key of ["xai", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm", "features"] as const) {
+  for (const key of ["xai", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm", "features", "permissions"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);

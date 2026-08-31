@@ -95,6 +95,14 @@ describe("Store", () => {
     expect(reloaded.bot(bot.id)?.composio).toBe(false);
   });
 
+  it("persists an explicit per-bot permission mode", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({}, { seedMessages: false });
+    store.patchBot(bot.id, { permissionMode: "deny", autoApprove: false });
+    const reloaded = new Store(selection);
+    expect(reloaded.bot(bot.id)).toMatchObject({ permissionMode: "deny", autoApprove: false });
+  });
+
   it("rotates colors across created bots", () => {
     const store = new Store(selection);
     const first = store.createBot();

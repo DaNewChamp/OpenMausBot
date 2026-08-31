@@ -14,6 +14,8 @@ import {
   validateConnectorCardBody,
   validateConnectorCardThreadId,
   validateLocalVmActionBody,
+  validatePermissionPolicyBody,
+  validateBotPermissionModeBody,
 } from "../src/routes.ts";
 
 const ask = (method: string, path: string, authenticated = true) =>
@@ -70,6 +72,8 @@ describe("what the app may do", () => {
   const calls: Array<[string, string]> = [
     ["GET", "/api/health"],
     ["GET", "/api/config"],
+    ["GET", "/api/permissions"],
+    ["PATCH", "/api/permissions"],
     ["GET", "/api/events"],
     ["GET", "/api/instances"],
     ["GET", "/api/vbot/engine-sync"],
@@ -100,6 +104,7 @@ describe("what the app may do", () => {
     ["PATCH", "/api/bots/bot_123/visibility"],
     ["POST", "/api/bots/bot_123/unread"],
     ["PATCH", "/api/bots/bot_123/profile"],
+    ["PATCH", "/api/bots/bot_123/permission-mode"],
     ["PATCH", "/api/bots/bot_123/model"],
     ["PATCH", "/api/bots/bot_123/computer-destination"],
     ["POST", "/api/bots/bot_123/avatar/generate"],
@@ -402,5 +407,33 @@ describe("what it may not", () => {
       expect(allowed("POST", path), path).toBe(false);
       expect(allowed("DELETE", path), path).toBe(false);
     }
+  });
+});
+
+describe("permission policy", () => {
+  it("allows only the narrow global and per-bot routes", () => {
+    expect(allowed("GET", "/api/permissions")).toBe(true);
+    expect(allowed("PATCH", "/api/permissions")).toBe(true);
+    expect(allowed("PATCH", "/api/bots/bot_123/permission-mode")).toBe(true);
+    expect(allowed("PUT", "/api/permissions")).toBe(false);
+    expect(allowed("PATCH", "/api/bots/bot_123/permission-mode/extra")).toBe(false);
+  });
+
+  it("validates policy bodies without accepting broad config fields", () => {
+    expect(validatePermissionPolicyBody("PATCH", "/api/permissions", { defaultMode: "allow" })).toEqual({
+      patch: { defaultMode: "allow" },
+    });
+    expect(validatePermissionPolicyBody("PATCH", "/api/permissions", { xai: { key: "secret" } })).toMatchObject({
+      denial: { status: 400 },
+    });
+    expect(validatePermissionPolicyBody("PATCH", "/api/permissions", { defaultMode: "yolo" })).toMatchObject({
+      denial: { status: 400 },
+    });
+    expect(validateBotPermissionModeBody("PATCH", "/api/bots/bot_123/permission-mode", { mode: "inherit" })).toEqual({
+      patch: { mode: "inherit" },
+    });
+    expect(validateBotPermissionModeBody("PATCH", "/api/bots/bot_123/permission-mode", { mode: "allow", autoApprove: true })).toMatchObject({
+      denial: { status: 400 },
+    });
   });
 });

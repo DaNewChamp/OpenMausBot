@@ -140,6 +140,75 @@ export function isComputerDestination(method: string, path: string): boolean {
   return method === COMPUTER_DESTINATION_ROUTE.method && COMPUTER_DESTINATION_ROUTE.path.test(path);
 }
 
+/** App-wide permission policy. The sidecar exposes only this small setting,
+ * never the broader `/api/config` writer. */
+export const PERMISSION_POLICY_ROUTE = {
+  method: "PATCH",
+  path: /^\/api\/permissions$/,
+} as const;
+export const PERMISSION_POLICY_STATUS_ROUTE = {
+  method: "GET",
+  path: /^\/api\/permissions$/,
+} as const;
+export const BOT_PERMISSION_MODE_ROUTE = {
+  method: "PATCH",
+  path: /^\/api\/bots\/[\w-]+\/permission-mode$/,
+} as const;
+const PERMISSION_MODES = new Set(["ask", "allow", "deny"]);
+
+export function isPermissionPolicy(method: string, path: string): boolean {
+  return PERMISSION_POLICY_ROUTE.method === method && PERMISSION_POLICY_ROUTE.path.test(path);
+}
+export function isPermissionPolicyStatus(method: string, path: string): boolean {
+  return PERMISSION_POLICY_STATUS_ROUTE.method === method && PERMISSION_POLICY_STATUS_ROUTE.path.test(path);
+}
+export function isBotPermissionMode(method: string, path: string): boolean {
+  return BOT_PERMISSION_MODE_ROUTE.method === method && BOT_PERMISSION_MODE_ROUTE.path.test(path);
+}
+export function botPermissionModeBotId(path: string): string | null {
+  return /^\/api\/bots\/([\w-]+)\/permission-mode$/.exec(path)?.[1] ?? null;
+}
+
+export function validatePermissionPolicyBody(
+  method: string,
+  path: string,
+  body: unknown,
+): { denial: Denial } | { patch: { defaultMode: string } } {
+  if (!isPermissionPolicy(method, path)) return { patch: { defaultMode: "" } };
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { denial: { status: 400, error: "permission policy requires a JSON object" } };
+  }
+  const values = body as Record<string, unknown>;
+  const keys = Object.keys(values);
+  if (keys.length !== 1 || keys[0] !== "defaultMode") {
+    return { denial: { status: 400, error: "permission policy accepts only defaultMode" } };
+  }
+  if (typeof values.defaultMode !== "string" || !PERMISSION_MODES.has(values.defaultMode)) {
+    return { denial: { status: 400, error: "defaultMode must be ask, allow, or deny" } };
+  }
+  return { patch: { defaultMode: values.defaultMode } };
+}
+
+export function validateBotPermissionModeBody(
+  method: string,
+  path: string,
+  body: unknown,
+): { denial: Denial } | { patch: { mode: string } } {
+  if (!isBotPermissionMode(method, path)) return { patch: { mode: "" } };
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { denial: { status: 400, error: "permission mode requires a JSON object" } };
+  }
+  const values = body as Record<string, unknown>;
+  const keys = Object.keys(values);
+  if (keys.length !== 1 || keys[0] !== "mode") {
+    return { denial: { status: 400, error: "permission mode accepts only mode" } };
+  }
+  if (typeof values.mode !== "string" || (values.mode !== "inherit" && !PERMISSION_MODES.has(values.mode))) {
+    return { denial: { status: 400, error: "mode must be inherit, ask, allow, or deny" } };
+  }
+  return { patch: { mode: values.mode } };
+}
+
 /** Paired-safe group instructions and default responder. Rewrites to harness
  * PATCH /api/groups/:id with only bulletin and defaultResponder. */
 export const GROUP_SETUP_ROUTE = {
@@ -453,6 +522,8 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // configured-or-not booleans. The write side is refused below: reading
   // which providers are set up is not reading their keys.
   { method: "GET", path: /^\/api\/config$/ },
+  PERMISSION_POLICY_STATUS_ROUTE,
+  PERMISSION_POLICY_ROUTE,
   { method: "GET", path: /^\/api\/events$/ },
   { method: "GET", path: /^\/api\/instances$/ },
   { method: "GET", path: /^\/api\/vbot\/engine-sync$/ },
@@ -491,6 +562,7 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // Paired-safe profile subset. The harness route itself rejects fields
   // outside identity, avatar, notifications, and voice preferences.
   { method: "PATCH", path: /^\/api\/bots\/[\w-]+\/profile$/ },
+  BOT_PERMISSION_MODE_ROUTE,
   // Paired-safe model switch. Instance and model are validated against the
   // advertised catalog on the harness; the broad bot PATCH stays closed.
   { method: "PATCH", path: /^\/api\/bots\/[\w-]+\/model$/ },

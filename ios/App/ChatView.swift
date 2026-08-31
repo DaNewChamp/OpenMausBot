@@ -1684,7 +1684,24 @@ struct CardView: View {
                     .font(typography.font(size: 16, relativeTo: .headline, weight: .semibold))
                     .foregroundStyle(Color.primary)
                     .fixedSize(horizontal: false, vertical: true)
-                if !card.subtitle.isEmpty {
+                if card.isPermission {
+                    Text(card.actionSummary ?? "This will let the requested tool run.")
+                        .font(typography.font(size: 15, relativeTo: .subheadline))
+                        .foregroundStyle(Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let details = card.details ?? (!card.subtitle.isEmpty ? card.subtitle : nil), !details.isEmpty {
+                        DisclosureGroup("Show command/details") {
+                            Text(details)
+                                .font(typography.font(size: 14, relativeTo: .footnote))
+                                .foregroundStyle(Color.secondary)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.top, 4)
+                        }
+                        .font(typography.compact.weight(.medium))
+                        .foregroundStyle(Color.secondary)
+                    }
+                } else if !card.subtitle.isEmpty {
                     Text(card.subtitle)
                         .font(typography.font(size: 15, relativeTo: .subheadline))
                         .foregroundStyle(Color.secondary)
@@ -1708,7 +1725,7 @@ struct CardView: View {
                                     answering = false
                                 }
                             } label: {
-                                Text(option)
+                                Text(card.displayLabel(for: option))
                                     .font(typography.font(size: 15, relativeTo: .subheadline, weight: .semibold))
                                     .foregroundStyle(Self.isRefusal(option) ? Color.primary : .white)
                                     .frame(maxWidth: .infinity)

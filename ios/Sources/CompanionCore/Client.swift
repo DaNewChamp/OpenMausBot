@@ -1181,6 +1181,22 @@ public struct CompanionClient: Sendable {
         try await send(try makeRequest("GET", "/api/config"), as: ConfigStatus.self)
     }
 
+    /// Read the app-wide permission default from the paired computer. This
+    /// narrow route avoids exposing the rest of the desktop configuration.
+    public func permissionPolicy() async throws -> PermissionPolicyStatus {
+        try await send(try makeRequest("GET", "/api/permissions"), as: PermissionPolicyStatus.self)
+    }
+
+    /// Set the app-wide permission default. The server applies it at the
+    /// decision boundary, so existing bots without an explicit override and
+    /// newly created bots observe one consistent value.
+    public func setPermissionPolicy(defaultMode: PermissionMode) async throws -> PermissionPolicyStatus {
+        try await send(
+            try makeRequest("PATCH", "/api/permissions", encodedBody: PermissionPolicyPatch(defaultMode: defaultMode)),
+            as: PermissionPolicyStatus.self
+        )
+    }
+
     public func connectorCatalog() async throws -> ConnectorCatalog {
         try await send(try makeRequest("GET", "/api/connectors/catalog"), as: ConnectorCatalog.self)
     }
@@ -1651,6 +1667,15 @@ public struct CompanionClient: Sendable {
     /// the key and puts it on the card; the phone never derives its own.
     public func alwaysAllow(botId: String, key: String) async throws {
         try await send(try makeRequest("POST", "/api/bots/\(botId)/always-allow", body: ["allowKey": key]))
+    }
+
+    /// Set a bot-specific permission mode. The server mirrors the legacy
+    /// autoApprove flag for older desktop clients.
+    public func setPermissionMode(botId: String, mode: PermissionMode?) async throws -> Bot {
+        try await send(
+            try makeRequest("PATCH", "/api/bots/\(botId)/permission-mode", encodedBody: BotPermissionModePatch(mode: mode)),
+            as: BotResponse.self
+        ).bot
     }
 
     /// Starts one more account authorization for a toolkit. Revocation is

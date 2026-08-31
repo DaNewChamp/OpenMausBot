@@ -21,7 +21,7 @@ import {
   type CredentialTargetId,
 } from "../shared/credential-request.ts";
 
-import { approvalKey, autoVerdict } from "./auto-approve.ts";
+import { approvalKey, autoVerdict, permissionMode } from "./auto-approve.ts";
 import * as checkpoints from "./checkpoints.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
@@ -113,6 +113,9 @@ import {
   DATA_DIR,
   EVENTS_DIR,
   NATIVE_DIR,
+  defaultPermissionMode,
+  PERMISSION_MODES,
+  type PermissionMode,
 } from "./config.ts";
 import { ComputerControl } from "./computer-control.ts";
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
@@ -666,7 +669,10 @@ async function answerRequest(
       botId: decidedFor?.id,
       botName: decidedFor?.name,
       tool: card?.tool,
-      summary: card?.subtitle,
+      // Permission cards show a calm one-line explanation in `subtitle`; the
+      // sanitized command remains in `details` and is what the audit row
+      // records for backwards-compatible decision-log consumers.
+      summary: card?.details ?? card?.subtitle,
       decision: behavior === "allow" ? "user-approved" : "user-denied",
       source: "user",
     });
@@ -910,6 +916,30 @@ const watchdog = new TurnWatchdog({
   },
 });
 watchdog.start();
+
+/** Keep approval cards readable on a phone. Provider summaries remain
+ * available as `details`, but the headline never exposes raw UUIDs, paths, or
+ * gateway payloads. */
+function approvalPresentation(tool: string, summary: string, scope?: RuntimeEvent["approvalScope"]): {
+  toolLabel: string;
+  hostLabel: string;
+  actionSummary: string;
+  details: string;
+} {
+  const bare = tool.replace(/^mcp__[^_]+__/, "").replace(/[_-]+/g, " ").trim().toLowerCase();
+  const toolLabel = /computer|screenshot|click|type text|press key|scroll|open url/.test(bare)
+    ? "Computer"
+    : /bash|shell|terminal|execute|command|bridge|ssh/.test(bare)
+      ? "Terminal"
+      : bare ? bare.replace(/\b\w/g, (letter) => letter.toUpperCase()).slice(0, 48) : "Tool";
+  const hostLabel = scope === "local-computer" ? "Mac mini" : scope === "bridge" ? "Bridge" : "bot workspace";
+  const actionSummary = `This will let ${toolLabel.toLowerCase()} run on ${hostLabel}.`;
+  // Preserve the command's shape for the disclosure, while applying the
+  // same local-VM redaction used for tool output so paths, private URLs,
+  // viewer tokens, and credential-shaped values never cross the phone link.
+  const details = sanitizeLocalVmInvokeText(String(summary ?? "").slice(0, 16_000));
+  return { toolLabel, hostLabel, actionSummary, details };
+}
 
 bus.subscribe((event: RuntimeEvent) => {
   if (event.type === "request.opened") watchdog.setWaitingOnHuman(event.threadId, true);
@@ -1219,7 +1249,12 @@ bus.subscribe((event: RuntimeEvent) => {
       const asker = bot ?? (speaker ? store.bot(speaker.botId) : undefined);
       const unattended = permission && asker && event.requestId ? isUnattended(asker.id) : false;
       const verdict = permission && asker && event.requestId
-        ? autoVerdict(asker, event.tool, event.summary, { unattended, scope: event.approvalScope })
+        ? autoVerdict(
+          { ...asker, defaultPermissionMode: defaultPermissionMode(cfg) },
+          event.tool,
+          event.summary,
+          { unattended, scope: event.approvalScope },
+        )
         : null;
       if (verdict?.approve && asker && event.requestId) {
         const settled = verdict.approve;
@@ -1235,12 +1270,13 @@ bus.subscribe((event: RuntimeEvent) => {
         void (async () => {
           try {
             if (!instance) throw new Error("provider unavailable");
-            const outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "allow" });
+            const behavior = verdict.deny ? "deny" : "allow";
+            const outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior });
             if (outcome === "unavailable") throw new Error("the ask is no longer open");
             pushMessage({
               role: "bot",
               kind: "activity",
-              tool: { name: `${settled}: ${summary.slice(0, 120)}`, ok: true },
+              tool: { name: `${settled}: ${summary.slice(0, 120)}`, ok: behavior === "allow" },
             });
             // logged under the same discipline as the chip: only once the
             // provider has actually taken the answer, so the audit log
@@ -1252,7 +1288,7 @@ bus.subscribe((event: RuntimeEvent) => {
               botName: asker.name,
               tool,
               summary,
-              decision: "auto-approved",
+              decision: verdict.deny ? "auto-denied" : "auto-approved",
               source: verdict.source,
               rule: verdict.rule,
             });
@@ -1263,8 +1299,16 @@ bus.subscribe((event: RuntimeEvent) => {
               role: "bot",
               kind: "options",
               card: {
-                title: "Approval needed",
-                subtitle: summary,
+                ...(() => {
+                  const presentation = approvalPresentation(tool, summary, event.approvalScope);
+                  return {
+                    title: `Allow ${presentation.toolLabel} on ${presentation.hostLabel}?`,
+                    subtitle: presentation.actionSummary,
+                    details: presentation.details,
+                    toolLabel: presentation.toolLabel,
+                    hostLabel: presentation.hostLabel,
+                  };
+                })(),
                 options: ["Allow", "Deny"],
                 requestId,
                 tool,
@@ -1295,13 +1339,21 @@ bus.subscribe((event: RuntimeEvent) => {
         role: "bot",
         kind: "options",
         card: {
-          title:
-            permission && event.approvalScope === "local-computer"
-              ? "Local computer approval"
-              : permission
-                ? "Approval needed"
-                : "Your bot has a question",
-          subtitle: event.summary,
+          ...(permission
+            ? (() => {
+              const presentation = approvalPresentation(event.tool, event.summary, event.approvalScope);
+              return {
+                title: `Allow ${presentation.toolLabel} on ${presentation.hostLabel}?`,
+                subtitle: presentation.actionSummary,
+                details: presentation.details,
+                toolLabel: presentation.toolLabel,
+                hostLabel: presentation.hostLabel,
+              };
+            })()
+            : {
+              title: "Your bot has a question",
+              subtitle: event.summary,
+            }),
           options: event.choices?.length ? event.choices : permission ? ["Allow", "Deny"] : [],
           requestId: event.requestId,
           tool: permission ? event.tool : undefined,
@@ -1313,7 +1365,7 @@ bus.subscribe((event: RuntimeEvent) => {
               : undefined,
           // in auto mode a card can only mean the guard stopped it — say so
           held:
-            permission && asker?.autoApprove
+            permission && asker && permissionMode({ ...asker, defaultPermissionMode: defaultPermissionMode(cfg) }) === "allow"
               ? "This looked destructive, so auto mode stopped to ask."
               : undefined,
           approvalScope: event.approvalScope,
@@ -3588,6 +3640,7 @@ function configStatus() {
       maxInstances: localVmMaxInstances(cfg),
     },
     features: { skillRecorder: skillRecorderEnabled(cfg) },
+    permissions: { defaultMode: defaultPermissionMode(cfg) },
   };
 }
 
@@ -5760,6 +5813,15 @@ const server = createServer(async (req, res) => {
       if (body.autoApprove !== undefined) {
         if (typeof body.autoApprove !== "boolean") return json(res, 400, { error: "autoApprove must be true or false" });
         patch.autoApprove = body.autoApprove;
+        if (body.permissionMode === undefined) patch.permissionMode = body.autoApprove ? "allow" : "ask";
+      }
+      if (body.permissionMode !== undefined) {
+        if (typeof body.permissionMode !== "string" || !PERMISSION_MODES.includes(body.permissionMode as PermissionMode)) {
+          return json(res, 400, { error: "permissionMode must be ask, allow, or deny" });
+        }
+        patch.permissionMode = body.permissionMode as PermissionMode;
+        // New clients and older desktop toggles see the same effective mode.
+        if (body.autoApprove === undefined) patch.autoApprove = body.permissionMode === "allow";
       }
       if (body.fastMode !== undefined) {
         if (typeof body.fastMode !== "boolean") return json(res, 400, { error: "fastMode must be true or false" });
@@ -5772,8 +5834,16 @@ const server = createServer(async (req, res) => {
       // call, a script, a stale client — is refused. The renderer dialog
       // alone is not a boundary; this check is.
       const wantsComputer = body.computer !== undefined ? body.computer : existingBot?.computer;
-      const wantsAuto = body.autoApprove !== undefined ? body.autoApprove : existingBot?.autoApprove === true;
-      const alreadyGranted = existingBot?.computer === "local" && existingBot?.autoApprove === true;
+      const requestedMode = body.permissionMode !== undefined
+        ? body.permissionMode as PermissionMode
+        : body.autoApprove !== undefined
+          ? body.autoApprove ? "allow" : "ask"
+          : permissionMode({ ...existingBot!, defaultPermissionMode: defaultPermissionMode(cfg) });
+      const wantsAuto = requestedMode === "allow";
+      const alreadyGranted = existingBot?.computer === "local" && permissionMode({
+        ...existingBot,
+        defaultPermissionMode: defaultPermissionMode(cfg),
+      }) === "allow";
       if (wantsComputer === "local" && wantsAuto === true && !alreadyGranted && body.acknowledgeLocalAuto !== true) {
         return json(res, 400, {
           error: "Auto mode on this computer requires confirming the warning first (acknowledgeLocalAuto)",
@@ -6840,6 +6910,48 @@ const server = createServer(async (req, res) => {
     }
 
     // ── app config (API keys — never echoed back, booleans only) ──
+    // Narrow permission-policy routes are safe for paired devices. They do
+    // not expose or accept arbitrary config keys, and the effective policy is
+    // resolved at each request so a global change applies atomically to old
+    // bots and becomes the default for new ones.
+    if (method === "GET" && path === "/api/permissions") {
+      return json(res, 200, { defaultMode: defaultPermissionMode(cfg) });
+    }
+    if (method === "PATCH" && path === "/api/permissions") {
+      const body = await readBody(req);
+      if (!body || typeof body.defaultMode !== "string" || !PERMISSION_MODES.includes(body.defaultMode as PermissionMode)) {
+        return json(res, 400, { error: "defaultMode must be ask, allow, or deny" });
+      }
+      saveConfig({ permissions: { defaultMode: body.defaultMode as PermissionMode } });
+      Object.assign(cfg, loadConfig());
+      const status = { defaultMode: defaultPermissionMode(cfg) };
+      broadcast({ kind: "config", ...configStatus() });
+      return json(res, 200, status);
+    }
+    const permissionBot = path.match(/^\/api\/bots\/([\w-]+)\/permission-mode$/);
+    if (permissionBot && method === "PATCH") {
+      const body = await readBody(req);
+      if (!body || typeof body.mode !== "string" || (body.mode !== "inherit" && !PERMISSION_MODES.includes(body.mode as PermissionMode))) {
+        return json(res, 400, { error: "mode must be inherit, ask, allow, or deny" });
+      }
+      const existing = store.bot(permissionBot[1]);
+      if (!existing) return json(res, 404, { error: "no such bot" });
+      const mode = body.mode as PermissionMode | "inherit";
+      if (mode === "allow" && existing.computer === "local" && existing.autoApprove !== true) {
+        return json(res, 400, {
+          error: "Auto mode on this computer requires confirming the warning first (acknowledgeLocalAuto)",
+        });
+      }
+      const bot = store.patchBot(existing.id, {
+        permissionMode: mode === "inherit" ? undefined : mode,
+        // Keep the legacy desktop toggle coherent for older clients. The
+        // explicit mode remains authoritative for newer clients.
+        autoApprove: mode === "inherit" ? undefined : mode === "allow",
+      });
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      broadcast({ kind: "bot", bot: wireBot(bot) });
+      return json(res, 200, { bot: wireBot(bot) });
+    }
     if (method === "GET" && path === "/api/config") {
       return json(res, 200, configStatus());
     }
