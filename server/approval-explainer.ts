@@ -18,6 +18,8 @@ export interface ApprovalExplanation {
   riskLevel: ApprovalRiskLevel;
   confidence: "high" | "medium" | "low";
   source?: "local" | "ai-reviewed";
+  /** Optional model wording. Local facts above remain authoritative. */
+  advisorySummary?: string;
 }
 
 /** Sanitized, display-only input for an optional BYOK reviewer. It carries no
@@ -40,8 +42,12 @@ const REVIEW_CACHE_TTL_MS = 30_000;
 const reviewCaches = new WeakMap<ApprovalExplanationReviewer, Map<string, { expiresAt: number; result: ApprovalExplanation }>>();
 const identityCaches = new Map<string, Map<string, { expiresAt: number; result: ApprovalExplanation }>>();
 
-function riskRank(level: ApprovalRiskLevel): number {
-  return level === "high" ? 3 : level === "medium" ? 2 : 1;
+function sanitizeReviewerText(value: string): string {
+  return sanitizeLocalVmInvokeText(value)
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
 }
 
 function parseReviewed(value: unknown, fallback: ApprovalExplanation): ApprovalExplanation | null {
@@ -52,14 +58,15 @@ function parseReviewed(value: unknown, fallback: ApprovalExplanation): ApprovalE
   const where = typeof candidate.where === "string" ? candidate.where.trim().slice(0, 240) : "";
   const risk = candidate.risk;
   if (!purpose || !change || !where || (risk !== "low" && risk !== "medium" && risk !== "high")) return null;
+  const advisorySummary = sanitizeReviewerText(
+    typeof candidate.advisory === "string" ? candidate.advisory : purpose,
+  );
+  if (!advisorySummary) return null;
   return {
-    executiveSummary: purpose,
-    changeSummary: change,
-    resourceSummary: where,
-    // A reviewer may make the display more cautious, never less cautious than
-    // the deterministic guard. The reviewer cannot affect allow/deny policy.
-    riskLevel: riskRank(risk) >= riskRank(fallback.riskLevel) ? risk : fallback.riskLevel,
-    confidence: "high",
+    // The reviewer cannot replace local facts. Its output is retained only as
+    // a separately labeled advisory note and never affects approval policy.
+    ...fallback,
+    advisorySummary,
     source: "ai-reviewed",
   };
 }
@@ -95,9 +102,10 @@ export async function reviewApproval(
   const controller = new AbortController();
   const boundedTimeout = Math.min(Math.max(timeoutMs, 100), 2_500);
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const localFacts = Object.freeze({ ...deterministic });
   try {
     const value = await Promise.race([
-      reviewer({ tool: safeTool, command, host: safeHost, deterministic }, controller.signal),
+      reviewer(Object.freeze({ tool: safeTool, command, host: safeHost, deterministic: localFacts }), controller.signal),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           controller.abort();

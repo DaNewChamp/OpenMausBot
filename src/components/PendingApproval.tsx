@@ -27,6 +27,7 @@ export interface Pending {
   changeSummary?: string;
   resourceSummary?: string;
   riskLevel?: "low" | "medium" | "high";
+  advisorySummary?: string;
 }
 
 /** Open approvals on a thread, oldest first — answered/dismissed drop out. */
@@ -44,6 +45,7 @@ export function pendingApprovals(messages: Message[]): Pending[] {
       changeSummary: m.card!.changeSummary,
       resourceSummary: m.card!.resourceSummary,
       riskLevel: m.card!.riskLevel,
+      advisorySummary: m.card!.advisorySummary,
     }));
 }
 
@@ -95,6 +97,11 @@ export const PendingApprovalPanel = memo(function PendingApprovalPanel({
       {pending.riskLevel && (
         <div className="mt-1 text-[11px] uppercase tracking-[0.12em] text-ink-secondary">
           Risk: {pending.riskLevel}
+        </div>
+      )}
+      {pending.advisorySummary && (
+        <div className="mt-2 rounded-lg border border-hairline/40 bg-control/40 px-3 py-2 text-[12px] leading-relaxed text-ink-secondary">
+          <span className="font-medium text-ink">AI review · advisory: </span>{pending.advisorySummary}
         </div>
       )}
       {/* never truncated — long commands wrap and scroll */}

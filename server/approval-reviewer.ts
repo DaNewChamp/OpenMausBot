@@ -6,6 +6,7 @@
 
 import { classifyProvider, NAMED_PROVIDER_LABELS, providerLabel } from "./provider-catalog.ts";
 import type { ApprovalExplanation, ApprovalExplanationReviewer, ApprovalReviewInput } from "./approval-explainer.ts";
+import { sanitizeLocalVmInvokeText } from "./local-vm-invoke.ts";
 
 export const APPROVAL_REVIEWER_MODES = ["off", "when-unclear", "always"] as const;
 export type ApprovalReviewerMode = (typeof APPROVAL_REVIEWER_MODES)[number];
@@ -19,12 +20,13 @@ export const APPROVAL_REVIEW_JSON_SCHEMA = {
     change: { type: "string" },
     where: { type: "string" },
     risk: { type: "string", enum: ["low", "medium", "high"] },
+    advisory: { type: "string" },
   },
   required: ["purpose", "change", "where", "risk"],
 } as const;
 
 export const APPROVAL_REVIEW_SYSTEM =
-  "Rewrite the approval request as JSON with keys purpose, change, where, and risk. risk must be low, medium, or high. You cannot approve or deny. Do not lower risk below localRisk. Name files and resources explicitly. Return JSON only.";
+  "Return JSON with purpose, change, where, risk, and optional advisory. This is an advisory explanation only: never approve or deny. The local purpose, change, where, and risk are authoritative and cannot be replaced or lowered. Name files and resources explicitly. Return JSON only.";
 
 export type ReviewDriverFamily =
   | "openai-compat"
@@ -145,20 +147,21 @@ export function reviewDriverFamily(driverKind: string, instanceId: string): Revi
 
 export function claudeHelpSupportsIsolatedReview(helpText: string): boolean {
   const help = helpText.toLowerCase().replace(/\s+/g, " ");
-  return help.includes("--tools") && help.includes("disable all tools") && (help.includes("--print") || help.includes("-p"));
+  return help.includes("--tools") && help.includes("disable all tools") &&
+    help.includes("--strict-mcp-config") && help.includes("--no-session-persistence") &&
+    (help.includes("--print") || help.includes("-p"));
 }
 
-export function cursorHelpSupportsIsolatedReview(helpText: string): boolean {
-  const help = helpText.toLowerCase();
-  return help.includes("--mode") && help.includes("ask") && help.includes("read-only") &&
-    help.includes("--print") && help.includes("--sandbox") && help.includes("enabled");
+export function cursorHelpSupportsIsolatedReview(_helpText: string): boolean {
+  // Cursor's ask/sandbox flags do not prove that the process has no tools or
+  // MCP access. Keep the lane visible in the picker, but never bind it.
+  return false;
 }
 
-export function codexHelpSupportsIsolatedReview(helpText: string): boolean {
-  const help = helpText.toLowerCase();
-  return help.includes("exec") && help.includes("--sandbox") && help.includes("read-only") &&
-    help.includes("--ephemeral") && help.includes("--ignore-user-config") &&
-    help.includes("--skip-git-repo-check") && help.includes("--json");
+export function codexHelpSupportsIsolatedReview(_helpText: string): boolean {
+  // Codex read-only is a filesystem policy, not a proof that the reviewer
+  // process has no tools, MCP, or network side effects.
+  return false;
 }
 
 export function detectCliReviewCapability(
@@ -173,17 +176,15 @@ export function detectCliReviewCapability(
     };
   }
   if (family === "cursor") {
-    if (cursorHelpSupportsIsolatedReview(helpText)) return { kind: "supported" };
     return {
       kind: "unavailable",
-      reason: "Cursor CLI does not advertise a read-only ask mode.",
+      reason: "Cursor reviewer is unavailable because its CLI does not prove a tool-free review mode.",
     };
   }
   if (family === "codex") {
-    if (codexHelpSupportsIsolatedReview(helpText)) return { kind: "supported" };
     return {
       kind: "unavailable",
-      reason: "Codex CLI does not advertise an ephemeral read-only JSON mode.",
+      reason: "Codex OAuth reviewer is unavailable because read-only CLI mode does not prove a tool-free review.",
     };
   }
   if (family === "grok-auth") {
@@ -200,8 +201,23 @@ export function detectCliReviewCapability(
 
 export function reviewLaneForFamily(family: ReviewDriverFamily): ReviewLaneKind {
   if (family === "openai-compat" || family === "xai") return "direct";
-  if (family === "claude" || family === "cursor" || family === "codex") return "cli";
+  if (family === "claude") return "cli";
   return "unavailable";
+}
+
+/** Direct reviewers may use HTTPS, or HTTP only on an explicit loopback
+ * address for a local gateway. Credentials must never be sent to arbitrary
+ * cleartext hosts, credential-bearing URLs, or URLs with hidden query data. */
+export function isAllowedReviewerUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw.trim());
+    const loopback = url.hostname === "localhost" || url.hostname === "[::1]" || /^127\./.test(url.hostname);
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) return false;
+    if (url.username || url.password || url.search || url.hash) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function buildApprovalReviewPrompt(input: ApprovalReviewInput): string {
@@ -213,7 +229,7 @@ export function buildApprovalReviewPrompt(input: ApprovalReviewInput): string {
     `localChange: ${input.deterministic.changeSummary}`,
     `localWhere: ${input.deterministic.resourceSummary}`,
     `localRisk: ${input.deterministic.riskLevel}`,
-    "Return JSON: {\"purpose\":\"...\",\"change\":\"...\",\"where\":\"...\",\"risk\":\"low|medium|high\"}.",
+    "Return JSON: {\"purpose\":\"...\",\"change\":\"...\",\"where\":\"...\",\"risk\":\"low|medium|high\",\"advisory\":\"optional plain-language note\"}. Local facts remain authoritative.",
   ].join("\n");
 }
 
@@ -275,16 +291,22 @@ export function unavailableReasonFor(
     configured: boolean;
     helpText?: string;
     installed?: boolean;
+    cliValid?: boolean;
+    url?: string;
   },
 ): string | null {
   if (family === "other") return "This engine cannot power approval summaries.";
   if (family === "openai-compat" && !input.configured) return "No OpenAI-compatible API key is configured.";
   if (family === "xai" && !input.configured) return "No xAI API key is configured.";
+  if ((family === "openai-compat" || family === "xai") && input.configured && input.url && !isAllowedReviewerUrl(input.url)) {
+    return "Reviewer URL must use HTTPS (or HTTP on localhost/127.0.0.1 only).";
+  }
   if (reviewLaneForFamily(family) === "unavailable") {
     const capability = detectCliReviewCapability(family, input.helpText ?? "");
     return capability.kind === "unavailable" ? capability.reason : "This engine has no isolated approval-review mode.";
   }
   if (reviewLaneForFamily(family) === "cli") {
+    if (input.cliValid === false) return "This reviewer accepts only a bare known CLI or an absolute path to one; wrapper commands are not allowed.";
     if (input.installed === false) return "This CLI is not installed.";
     if (!input.configured) return "This CLI is not signed in.";
     const capability = detectCliReviewCapability(family, input.helpText ?? "");
@@ -296,6 +318,7 @@ export function unavailableReasonFor(
 export interface ReviewerCapabilityHints {
   helpTextByCli?: Record<string, string>;
   installedByCli?: Record<string, boolean>;
+  validCliByName?: Record<string, boolean>;
 }
 
 export function buildApprovalReviewerCatalog(
@@ -323,6 +346,12 @@ export function buildApprovalReviewerCatalog(
       configured,
       helpText: cliName ? hints.helpTextByCli?.[cliName] : undefined,
       installed: cliName ? hints.installedByCli?.[cliName] : undefined,
+      cliValid: cliName ? hints.validCliByName?.[cliName] : undefined,
+      url: family === "openai-compat"
+        ? compact(credentials.openaiCompat?.url) || DEFAULT_OPENAI_COMPAT_URL
+        : family === "xai"
+          ? compact(credentials.xai?.url) || DEFAULT_XAI_URL
+          : undefined,
     });
     const firstModel = models[0]?.id ?? compact(instance.models?.default);
     const providerId = providerIdFor(instance, family, firstModel);
@@ -369,17 +398,22 @@ export function findReviewerProvider(
 }
 
 export function sanitizeApprovalReviewerStatus(status: ApprovalReviewerStatus): ApprovalReviewerStatus {
+  const safeText = (value: string | null): string | null => value === null ? null : sanitizeLocalVmInvokeText(value)
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
   return {
     mode: status.mode,
     selection: status.selection,
     providers: status.providers.map((provider) => ({
       id: provider.id,
-      label: provider.label,
+      label: safeText(provider.label) || "Reviewer",
       instanceId: provider.instanceId,
       available: provider.available,
       configured: provider.configured,
-      reason: provider.reason,
-      models: provider.models.map((model) => ({ id: model.id, label: model.label })),
+      reason: safeText(provider.reason),
+      models: provider.models.map((model) => ({ id: model.id, label: safeText(model.label) || model.id })),
     })),
   };
 }
@@ -443,13 +477,11 @@ export function resolveStoredSelection(
   selection: ApprovalReviewerSelection,
   providers: readonly ApprovalReviewerProvider[],
 ): { instanceId: string; model: string } | null {
-  if (!selection.instanceId || !selection.model) {
-    const fallback = providers.find((provider) => provider.available && provider.models.length > 0);
-    const model = fallback?.models[0]?.id;
-    return fallback && model ? { instanceId: fallback.instanceId, model } : null;
-  }
+  // Never pick a provider on the user's behalf. External review is opt-in and
+  // requires an explicit saved instance/model selection.
+  if (!selection.instanceId || !selection.model) return null;
   const provider = findReviewerProvider(providers, selection.instanceId, selection.model);
-  if (!provider) return { instanceId: selection.instanceId, model: selection.model };
+  if (!provider?.available) return null;
   return { instanceId: selection.instanceId, model: selection.model };
 }
 

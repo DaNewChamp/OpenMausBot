@@ -74,6 +74,8 @@ export interface OptionCardData {
   /** How the display-only explanation was produced. */
   explanationConfidence?: "high" | "medium" | "low";
   explanationSource?: "local" | "ai-reviewed";
+  /** Optional model wording. Local explanation fields remain authoritative. */
+  advisorySummary?: string;
   /** why this stopped despite auto mode (destructive-looking command) */
   held?: string;
   /** the narrow grant "always allow" remembers, e.g. "Bash:git" */
@@ -262,6 +264,7 @@ function redactBotAuthored<T extends Omit<Message, "id" | "at"> & { at?: number 
     if (typeof card.executiveSummary === "string") card.executiveSummary = redactSecretsInText(card.executiveSummary);
     if (typeof card.changeSummary === "string") card.changeSummary = redactSecretsInText(card.changeSummary);
     if (typeof card.resourceSummary === "string") card.resourceSummary = redactSecretsInText(card.resourceSummary);
+    if (typeof card.advisorySummary === "string") card.advisorySummary = redactSecretsInText(card.advisorySummary);
     out.card = card;
   }
   if (out.connector) {

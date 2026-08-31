@@ -58,6 +58,7 @@ export interface OptionCardData {
   riskLevel?: "low" | "medium" | "high";
   explanationConfidence?: "high" | "medium" | "low";
   explanationSource?: "local" | "ai-reviewed";
+  advisorySummary?: string;
 }
 
 export interface ConnectorCardData {

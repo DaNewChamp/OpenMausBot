@@ -1833,6 +1833,10 @@ private struct ApprovalDetailSheet: View {
         default: return .green
         }
     }
+    private var advisorySummary: String? {
+        guard let value = card.advisorySummary?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return OptionCard.sanitizedPresentation(value)
+    }
     @ViewBuilder
     private func explanationBlock(_ title: String, _ value: String, color: Color = .primary) -> some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -1882,6 +1886,9 @@ private struct ApprovalDetailSheet: View {
                     }
                     if let riskSummary {
                         explanationBlock("Risk", riskSummary, color: riskColor)
+                    }
+                    if let advisorySummary {
+                        explanationBlock("AI review · advisory", advisorySummary, color: .secondary)
                     }
 
                     if let held = card.held {

@@ -7,6 +7,7 @@ import {
   DEFAULT_XAI_URL,
   XAI_REVIEW_INSTANCE_ID,
   findReviewerProvider,
+  isAllowedReviewerUrl,
   reviewDriverFamily,
   reviewerCacheIdentity,
   type ApprovalReviewerProvider,
@@ -17,7 +18,7 @@ import {
   type ReviewerCatalogInstance,
 } from "./approval-reviewer.ts";
 import { createDirectReviewer } from "./approval-reviewer-direct.ts";
-import { createCliReviewer, probeReviewerHints, type IsolatedCliRunner } from "./approval-reviewer-cli.ts";
+import { createCliReviewer, probeReviewerHints, validateReviewerCli, type IsolatedCliRunner } from "./approval-reviewer-cli.ts";
 
 export function credentialsFromConfig(cfg: AppConfig): DirectReviewCredentials {
   return {
@@ -76,7 +77,7 @@ export function bindApprovalReviewer(input: {
   if (family === "openai-compat" || family === "xai") {
     const key = directKey(family, input.credentials);
     const url = directUrl(family, input.credentials);
-    if (!key || !url) return null;
+    if (!key || !url || !isAllowedReviewerUrl(url)) return null;
     const review: ApprovalExplanationReviewer = createDirectReviewer({
       url,
       apiKey: key,
@@ -85,9 +86,9 @@ export function bindApprovalReviewer(input: {
     });
     return { identity, review };
   }
-  if (family === "claude" || family === "cursor") {
+  if (family === "claude") {
     const cli = instance?.cli?.trim() || instance?.cliDefault?.trim();
-    if (!cli) return null;
+    if (!cli || !validateReviewerCli(cli)) return null;
     return {
       identity,
       review: createCliReviewer({

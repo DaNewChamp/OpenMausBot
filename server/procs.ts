@@ -57,10 +57,23 @@ export function execCli(
   opts: ExecFileOptions,
   cb: (err: Error | null, stdout: string, stderr?: string) => void,
 ): void {
+  void execCliWithChild(cli, args, opts, cb);
+}
+
+/** Same callback contract as execCli, while exposing the child handle to
+ * callers that must terminate and await a subprocess on timeout. */
+export function execCliWithChild(
+  cli: string,
+  args: string[],
+  opts: ExecFileOptions,
+  cb: (err: Error | null, stdout: string, stderr?: string) => void,
+): ChildProcess {
   const resolved = resolveCli(cli, args);
-  execFile(resolved.command, resolved.args, { ...opts, windowsHide: true, encoding: "utf8" }, (err, stdout, stderr) =>
+  const child = execFile(resolved.command, resolved.args, { ...opts, windowsHide: true, encoding: "utf8" }, (err, stdout, stderr) =>
     cb(err, stdout, stderr),
   );
+  child.on("error", () => {});
+  return child;
 }
 
 /** Human wording for a failed CLI spawn.

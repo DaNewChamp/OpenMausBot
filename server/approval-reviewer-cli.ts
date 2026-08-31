@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, delimiter, join } from "node:path";
+import type { ChildProcess } from "node:child_process";
 
-import { stripWorkspaceCredentialEnv } from "./config.ts";
-import { augmentedPath, findCliCandidates } from "./env-path.ts";
-import { execCli } from "./procs.ts";
+import { augmentedPath } from "./env-path.ts";
+import { execCliWithChild, killCliTree } from "./procs.ts";
 import type { ApprovalExplanationReviewer, ApprovalReviewInput } from "./approval-explainer.ts";
 import {
   APPROVAL_REVIEW_JSON_SCHEMA,
@@ -18,7 +18,52 @@ export type IsolatedCliRunner = (
   args: string[],
   opts: { timeout?: number; cwd?: string; env?: NodeJS.ProcessEnv; maxBuffer?: number },
   cb: (err: Error | null, stdout: string, stderr?: string) => void,
-) => void;
+) => ChildProcess | void;
+
+const KNOWN_REVIEWER_CLIS = new Set(["claude", "claude-code", "cursor", "cursor-agent", "codex", "codex-cli"]);
+
+/** Accept only a single known executable. A configured `env foo`, `npx`, or
+ * `wrapper --flag` is intentionally rejected: leading arguments can bypass
+ * the no-tools argv checks below. Absolute paths are allowed for packaged or
+ * versioned installs, but their basename must still be known. */
+export function validateReviewerCli(value: string): string | null {
+  const cli = value.trim();
+  if (!cli || /[\r\n\u0000]/.test(cli) || /[;&|`$<>]/.test(cli)) return null;
+  const pathLike = cli.includes("/") || cli.includes("\\");
+  if (pathLike) {
+    const absolute = cli.startsWith("/") || /^[A-Za-z]:[\\/]/.test(cli) || cli.startsWith("\\\\");
+    if (!absolute) return null;
+    const name = basename(cli.replace(/\\/g, "/")).toLowerCase().replace(/\.(?:cmd|exe|bat|sh)$/i, "");
+    return KNOWN_REVIEWER_CLIS.has(name) ? cli : null;
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(cli)) return null;
+  return KNOWN_REVIEWER_CLIS.has(cli.toLowerCase().replace(/\.(?:cmd|exe|bat|sh)$/i, "")) ? cli : null;
+}
+
+function executableFile(cli: string): boolean {
+  try {
+    return existsSync(cli) && statSync(cli).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Environment supplied to a subscription CLI. OAuth state lives under HOME;
+ * workspace/provider credentials and unrelated deployment secrets do not. */
+export function minimalCliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const allow = new Set([
+    "HOME", "USER", "LOGNAME", "SHELL", "PATH", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE",
+    "TERM", "TERM_PROGRAM", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "PATHEXT", "SystemRoot", "SYSTEMROOT",
+    "COMSPEC", "NO_COLOR",
+  ]);
+  const env: NodeJS.ProcessEnv = { PATH: augmentedPath() };
+  for (const name of allow) {
+    const value = source[name];
+    if (value !== undefined) env[name] = value;
+  }
+  env.PATH = augmentedPath();
+  return env;
+}
 
 const DEFAULT_MAX_BYTES = 32_768;
 
@@ -40,71 +85,40 @@ export function claudeIsolatedReviewArgs(prompt: string, model: string): string[
   ];
 }
 
-export function cursorIsolatedReviewArgs(prompt: string, model: string): string[] {
-  return ["--print", "--mode", "ask", "--sandbox", "enabled", "--output-format", "json", "--model", model, prompt];
+export function cursorIsolatedReviewArgs(_prompt: string, _model: string): never {
+  throw new Error("Cursor reviewer is unavailable: no tool-free CLI mode is proven");
 }
 
-export function codexIsolatedReviewArgs(prompt: string, model: string): string[] {
-  return [
-    "exec",
-    "--ephemeral",
-    "--ignore-user-config",
-    "--skip-git-repo-check",
-    "--sandbox",
-    "read-only",
-    "--json",
-    "--model",
-    model,
-    prompt,
-  ];
+export function codexIsolatedReviewArgs(_prompt: string, _model: string): never {
+  throw new Error("Codex OAuth reviewer is unavailable: no tool-free CLI mode is proven");
 }
 
 export function isolatedReviewArgs(family: ReviewDriverFamily, prompt: string, model: string): string[] | null {
   if (family === "claude") return claudeIsolatedReviewArgs(prompt, model);
-  if (family === "cursor") return cursorIsolatedReviewArgs(prompt, model);
-  if (family === "codex") return codexIsolatedReviewArgs(prompt, model);
   return null;
 }
 
 export function isolatedReviewEnv(_family: ReviewDriverFamily, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...source, PATH: augmentedPath(), NPM_CONFIG_LOGLEVEL: "error" };
-  stripWorkspaceCredentialEnv(env);
-  delete env.CLAUDECODE;
-  delete env.CLAUDE_CODE_ENTRYPOINT;
-  delete env.ANTHROPIC_API_KEY;
-  delete env.OPENAI_API_KEY;
-  delete env.CURSOR_API_KEY;
-  delete env.CURSOR_AUTH_TOKEN;
-  return env;
+  return minimalCliEnv(source);
 }
 
 export function assertIsolatedReviewArgs(family: ReviewDriverFamily, args: string[]): void {
+  if (family === "cursor" || family === "codex") {
+    throw new Error(`${family === "cursor" ? "Cursor" : "Codex"} reviewer is unavailable: no tool-free CLI mode is proven`);
+  }
+  if (family !== "claude") throw new Error("this CLI cannot run an isolated approval review");
   const text = args.join(" ");
-  if (/\bmcp\b/i.test(text) && !text.includes("--strict-mcp-config") &&
-    !(family === "codex" && args.includes("--ignore-user-config"))) {
+  if (/\bmcp\b/i.test(text) && !text.includes("--strict-mcp-config")) {
     throw new Error("isolated review must not enable MCP");
   }
   if (args.includes("--force") || args.includes("--yolo") || args.includes("--approve-mcps")) {
     throw new Error("isolated review must not auto-approve tools");
   }
-  if (family === "claude" && !(args.includes("--tools") && args[args.indexOf("--tools") + 1] === "")) {
+  if (!(args.includes("--tools") && args[args.indexOf("--tools") + 1] === "")) {
     throw new Error("Claude isolated review requires --tools \"\"");
   }
-  if (family === "cursor" && (
-    !(args.includes("--mode") && args[args.indexOf("--mode") + 1] === "ask") ||
-    !(args.includes("--sandbox") && args[args.indexOf("--sandbox") + 1] === "enabled")
-  )) {
-    throw new Error("Cursor isolated review requires ask mode with sandbox enabled");
-  }
-  if (family === "codex" && (
-    !args.includes("exec") ||
-    !args.includes("--ephemeral") ||
-    !args.includes("--ignore-user-config") ||
-    !args.includes("--skip-git-repo-check") ||
-    !args.includes("--sandbox") ||
-    args[args.indexOf("--sandbox") + 1] !== "read-only"
-  )) {
-    throw new Error("Codex isolated review requires ephemeral read-only exec");
+  if (!args.includes("--strict-mcp-config") || !args.includes("--no-session-persistence")) {
+    throw new Error("Claude isolated review requires strict MCP isolation and no session persistence");
   }
 }
 
@@ -119,20 +133,21 @@ const HELP_TTL_MS = 60_000;
 
 export async function probeCliHelp(
   cli: string,
-  run: IsolatedCliRunner = execCli,
+  run: IsolatedCliRunner = execCliWithChild,
 ): Promise<{ installed: boolean; help: string }> {
-  const name = cli.trim();
+  const name = validateReviewerCli(cli);
   if (!name) return { installed: false, help: "" };
   const cached = helpCache.get(name);
   if (cached && cached.expiresAt > Date.now()) return { installed: cached.installed, help: cached.help };
-  const installed = findCliCandidates(name).length > 0;
+  const candidate = name.includes("/") || name.includes("\\") ? name : undefined;
+  const installed = candidate ? executableFile(candidate) : Boolean(augmentedPath().split(delimiter).some((dir) => executableFile(join(dir, name))));
   if (!installed) {
     const miss = { installed: false, help: "", expiresAt: Date.now() + HELP_TTL_MS };
     helpCache.set(name, miss);
     return miss;
   }
   const help = await new Promise<string>((resolve) => {
-    run(name, ["--help"], { timeout: 2_000, maxBuffer: 16_384 }, (_err, stdout, stderr) => {
+    run(name, ["--help"], { timeout: 2_000, maxBuffer: 16_384, env: isolatedReviewEnv("claude") }, (_err, stdout, stderr) => {
       resolve(`${stdout ?? ""}\n${stderr ?? ""}`.slice(0, 16_384));
     });
   });
@@ -143,19 +158,22 @@ export async function probeCliHelp(
 
 export async function probeReviewerHints(
   instances: readonly { cli?: string; cliDefault?: string }[],
-  run: IsolatedCliRunner = execCli,
-): Promise<{ helpTextByCli: Record<string, string>; installedByCli: Record<string, boolean> }> {
+  run: IsolatedCliRunner = execCliWithChild,
+): Promise<{ helpTextByCli: Record<string, string>; installedByCli: Record<string, boolean>; validCliByName: Record<string, boolean> }> {
   const names = [...new Set(
     instances.map((instance) => instance.cli?.trim() || instance.cliDefault?.trim()).filter((name): name is string => Boolean(name)),
   )];
   const helpTextByCli: Record<string, string> = {};
   const installedByCli: Record<string, boolean> = {};
-  await Promise.all(names.map(async (name) => {
+  const validCliByName: Record<string, boolean> = {};
+  await Promise.all(names.map(async (rawName) => {
+    const name = rawName.trim();
+    validCliByName[name] = validateReviewerCli(name) !== null;
     const probed = await probeCliHelp(name, run);
     helpTextByCli[name] = probed.help;
     installedByCli[name] = probed.installed;
   }));
-  return { helpTextByCli, installedByCli };
+  return { helpTextByCli, installedByCli, validCliByName };
 }
 
 export function parseIsolatedCliOutput(stdout: string): unknown {
@@ -200,36 +218,53 @@ export async function reviewViaIsolatedCli(input: {
   env?: NodeJS.ProcessEnv;
   maxBytes?: number;
 }): Promise<unknown> {
+  const cli = validateReviewerCli(input.cli);
+  if (!cli) throw new Error("approval reviewer CLI must be a bare known executable or absolute path");
   const args = isolatedReviewArgs(input.family, input.prompt, input.model);
   if (!args) throw new Error("this CLI cannot run an isolated approval review");
   assertIsolatedReviewArgs(input.family, args);
   const cwd = mkdtempSync(join(tmpdir(), "omb-approval-review-"));
   const env = isolatedReviewEnv(input.family, input.env);
-  const run = input.run ?? execCli;
-  const maxBytes = input.maxBytes ?? DEFAULT_MAX_BYTES;
+  const run = input.run ?? execCliWithChild;
+  const requestedMaxBytes = input.maxBytes ?? DEFAULT_MAX_BYTES;
+  if (!Number.isSafeInteger(requestedMaxBytes) || requestedMaxBytes < 1) throw new Error("approval reviewer output cap is invalid");
+  const maxBytes = Math.min(requestedMaxBytes, DEFAULT_MAX_BYTES);
   try {
     const stdout = await new Promise<string>((resolve, reject) => {
+      let child: ChildProcess | void;
+      let settled = false;
+      const abortError = () => Object.assign(new Error("aborted"), { name: "AbortError" });
+      const terminate = async () => {
+        if (!child || child.exitCode !== null || child.signalCode !== null) return;
+        await waitForChildExit(child);
+      };
+      const abort = () => {
+        void terminate().finally(() => {
+          if (settled) return;
+          settled = true;
+          reject(abortError());
+        });
+      };
       if (input.signal.aborted) {
-        reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        abort();
         return;
       }
-      const child = run(
-        input.cli,
+      child = run(
+        cli,
         args,
         { timeout: timeoutMs(input.signal), cwd, env, maxBuffer: maxBytes },
-        (err, out) => {
+        (err: Error | null, out: string) => {
+          if (settled) return;
+          settled = true;
           if (err) reject(err);
           else resolve(out);
         },
       );
       input.signal.addEventListener(
         "abort",
-        () => {
-          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
-        },
+        abort,
         { once: true },
       );
-      void child;
     });
     return parseIsolatedCliOutput(stdout.slice(0, maxBytes));
   } finally {
@@ -239,6 +274,21 @@ export async function reviewViaIsolatedCli(input: {
       /* temp dir */
     }
   }
+}
+
+export function waitForChildExit(child: ChildProcess, stop: (child: ChildProcess) => void = killCliTree): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      resolve();
+    };
+    child.once("close", finish);
+    child.once("exit", finish);
+    stop(child);
+  });
 }
 
 export function createCliReviewer(input: {

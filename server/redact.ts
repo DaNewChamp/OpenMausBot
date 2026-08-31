@@ -50,6 +50,8 @@ const PEM_BLOCK = /(-----BEGIN [A-Z ]*PRIVATE KEY-----)([\s\S]*?)(-----END [A-Z 
  * ("password: leave blank…") has spaces and does not match. */
 const KEY_VALUE =
   /\b((?:[A-Za-z0-9_-]*_)?(?:api[_-]?key|apikey|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?key|private[_-]?key)s?)(["']?\s*[=:]\s*)(["']?)([A-Za-z0-9._~+/=-]{8,})\3/gi;
+const URL_CREDENTIAL =
+  /([?&](?:api[_-]?key|apikey|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?key|private[_-]?key)=)([^&#\s]*)/gi;
 
 export function redactSecretsInText(text: string): string {
   if (!text || text.length < 8) return text;
@@ -58,6 +60,7 @@ export function redactSecretsInText(text: string): string {
   for (const re of KEY_PREFIXES) out = out.replace(re, (m) => mask(m));
   out = out.replace(BEARER, (_m, lead: string, tok: string) => `${lead}${mask(tok)}`);
   out = out.replace(KEY_VALUE, (_m, key: string, sep: string, quote: string, value: string) => `${key}${sep}${quote}${mask(value)}${quote}`);
+  out = out.replace(URL_CREDENTIAL, (_m, prefix: string) => `${prefix}${mask("url credential")}`);
   return out;
 }
 

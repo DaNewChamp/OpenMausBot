@@ -37,6 +37,8 @@ public struct OptionCard: Codable, Hashable, Sendable {
     public var riskLevel: String?
     public var explanationConfidence: String?
     public var explanationSource: String?
+    /// Optional model wording. The local explanation fields remain authoritative.
+    public var advisorySummary: String?
     /// Why auto mode stopped to ask anyway.
     public var held: String?
     /// The narrow grant "always allow" would remember, e.g. `Bash:git`.

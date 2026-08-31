@@ -944,6 +944,7 @@ export function approvalPresentation(tool: string, summary: string, scope?: "loc
   riskLevel: "low" | "medium" | "high";
   explanationConfidence: "high" | "medium" | "low";
   explanationSource: "local" | "ai-reviewed";
+  advisorySummary?: string;
 } {
   const bare = tool.replace(/^mcp__[^_]+__/, "").replace(/[_-]+/g, " ").trim().toLowerCase();
   const toolLabel = /computer|screenshot|click|type text|press key|scroll|open url/.test(bare)
@@ -1009,17 +1010,16 @@ async function maybeReviewApprovalCard(
     });
     if (!bound) return;
     const reviewed = await reviewApproval(tool, details, hostLabel, bound.review, 1_500, bound.identity);
-    if (reviewed.source !== "ai-reviewed") return;
+    if (reviewed.source !== "ai-reviewed" || !reviewed.advisorySummary) return;
     const existing = store.messagesFor(threadId).find((message) => message.id === messageId);
     if (!existing?.card || existing.card.answered || existing.card.dismissed) return;
     store.patchMessage(threadId, messageId, {
       card: {
         ...existing.card,
-        executiveSummary: reviewed.executiveSummary,
-        changeSummary: reviewed.changeSummary,
-        resourceSummary: reviewed.resourceSummary,
-        riskLevel: reviewed.riskLevel,
-        explanationConfidence: reviewed.confidence,
+        // The local explanation is authoritative. AI wording is shown only
+        // as a clearly labeled advisory note and cannot lower risk or alter
+        // the facts the person is approving.
+        advisorySummary: reviewed.advisorySummary,
         explanationSource: reviewed.source,
       },
     });

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { explainApproval, reviewApproval } from "./approval-explainer.ts";
+import { explainApproval, reviewApproval, type ApprovalReviewInput } from "./approval-explainer.ts";
 import {
   approvalReviewerSelection,
   buildApprovalReviewerCatalog,
@@ -10,14 +10,22 @@ import {
   detectCliReviewCapability,
   codexHelpSupportsIsolatedReview,
   extractReviewedJson,
+  isAllowedReviewerUrl,
   parseApprovalReviewerPatch,
   reviewDriverFamily,
   reviewerCacheIdentity,
+  resolveStoredSelection,
+  sanitizeApprovalReviewerStatus,
   shouldReviewApproval,
   validateReviewerSelection,
   XAI_REVIEW_INSTANCE_ID,
 } from "./approval-reviewer.ts";
-import { chatCompletionReviewPayload, createDirectReviewer } from "./approval-reviewer-direct.ts";
+import {
+  chatCompletionReviewPayload,
+  createDirectReviewer,
+  readResponseTextCapped,
+  reviewEndpoint,
+} from "./approval-reviewer-direct.ts";
 import {
   assertIsolatedReviewArgs,
   claudeIsolatedReviewArgs,
@@ -26,12 +34,16 @@ import {
   cursorIsolatedReviewArgs,
   isolatedReviewEnv,
   parseIsolatedCliOutput,
+  probeCliHelp,
+  validateReviewerCli,
+  waitForChildExit,
 } from "./approval-reviewer-cli.ts";
 
 const CLAUDE_HELP = `
   -p, --print  Print response and exit
   --tools <tools...>  Use "" to disable all tools, "default" to use all tools
   --strict-mcp-config  Only use MCP servers from --mcp-config
+  --no-session-persistence  Do not persist the session
 `;
 
 const CURSOR_HELP = `
@@ -65,7 +77,7 @@ describe("approval reviewer selection", () => {
     });
   });
 
-  it("selects the first available model when no reviewer is saved", () => {
+  it("does not select a provider when none was explicitly saved", () => {
     expect(buildApprovalReviewerStatus(
       {},
       [{
@@ -77,7 +89,7 @@ describe("approval reviewer selection", () => {
       }],
       {},
       { helpTextByCli: { codex: CODEX_HELP }, installedByCli: { codex: true } },
-    ).selection).toEqual({ instanceId: "codex", model: "gpt-5.6-sol" });
+    ).selection).toBeNull();
   });
 
   it("reviews only when the mode asks for it", () => {
@@ -154,8 +166,10 @@ describe("approval reviewer catalog", () => {
     expect(byId.openaiCompat).toMatchObject({ available: true, configured: true, reason: null });
     expect(byId[XAI_REVIEW_INSTANCE_ID]).toMatchObject({ available: true, configured: true, id: "xai" });
     expect(byId.claude).toMatchObject({ available: true, configured: true });
-    expect(byId.cursor).toMatchObject({ available: true, configured: true });
-    expect(byId.codex).toMatchObject({ available: true, configured: true, reason: null });
+    expect(byId.cursor).toMatchObject({ available: false, configured: true });
+    expect(byId.cursor?.reason).toMatch(/unavailable|tool-free/i);
+    expect(byId.codex).toMatchObject({ available: false, configured: true });
+    expect(byId.codex?.reason).toMatch(/unavailable|tool-free/i);
     expect(byId.grok?.available).toBe(false);
     expect(byId.grok?.reason).toMatch(/MCP/i);
     expect(catalogContainsSecrets(buildApprovalReviewerStatus(
@@ -165,7 +179,7 @@ describe("approval reviewer catalog", () => {
     ))).toBe(false);
   });
 
-  it("accepts the Codex OAuth lane when its isolated mode is available", () => {
+  it("rejects the Codex OAuth lane even when its CLI advertises read-only flags", () => {
     const providers = buildApprovalReviewerCatalog(
       [{
         instanceId: "codex",
@@ -177,16 +191,16 @@ describe("approval reviewer catalog", () => {
       {},
       { helpTextByCli: { codex: CODEX_HELP }, installedByCli: { codex: true } },
     );
-    expect(validateReviewerSelection({ mode: "always", instanceId: "codex", model: "gpt-5.4" }, providers).ok).toBe(true);
+    expect(validateReviewerSelection({ mode: "always", instanceId: "codex", model: "gpt-5.4" }, providers).ok).toBe(false);
   });
 });
 
 describe("CLI isolation detection", () => {
-  it("accepts Claude empty-tools print, Cursor ask, and Codex read-only exec, and refuses Grok Auth", () => {
+  it("accepts only Claude empty-tools print and refuses subscription CLI lanes without proof", () => {
     expect(detectCliReviewCapability("claude", CLAUDE_HELP).kind).toBe("supported");
-    expect(detectCliReviewCapability("cursor", CURSOR_HELP).kind).toBe("supported");
-    expect(codexHelpSupportsIsolatedReview(CODEX_HELP)).toBe(true);
-    expect(detectCliReviewCapability("codex", CODEX_HELP).kind).toBe("supported");
+    expect(detectCliReviewCapability("cursor", CURSOR_HELP).kind).toBe("unavailable");
+    expect(codexHelpSupportsIsolatedReview(CODEX_HELP)).toBe(false);
+    expect(detectCliReviewCapability("codex", CODEX_HELP).kind).toBe("unavailable");
     expect(detectCliReviewCapability("grok-auth", GROK_HELP).kind).toBe("unavailable");
     expect(reviewDriverFamily("claudeAgent", "claude")).toBe("claude");
     expect(reviewDriverFamily("cursorAgent", "cursor")).toBe("cursor");
@@ -195,36 +209,36 @@ describe("CLI isolation detection", () => {
     expect(reviewDriverFamily("grok", XAI_REVIEW_INSTANCE_ID)).toBe("xai");
   });
 
-  it("builds isolated argv without MCP, force, or the app approval bus", () => {
+  it("builds Claude isolated argv and rejects unsupported subscription CLIs", () => {
     const prompt = "review this";
     const claude = claudeIsolatedReviewArgs(prompt, "claude-haiku-4-5");
-    const cursor = cursorIsolatedReviewArgs(prompt, "auto");
-    const codex = codexIsolatedReviewArgs(prompt, "gpt-5.6-sol");
     assertIsolatedReviewArgs("claude", claude);
-    assertIsolatedReviewArgs("cursor", cursor);
     expect(claude).toContain("--tools");
     expect(claude[claude.indexOf("--tools") + 1]).toBe("");
     expect(claude).toContain("--strict-mcp-config");
+    expect(claude).toContain("--no-session-persistence");
     expect(claude).not.toContain("--mcp-config");
-    expect(cursor.slice(0, 6)).toEqual(["--print", "--mode", "ask", "--sandbox", "enabled", "--output-format"]);
-    expect(cursor).not.toContain("--force");
-    expect(cursor).not.toContain("--approve-mcps");
-    assertIsolatedReviewArgs("codex", codex);
-    expect(codex).toContain("exec");
-    expect(codex).toContain("--ephemeral");
-    expect(codex[codex.indexOf("--sandbox") + 1]).toBe("read-only");
-    expect(codex).toContain("--ignore-user-config");
+    expect(() => cursorIsolatedReviewArgs(prompt, "auto")).toThrow(/unavailable|tool-free/i);
+    expect(() => codexIsolatedReviewArgs(prompt, "gpt-5.6-sol")).toThrow(/unavailable|tool-free/i);
+    expect(() => assertIsolatedReviewArgs("cursor", [])).toThrow(/unavailable|tool-free/i);
+    expect(() => assertIsolatedReviewArgs("codex", [])).toThrow(/unavailable|tool-free/i);
     const env = isolatedReviewEnv("claude", {
       ANTHROPIC_API_KEY: "sk-ant",
       XAI_API_KEY: "xai",
       CURSOR_API_KEY: "cursor",
       CURSOR_AUTH_TOKEN: "cursor-auth",
+      GH_TOKEN: "gh-secret",
+      DATABASE_URL: "postgres://secret",
+      AWS_SECRET_ACCESS_KEY: "aws-secret",
       HOME: "/tmp/home",
     });
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.XAI_API_KEY).toBeUndefined();
     expect(env.CURSOR_API_KEY).toBeUndefined();
     expect(env.CURSOR_AUTH_TOKEN).toBeUndefined();
+    expect(env.GH_TOKEN).toBeUndefined();
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
     expect(env.HOME).toBe("/tmp/home");
   });
 });
@@ -268,6 +282,129 @@ describe("direct provider payloads", () => {
     expect(payload.body).toBeUndefined();
     expect(seen[0]?.body).not.toContain("sk-secret-key");
     expect(chatCompletionReviewPayload("llama", "hi")).not.toHaveProperty("tools");
+  });
+});
+
+describe("reviewer security boundaries", () => {
+  it("accepts only safe reviewer URLs and rejects credential-bearing or cleartext origins", () => {
+    expect(isAllowedReviewerUrl("https://api.example.test/v1")).toBe(true);
+    expect(isAllowedReviewerUrl("http://127.0.0.1:4102/v1")).toBe(true);
+    expect(isAllowedReviewerUrl("http://localhost:4102/v1")).toBe(true);
+    expect(isAllowedReviewerUrl("http://[::1]:4102/v1")).toBe(true);
+    expect(isAllowedReviewerUrl("http://api.example.test/v1")).toBe(false);
+    expect(isAllowedReviewerUrl("ftp://api.example.test/v1")).toBe(false);
+    expect(isAllowedReviewerUrl("https://user:pass@api.example.test/v1")).toBe(false);
+    expect(isAllowedReviewerUrl("https://api.example.test/v1?api_key=secret")).toBe(false);
+    expect(() => reviewEndpoint("http://api.example.test/v1")).toThrow(/HTTPS|loopback/i);
+    expect(reviewEndpoint("https://api.example.test/v1").toString()).toBe("https://api.example.test/v1/chat/completions");
+  });
+
+  it("refuses redirects and forwards a hard response-size cap", async () => {
+    const oversized = new Response("123456789");
+    await expect(readResponseTextCapped(oversized, 8)).rejects.toThrow(/byte limit/i);
+
+    let requestInit: RequestInit | undefined;
+    const reviewer = createDirectReviewer({
+      url: "https://api.example.test/v1",
+      apiKey: "sk-review-secret",
+      model: "small-reviewer",
+      maxResponseBytes: 32,
+      fetchImpl: async (_url, init) => {
+        requestInit = init;
+        const response = new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }] }), { status: 200 });
+        Object.defineProperty(response, "redirected", { value: true });
+        return response;
+      },
+    });
+    await expect(reviewer({
+      tool: "terminal",
+      command: "cat README.md",
+      host: "Mac mini",
+      deterministic: explainApproval("terminal", "cat README.md", "Mac mini"),
+    }, new AbortController().signal)).rejects.toThrow(/redirect/i);
+    expect(requestInit?.redirect).toBe("error");
+  });
+
+  it("does not invoke invalid wrapper commands during help probing", async () => {
+    const run = vi.fn((_cli, _args, _opts, cb) => cb(null, "help", ""));
+    expect(validateReviewerCli("env claude")).toBeNull();
+    expect(validateReviewerCli("npx claude")).toBeNull();
+    expect(validateReviewerCli("/tmp/reviewer-wrapper")).toBeNull();
+    expect(validateReviewerCli("claude")).toBe("claude");
+    expect(await probeCliHelp("env claude", run)).toEqual({ installed: false, help: "" });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("keeps local facts authoritative and sanitizes the advisory note", async () => {
+    const reviewer = vi.fn(async (input: ApprovalReviewInput) => {
+      expect(Object.isFrozen(input)).toBe(true);
+      expect(Object.isFrozen(input.deterministic)).toBe(true);
+      try {
+        (input.deterministic as { riskLevel: string }).riskLevel = "low";
+      } catch {
+        // Frozen input is expected to reject mutation in strict mode.
+      }
+      return {
+        purpose: "safe",
+        change: "none",
+        where: "README.md",
+        risk: "low",
+        advisory: "Looks safe; token=sk-ant-12345678901234567890 and https://127.0.0.1:4102/private",
+      };
+    });
+    const reviewed = await reviewApproval(
+      "terminal",
+      "cat ~/.ssh/id_rsa",
+      "Mac mini",
+      reviewer,
+      1_500,
+      `security-${Date.now()}`,
+    );
+    expect(reviewed.source).toBe("ai-reviewed");
+    expect(reviewed.riskLevel).toBe("high");
+    expect(reviewed.executiveSummary).toMatch(/credential|private|sensitive/i);
+    expect(reviewed.advisorySummary).not.toContain("sk-ant-12345678901234567890");
+    expect(reviewed.advisorySummary).not.toContain("127.0.0.1:4102");
+  });
+
+  it("redacts route labels and never auto-selects an external provider", () => {
+    const status = sanitizeApprovalReviewerStatus({
+      mode: "when-unclear",
+      selection: null,
+      providers: [{
+        id: "openrouter",
+        label: "OpenRouter sk-proj-secret-1234567890123456",
+        instanceId: "openaiCompat",
+        available: true,
+        configured: true,
+        reason: "https://api.example.test/v1?token=secret",
+        models: [{ id: "review", label: "Review\nmodel" }],
+      }],
+    });
+    expect(JSON.stringify(status)).not.toContain("sk-proj-secret-1234567890123456");
+    expect(JSON.stringify(status)).not.toContain("token=secret");
+    expect(status.providers[0]?.models[0]?.label).toBe("Review model");
+    expect(resolveStoredSelection({ mode: "when-unclear" }, status.providers)).toBeNull();
+  });
+
+  it("waits for child termination after requesting a kill", async () => {
+    const listeners = new Map<string, () => void>();
+    const child = {
+      exitCode: null,
+      signalCode: null,
+      once(event: string, listener: () => void) {
+        listeners.set(event, listener);
+        return this;
+      },
+    } as unknown as import("node:child_process").ChildProcess;
+    let stopped = false;
+    let settled = false;
+    const done = waitForChildExit(child, () => { stopped = true; }).then(() => { settled = true; });
+    expect(stopped).toBe(true);
+    expect(settled).toBe(false);
+    listeners.get("close")?.();
+    await done;
+    expect(settled).toBe(true);
   });
 });
 
@@ -329,9 +466,12 @@ describe("review cache and fail-closed fallback", () => {
     const first = await reviewApproval("terminal", "cat README.md", "Mac mini", a, 1_500, reviewerCacheIdentity("openaiCompat", "llama"));
     const cached = await reviewApproval("terminal", "cat README.md", "Mac mini", a, 1_500, reviewerCacheIdentity("openaiCompat", "llama"));
     const otherModel = await reviewApproval("terminal", "cat README.md", "Mac mini", b, 1_500, reviewerCacheIdentity("openaiCompat", "other"));
-    expect(first.executiveSummary).toBe("a");
-    expect(cached.executiveSummary).toBe("a");
-    expect(otherModel.executiveSummary).toBe("b");
+    expect(first.executiveSummary).toBe("Reads README.md");
+    expect(first.advisorySummary).toBe("a");
+    expect(cached.executiveSummary).toBe("Reads README.md");
+    expect(cached.advisorySummary).toBe("a");
+    expect(otherModel.executiveSummary).toBe("Reads README.md");
+    expect(otherModel.advisorySummary).toBe("b");
     expect(a).toHaveBeenCalledOnce();
     expect(b).toHaveBeenCalledOnce();
     expect(a.mock.calls[0]?.[0]).not.toHaveProperty("tools");
