@@ -593,7 +593,7 @@ struct ChatView: View {
         // Acknowledge the tap immediately. The network receipt can arrive
         // later (or wait for an attachment upload), so feedback belongs at
         // the accepted-request boundary rather than after the await.
-        Haptics.impact(.soft)
+        Haptics.keyboardTap()
         let target = current
         let mode = explicitMode ?? (target.busy ? selectedBusySendDefault.deliveryMode : .auto)
         showCommandHUD = false

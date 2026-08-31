@@ -97,6 +97,16 @@ public enum Haptics {
         #endif
     }
 
+    /// Crisp, low-intensity feedback for the message send key.
+    public static func keyboardTap() {
+        #if os(iOS)
+        guard CompanionPreferences.hapticsEnabled else { return }
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.prepare()
+        generator.impactOccurred(intensity: 0.35)
+        #endif
+    }
+
     private static func clamped(_ style: UIImpactFeedbackGenerator.FeedbackStyle) -> UIImpactFeedbackGenerator.FeedbackStyle {
         switch style {
         case .heavy, .rigid: return .medium

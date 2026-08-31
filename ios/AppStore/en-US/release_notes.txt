@@ -1,7 +1,8 @@
-V Bot build 64: smoother computer control and clearer approvals.
+V Bot build 65: smoother computer control and a lighter send tap.
 
 • Trackpad mode now moves the remote pointer naturally by relative motion
 • Trackpad and touch controls no longer open the Create Local VM prompt accidentally
 • Home bot captions show the bot name cleanly without repeating hierarchy titles
 • Approval cards explain actions in plain language with clear Allow once and Deny choices
 • Global and per-bot Ask, Allow, or Deny permission policies now sync securely
+• Sending a message now uses a crisp, keyboard-light haptic instead of a heavy tap
