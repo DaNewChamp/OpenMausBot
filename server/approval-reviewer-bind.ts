@@ -18,7 +18,7 @@ import {
   type ReviewerCatalogInstance,
 } from "./approval-reviewer.ts";
 import { createDirectReviewer } from "./approval-reviewer-direct.ts";
-import { createCodexOAuthReviewer, readCodexOAuthCredentialsSync } from "./approval-reviewer-codex.ts";
+import { createCodexOAuthReviewer, freshCodexOAuthCredentials } from "./approval-reviewer-codex.ts";
 import { createCliReviewer, probeReviewerHints, validateReviewerCli, type IsolatedCliRunner } from "./approval-reviewer-cli.ts";
 
 export function credentialsFromConfig(cfg: AppConfig): DirectReviewCredentials {
@@ -51,7 +51,7 @@ export async function liveApprovalReviewerStatus(
   const credentials = credentialsFromConfig(cfg);
   const hints = {
     ...(await probeReviewerHints(instances, runCli)),
-    codexOAuthAvailable: readCodexOAuthCredentialsSync() !== null,
+    codexOAuthAvailable: (await freshCodexOAuthCredentials()) !== null,
   };
   const status = buildApprovalReviewerStatus(cfg, instances, credentials, hints);
   if (catalogContainsSecrets(status)) {
@@ -91,15 +91,15 @@ export function bindApprovalReviewer(input: {
     return { identity, review };
   }
   if (family === "codex") {
-    const oauth = readCodexOAuthCredentialsSync(input.env);
-    if (!oauth) return null;
+    // Do not capture an access token here. The reviewer resolves and
+    // re-reads Codex auth immediately before each review, including a safe
+    // app-server refresh when the short-lived token has expired.
     return {
       identity,
       review: createCodexOAuthReviewer({
-        accessToken: oauth.accessToken,
-        accountId: oauth.accountId,
         model: input.selection.model,
         fetchImpl: input.fetchImpl,
+        env: input.env,
       }),
     };
   }

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 
 import { explainApproval, reviewApproval, type ApprovalReviewInput } from "./approval-explainer.ts";
 import {
@@ -45,6 +47,7 @@ import {
   assertCodexNoToolsPayload,
   createCodexOAuthReviewer,
   readCodexOAuthCredentialsSync,
+  refreshCodexOAuthCredentials,
 } from "./approval-reviewer-codex.ts";
 
 const CLAUDE_HELP = `
@@ -313,6 +316,48 @@ describe("Codex OAuth reviewer", () => {
     return mkdtempSync(join(tmpdir(), "omb-codex-auth-test-"));
   }
 
+  function writeAuth(home: string, accessToken: string): void {
+    writeFileSync(join(home, "auth.json"), JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: accessToken,
+        refresh_token: "refresh-secret",
+        id_token: "id-secret",
+        account_id: "account-123",
+      },
+    }));
+    chmodSync(join(home, "auth.json"), 0o600);
+  }
+
+  function fakeAppServer(
+    onAccountRead: () => void,
+    seen: string[],
+  ): import("node:child_process").ChildProcess {
+    const child = new EventEmitter() as import("node:child_process").ChildProcess & {
+      stdin: PassThrough;
+      stdout: PassThrough;
+      stderr: PassThrough;
+    };
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.stdin.setEncoding("utf8");
+    child.stdin.on("data", (chunk) => {
+      const lines = String(chunk).split("\n").filter(Boolean);
+      for (const line of lines) {
+        seen.push(line);
+        const message = JSON.parse(line) as { id?: number; method?: string };
+        if (message.method === "initialize") {
+          child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} })}\n`);
+        } else if (message.method === "account/read") {
+          onAccountRead();
+          child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { account: null } })}\n`);
+        }
+      }
+    });
+    return child;
+  }
+
   it("reads only a valid owner-readable access token and never exposes refresh state", () => {
     const home = tempCodexHome();
     try {
@@ -332,6 +377,113 @@ describe("Codex OAuth reviewer", () => {
       expect(JSON.stringify(credentials)).not.toContain("refresh-secret");
       chmodSync(join(home, "auth.json"), 0o644);
       expect(readCodexOAuthCredentialsSync({ CODEX_HOME: home })).toBeNull();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes an expired login through the official account/read path", async () => {
+    const home = tempCodexHome();
+    try {
+      const expired = `header.${Buffer.from(JSON.stringify({ exp: 1 })).toString("base64url")}.signature`;
+      writeAuth(home, expired);
+      const seen: string[] = [];
+      let launches = 0;
+      const refreshed = `fresh.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1_000) + 3_600 })).toString("base64url")}.signature`;
+      const result = await refreshCodexOAuthCredentials({
+        env: { HOME: home, CODEX_HOME: home, PATH: process.env.PATH },
+        spawn: (_cli, args, options) => {
+          launches += 1;
+          expect(args).toEqual(["app-server", "--listen", "stdio://"]);
+          expect(options.env?.CODEX_HOME).toBe(home);
+          return fakeAppServer(() => writeAuth(home, refreshed), seen) as never;
+        },
+      });
+      expect(result).toEqual({ accessToken: refreshed, accountId: "account-123" });
+      expect(launches).toBe(1);
+      expect(seen.join(" ")).not.toContain("refresh-secret");
+      expect(seen.join(" ")).not.toContain("cat README");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the provider unavailable when an expired login cannot be refreshed", () => {
+    const home = tempCodexHome();
+    try {
+      const expired = `header.${Buffer.from(JSON.stringify({ exp: 1 })).toString("base64url")}.signature`;
+      writeAuth(home, expired);
+      expect(readCodexOAuthCredentialsSync({ CODEX_HOME: home })).toBeNull();
+      const providers = buildApprovalReviewerCatalog(
+        [{
+          instanceId: "codex",
+          driverKind: "codex",
+          snapshot: { state: "available", authenticated: true },
+          models: { options: [{ id: "gpt-5.6-sol", label: "Sol" }] },
+        }],
+        {},
+        { codexOAuthAvailable: false },
+      );
+      expect(providers[0]).toMatchObject({ available: false, configured: true });
+      expect(providers[0]?.reason).toMatch(/unavailable|refresh/i);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes concurrent refreshes and reports failure without token material", async () => {
+    const home = tempCodexHome();
+    try {
+      const expired = `header.${Buffer.from(JSON.stringify({ exp: 1 })).toString("base64url")}.signature`;
+      writeAuth(home, expired);
+      const seen: string[] = [];
+      let launches = 0;
+      const spawn = (_cli: string, _args: string[], _options: unknown) => {
+        launches += 1;
+        return fakeAppServer(() => {}, seen) as never;
+      };
+      const options = { env: { HOME: home, CODEX_HOME: home, PATH: process.env.PATH }, spawn };
+      const [a, b] = await Promise.all([
+        refreshCodexOAuthCredentials(options),
+        refreshCodexOAuthCredentials(options),
+      ]);
+      expect(a).toBeNull();
+      expect(b).toBeNull();
+      expect(launches).toBe(1);
+      expect(seen.join(" ")).not.toContain("refresh-secret");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("re-reads auth.json before every bound review instead of retaining a token", async () => {
+    const home = tempCodexHome();
+    try {
+      writeAuth(home, "old-access-token");
+      const headers: string[] = [];
+      const reviewer = createCodexOAuthReviewer({
+        model: "gpt-5.6-sol",
+        env: { HOME: home, CODEX_HOME: home, PATH: process.env.PATH },
+        fetchImpl: async (_url, init) => {
+          headers.push(new Headers(init?.headers).get("authorization") ?? "");
+          return new Response(JSON.stringify({ output_text: JSON.stringify({
+            purpose: "Reads the requested file",
+            change: "Nothing; read-only",
+            where: "README.md on Mac mini",
+            risk: "low",
+          }) }), { status: 200 });
+        },
+      });
+      const input = {
+        tool: "terminal",
+        command: "cat README.md",
+        host: "Mac mini",
+        deterministic: explainApproval("terminal", "cat README.md", "Mac mini"),
+      };
+      await reviewer(input, new AbortController().signal);
+      writeAuth(home, "new-access-token");
+      await reviewer(input, new AbortController().signal);
+      expect(headers).toEqual(["Bearer old-access-token", "Bearer new-access-token"]);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
