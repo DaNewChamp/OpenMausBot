@@ -14,6 +14,9 @@ export default defineConfig({
       "companion/**/*.test.ts",
       "scripts/**/*.test.mjs",
     ],
+    // Real Electron fixtures launch a separate desktop process and belong to
+    // the explicit browser harness, not the fast Vitest unit suite.
+    exclude: ["electron/**/*.electron.test.mjs"],
     setupFiles: ["server/testing/setup.ts"],
     // the suite spawns fake provider CLIs and a real harness server;
     // parallel files introduce load-sensitive flakes for no win
