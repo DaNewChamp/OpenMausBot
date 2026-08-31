@@ -6,6 +6,8 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  chmodSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -15,6 +17,8 @@ import { afterEach, describe, it } from "node:test";
 
 import {
   HubIdentityUnavailableError,
+  ensurePrivateDataDir,
+  inspectPrivateDataDir,
   loadOrCreateHubIdentity,
   readHubIdentity,
 } from "./hub-identity.mjs";
@@ -335,5 +339,31 @@ describe("stable hub identity", () => {
       () => loadOrCreateHubIdentity({ dataDir: "relative-data-dir" }),
       HubIdentityUnavailableError,
     );
+  });
+
+  it("repairs existing directory modes before identity creation", () => {
+    const dataDir = makeDataDir();
+    chmodSync(dataDir, 0o755);
+    assert.equal(inspectPrivateDataDir(dataDir), "needs-repair");
+    ensurePrivateDataDir(dataDir);
+    assert.equal(inspectPrivateDataDir(dataDir), "ok");
+    assert.equal(statSync(dataDir).mode & 0o777, 0o700);
+  });
+
+  it("rejects a symlink or regular file as the runtime directory", () => {
+    const root = makeDataDir();
+    const target = join(root, "target");
+    const link = join(root, "link");
+    const file = join(root, "file");
+    // The target itself is deliberately absent: a dangling symlink must not
+    // be followed or replaced by recursive directory creation.
+    symlinkSync(target, link);
+    writeFileSync(file, "not a directory");
+    assert.equal(inspectPrivateDataDir(link), "unavailable");
+    assert.equal(inspectPrivateDataDir(`${link}/`), "unavailable");
+    assert.throws(() => ensurePrivateDataDir(link), HubIdentityUnavailableError);
+    assert.throws(() => ensurePrivateDataDir(`${link}/`), HubIdentityUnavailableError);
+    assert.equal(inspectPrivateDataDir(file), "unavailable");
+    assert.throws(() => ensurePrivateDataDir(file), HubIdentityUnavailableError);
   });
 });

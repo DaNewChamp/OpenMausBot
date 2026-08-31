@@ -1,4 +1,3 @@
-import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { isAbsolute } from "node:path";
 import { stdin as processStdin, stdout as processStdout, stderr as processStderr } from "node:process";
@@ -9,17 +8,47 @@ import {
 } from "../../server/host-secret-store.ts";
 import {
   loadOrCreateHubIdentity,
+  ensurePrivateDataDir,
 } from "../../shared/hub-identity.mjs";
 import {
   createControlPlaneClient,
   normalizeControlPlaneURL,
 } from "../../shared/control-plane-client.mjs";
 import {
+  assertHostSecretStoreAvailable,
   createHubAccountService,
 } from "./hub-account.ts";
 
 const DEFAULT_CONTROL_PLANE_URL = "https://accounts.openmausbot.com";
 const DEFAULT_APP_VERSION = "0.1.37";
+const MAX_OTP_INPUT_BYTES = 64;
+const SAFE_ERROR_CODES = new Set([
+  "invalid_email",
+  "invalid_otp",
+  "invalid_request",
+  "invalid_response",
+  "invalid_client_identity",
+  "signed_out",
+  "unauthorized",
+  "forbidden",
+  "not_found",
+  "method_not_allowed",
+  "conflict",
+  "request_too_large",
+  "unsupported_media_type",
+  "rate_limited",
+  "otp_expired",
+  "credential_rotation_rate_limited",
+  "installation_limit_reached",
+  "installation_exists",
+  "endpoint_busy",
+  "endpoint_unavailable",
+  "endpoint_cleanup_pending",
+  "internal_error",
+  "control_plane_unavailable",
+  "network_unavailable",
+  "request_failed",
+]);
 
 type Output = { write(chunk: string): unknown };
 type Input = AsyncIterable<unknown>;
@@ -145,7 +174,9 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
   }
   if (group === "account" && action === "verify-code") {
     const email = parseFlagValue(rest, "--email");
-    const fromStdin = rest.includes("--stdin");
+    const stdinCount = rest.filter((value) => value === "--stdin").length;
+    if (stdinCount > 1) throw usageError("duplicate --stdin");
+    const fromStdin = stdinCount === 1;
     const remaining = removeFlag(removeFlag(rest, "--email"), "--stdin");
     if (!email || remaining.length > 0) throw usageError("account verify-code requires --email");
     return { dataDir, kind: "verify-code", email, fromStdin };
@@ -189,23 +220,111 @@ function redactOutput(value: unknown): unknown {
   return output;
 }
 
-async function readStdin(input: Input | string): Promise<string> {
-  if (typeof input === "string") return input.trim();
-  const chunks: string[] = [];
-  if (input && typeof input[Symbol.asyncIterator] === "function") {
-    for await (const chunk of input) chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf8"));
+function boundedOtpInput(value: unknown): string {
+  if (typeof value !== "string") throw usageError("verification code is required");
+  if (Buffer.byteLength(value, "utf8") > MAX_OTP_INPUT_BYTES) {
+    throw usageError("verification code is too long");
   }
-  return chunks.join("").trim();
+  const trimmed = value.trim();
+  if (!trimmed) throw usageError("verification code is required");
+  return trimmed;
+}
+
+async function readStdin(input: Input | string): Promise<string> {
+  if (typeof input === "string") return boundedOtpInput(input);
+  const chunks: string[] = [];
+  let bytes = 0;
+  if (input && typeof input[Symbol.asyncIterator] === "function") {
+    for await (const chunk of input) {
+      let text: string;
+      try {
+        text = typeof chunk === "string"
+          ? chunk
+          : Buffer.from(chunk as Uint8Array).toString("utf8");
+      } catch {
+        throw usageError("verification code is required");
+      }
+      bytes += Buffer.byteLength(text, "utf8");
+      if (bytes > MAX_OTP_INPUT_BYTES) throw usageError("verification code is too long");
+      chunks.push(text);
+    }
+  }
+  return boundedOtpInput(chunks.join(""));
 }
 
 async function hiddenPrompt(dependencies: VbotctlDependencies): Promise<string> {
-  if (dependencies.prompt) return (await dependencies.prompt("Verification code: ", { hideEchoBack: true })).trim();
-  const line = createInterface({ input: processStdin, output: processStderr, terminal: true });
-  try {
-    return (await line.question("Verification code: ", { hideEchoBack: true } as never)).trim();
-  } finally {
-    line.close();
+  if (dependencies.prompt) {
+    return boundedOtpInput(await dependencies.prompt("Verification code: ", { hideEchoBack: true }));
   }
+  if (processStdin.isTTY !== true || typeof processStdin.setRawMode !== "function") {
+    throw usageError("verification code requires --stdin");
+  }
+
+  return new Promise<string>((resolve, reject) => {
+    let value = "";
+    let settled = false;
+    const input = processStdin;
+    const promptOutput = dependencies.stderr ?? processStderr;
+    const restore = () => {
+      input.off("data", onData);
+      input.off("error", onError);
+      try {
+        input.setRawMode?.(false);
+      } catch {
+        // The original operation result remains authoritative.
+      }
+      input.pause();
+    };
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      restore();
+      if (error) reject(error);
+      else {
+        try {
+          resolve(boundedOtpInput(value));
+        } catch (validationError) {
+          reject(validationError);
+        }
+      }
+    };
+    const onError = () => finish(usageError("verification code input failed"));
+    const onData = (chunk: Buffer | string) => {
+      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      for (const character of text) {
+        if (character === "\r" || character === "\n") {
+          finish();
+          return;
+        }
+        if (character === "\u0003") {
+          finish(usageError("verification code cancelled"));
+          return;
+        }
+        if (character === "\u0008" || character === "\u007f") {
+          value = Array.from(value).slice(0, -1).join("");
+          continue;
+        }
+        if ((character.codePointAt(0) ?? 0) < 0x20) {
+          finish(usageError("verification code input failed"));
+          return;
+        }
+        if (Buffer.byteLength(value + character, "utf8") > MAX_OTP_INPUT_BYTES) {
+          finish(usageError("verification code is too long"));
+          return;
+        }
+        value += character;
+      }
+    };
+    input.on("data", onData);
+    input.once("error", onError);
+    try {
+      input.setRawMode(true);
+      input.resume();
+      promptOutput.write("Verification code: ");
+    } catch {
+      finish(usageError("verification code input failed"));
+    }
+  });
 }
 
 function resolveControlPlaneURL(dependencies: VbotctlDependencies): string {
@@ -229,19 +348,27 @@ function safeFailure(error: unknown): string {
   if (error instanceof UsageError) return error.message;
   if (error && typeof error === "object" && "code" in error && typeof error.code === "string") {
     const code = error.code;
-    if (/^[a-z][a-z0-9_.-]{0,63}$/.test(code)) return code;
+    if (SAFE_ERROR_CODES.has(code)) return code;
   }
   return "command failed";
 }
 
 async function createServiceForCommand(command: ParsedCommand, dependencies: VbotctlDependencies): Promise<HubAccountService> {
   if (dependencies.service) return dependencies.service;
-  const identity = dependencies.identity ?? (dependencies.readIdentity
-    ? dependencies.readIdentity({ dataDir: command.dataDir }) as HubIdentity
-    : loadOrCreateHubIdentity({ dataDir: command.dataDir }));
+  // Validate the explicit runtime directory before touching identity or
+  // secret state. The helper narrows existing modes and rejects symlinks,
+  // files, ownership mismatches, and races.
+  ensurePrivateDataDir(command.dataDir);
   const secrets = dependencies.secrets ?? (dependencies.createSecretStore
     ? dependencies.createSecretStore({ dataDir: command.dataDir }) as HostSecretStore
     : createFileEnvelopeSecretStore({ dataDir: command.dataDir }));
+  assertHostSecretStoreAvailable(secrets);
+  const identity = dependencies.identity ?? (dependencies.readIdentity
+    ? dependencies.readIdentity({ dataDir: command.dataDir }) as HubIdentity
+    : loadOrCreateHubIdentity({
+      dataDir: command.dataDir,
+      beforePublish: () => assertHostSecretStoreAvailable(secrets),
+    }));
   const client = dependencies.client ?? (dependencies.createClient
     ? dependencies.createClient({ baseURL: resolveControlPlaneURL(dependencies) }) as ReturnType<typeof createControlPlaneClient>
     : createControlPlaneClient({ baseURL: resolveControlPlaneURL(dependencies) }));

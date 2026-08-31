@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { Readable, Writable } from "node:stream";
-import { mkdtempSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -107,5 +107,115 @@ describe("vbotctl parser and output", () => {
     await expect(runVbotctl(["--data-dir", deps.dataDir, "hub", "register", "--name", "Home Hub"], deps)).resolves.toBe(0);
     expect(deps.io.read().stdout).not.toContain("signed.");
     expect(deps.io.read().stdout).not.toContain("omb_install_");
+  });
+
+  it("rejects duplicate --stdin and never invokes the verifier", async () => {
+    const deps = baseDependencies();
+    await expect(runVbotctl([
+      "--data-dir", deps.dataDir,
+      "account", "verify-code", "--email", "owner@example.com", "--stdin", "--stdin",
+    ], deps)).resolves.toBe(2);
+    expect(deps.service.verifyCode).not.toHaveBeenCalled();
+    expect(deps.io.read().stderr).toContain("duplicate --stdin");
+  });
+
+  it("caps stdin and prompt input without echoing the supplied value", async () => {
+    const stdinDeps = baseDependencies();
+    const oversizedStdin = "SECRET-" + "x".repeat(80);
+    stdinDeps.stdin = Readable.from([oversizedStdin]);
+    await expect(runVbotctl([
+      "--data-dir", stdinDeps.dataDir,
+      "account", "verify-code", "--email", "owner@example.com", "--stdin",
+    ], stdinDeps)).resolves.toBe(1);
+    expect(stdinDeps.service.verifyCode).not.toHaveBeenCalled();
+    expect(stdinDeps.io.read().stderr).toContain("verification code is too long");
+    expect(stdinDeps.io.read().stderr).not.toContain(oversizedStdin);
+
+    const promptDeps = baseDependencies();
+    const oversizedPrompt = "SECRET-" + "y".repeat(80);
+    promptDeps.prompt = vi.fn(async () => oversizedPrompt);
+    await expect(runVbotctl([
+      "--data-dir", promptDeps.dataDir,
+      "account", "verify-code", "--email", "owner@example.com",
+    ], promptDeps)).resolves.toBe(1);
+    expect(promptDeps.service.verifyCode).not.toHaveBeenCalled();
+    expect(promptDeps.io.read().stderr).not.toContain(oversizedPrompt);
+  });
+
+  it("allowlists emitted error codes and genericizes unknown values", async () => {
+    const service = serviceFixture();
+    service.verifyCode.mockRejectedValue({ code: "arbitrary_secret_code" });
+    const deps = baseDependencies(service);
+    await expect(runVbotctl([
+      "--data-dir", deps.dataDir,
+      "account", "verify-code", "--email", "owner@example.com",
+    ], deps)).resolves.toBe(1);
+    expect(deps.io.read().stderr).toBe("command failed\n");
+
+    const safeService = serviceFixture();
+    safeService.verifyCode.mockRejectedValue({ code: "invalid_otp" });
+    const safeDeps = baseDependencies(safeService);
+    await expect(runVbotctl([
+      "--data-dir", safeDeps.dataDir,
+      "account", "verify-code", "--email", "owner@example.com",
+    ], safeDeps)).resolves.toBe(1);
+    expect(safeDeps.io.read().stderr).toBe("invalid_otp\n");
+  });
+
+  it("checks the secret store before minting a missing hub identity", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "vbot-cli-preflight-"));
+    const io = makeIo();
+    const readIdentity = vi.fn(() => ({ schemaVersion: 1, id: "hub-id", createdAt: 1 }));
+    const createSecretStore = vi.fn(() => ({
+      read: () => ({ status: "unavailable", values: {}, error: "corrupt" }),
+      set: vi.fn(),
+      delete: vi.fn(),
+    }));
+    const createService = vi.fn(() => serviceFixture());
+    const deps = {
+      ...io,
+      service: undefined,
+      readIdentity,
+      createSecretStore,
+      createService,
+      createClient: vi.fn(() => ({})),
+      io,
+    };
+    await expect(runVbotctl([
+      "--data-dir", dataDir,
+      "account", "request-code", "--email", "owner@example.com",
+    ], deps)).resolves.toBe(1);
+    expect(readIdentity).not.toHaveBeenCalled();
+    expect(createService).not.toHaveBeenCalled();
+    expect(existsSync(join(dataDir, "hub.json"))).toBe(false);
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("rejects a symlink data directory before initializing secrets", async () => {
+    const root = mkdtempSync(join(tmpdir(), "vbot-cli-symlink-"));
+    const target = join(root, "target");
+    const link = join(root, "link");
+    symlinkSync(target, link);
+    const deps = { ...baseDependencies(), service: undefined, dataDir: link };
+    await expect(runVbotctl([
+      "--data-dir", link,
+      "account", "request-code", "--email", "owner@example.com",
+    ], deps)).resolves.toBe(1);
+    expect(deps.createSecretStore).not.toHaveBeenCalled();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("repairs owner-only data-directory permissions before use", async () => {
+    const deps = {
+      ...baseDependencies(),
+      service: undefined,
+      createService: vi.fn(() => serviceFixture()),
+    };
+    chmodSync(deps.dataDir, 0o755);
+    await expect(runVbotctl([
+      "--data-dir", deps.dataDir,
+      "account", "request-code", "--email", "owner@example.com",
+    ], deps)).resolves.toBe(0);
+    expect(statSync(deps.dataDir).mode & 0o777).toBe(0o700);
   });
 });

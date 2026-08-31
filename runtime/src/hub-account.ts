@@ -10,12 +10,17 @@ import { normalizeWirePlatform } from "../../shared/runtime-platform.ts";
 
 export const ACCOUNT_TOKEN = "controlPlane.accountToken";
 export const ACCOUNT_EMAIL = "controlPlane.accountEmail";
+export const ACCOUNT_USER_ID = "controlPlane.accountUserId";
 export const INSTALLATION_ID = "controlPlane.installationId";
 export const INSTALLATION_CREDENTIAL = "controlPlane.installationCredential";
 export const INSTALLATION_EXPIRY = "controlPlane.installationCredentialExpiresAt";
+export const INSTALLATION_ACCOUNT_EMAIL = "controlPlane.installationAccountEmail";
+export const INSTALLATION_ACCOUNT_USER_ID = "controlPlane.installationAccountUserId";
 
 const INSTALLATION_CREDENTIAL_PATTERN = /^omb_install_[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/;
 const INSTALLATION_CREDENTIAL_PREFIX = "omb_install_";
+const MAX_ACCOUNT_TOKEN_LENGTH = 8_192;
+const MAX_OTP_INPUT_LENGTH = 64;
 const PRESENCE_CAPABILITIES = Object.freeze(["companion", "harness"]);
 
 export interface HubAccountState {
@@ -90,6 +95,7 @@ function readValues(secrets: HostSecretStore): StoredValues {
     if (error instanceof HostSecretStoreUnavailableError) throw error;
     throw unavailable();
   }
+  if (snapshot.status === "empty" && Object.keys(values).length !== 0) throw unavailable();
   return values;
 }
 
@@ -106,6 +112,12 @@ function writeValue(secrets: HostSecretStore, name: string, value: string): void
   }
 }
 
+/** Establish that the encrypted host store can be read before any caller
+ * mints an identity or sends account material to the control plane. */
+export function assertHostSecretStoreAvailable(secrets: HostSecretStore): void {
+  readValues(secrets);
+}
+
 function deleteValue(secrets: HostSecretStore, name: string): void {
   readValues(secrets);
   try {
@@ -117,7 +129,11 @@ function deleteValue(secrets: HostSecretStore, name: string): void {
 }
 
 function accountToken(value: unknown): string {
-  return typeof value === "string" && value.length >= 20 && !value.startsWith(INSTALLATION_CREDENTIAL_PREFIX)
+  return typeof value === "string" &&
+    value.length >= 20 &&
+    value.length <= MAX_ACCOUNT_TOKEN_LENGTH &&
+    /^\S+$/.test(value) &&
+    !value.startsWith(INSTALLATION_CREDENTIAL_PREFIX)
     ? value
     : "";
 }
@@ -128,6 +144,44 @@ function installationCredential(value: unknown): string {
 
 function installationId(value: unknown): string {
   return typeof value === "string" && isValidOpaqueId(value) ? value : "";
+}
+
+function accountUserId(value: unknown): string {
+  return typeof value === "string" && isValidOpaqueId(value) ? value : "";
+}
+
+function hasInstallationState(values: StoredValues): boolean {
+  return [
+    INSTALLATION_ID,
+    INSTALLATION_CREDENTIAL,
+    INSTALLATION_EXPIRY,
+    INSTALLATION_ACCOUNT_EMAIL,
+    INSTALLATION_ACCOUNT_USER_ID,
+  ].some((name) => Object.hasOwn(values, name));
+}
+
+function clearInstallationState(secrets: HostSecretStore, values: StoredValues): void {
+  for (const name of [
+    INSTALLATION_ID,
+    INSTALLATION_CREDENTIAL,
+    INSTALLATION_EXPIRY,
+    INSTALLATION_ACCOUNT_EMAIL,
+    INSTALLATION_ACCOUNT_USER_ID,
+  ]) {
+    if (Object.hasOwn(values, name)) deleteValue(secrets, name);
+  }
+}
+
+function accountChanged(
+  values: StoredValues,
+  email: string,
+  userId: string,
+): boolean {
+  const previousEmail = normalizeAccountEmail(values[ACCOUNT_EMAIL]);
+  const previousUserId = accountUserId(values[ACCOUNT_USER_ID]);
+  if (!previousEmail) return hasInstallationState(values);
+  if (previousEmail !== email) return true;
+  return Boolean(previousUserId && userId && previousUserId !== userId);
 }
 
 function expiration(value: unknown): number | undefined {
@@ -224,6 +278,9 @@ export function createHubAccountService({
   const verifyCode = async (rawEmail: string, otp: string): Promise<HubAccountState> => {
     const email = normalizeAccountEmail(rawEmail);
     if (!email) throw new ControlPlaneError("invalid_email");
+    if (typeof otp !== "string" || otp.length === 0 || otp.length > MAX_OTP_INPUT_LENGTH) {
+      throw new ControlPlaneError("invalid_otp");
+    }
     // Verification persists the account bearer below, so fail closed on an
     // unavailable store before sending the OTP to the control plane.
     readValues(secrets);
@@ -235,10 +292,16 @@ export function createHubAccountService({
     }
     const token = accountToken(verified?.accountToken);
     const verifiedEmail = normalizeAccountEmail(verified?.user?.email);
-    if (!token || !verifiedEmail || verifiedEmail !== email) {
+    const verifiedUserId = accountUserId(verified?.user?.id);
+    if (!token || !verifiedEmail || verifiedEmail !== email || !verifiedUserId) {
       throw new ControlPlaneError("invalid_response");
     }
+    const currentValues = readValues(secrets);
+    if (accountChanged(currentValues, verifiedEmail, verifiedUserId)) {
+      clearInstallationState(secrets, currentValues);
+    }
     writeValue(secrets, ACCOUNT_EMAIL, verifiedEmail);
+    writeValue(secrets, ACCOUNT_USER_ID, verifiedUserId);
     writeValue(secrets, ACCOUNT_TOKEN, token);
     return state();
   };
@@ -246,13 +309,24 @@ export function createHubAccountService({
   const register = async (): Promise<HubAccountState> => {
     const values = readValues(secrets);
     const token = accountToken(values[ACCOUNT_TOKEN]);
-    if (!token) throw new ControlPlaneError("signed_out", 401);
+    const email = normalizeAccountEmail(values[ACCOUNT_EMAIL]);
+    const userId = accountUserId(values[ACCOUNT_USER_ID]);
+    if (!token || !email || !userId) throw new ControlPlaneError("signed_out", 401);
     const currentCredential = installationCredential(values[INSTALLATION_CREDENTIAL]);
+    const boundEmail = normalizeAccountEmail(values[INSTALLATION_ACCOUNT_EMAIL]);
+    const boundUserId = accountUserId(values[INSTALLATION_ACCOUNT_USER_ID]);
+    const retainedCredential =
+      currentCredential &&
+      boundEmail === email &&
+      Boolean(userId) &&
+      boundUserId === userId
+        ? currentCredential
+        : "";
     let result;
     try {
       result = await client.ensureInstallation({
         accountToken: token,
-        currentCredential,
+        currentCredential: retainedCredential,
         clientInstanceId: identity.id,
         name: displayName,
         platform: wirePlatform,
@@ -274,6 +348,8 @@ export function createHubAccountService({
     }
     writeValue(secrets, INSTALLATION_ID, id);
     writeValue(secrets, INSTALLATION_CREDENTIAL, credential);
+    writeValue(secrets, INSTALLATION_ACCOUNT_EMAIL, email);
+    writeValue(secrets, INSTALLATION_ACCOUNT_USER_ID, userId);
     const expiresAt = expiration(result?.credentialExpiresAt);
     if (expiresAt === undefined) {
       deleteValue(secrets, INSTALLATION_EXPIRY);
@@ -339,8 +415,11 @@ export function createHubAccountService({
         // Removing the local bearer is authoritative for a headless sign-out;
         // a remote session can expire without deleting the installation.
       }
-      deleteValue(secrets, ACCOUNT_TOKEN);
     }
+    // A malformed/stale bearer is still account state and must not survive a
+    // local sign-out. Installation identity and credential binding remain so
+    // a later sign-in to the same account can recover the installation.
+    if (Object.hasOwn(values, ACCOUNT_TOKEN)) deleteValue(secrets, ACCOUNT_TOKEN);
   };
 
   // Keep `now` in the dependency contract for callers that build a common

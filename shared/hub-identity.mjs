@@ -8,18 +8,20 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  lstatSync,
   statSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
 import { randomUUID as cryptoRandomUUID } from "node:crypto";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 
 const HUB_FILENAME = "hub.json";
 const { COPYFILE_EXCL } = constants;
 const PUBLICATION_LOCK_FILENAME = `.${HUB_FILENAME}.lock`;
 const MAX_ID_LENGTH = 256;
+const PRIVATE_DIRECTORY_MODE = 0o700;
 const PUBLICATION_LOCK_ATTEMPTS = 100;
 const PUBLICATION_LOCK_WAIT_MS = 5;
 const publicationWaitCell = new Int32Array(new SharedArrayBuffer(4));
@@ -44,6 +46,78 @@ function validDataDir(dataDir) {
     dataDir.length > 0 &&
     isAbsolute(dataDir)
   );
+}
+
+/**
+ * Inspect the caller-provided runtime directory without creating it or
+ * following a final-component symlink. A missing directory is safe to create;
+ * every existing directory must be an owner-controlled directory with no
+ * group/other permissions before identity or secret files are touched.
+ */
+export function inspectPrivateDataDir(dataDir) {
+  if (!validDataDir(dataDir)) return "unavailable";
+  const directoryPath = resolve(dataDir);
+  let directory;
+  try {
+    directory = lstatSync(directoryPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return "missing";
+    return "unavailable";
+  }
+  if (!directory.isDirectory() || directory.isSymbolicLink()) return "unavailable";
+  if (typeof process.getuid === "function" && directory.uid !== process.getuid()) {
+    return "unavailable";
+  }
+  if ((directory.mode & 0o7777 & ~PRIVATE_DIRECTORY_MODE) !== 0) return "needs-repair";
+  return "ok";
+}
+
+/**
+ * Prepare and revalidate the explicit runtime directory. Existing unsafe
+ * modes are narrowed to 0700 only after ownership and directory type checks;
+ * symlinks, files, ownership mismatches, and races fail closed.
+ */
+export function ensurePrivateDataDir(dataDir) {
+  if (!validDataDir(dataDir)) throwUnavailable("Hub data directory is invalid");
+  const directoryPath = resolve(dataDir);
+
+  let before;
+  try {
+    before = lstatSync(directoryPath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throwUnavailable("Hub data directory is unavailable");
+    try {
+      mkdirSync(directoryPath, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
+      before = lstatSync(directoryPath);
+    } catch {
+      throwUnavailable("Hub data directory could not be prepared");
+    }
+  }
+
+  if (!before.isDirectory() || before.isSymbolicLink()) {
+    throwUnavailable("Hub data directory is unavailable");
+  }
+  if (typeof process.getuid === "function" && before.uid !== process.getuid()) {
+    throwUnavailable("Hub data directory is unavailable");
+  }
+
+  try {
+    chmodSync(directoryPath, PRIVATE_DIRECTORY_MODE);
+    const after = lstatSync(directoryPath);
+    if (
+      !after.isDirectory() ||
+      after.isSymbolicLink() ||
+      after.dev !== before.dev ||
+      after.ino !== before.ino ||
+      (after.mode & 0o7777 & ~PRIVATE_DIRECTORY_MODE) !== 0 ||
+      (typeof process.getuid === "function" && after.uid !== process.getuid())
+    ) {
+      throwUnavailable("Hub data directory is unavailable");
+    }
+  } catch (error) {
+    if (error instanceof HubIdentityUnavailableError) throw error;
+    throwUnavailable("Hub data directory could not be prepared");
+  }
 }
 
 /** IDs are intentionally opaque. Existing clients used UUIDs, but punctuation
@@ -96,6 +170,10 @@ export function readHubIdentity(options = {}) {
   const { dataDir } = options ?? {};
   if (!validDataDir(dataDir)) return unavailable("Hub data directory is invalid");
 
+  const directoryStatus = inspectPrivateDataDir(dataDir);
+  if (directoryStatus === "missing") return { status: "missing" };
+  if (directoryStatus !== "ok") return unavailable("Hub data directory is unavailable");
+
   let bytes;
   try {
     bytes = readFileSync(hubPath(dataDir));
@@ -123,17 +201,6 @@ export function readHubIdentity(options = {}) {
 
 function throwUnavailable(message) {
   throw new HubIdentityUnavailableError(message);
-}
-
-function ensureDataDir(dataDir) {
-  try {
-    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-    // mkdir's mode is ignored when the directory already exists. The runtime
-    // directory contains credentials, so enforce the private mode as well.
-    chmodSync(dataDir, 0o700);
-  } catch {
-    throwUnavailable("Hub data directory could not be prepared");
-  }
 }
 
 function writeDurableTemp(tempPath, serialized) {
@@ -335,12 +402,18 @@ export function loadOrCreateHubIdentity(options = {}) {
   } = options ?? {};
   if (!validDataDir(dataDir)) throwUnavailable("Hub data directory is invalid");
 
+  const directoryStatus = inspectPrivateDataDir(dataDir);
+  if (directoryStatus === "missing" && allowCreate === false) {
+    throwUnavailable("Hub identity is unavailable until credential state is known");
+  }
+  // Existing unsafe modes are narrowed before reading or publishing identity
+  // data; symlinks, files, ownership mismatches, and races fail closed.
+  ensurePrivateDataDir(dataDir);
+
   const existing = readHubIdentity({ dataDir });
   if (existing.status === "ok") return existing.identity;
   if (existing.status === "unavailable") throwUnavailable(existing.error);
   if (allowCreate === false) throwUnavailable("Hub identity is unavailable until credential state is known");
-
-  ensureDataDir(dataDir);
 
   // Recheck after preparing the directory: another process may have created
   // the identity while this process was making the directory private.

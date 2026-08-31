@@ -11,7 +11,6 @@ import {
   fstatSync,
   linkSync,
   lstatSync,
-  mkdirSync,
   openSync,
   readFileSync,
   unlinkSync,
@@ -22,6 +21,7 @@ import { constants as fsConstants } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { ensurePrivateDataDir } from "../shared/hub-identity.mjs";
 
 const KEY_FILE = "host-secret.key";
 const ENVELOPE_FILE = "host-secrets.bin";
@@ -78,7 +78,7 @@ export function createFileEnvelopeSecretStore(options?: {
 
   const dataDir = resolve(options.dataDir);
   try {
-    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    ensurePrivateDataDir(dataDir);
   } catch {
     throw new TypeError("dataDir is unavailable");
   }
@@ -89,6 +89,7 @@ export function createFileEnvelopeSecretStore(options?: {
 
   function read(): HostSecretSnapshot {
     try {
+      ensurePrivateDataDir(dataDir);
       const key = readKey(false);
       const envelope = readEnvelope();
       if (key === null && envelope === null) return emptySnapshot();
@@ -102,6 +103,12 @@ export function createFileEnvelopeSecretStore(options?: {
   function set(name: string, value: string): void {
     validateName(name);
     validateValue(value);
+
+    try {
+      ensurePrivateDataDir(dataDir);
+    } catch {
+      throw unavailableError();
+    }
 
     const current = readMutationState();
     const values: SecretValues = { ...current.values };
@@ -118,6 +125,12 @@ export function createFileEnvelopeSecretStore(options?: {
 
   function remove(name: string): void {
     validateName(name);
+
+    try {
+      ensurePrivateDataDir(dataDir);
+    } catch {
+      throw unavailableError();
+    }
 
     const current = readMutationState();
     if (current.envelope === null || !Object.hasOwn(current.values, name)) return;

@@ -3,7 +3,10 @@ import { mkdtempSync, rmSync, statSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createHubAccountService } from "./hub-account.ts";
+import {
+  ACCOUNT_TOKEN as ACCOUNT_TOKEN_FIELD,
+  createHubAccountService,
+} from "./hub-account.ts";
 import { createFileEnvelopeSecretStore, HostSecretStoreUnavailableError } from "../../server/host-secret-store.ts";
 import { loadOrCreateHubIdentity } from "../../shared/hub-identity.mjs";
 
@@ -98,6 +101,8 @@ describe("headless hub account service", () => {
     await f.service.verifyCode(EMAIL, "12345678");
     await f.secrets.set("controlPlane.installationCredential", INSTALLATION_CREDENTIAL);
     await f.secrets.set("controlPlane.installationId", INSTALLATION_ID);
+    await f.secrets.set("controlPlane.installationAccountEmail", EMAIL);
+    await f.secrets.set("controlPlane.installationAccountUserId", USER.id);
     await expect(f.service.register()).resolves.toMatchObject({ installationId: INSTALLATION_ID });
     expect(f.client.ensureInstallation).toHaveBeenCalledWith(expect.objectContaining({ currentCredential: INSTALLATION_CREDENTIAL }));
   });
@@ -194,5 +199,63 @@ describe("headless hub account service", () => {
     await f.service.verifyCode(EMAIL, "12345678");
     await expect(f.service.fleet()).resolves.toEqual([fleet]);
     expect(f.client.listFleet).toHaveBeenCalledWith(ACCOUNT_TOKEN);
+  });
+
+  it("does not reuse an installation credential after the verified account changes", async () => {
+    const f = fixture(); directories.push(f.dataDir);
+    await f.service.verifyCode(EMAIL, "12345678");
+    await f.service.register();
+    await f.service.signOut();
+    f.client.verifyOTP.mockResolvedValueOnce({
+      accountToken: `signed.${"d".repeat(40)}`,
+      user: { id: "user-2", email: "other@example.com" },
+    });
+    await f.service.verifyCode("other@example.com", "12345678");
+    const snapshot = f.secrets.read();
+    expect(snapshot).toMatchObject({ status: "ok", values: {
+      "controlPlane.accountEmail": "other@example.com",
+      "controlPlane.accountUserId": "user-2",
+    } });
+    expect((snapshot as { values: Record<string, string> }).values["controlPlane.installationCredential"]).toBeUndefined();
+
+    await f.service.register();
+    expect(f.client.ensureInstallation).toHaveBeenLastCalledWith(expect.objectContaining({ currentCredential: "" }));
+  });
+
+  it("retains a credential for same-account recovery after sign-out", async () => {
+    const f = fixture(); directories.push(f.dataDir);
+    await f.service.verifyCode(EMAIL, "12345678");
+    await f.service.register();
+    await f.service.signOut();
+    await f.service.verifyCode(EMAIL, "12345678");
+    await f.service.register();
+    expect(f.client.ensureInstallation).toHaveBeenLastCalledWith(expect.objectContaining({
+      currentCredential: INSTALLATION_CREDENTIAL,
+    }));
+  });
+
+  it("ignores an unbound retained credential instead of replaying it", async () => {
+    const f = fixture(); directories.push(f.dataDir);
+    await f.service.verifyCode(EMAIL, "12345678");
+    await f.secrets.set("controlPlane.installationCredential", INSTALLATION_CREDENTIAL);
+    await f.secrets.set("controlPlane.installationId", INSTALLATION_ID);
+    await f.service.register();
+    expect(f.client.ensureInstallation).toHaveBeenCalledWith(expect.objectContaining({ currentCredential: "" }));
+  });
+
+  it("removes malformed account bearer state on sign-out while retaining installation state", async () => {
+    const f = fixture(); directories.push(f.dataDir);
+    await f.service.verifyCode(EMAIL, "12345678");
+    await f.service.register();
+    await f.secrets.set(ACCOUNT_TOKEN_FIELD, `omb_install_malformed-${"x".repeat(20)}`);
+    await f.service.signOut();
+    const snapshot = f.secrets.read();
+    expect(snapshot).toMatchObject({ status: "ok", values: {
+      "controlPlane.accountEmail": EMAIL,
+      "controlPlane.installationId": INSTALLATION_ID,
+      "controlPlane.installationCredential": INSTALLATION_CREDENTIAL,
+    } });
+    expect((snapshot as { values: Record<string, string> }).values[ACCOUNT_TOKEN_FIELD]).toBeUndefined();
+    expect(f.client.signOut).not.toHaveBeenCalled();
   });
 });
