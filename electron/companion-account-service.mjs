@@ -112,7 +112,7 @@ function withAuthenticatedAccount(
     [COMPANION_ACCOUNT_USER_ID_FIELD]: user.id,
     [COMPANION_ACCOUNT_EMAIL_FIELD]: user.email,
   };
-  if (!isValidOpaqueId(ownString(next, COMPANION_CLIENT_INSTANCE_FIELD))) {
+  if (next[COMPANION_CLIENT_INSTANCE_FIELD] !== clientInstanceId) {
     next[COMPANION_CLIENT_INSTANCE_FIELD] = clientInstanceId;
   }
   if (preserveCleanupPending) {
@@ -187,6 +187,13 @@ export function createCompanionAccountService({
   updateCredentials,
   identity,
   newClientInstanceId,
+  clientInstanceId,
+  identityError = "",
+  runtimeProfile = "desktop-hub",
+  appVersion = "",
+  capabilities = ["companion", "harness"],
+  schedulePresence = (work) => setInterval(work, 60_000),
+  clearPresence = clearInterval,
   activatePersistedEndpoint = async () => ({ status: "stopped", ready: false }),
   stopManagedEndpoint = async () => {},
   managedConnectionState = () => ({ status: "stopped", ready: false }),
@@ -195,11 +202,25 @@ export function createCompanionAccountService({
   healthCacheMs = DEFAULT_HEALTH_CACHE_MS,
 } = {}) {
   const configured = Boolean(client);
+  const configuredClientInstanceId = clientInstanceId !== undefined
+    ? clientInstanceId
+    : identity?.clientInstanceId;
+  const identityUnavailable = typeof identityError === "string" && identityError.length > 0;
+  const presenceCapabilities = Object.freeze(
+    [...new Set(Array.isArray(capabilities) ? capabilities : [])].sort(),
+  );
   let healthy = false;
   let lastHealthCheck = null;
   let healthProbe = null;
   let phase = null;
   let transition = Promise.resolve();
+  let presenceTimer = null;
+  let presenceTimerScheduled = false;
+  let presenceActive = false;
+  let presenceGeneration = 0;
+  let disposed = false;
+  let disposePromise = null;
+  const inFlightPresence = new Set();
 
   const serialize = (work) => {
     const next = transition.then(work, work);
@@ -211,6 +232,99 @@ export function createCompanionAccountService({
   };
 
   const credentials = () => readCredentials?.() ?? {};
+
+  const presenceError = (error, email, generation = presenceGeneration) => {
+    if (generation !== presenceGeneration) return;
+    if (error instanceof ControlPlaneError && error.status === 401) {
+      stopPresence();
+      phase = {
+        status: "signed-out",
+        email,
+        message: friendlyCompanionAccountError(error),
+      };
+    }
+  };
+
+  const sendPresence = async (installationCredential, email, generation = presenceGeneration) => {
+    if (disposed) return;
+    const work = Promise.resolve()
+      .then(() => client.updatePresence(installationCredential, {
+        runtimeProfile,
+        appVersion,
+        capabilities: presenceCapabilities,
+      }))
+      .catch((error) => {
+        presenceError(error, email, generation);
+        throw error;
+      });
+    inFlightPresence.add(work);
+    try {
+      await work;
+    } finally {
+      inFlightPresence.delete(work);
+    }
+  };
+
+  const schedulePresenceHeartbeat = (installationCredential, email) => {
+    if (disposed) return;
+    stopPresence();
+    const generation = presenceGeneration;
+    presenceActive = true;
+    const run = () => {
+      if (!presenceActive || disposed || generation !== presenceGeneration) return;
+      return sendPresence(installationCredential, email, generation).catch(() => {});
+    };
+    presenceTimer = schedulePresence(run);
+    presenceTimerScheduled = true;
+    if (!presenceActive || generation !== presenceGeneration) {
+      stopPresence();
+    } else {
+      presenceTimer?.unref?.();
+    }
+  };
+
+  function stopPresence() {
+    presenceActive = false;
+    presenceGeneration += 1;
+    if (presenceTimerScheduled) {
+      clearPresence(presenceTimer);
+      presenceTimer = null;
+      presenceTimerScheduled = false;
+    }
+  }
+
+  const ensurePresence = async (account) => {
+    if (!account?.installationCredential || disposed) return;
+    stopPresence();
+    const generation = presenceGeneration;
+    try {
+      await sendPresence(account.installationCredential, account.email, generation);
+    } catch (error) {
+      if (
+        !disposed &&
+        generation === presenceGeneration &&
+        !(error instanceof ControlPlaneError && error.status === 401)
+      ) {
+        schedulePresenceHeartbeat(account.installationCredential, account.email);
+      }
+      throw error;
+    }
+    if (!disposed && generation === presenceGeneration && presenceActive === false) {
+      schedulePresenceHeartbeat(account.installationCredential, account.email);
+    }
+  };
+
+  const dispose = () => {
+    if (disposePromise) return disposePromise;
+    disposed = true;
+    stopPresence();
+    disposePromise = (async () => {
+      while (inFlightPresence.size > 0) {
+        await Promise.allSettled(inFlightPresence);
+      }
+    })();
+    return disposePromise;
+  };
 
   const probeControlPlane = async ({ force = false } = {}) => {
     if (!configured) return false;
@@ -245,6 +359,13 @@ export function createCompanionAccountService({
   };
 
   const settledState = () => {
+    if (identityUnavailable) {
+      return publicState({
+        available: false,
+        status: "error",
+        message: identityError,
+      });
+    }
     if (!configured) {
       return publicState({
         available: false,
@@ -317,6 +438,12 @@ export function createCompanionAccountService({
 
   const resolveClientIdentity = () => {
     const current = credentials();
+    if (configuredClientInstanceId !== undefined) {
+      if (!isValidOpaqueId(configuredClientInstanceId)) {
+        throw new ControlPlaneError("invalid_client_identity");
+      }
+      return configuredClientInstanceId;
+    }
     if (Object.hasOwn(current, COMPANION_CLIENT_INSTANCE_FIELD)) {
       const existing = current[COMPANION_CLIENT_INSTANCE_FIELD];
       if (!isValidOpaqueId(existing)) throw new ControlPlaneError("invalid_client_identity");
@@ -328,22 +455,14 @@ export function createCompanionAccountService({
   };
 
   const ensureClientIdentity = async () => {
-    const current = credentials();
-    if (Object.hasOwn(current, COMPANION_CLIENT_INSTANCE_FIELD)) {
-      return resolveClientIdentity();
-    }
     const candidate = resolveClientIdentity();
+    const current = credentials();
+    if (current[COMPANION_CLIENT_INSTANCE_FIELD] === candidate) return candidate;
     await updateCredentials((document) => {
-      if (Object.hasOwn(document, COMPANION_CLIENT_INSTANCE_FIELD)) {
-        if (!isValidOpaqueId(document[COMPANION_CLIENT_INSTANCE_FIELD])) {
-          throw new ControlPlaneError("invalid_client_identity");
-        }
-        return document;
-      }
       return { ...document, [COMPANION_CLIENT_INSTANCE_FIELD]: candidate };
     });
     const persisted = credentials()[COMPANION_CLIENT_INSTANCE_FIELD];
-    if (!isValidOpaqueId(persisted)) throw new ControlPlaneError("invalid_client_identity");
+    if (persisted !== candidate) throw new ControlPlaneError("invalid_client_identity");
     return persisted;
   };
 
@@ -363,6 +482,7 @@ export function createCompanionAccountService({
   /** Returns true only when the installation was revoked (which schedules
    * endpoint cleanup) and it is safe to forget its local retry credentials. */
   const cleanupCurrentAccount = async ({ markPending = true } = {}) => {
+    stopPresence();
     const document = credentials();
     const account = storedAccount(document);
     if (!account) {
@@ -392,10 +512,7 @@ export function createCompanionAccountService({
     // active installations and revoke every matching record before forgetting
     // the bearer. Revocation marks the owner row and durably schedules the
     // server-side endpoint sweep.
-    const clientInstanceId = ownString(document, COMPANION_CLIENT_INSTANCE_FIELD);
-    if (!isValidOpaqueId(clientInstanceId)) {
-      throw new ControlPlaneError("invalid_client_identity");
-    }
+    const clientInstanceId = resolveClientIdentity();
 
     // The known ID is a fast path. Its result is not trusted on its own: the
     // authoritative list below also catches a response-lost duplicate.
@@ -440,6 +557,13 @@ export function createCompanionAccountService({
       platform: identity.platform,
       appVersion: identity.appVersion,
     });
+    if (
+      !INSTALLATION_CREDENTIAL.test(installation?.credential) ||
+      !isValidOpaqueId(installation?.installation?.id) ||
+      !isValidOpaqueId(installation?.installation?.clientInstanceId)
+    ) {
+      throw new ControlPlaneError("invalid_response");
+    }
     const endpoint = await client.ensureEndpoint(installation.credential);
     try {
       await updateCredentials((document) =>
@@ -471,6 +595,10 @@ export function createCompanionAccountService({
         message: "The address is ready, but this app could not start its secure connection. Local pairing still works.",
       };
     }
+    await ensurePresence({
+      installationCredential: installation.credential,
+      email: user.email,
+    });
     return settledState();
   };
 
@@ -492,6 +620,7 @@ export function createCompanionAccountService({
   };
 
   const requestCode = (rawEmail) => serialize(async () => {
+    if (identityUnavailable) throw new Error(identityError);
     if (!configured) throw new Error(FRIENDLY_MESSAGES.control_plane_unavailable);
     const email = normalizeAccountEmail(rawEmail);
     let requested;
@@ -510,6 +639,7 @@ export function createCompanionAccountService({
   });
 
   const verifyCode = (rawEmail, rawCode) => serialize(async () => {
+    if (identityUnavailable) throw new Error(identityError);
     if (!configured) throw new Error(FRIENDLY_MESSAGES.control_plane_unavailable);
     const email = normalizeAccountEmail(rawEmail);
     phase = { status: "connecting", email };
@@ -561,6 +691,7 @@ export function createCompanionAccountService({
   });
 
   const retryWork = async () => {
+    if (identityUnavailable) return settledState();
     if (!configured) return settledState();
     const account = storedAccount(credentials());
     if (!account) {
@@ -593,6 +724,8 @@ export function createCompanionAccountService({
   const retry = () => serialize(retryWork);
 
   const signOut = () => serialize(async () => {
+    stopPresence();
+    if (identityUnavailable) throw new Error(identityError);
     if (!storedAccount(credentials())) {
       await clearAfterCleanup();
       return settledState();
@@ -618,13 +751,21 @@ export function createCompanionAccountService({
   });
 
   const restore = () => serialize(async () => {
+    if (identityUnavailable) return settledState();
     if (!configured) return settledState();
     if (!(await probeControlPlane({ force: true }))) return settledState();
     if (companionAccountCleanupPending(credentials())) return retryWork();
     await ensureClientIdentity();
     const account = storedAccount(credentials());
     if (account && !managedCompanionTunnelAccess(credentials())) return retryWork();
-    phase = null;
+    if (account) {
+      try {
+        await ensurePresence(account);
+      } catch (error) {
+        presenceError(error, account.email);
+      }
+    }
+    if (phase?.status !== "signed-out") phase = null;
     return settledState();
   });
 
@@ -638,5 +779,7 @@ export function createCompanionAccountService({
     retry,
     signOut,
     restore,
+    stopPresence,
+    dispose,
   });
 }

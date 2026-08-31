@@ -63,6 +63,7 @@ function readyClient(overrides = {}) {
       endpoint: { url: ENDPOINT },
       connectorToken: CONNECTOR_TOKEN,
     })),
+    updatePresence: vi.fn(async () => {}),
     listInstallations: vi.fn(async () => []),
     deleteEndpoint: vi.fn(async () => {}),
     revokeInstallation: vi.fn(async () => {}),
@@ -722,5 +723,201 @@ describe("Companion account service", () => {
 
     await expect(service.signOut()).resolves.toEqual({ available: true, status: "signed-out" });
     expect(store.read()).toEqual({ [COMPANION_CLIENT_INSTANCE_FIELD]: UUID });
+  });
+
+  it("publishes initial presence before returning ready and schedules an unref heartbeat", async () => {
+    let heartbeat;
+    const timer = { unref: vi.fn() };
+    const schedulePresence = vi.fn((work) => {
+      heartbeat = work;
+      return timer;
+    });
+    const clearPresence = vi.fn();
+    const client = readyClient();
+    const { service } = serviceFixture({
+      client,
+      runtimeProfile: "desktop-hub",
+      appVersion: "1.2.3",
+      capabilities: ["harness", "companion", "harness", "desktop-ui"],
+      schedulePresence,
+      clearPresence,
+    });
+
+    await expect(service.verifyCode("ada@example.com", "12345678")).resolves.toMatchObject({
+      status: "ready",
+    });
+    expect(client.updatePresence).toHaveBeenCalledWith(INSTALLATION_CREDENTIAL, {
+      runtimeProfile: "desktop-hub",
+      appVersion: "1.2.3",
+      capabilities: ["companion", "desktop-ui", "harness"],
+    });
+    expect(schedulePresence).toHaveBeenCalledOnce();
+    expect(timer.unref).toHaveBeenCalledOnce();
+
+    await heartbeat();
+    expect(client.updatePresence).toHaveBeenCalledTimes(2);
+    service.stopPresence();
+    service.stopPresence();
+    expect(clearPresence).toHaveBeenCalledOnce();
+    await heartbeat();
+    expect(client.updatePresence).toHaveBeenCalledTimes(2);
+  });
+
+  it("dispose is idempotent and waits for an in-flight heartbeat", async () => {
+    let heartbeat;
+    const timer = {};
+    const schedulePresence = vi.fn((work) => {
+      heartbeat = work;
+      return timer;
+    });
+    const clearPresence = vi.fn();
+    let resolvePresence;
+    const pending = new Promise((resolve) => {
+      resolvePresence = resolve;
+    });
+    const client = readyClient({
+      updatePresence: vi.fn()
+        .mockResolvedValueOnce(undefined)
+        .mockReturnValueOnce(pending),
+    });
+    const { service } = serviceFixture({ client, schedulePresence, clearPresence });
+    await service.verifyCode("ada@example.com", "12345678");
+
+    const running = heartbeat();
+    await Promise.resolve();
+    const firstDispose = service.dispose();
+    const secondDispose = service.dispose();
+    expect(secondDispose).toBe(firstDispose);
+    let settled = false;
+    void firstDispose.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    resolvePresence();
+    await running;
+    await firstDispose;
+    expect(settled).toBe(true);
+    expect(clearPresence).toHaveBeenCalledOnce();
+  });
+
+  it("keeps local account state unchanged after a heartbeat network failure", async () => {
+    let heartbeat;
+    const client = readyClient({
+      updatePresence: vi.fn()
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new ControlPlaneError("network_unavailable")),
+    });
+    const { service, store } = serviceFixture({
+      client,
+      schedulePresence: vi.fn((work) => {
+        heartbeat = work;
+        return {};
+      }),
+    });
+    await service.verifyCode("ada@example.com", "12345678");
+    const before = store.read();
+    await heartbeat();
+    expect(store.read()).toEqual(before);
+    await expect(service.state()).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("surfaces a presence 401 without provisioning a replacement installation", async () => {
+    const client = readyClient({
+      updatePresence: vi.fn(async () => {
+        throw new ControlPlaneError("unauthorized", 401);
+      }),
+    });
+    const { service, store } = serviceFixture({ client });
+
+    await expect(service.verifyCode("ada@example.com", "12345678")).resolves.toMatchObject({
+      status: "signed-out",
+      message: expect.stringContaining("sign-in expired"),
+    });
+    expect(client.ensureInstallation).toHaveBeenCalledOnce();
+    expect(store.read()).toMatchObject({
+      [COMPANION_INSTALLATION_ID_FIELD]: INSTALLATION_ID,
+      [COMPANION_INSTALLATION_CREDENTIAL_FIELD]: INSTALLATION_CREDENTIAL,
+    });
+  });
+
+  it("stops presence before sign-out endpoint and installation cleanup", async () => {
+    let heartbeat;
+    const events = [];
+    const client = readyClient({
+      deleteEndpoint: vi.fn(async () => events.push("delete")),
+      revokeInstallation: vi.fn(async () => events.push("revoke")),
+      signOut: vi.fn(async () => events.push("sign-out")),
+    });
+    const clearPresence = vi.fn(() => events.push("stop"));
+    const { service } = serviceFixture({
+      client,
+      schedulePresence: vi.fn((work) => {
+        heartbeat = work;
+        return {};
+      }),
+      clearPresence,
+      initial: signedCredentials(),
+    });
+    await service.restore();
+    await service.signOut();
+    expect(events[0]).toBe("stop");
+    expect(events.indexOf("stop")).toBeLessThan(events.indexOf("delete"));
+    expect(events.indexOf("stop")).toBeLessThan(events.indexOf("revoke"));
+    void heartbeat;
+  });
+
+  it("uses the canonical injected identity for reconciliation and cleanup", async () => {
+    const hubId = "legacy/hub.identity: stable+opaque";
+    const legacyField = "stale/client.instance: old";
+    const client = readyClient({
+      ensureInstallation: vi.fn(async () => ({
+        installation: {
+          id: INSTALLATION_ID,
+          clientInstanceId: hubId,
+          name: "Test Mac",
+          platform: "darwin",
+        },
+        credential: INSTALLATION_CREDENTIAL,
+      })),
+      listInstallations: vi.fn(async () => [{
+        id: INSTALLATION_ID,
+        clientInstanceId: hubId,
+        name: "Test Mac",
+        platform: "darwin",
+      }]),
+    });
+    const { service, store } = serviceFixture({
+      client,
+      initial: { [COMPANION_CLIENT_INSTANCE_FIELD]: legacyField },
+      identity: {
+        name: "Test Mac",
+        platform: "darwin",
+        appVersion: "1.2.3",
+        clientInstanceId: hubId,
+      },
+    });
+
+    await service.verifyCode("ada@example.com", "12345678");
+    expect(store.read()[COMPANION_CLIENT_INSTANCE_FIELD]).toBe(hubId);
+    await service.signOut();
+    expect(client.listInstallations).toHaveBeenCalledWith(ACCOUNT_TOKEN);
+    expect(client.revokeInstallation).toHaveBeenCalledWith(ACCOUNT_TOKEN, INSTALLATION_ID);
+    expect(store.read()).toEqual({ [COMPANION_CLIENT_INSTANCE_FIELD]: hubId });
+  });
+
+  it("surfaces unavailable identity without mutating credentials", async () => {
+    const { service, store, client } = serviceFixture({
+      initial: signedCredentials(),
+      identityError: "Hub identity is malformed",
+    });
+    await expect(service.state()).resolves.toEqual({
+      available: false,
+      status: "error",
+      message: "Hub identity is malformed",
+    });
+    await expect(service.signOut()).rejects.toThrow("Hub identity is malformed");
+    expect(store.writes).toHaveLength(0);
+    expect(client.deleteEndpoint).not.toHaveBeenCalled();
   });
 });

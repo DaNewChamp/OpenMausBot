@@ -45,8 +45,10 @@ import { createSecureCredentialState } from "./secure-credential-state.mjs";
 import { readSecureCredentials, withCredentialStoreTimeout } from "./secure-credentials.mjs";
 import { probeOwnedPackagedServer } from "./packaged-server.mjs";
 import { createControlPlaneClient } from "./control-plane-client.mjs";
+import { loadOrCreateHubIdentity, readHubIdentity } from "../shared/hub-identity.mjs";
 import {
   companionAccountCleanupPending,
+  COMPANION_CLIENT_INSTANCE_FIELD,
   createCompanionAccountService,
   resolveCompanionControlPlaneURL,
 } from "./companion-account-service.mjs";
@@ -88,6 +90,25 @@ const compatibleUserDataPath = resolveCompatibleUserDataPath({
 if (app.isPackaged && compatibleUserDataPath && compatibleUserDataPath !== defaultUserDataPath) {
   app.setPath("userData", compatibleUserDataPath);
 }
+
+// Read the canonical installation identity only after the compatibility path
+// has been selected. A missing hub file is safe to create after the encrypted
+// credential store has been proven readable; malformed/unavailable identity
+// state must remain untouched and visible to the account panel.
+let hubIdentityRead;
+try {
+  hubIdentityRead = readHubIdentity({ dataDir: app.getPath("userData") });
+} catch (error) {
+  hubIdentityRead = {
+    status: "unavailable",
+    error: error instanceof Error ? error.message : "Hub identity is unavailable",
+  };
+}
+let hubIdentity = hubIdentityRead.status === "ok" ? hubIdentityRead.identity : null;
+let hubIdentityError = hubIdentityRead.status === "unavailable"
+  ? hubIdentityRead.error || "Hub identity is unavailable"
+  : "";
+
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
 // resolve to ::1 and paint a black window
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
@@ -355,6 +376,7 @@ const CREDENTIALS_FILE = path.join(app.getPath("userData"), "credentials.bin");
  * server's view of "configured", and whether we may register a fresh
  * installation — keys off this rather than off an empty object. */
 let credentialStoreUnavailable = false;
+let credentialStoreError = "";
 
 async function loadSecureCredentials() {
   slog("reading credential store");
@@ -366,6 +388,9 @@ async function loadSecureCredentials() {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
   credentialStoreUnavailable = result.status === "unavailable";
+  credentialStoreError = credentialStoreUnavailable
+    ? result.error || "The operating-system credential store could not be read this launch"
+    : "";
   if (credentialStoreUnavailable) {
     // Deliberately loud. A silent {} here is what made a keychain hiccup
     // look like "your connected apps are gone".
@@ -535,6 +560,46 @@ export async function updateSecureCredentialDocument(derive, afterPersist) {
     return await secureCredentialState.update(derive, afterPersist);
   } finally {
     secureCredentials = secureCredentialState.read();
+  }
+}
+
+async function prepareHubIdentity() {
+  if (hubIdentityRead.status === "unavailable") return;
+  if (!hubIdentity) {
+    if (credentialStoreUnavailable) {
+      hubIdentityError = credentialStoreError ||
+        "The operating-system credential store could not be read this launch";
+      return;
+    }
+    const preferredId = Object.hasOwn(secureCredentials, COMPANION_CLIENT_INSTANCE_FIELD)
+      ? secureCredentials[COMPANION_CLIENT_INSTANCE_FIELD]
+      : undefined;
+    try {
+      hubIdentity = loadOrCreateHubIdentity({
+        dataDir: app.getPath("userData"),
+        preferredId,
+        allowCreate: true,
+      });
+      hubIdentityRead = { status: "ok", identity: hubIdentity };
+    } catch (error) {
+      hubIdentityError = error instanceof Error ? error.message : "Hub identity is unavailable";
+      return;
+    }
+  }
+
+  if (credentialStoreUnavailable || secureCredentials[COMPANION_CLIENT_INSTANCE_FIELD] === hubIdentity.id) {
+    return;
+  }
+  try {
+    await updateSecureCredentialDocument((credentials) => ({
+      ...credentials,
+      [COMPANION_CLIENT_INSTANCE_FIELD]: hubIdentity.id,
+    }));
+  } catch (error) {
+    // The canonical identity remains authoritative even when a transient
+    // keychain write cannot complete. Account registration will retry this
+    // reconciliation through the injected identity before any remote create.
+    slog(`hub identity legacy-field reconciliation deferred: ${error?.message ?? error}`);
   }
 }
 
@@ -744,6 +809,7 @@ function ensureCompanionAccountService() {
     client,
     readCredentials: () => secureCredentialState?.read() ?? secureCredentials,
     updateCredentials: updateSecureCredentialDocument,
+    identityError: hubIdentityError,
     identity: {
       name: installationDisplayName(),
       platform:
@@ -753,7 +819,11 @@ function ensureCompanionAccountService() {
             ? "darwin"
             : "linux",
       appVersion: app.getVersion().slice(0, 64),
+      clientInstanceId: hubIdentity?.id,
     },
+    runtimeProfile: "desktop-hub",
+    appVersion: app.getVersion().slice(0, 64),
+    capabilities: ["companion", "desktop-ui", "harness"],
     newClientInstanceId: randomUUID,
     activatePersistedEndpoint: activatePersistedManagedCompanionEndpoint,
     stopManagedEndpoint: stopManagedCompanionEndpointLocally,
@@ -1636,7 +1706,7 @@ app.whenReady().then(async () => {
   if (app.isPackaged) serverReady = false;
   const win = createWindow({ waitingForServer: app.isPackaged });
   secureCredentials = await loadSecureCredentials();
-  if (app.isPackaged) {
+  if (app.isPackaged && hubIdentityRead.status !== "unavailable") {
     await secureComposioConfig();
     await secureWorkspaceConfig();
   }
@@ -1644,9 +1714,10 @@ app.whenReady().then(async () => {
   // every account/API-key writer must use the shared serialized state.
   // An unreadable store must not become a WRITE of an empty document.
   secureCredentialState = createSecureCredentialState(secureCredentials, saveSecureCredentials, {
-    writable: !credentialStoreUnavailable,
+    writable: !credentialStoreUnavailable && hubIdentityRead.status !== "unavailable",
   });
   secureCredentials = secureCredentialState.read();
+  await prepareHubIdentity();
   const hostedAccount = ensureCompanionAccountService();
   // Display capture remains user-initiated. The renderer first sends a
   // short-lived one-shot intent, then calls getDisplayMedia in the same click.
@@ -1735,7 +1806,7 @@ app.whenReady().then(async () => {
   if (credentialStoreUnavailable) {
     slog("skipping connected-apps registration: the credential store was unreadable this launch");
   }
-  if (app.isPackaged && composioBrokerUrl() && !credentialStoreUnavailable) {
+  if (app.isPackaged && composioBrokerUrl() && !credentialStoreUnavailable && !hubIdentityError) {
     void updateSecureCredentialDocument(async (credentials) => {
       await ensureManagedComposioCredentials({
         brokerUrl: composioBrokerUrl(),
@@ -1798,6 +1869,7 @@ app.on("before-quit", (e) => {
   const cleanup = Promise.race([
     Promise.all([
       stopCua().catch(() => {}),
+      companionAccountService?.dispose?.().catch(() => {}),
       // Both listeners reachable from outside the app are owned children.
       // Shut the connector down first, then the sidecar, without changing the
       // remembered toggle the next launch will restore.

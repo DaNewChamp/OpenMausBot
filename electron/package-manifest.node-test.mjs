@@ -12,10 +12,12 @@ describe("V Bot packaged runtime manifest", () => {
     assert.ok(Array.isArray(builder.files));
     assert.ok(builder.files.includes("electron/**"));
     assert.ok(builder.files.includes("shared/control-plane-client.mjs"));
+    assert.ok(builder.files.includes("shared/hub-identity.mjs"));
     assert.ok(builder.files.includes("shared/runtime-vocabulary.mjs"));
 
     const entrypoint = read("electron/control-plane-client.mjs");
     assert.match(entrypoint, /\.\.\/shared\/control-plane-client\.mjs/);
+    assert.match(read("electron/main.mjs"), /\.\.\/shared\/hub-identity\.mjs/);
     assert.match(read("shared/control-plane-client.mjs"), /\.\/runtime-vocabulary\.mjs/);
   });
 
