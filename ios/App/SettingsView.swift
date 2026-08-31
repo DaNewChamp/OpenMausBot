@@ -10,6 +10,8 @@ struct SettingsView: View {
     @AppStorage("busySendDefault") private var busySendDefault = BusySendDefault.steer.rawValue
     @AppStorage(CompanionPreferences.hapticsKey) private var hapticsEnabled = true
     @AppStorage(CompanionPreferences.soundsKey) private var soundsEnabled = true
+    @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.reduced.rawValue
+    @AppStorage(PrefKey.islandIntro) private var islandIntro = IslandIntro.oncePerBot.rawValue
     @State private var permissionDefault: PermissionMode = .ask
     @State private var permissionPolicyLoaded = false
     @State private var approvalReviewer: ApprovalReviewerStatus?
@@ -30,6 +32,7 @@ struct SettingsView: View {
                 if session.connection != nil {
                     workspaceSection
                     appearanceSection
+                    chatPreferencesSection
                     busySection
                     permissionsSection
                     approvalReviewerSection
@@ -197,6 +200,67 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
+            .frame(minHeight: VBotSurface.Hit.row)
+        }
+    }
+
+    private var chatPreferencesSection: some View {
+        VBotSurfaceGroup(
+            title: "Chat",
+            footer: "These preferences stay on this iPhone and do not change the desktop.") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Activity detail")
+                    .font(.body)
+                Picker("Activity detail", selection: $activityDetail) {
+                    ForEach(ActivityDetail.allCases, id: \.rawValue) { detail in
+                        Text(detail.label).tag(detail.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Text(ActivityDetail(rawValue: activityDetail)?.caption ?? ActivityDetail.reduced.caption)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            VBotHairline().padding(.leading, 16)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Chat intro")
+                    .font(.body)
+                Picker("Chat intro", selection: $islandIntro) {
+                    ForEach(IslandIntro.allCases, id: \.rawValue) { intro in
+                        Text(intro.label).tag(intro.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            VBotHairline().padding(.leading, 16)
+
+            NavigationLink {
+                QuickRepliesEditor()
+            } label: {
+                HStack(spacing: 12) {
+                    SettingsIcon(symbol: "text.bubble", color: .blue)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Quick replies")
+                        Text("Customize composer shortcuts")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
             .frame(minHeight: VBotSurface.Hit.row)
         }
     }

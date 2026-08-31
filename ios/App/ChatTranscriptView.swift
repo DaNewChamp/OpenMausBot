@@ -21,6 +21,7 @@ struct ChatTranscriptView: View {
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationTypography) private var chatTypography
+    @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.reduced.rawValue
 
     @State private var lastAnnouncedSettledId: String?
 
@@ -38,6 +39,13 @@ struct ChatTranscriptView: View {
 
     private var messages: [Message] {
         session.state.visibleTranscript(forThread: threadId)
+    }
+
+    private var renderedMessages: [Message] {
+        if let detail = ActivityDetail(rawValue: activityDetail), detail == .hidden {
+            return messages.filter { $0.kind != .activity }
+        }
+        return messages
     }
 
     private var liveTail: LiveTailKind {
@@ -187,7 +195,7 @@ struct ChatTranscriptView: View {
     }
 
     private func transcriptStack(proxy: ScrollViewProxy, paneWidth: CGFloat) -> some View {
-        let transcript = messages
+        let transcript = renderedMessages
         return VStack(alignment: .leading, spacing: ConversationLayoutPolicy.transcriptRowSpacing) {
             if session.state.hasMore[threadId] == true {
                 Button("Load earlier messages") {
@@ -395,7 +403,14 @@ struct ChatTranscriptView: View {
 
     private func transcriptRows(in messages: [Message]) -> [ChatTranscriptRow] {
         var startIndex = 0
-        return ToolRunGrouping.segments(in: messages).map { segment in
+        let detail = ActivityDetail(rawValue: activityDetail) ?? .reduced
+        let segments: [TranscriptSegment]
+        if detail == .full {
+            segments = messages.map(TranscriptSegment.message)
+        } else {
+            segments = ToolRunGrouping.segments(in: messages)
+        }
+        return segments.map { segment in
             let isRedundantCommNarration: Bool
             if case .message(let message) = segment {
                 isRedundantCommNarration = CommActivityPresentation.shouldSuppressNarration(
