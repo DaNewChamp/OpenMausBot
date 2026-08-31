@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Implement in `/Users/Vincent/Github/.worktrees/vbot-wave1-hub-fleet` on branch `feat/vbot-hub-fleet-foundation` based on the current `vbot-private/main`.
-- Do not implement iOS account login, pairing invitations, provider connections, node v2, execution targets, deployment, or TestFlight in this wave.
+- Do not implement iOS account login, pairing invitations, provider connections, node v2, execution targets, production deployment, or TestFlight in this wave.
 - Do not modify production Cloudflare resources, D1 databases, DNS, tunnels, Servarica, or the hosted Mac runtime.
 - Existing desktop account sign-in and managed endpoint behavior must remain compatible.
 - Existing installations created by older clients decode as `runtimeProfile = desktop-hub`, `capabilities = []`, and offline until their next presence update.
@@ -26,14 +26,19 @@
 
 ## File map
 
-### New shared and server files
+### New shared files
 
 - `shared/runtime-profile.ts`: runtime profile vocabulary and validation.
+- `shared/runtime-profile.test.ts`: fixed-vocabulary and legacy-default tests.
+- `shared/hub-identity.mjs`: Electron-compatible stable identity lifecycle.
+- `shared/hub-identity.test.mjs`: creation, adoption, permissions, and corruption tests.
 - `shared/control-plane-client.mjs`: environment-neutral control-plane client extracted from Electron.
-- `server/hub-identity.ts`: stable identity file lifecycle.
-- `server/hub-identity.test.ts`: identity creation, adoption, permissions, and corruption behavior.
+- `shared/control-plane-client.test.mjs`: fleet and presence client tests.
+
+### New server files
+
 - `server/host-secret-store.ts`: headless encrypted secret envelope.
-- `server/host-secret-store.test.ts`: encryption, update, corruption, and write-permission behavior.
+- `server/host-secret-store.test.ts`: encryption, update, corruption, and write-permission tests.
 
 ### New control-plane files
 
@@ -46,23 +51,22 @@
 - `runtime/src/hub-account.ts`: account registration and presence orchestration.
 - `runtime/src/hub-account.test.ts`: stable registration and failure behavior.
 - `runtime/src/cli.ts`: Wave 1 `vbotctl` commands.
-- `runtime/src/cli.test.ts`: argument parsing and secret-redaction tests.
-- `tsconfig.runtime.build.json`: runtime build target.
+- `runtime/src/cli.test.ts`: parsing, stdin handling, and secret-redaction tests.
+- `tsconfig.runtime.build.json`: runtime build target that includes required shared ESM modules.
 
 ### Existing files to modify
 
 - `electron/control-plane-client.mjs`: compatibility re-export.
-- `electron/control-plane-client.test.mjs`: preserve existing client behavior and cover the wrapper.
+- `electron/control-plane-client.test.mjs`: preserve existing behavior and cover the wrapper.
 - `electron/companion-account-service.mjs`: attach runtime profile and presence heartbeat.
 - `electron/companion-account-service.test.mjs`: stable identity and heartbeat tests.
-- `electron/main.mjs`: load/adopt the stable hub identity before account provisioning.
+- `electron/main.mjs`: load or adopt the stable hub identity before account provisioning.
 - `cloudflare/control-plane/src/installations.ts`: return new safe installation fields with legacy defaults.
 - `cloudflare/control-plane/src/index.ts`: route `/v1/fleet` and `/v1/installations/self/presence`.
-- `cloudflare/control-plane/worker-configuration.d.ts`: migration-generated schema typing when required by the existing build.
 - `cloudflare/control-plane/README.md`: document fleet metadata and trust separation.
-- `package.json`: add runtime build/test/CLI scripts.
+- `package.json`: add runtime build, test, and CLI scripts.
 - `README.md`: document stable hub identity and headless registration commands.
-- `docs/cloud-vps-hosting.md`: add non-production setup and presence verification.
+- `docs/cloud-vps-hosting.md`: add local-development registration and presence verification.
 
 ---
 
@@ -74,7 +78,7 @@
 
 **Interfaces:**
 - Produces: `RuntimeProfile`, `RUNTIME_PROFILES`, `isRuntimeProfile()`, `normalizeRuntimeProfile()`.
-- Consumed by: control-plane fleet validation, Electron presence, headless runtime.
+- Consumed by: control-plane fleet validation, Electron presence, and headless runtime.
 
 - [ ] **Step 1: Write the failing profile tests**
 
@@ -110,8 +114,6 @@ describe("runtime profiles", () => {
 ```
 
 - [ ] **Step 2: Run the focused test and confirm it fails**
-
-Run:
 
 ```bash
 pnpm vitest run shared/runtime-profile.test.ts
@@ -163,38 +165,34 @@ git commit -m "feat(runtime): define V Bot runtime profiles"
 
 ---
 
-### Task 2: Add stable hub identity
+### Task 2: Add stable Electron-compatible hub identity
 
 **Files:**
-- Create: `server/hub-identity.ts`
-- Create: `server/hub-identity.test.ts`
+- Create: `shared/hub-identity.mjs`
+- Create: `shared/hub-identity.test.mjs`
 
 **Interfaces:**
-- Consumes: `writeFileAtomic()` from `server/atomic.ts`.
-- Produces:
 
-```ts
-export interface HubIdentity {
-  schemaVersion: 1;
-  id: string;
-  createdAt: number;
-}
+```js
+/** @typedef {{ schemaVersion: 1, id: string, createdAt: number }} HubIdentity */
 
 export class HubIdentityUnavailableError extends Error {}
 
-export function loadOrCreateHubIdentity(options?: {
-  dataDir?: string;
-  preferredId?: string;
-  now?: () => number;
-  randomId?: () => string;
-}): HubIdentity;
+export function readHubIdentity(options = {})
+// -> { status: "missing" }
+//  | { status: "ok", identity: HubIdentity }
+//  | { status: "unavailable", error: string }
+
+export function loadOrCreateHubIdentity(options = {})
+// options: { dataDir, preferredId, allowCreate, now, randomId }
+// -> HubIdentity
 ```
 
 - [ ] **Step 1: Write failing identity tests**
 
 Cover these exact cases:
 
-```ts
+```js
 it("creates hub.json once with mode 0600 and reuses it", () => {
   const first = loadOrCreateHubIdentity({
     dataDir,
@@ -206,8 +204,8 @@ it("creates hub.json once with mode 0600 and reuses it", () => {
     now: () => 1_800_000_000_000,
     randomId: () => "22222222-2222-4222-8222-222222222222",
   });
-  expect(second).toEqual(first);
-  expect(statSync(join(dataDir, "hub.json")).mode & 0o777).toBe(0o600);
+  assert.deepEqual(second, first);
+  assert.equal(statSync(join(dataDir, "hub.json")).mode & 0o777, 0o600);
 });
 
 it("adopts an existing Electron client instance id only on first creation", () => {
@@ -216,60 +214,65 @@ it("adopts an existing Electron client instance id only on first creation", () =
     preferredId: "33333333-3333-4333-8333-333333333333",
     now: () => 123,
   });
-  expect(identity.id).toBe("33333333-3333-4333-8333-333333333333");
+  assert.equal(identity.id, "33333333-3333-4333-8333-333333333333");
 });
 
 it("fails closed when an existing identity is malformed", () => {
   writeFileSync(join(dataDir, "hub.json"), "not-json", { mode: 0o600 });
-  expect(() => loadOrCreateHubIdentity({ dataDir })).toThrow(
+  assert.throws(
+    () => loadOrCreateHubIdentity({ dataDir }),
     HubIdentityUnavailableError,
   );
-  expect(readFileSync(join(dataDir, "hub.json"), "utf8")).toBe("not-json");
+  assert.equal(readFileSync(join(dataDir, "hub.json"), "utf8"), "not-json");
 });
 
-it("rejects a malformed preferred id", () => {
-  expect(() =>
-    loadOrCreateHubIdentity({ dataDir, preferredId: "same-name-new-machine" }),
-  ).toThrow("invalid preferred hub id");
+it("refuses first creation while the legacy credential state is unknown", () => {
+  assert.throws(
+    () => loadOrCreateHubIdentity({ dataDir, allowCreate: false }),
+    HubIdentityUnavailableError,
+  );
+  assert.equal(existsSync(join(dataDir, "hub.json")), false);
 });
 ```
 
-Also test schema version, UUID validation, integer timestamp, immutable persisted ID, and directory mode `0700`.
+Also test strict schema version, UUID validation, safe integer timestamp, invalid preferred ID, immutable persisted ID, directory mode `0700`, and successful reads when `allowCreate` is false but a valid identity already exists.
 
 - [ ] **Step 2: Run the test and confirm failure**
 
 ```bash
-pnpm vitest run server/hub-identity.test.ts
+node --test shared/hub-identity.test.mjs
 ```
 
 Expected: FAIL because the module does not exist.
 
 - [ ] **Step 3: Implement identity parsing and creation**
 
-Use a strict Zod schema or explicit checks. Creation behavior:
+Creation shape:
 
-```ts
-const identity: HubIdentity = {
+```js
+const identity = Object.freeze({
   schemaVersion: 1,
-  id: preferredId ?? randomId(),
+  id: preferredId || randomId(),
   createdAt: now(),
-};
+});
 ```
 
 Required details:
 
+- use only Node built-ins so Electron can import the module directly;
 - create the data directory recursively with mode `0700`;
-- if `hub.json` exists, parse it and return it;
-- if `hub.json` exists but is unreadable or invalid, throw `HubIdentityUnavailableError` and leave the bytes untouched;
-- if absent, validate `preferredId`, otherwise use `randomUUID()`;
-- write with `writeFileAtomic()` and mode `0600`;
-- reread and validate the written value before returning;
-- never change a valid persisted identity because a later `preferredId` differs.
+- if `hub.json` exists, parse and strictly validate it;
+- if existing bytes are unreadable or invalid, return unavailable from `readHubIdentity()` and throw `HubIdentityUnavailableError` from `loadOrCreateHubIdentity()` without changing the file;
+- if absent and `allowCreate === false`, throw without creating files;
+- validate `preferredId`; otherwise use `randomUUID()`;
+- write a temporary file with `openSync(..., 0o600)`, `fsyncSync()`, close, then rename into place;
+- reject a rename race by rereading the final file and accepting its valid identity rather than overwriting it;
+- never change a valid persisted identity because a later preferred ID differs.
 
 - [ ] **Step 4: Run focused tests**
 
 ```bash
-pnpm vitest run server/hub-identity.test.ts
+node --test shared/hub-identity.test.mjs
 ```
 
 Expected: PASS.
@@ -277,7 +280,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add server/hub-identity.ts server/hub-identity.test.ts
+git add shared/hub-identity.mjs shared/hub-identity.test.mjs
 git commit -m "feat(runtime): persist stable hub identity"
 ```
 
@@ -297,6 +300,8 @@ export type HostSecretSnapshot =
   | { status: "ok"; values: Record<string, string> }
   | { status: "unavailable"; values: Record<string, never>; error: string };
 
+export class HostSecretStoreUnavailableError extends Error {}
+
 export interface HostSecretStore {
   read(): HostSecretSnapshot;
   set(name: string, value: string): void;
@@ -310,8 +315,6 @@ export function createFileEnvelopeSecretStore(options?: {
 ```
 
 - [ ] **Step 1: Write failing secret-store tests**
-
-Test these behaviors:
 
 ```ts
 it("returns empty only when no envelope exists", () => {
@@ -338,13 +341,13 @@ it("does not overwrite a corrupt existing envelope", () => {
   writeFileSync(join(dataDir, "host-secrets.bin"), "corrupt", { mode: 0o600 });
   expect(store.read().status).toBe("unavailable");
   expect(() => store.set("replacement", "12345678901234567890")).toThrow(
-    "host secret store is unavailable",
+    HostSecretStoreUnavailableError,
   );
   expect(readFileSync(join(dataDir, "host-secrets.bin"), "utf8")).toBe("corrupt");
 });
 ```
 
-Also test authenticated-decryption failure with the wrong key, deletion of the last value, validation of names with `/^[A-Za-z][A-Za-z0-9._-]{0,127}$/`, bounded values of 1 to 32,768 bytes, and immutable input maps.
+Also test authenticated-decryption failure with the wrong key, deletion of the last value, key names matching `/^[A-Za-z][A-Za-z0-9._-]{0,127}$/`, values from 1 through 32,768 UTF-8 bytes, and immutable returned maps.
 
 - [ ] **Step 2: Run the test and confirm failure**
 
@@ -372,13 +375,13 @@ Implementation requirements:
 
 - create a 32-byte random key once in `host-secret.key`;
 - use a 12-byte random IV per write;
-- bind the authenticated additional data string `vbot-host-secrets-v1`;
+- bind authenticated additional data `vbot-host-secrets-v1`;
 - encrypt canonical JSON containing only validated string keys and values;
 - encode binary fields as base64url;
 - write atomically with mode `0600`;
 - decrypt and validate every existing envelope before mutation;
-- map all parse, read, key, and authentication failures to `status = unavailable` without including bytes or secret values in the error;
-- do not claim this protects against root on the host; document that it protects archives and accidental plaintext exposure.
+- map parse, read, key, and authentication failures to `status = unavailable` without including bytes or secret values in the error;
+- document that this protects archives and accidental plaintext exposure, not a host compromised as root.
 
 - [ ] **Step 4: Run focused tests**
 
@@ -408,8 +411,6 @@ git commit -m "feat(secrets): add encrypted headless host store"
 - Modify: `cloudflare/control-plane/README.md`
 
 **Interfaces:**
-- Consumes: `RuntimeProfile` vocabulary copied into Worker-safe validation without importing Node-only modules.
-- Produces:
 
 ```ts
 export async function updateInstallationPresence(
@@ -424,9 +425,7 @@ export async function listFleet(
 ): Promise<Response>;
 ```
 
-- [ ] **Step 1: Write the migration**
-
-Use exactly additive columns so existing installations remain valid:
+- [ ] **Step 1: Write the additive migration**
 
 ```sql
 ALTER TABLE installations
@@ -468,13 +467,7 @@ Create tests for:
 9. fleet endpoint metadata contains HTTPS origin and lifecycle status only;
 10. no credential, tunnel ID, DNS ID, connector token, owner ID, or email appears in the payload.
 
-- [ ] **Step 3: Run control-plane tests and confirm failure**
-
-```bash
-pnpm control-plane:test -- fleet.test.ts
-```
-
-If the package script does not forward file arguments, run:
+- [ ] **Step 3: Run the test and confirm failure**
 
 ```bash
 pnpm --filter @openmausbot/control-plane exec vitest run test/fleet.test.ts
@@ -483,8 +476,6 @@ pnpm --filter @openmausbot/control-plane exec vitest run test/fleet.test.ts
 Expected: FAIL because the route and migration do not exist.
 
 - [ ] **Step 4: Implement strict presence validation**
-
-Use a strict Zod schema:
 
 ```ts
 const presenceSchema = z.strictObject({
@@ -528,11 +519,9 @@ Join active installations to `installation_endpoints` by installation ID. Return
 }
 ```
 
-Sort by `created_at ASC, id ASC`, matching existing installation ordering. Invalid stored `capabilities_json` must decode to `[]` rather than failing the entire account response. Invalid stored `runtime_profile` must publish `desktop-hub` and be corrected by the next valid presence update.
+Sort by `created_at ASC, id ASC`, matching existing installation ordering. Invalid stored `capabilities_json` decodes to `[]` instead of failing the account response. Invalid stored `runtime_profile` publishes `desktop-hub` and is corrected by the next valid presence update.
 
 - [ ] **Step 6: Wire routes**
-
-In `cloudflare/control-plane/src/index.ts`:
 
 ```ts
 if (request.method === "GET" && url.pathname === "/v1/fleet") {
@@ -546,7 +535,7 @@ if (
 }
 ```
 
-Keep `/v1/installations` unchanged for existing desktop callers except for safe optional fields added by `installationJSON()`.
+Keep `/v1/installations` compatible for existing desktop callers. Safe optional fields may be added to `installationJSON()`, but existing fields and status codes cannot change.
 
 - [ ] **Step 7: Run all control-plane checks**
 
@@ -557,7 +546,7 @@ pnpm control-plane:test
 pnpm control-plane:dry-run
 ```
 
-Expected: PASS with no remote calls.
+Expected: PASS with no remote resource changes.
 
 - [ ] **Step 8: Commit**
 
@@ -596,8 +585,6 @@ Copy the current implementation from `electron/control-plane-client.mjs` to `sha
 ```js
 export * from "../shared/control-plane-client.mjs";
 ```
-
-Do not edit behavior in the same commit as the move.
 
 - [ ] **Step 2: Run existing client tests**
 
@@ -640,13 +627,13 @@ Test strict decoding of this response:
 }
 ```
 
-Reject non-HTTPS endpoints, extra secret-like fields inside the installation record, malformed capability names, duplicate capabilities, unknown profiles, oversized lists, and invalid timestamps.
+Reject non-HTTPS endpoints, unknown top-level installation keys, unknown endpoint keys, malformed capability names, duplicate capabilities, unknown profiles, oversized lists, and invalid timestamps.
 
-Verify `updatePresence()` sends `PUT`, installation bearer, exact JSON body, `redirect: error`, and no account `Origin` header.
+Verify `updatePresence()` sends `PUT`, an installation bearer, the exact JSON body, `redirect: error`, and no account-auth `Origin` header.
 
 - [ ] **Step 5: Implement safe fleet validation**
 
-Add a validator returning only:
+Return only:
 
 ```js
 {
@@ -663,7 +650,7 @@ Add a validator returning only:
 }
 ```
 
-Before accepting a record, reject enumerable keys outside that allowlist. This prevents a future server regression from passing a credential-like field through native clients.
+Reject enumerable keys outside the explicit installation and endpoint allowlists. This prevents a future server regression from passing credential-shaped fields into native clients.
 
 - [ ] **Step 6: Run shared and Electron client tests**
 
@@ -676,7 +663,10 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add shared/control-plane-client.mjs shared/control-plane-client.test.mjs electron/control-plane-client.test.mjs
+git add \
+  shared/control-plane-client.mjs \
+  shared/control-plane-client.test.mjs \
+  electron/control-plane-client.test.mjs
 git commit -m "feat(account): add safe fleet client"
 ```
 
@@ -703,7 +693,7 @@ export interface HubAccountState {
 
 export function createHubAccountService(dependencies: {
   client: ReturnType<typeof createControlPlaneClient>;
-  identity: HubIdentity;
+  identity: { schemaVersion: 1; id: string; createdAt: number };
   profile: "headless-hub";
   platform: "darwin" | "linux" | "win32";
   appVersion: string;
@@ -711,7 +701,8 @@ export function createHubAccountService(dependencies: {
   secrets: HostSecretStore;
   now?: () => number;
 }): {
-  login(email: string, otp: string): Promise<HubAccountState>;
+  requestCode(email: string): Promise<{ email: string }>;
+  verifyCode(email: string, otp: string): Promise<HubAccountState>;
   register(): Promise<HubAccountState>;
   heartbeat(): Promise<void>;
   fleet(): Promise<FleetInstallation[]>;
@@ -723,18 +714,19 @@ export function createHubAccountService(dependencies: {
 
 Use a fake control-plane client and real temporary identity/secret stores. Test:
 
-- login stores account token and normalized email;
+- request-code returns normalized email and stores no credential;
+- verify-code stores account token and normalized email;
 - register uses `identity.id` as `clientInstanceId`;
 - a valid stored installation credential is reused;
-- a 401 from the self route permits account recovery;
-- network/unavailable errors do not rotate or replace the stored credential;
-- heartbeat sends `headless-hub`, package version, and `[
+- a definitive 401 from the self route permits account recovery;
+- network and unavailable errors do not rotate or replace the stored credential;
+- heartbeat sends `headless-hub`, package version, and sorted `[
   "companion",
   "harness"
-]` sorted;
+]`;
 - an unavailable secret store blocks registration before any network write;
 - sign-out removes the account token but does not silently revoke or delete the installation;
-- public returned state contains no token.
+- public returned state contains no token or credential.
 
 - [ ] **Step 2: Run the service test and confirm failure**
 
@@ -756,7 +748,7 @@ const INSTALLATION_CREDENTIAL = "controlPlane.installationCredential";
 const INSTALLATION_EXPIRY = "controlPlane.installationCredentialExpiresAt";
 ```
 
-Never return values for keys ending in `Token`, `Credential`, or `Secret`. On any mutation, reread and validate the store before writing. An `unavailable` snapshot throws `HostSecretStoreUnavailableError` without calling the network.
+Never return values for keys ending in `Token`, `Credential`, or `Secret`. On any mutation, reread and validate the store before writing. An unavailable snapshot throws `HostSecretStoreUnavailableError` without calling the network.
 
 - [ ] **Step 4: Write failing CLI parser tests**
 
@@ -764,7 +756,8 @@ Wave 1 commands are:
 
 ```text
 vbotctl account request-code --email <address>
-vbotctl account verify-code --email <address> --code <8-digits>
+vbotctl account verify-code --email <address>
+vbotctl account verify-code --email <address> --stdin
 vbotctl hub register --name <display-name>
 vbotctl hub heartbeat --once
 vbotctl fleet list --json
@@ -775,30 +768,43 @@ Tests must verify:
 
 - unknown commands exit `2`;
 - missing arguments exit `2`;
-- `--code` is never included in error output;
+- verification code is read through an injected hidden prompt or stdin, never argv;
+- prompt and stdin contents are never included in error output;
 - `fleet list` redacts unexpected keys ending in `token`, `credential`, `secret`, `password`, or `key` before JSON output;
 - `hub heartbeat` requires `--once` in Wave 1 so this CLI does not pretend to be a service supervisor;
 - success output never includes account or installation credentials.
 
 - [ ] **Step 5: Implement the CLI with dependency injection**
 
-The entry point should export `runVbotctl(argv, dependencies)` for tests and call it only when executed directly. Use `node:readline/promises` only for optional interactive OTP entry; command-line flags remain supported for automation, and error rendering must not echo argv.
+Export `runVbotctl(argv, dependencies)` for tests and invoke it only when the module is executed directly. Use `node:readline/promises` for hidden interactive entry and raw stdin for `--stdin`. Do not accept a verification code, bearer, or installation credential as a command-line option.
 
 - [ ] **Step 6: Add build and package scripts**
 
-Create `tsconfig.runtime.build.json` matching the repository's NodeNext settings and add:
+Create `tsconfig.runtime.build.json` with NodeNext settings, `allowJs: true`, and includes for:
+
+```text
+runtime/src/**/*.ts
+server/host-secret-store.ts
+shared/hub-identity.mjs
+shared/control-plane-client.mjs
+shared/runtime-profile.ts
+```
+
+Use an isolated `dist-runtime/` output directory already covered by `.gitignore`, or add that exact directory to `.gitignore` in this task.
+
+Add:
 
 ```json
 {
   "scripts": {
     "build:runtime": "tsc -p tsconfig.runtime.build.json",
-    "test:runtime": "vitest run runtime/src",
+    "test:runtime": "vitest run runtime/src server/host-secret-store.test.ts shared/runtime-profile.test.ts && node --test shared/hub-identity.test.mjs shared/control-plane-client.test.mjs",
     "vbotctl": "node --experimental-strip-types runtime/src/cli.ts"
   }
 }
 ```
 
-Add `pnpm build:runtime` to `package:prepare` only after the build emits into a dedicated ignored directory and packaged smoke tests confirm no desktop artifact regression.
+Do not add `build:runtime` to `package:prepare` in Wave 1. Distribution integration belongs to Wave 6.
 
 - [ ] **Step 7: Run runtime tests and build**
 
@@ -813,7 +819,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add runtime tsconfig.runtime.build.json package.json pnpm-lock.yaml
+git add runtime tsconfig.runtime.build.json package.json pnpm-lock.yaml .gitignore
 git commit -m "feat(runtime): add headless hub account CLI"
 ```
 
@@ -825,11 +831,11 @@ git commit -m "feat(runtime): add headless hub account CLI"
 - Modify: `electron/companion-account-service.mjs`
 - Modify: `electron/companion-account-service.test.mjs`
 - Modify: `electron/main.mjs`
-- Add a focused Node test file if `main.mjs` wiring cannot be exercised without launching Electron.
+- Add a focused Node test file if `main.mjs` identity wiring cannot be exercised without launching Electron.
 
 **Interfaces:**
-- Consumes: `loadOrCreateHubIdentity()`, shared control-plane `updatePresence()`.
-- Preserves: every current companion account state and endpoint method.
+- Consumes: `readHubIdentity()`, `loadOrCreateHubIdentity()`, and shared control-plane `updatePresence()`.
+- Preserves: every current companion account state and managed endpoint method.
 
 - [ ] **Step 1: Write failing account-service presence tests**
 
@@ -861,16 +867,18 @@ node --test electron/companion-account-service.test.mjs
 
 Expected: FAIL on missing presence behavior.
 
-- [ ] **Step 3: Seed hub identity from the existing Electron installation ID**
+- [ ] **Step 3: Adopt the existing Electron installation identity safely**
 
 At startup, before account provisioning:
 
-1. read secure credentials using the existing unavailable/empty/ok distinction;
-2. obtain `COMPANION_CLIENT_INSTANCE_FIELD` only when the credential store is `ok`;
-3. call `loadOrCreateHubIdentity({ preferredId })`;
-4. if a new identity was created from no preferred ID, persist the identity ID back into the existing secure credential field;
-5. if the secure credential store is unavailable, do not create a new identity from an unknown state; surface the existing credential-store error;
-6. inject `hubIdentity.id` wherever the companion account service currently requests `identity.clientInstanceId`.
+1. call `readHubIdentity({ dataDir })`;
+2. when it returns `ok`, use that identity even if Electron `safeStorage` is temporarily unavailable;
+3. when it returns `unavailable`, surface the identity error and do not alter secure credentials;
+4. when it returns `missing`, read secure credentials using the existing unavailable/empty/ok distinction;
+5. if secure credentials are unavailable, call no create function and surface the credential-store error;
+6. if credentials are readable, obtain `COMPANION_CLIENT_INSTANCE_FIELD` as the preferred ID and call `loadOrCreateHubIdentity({ preferredId, allowCreate: true })`;
+7. if no preferred ID existed, persist the new hub ID back into `COMPANION_CLIENT_INSTANCE_FIELD` before registering the installation;
+8. inject `hubIdentity.id` wherever the companion account service currently requests `identity.clientInstanceId`.
 
 Do not change the existing installation credential or managed endpoint field names.
 
@@ -886,12 +894,14 @@ await client.updatePresence(installationCredential, {
 });
 ```
 
-Schedule the same call every 60 seconds while signed in. The timer must be stopped during service disposal, account sign-out, and app quit.
+Schedule the same call every 60 seconds while signed in. Stop the timer during service disposal, account sign-out, and app quit.
 
 - [ ] **Step 5: Run Electron account tests**
 
 ```bash
 node --test \
+  shared/hub-identity.test.mjs \
+  shared/control-plane-client.test.mjs \
   electron/control-plane-client.test.mjs \
   electron/companion-account-service.test.mjs \
   electron/secure-credentials.test.mjs \
@@ -927,7 +937,7 @@ git commit -m "feat(desktop): publish stable hub presence"
 - Modify: `README.md`
 - Modify: `docs/cloud-vps-hosting.md`
 - Modify: `cloudflare/control-plane/README.md`
-- Modify any generated configuration typings required by the checked-in Worker workflow.
+- Modify generated Worker configuration typings only when the existing type-generation command changes them.
 
 - [ ] **Step 1: Document the trust split**
 
@@ -938,35 +948,39 @@ State explicitly:
 - the control plane has no chats or provider secrets;
 - headless secrets live in the encrypted host store;
 - `hub.json` is included in hub backups and migrations;
-- deleting `hub.json` creates a new hub identity and therefore is never a normal troubleshooting step.
+- deleting `hub.json` creates a new hub identity and is never a normal troubleshooting step.
 
 - [ ] **Step 2: Document Wave 1 headless commands**
 
-Include exact non-production examples:
+Use interactive verification:
 
 ```bash
 pnpm vbotctl -- account request-code --email owner@example.com
-pnpm vbotctl -- account verify-code --email owner@example.com --code 12345678
+pnpm vbotctl -- account verify-code --email owner@example.com
 pnpm vbotctl -- hub register --name "Home V Bot"
 pnpm vbotctl -- hub heartbeat --once
 pnpm vbotctl -- fleet list --json
 ```
 
-Do not claim a background heartbeat service exists in Wave 1.
-
-- [ ] **Step 3: Scan for secret leakage and placeholders**
-
-Run:
+For non-interactive local tests, pipe only the short-lived verification code through stdin:
 
 ```bash
-rg -n "TBD|TODO|implement later|add appropriate|handle edge cases" \
-  shared server runtime cloudflare/control-plane electron docs README.md
+printf '%s\n' '12345678' | \
+  pnpm vbotctl -- account verify-code --email owner@example.com --stdin
+```
 
+Do not claim a background heartbeat service exists in Wave 1.
+
+- [ ] **Step 3: Audit for secret leakage and unfinished markers**
+
+Review all new and modified files for incomplete markers, vague error branches, credential-shaped fixtures, and accidental plaintext. Then run:
+
+```bash
 rg -n "controlPlane(AccountToken|InstallationCredential)|omb_install_|set-auth-token" \
   runtime cloudflare/control-plane electron shared
 ```
 
-Review every match. Test fixtures may use syntactically invalid redacted tokens. No production log, thrown message, snapshot, or fleet payload may include a real-shaped credential.
+Every match must be a fixed field name, parser, validator, or intentionally invalid fixture. No production log, thrown message, snapshot, fleet payload, or command argument may include a real-shaped credential.
 
 - [ ] **Step 4: Run the complete Wave 1 verification gate**
 
@@ -979,6 +993,7 @@ pnpm control-plane:check
 pnpm control-plane:test
 pnpm control-plane:dry-run
 node --test \
+  shared/hub-identity.test.mjs \
   shared/control-plane-client.test.mjs \
   electron/control-plane-client.test.mjs \
   electron/companion-account-service.test.mjs \
