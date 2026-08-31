@@ -51,6 +51,7 @@
     "test:save-file": "node --test electron/save-file.node-test.mjs",
     "bench:observation": "node --experimental-strip-types scripts/bench-observation.ts",
     "test:watch": "vitest",
+    "test:runtime": "vitest run runtime/src server/host-secret-store.test.ts shared/runtime-profile.test.ts shared/runtime-platform.test.ts && node --test shared/hub-identity.test.mjs shared/control-plane-client.test.mjs",
     "test:cua": "pnpm build:cua && node scripts/smoke-cua.mjs",
     "test:cua-container": "node scripts/smoke-cua-container.mjs",
     "check:electron": "node scripts/check-electron.mjs",
@@ -63,6 +64,7 @@
     "build:cua": "node scripts/prepare-cua.mjs",
     "build:android-tools": "node scripts/prepare-android-tools.mjs",
     "build:cloudflared": "node scripts/prepare-cloudflared.mjs",
+    "build:runtime": "tsc -p tsconfig.runtime.build.json",
     "build:cua:linux": "node scripts/prepare-cua-linux.mjs",
     "build:cua:linux:offline": "node scripts/prepare-cua-linux.mjs --offline",
     "build:updater": "node scripts/bundle-updater.mjs",
@@ -83,7 +85,8 @@
     "control-plane:types": "pnpm --filter @openmausbot/control-plane types",
     "control-plane:check": "pnpm --filter @openmausbot/control-plane check",
     "control-plane:test": "pnpm --filter @openmausbot/control-plane test",
-    "control-plane:dry-run": "pnpm --filter @openmausbot/control-plane dry-run"
+    "control-plane:dry-run": "pnpm --filter @openmausbot/control-plane dry-run",
+    "vbotctl": "node --experimental-strip-types runtime/src/cli.ts"
   },
   "dependencies": {
     "@trycua/cua-driver": "0.20.0",

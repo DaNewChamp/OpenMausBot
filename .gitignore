@@ -13,6 +13,7 @@ dist-native
 # which package:prepare runs before electron-builder stages it
 dist-companion
 dist-server
+dist-runtime
 *.local
 .DS_Store
 *.tsbuildinfo

@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowJs": true,
+    "checkJs": false,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "noEmit": false,
+    "outDir": "dist-runtime",
+    "rootDir": ".",
+    "declaration": false,
+    "sourceMap": false,
+    "types": ["node"]
+  },
+  "include": [
+    "runtime/src/**/*.ts",
+    "server/host-secret-store.ts",
+    "shared/hub-identity.mjs",
+    "shared/control-plane-client.mjs",
+    "shared/runtime-vocabulary.mjs",
+    "shared/runtime-profile.ts",
+    "shared/runtime-platform.ts"
+  ]
+}
