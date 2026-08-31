@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { explainApproval, reviewApproval, type ApprovalReviewInput } from "./approval-explainer.ts";
 import {
@@ -38,6 +41,11 @@ import {
   validateReviewerCli,
   waitForChildExit,
 } from "./approval-reviewer-cli.ts";
+import {
+  assertCodexNoToolsPayload,
+  createCodexOAuthReviewer,
+  readCodexOAuthCredentialsSync,
+} from "./approval-reviewer-codex.ts";
 
 const CLAUDE_HELP = `
   -p, --print  Print response and exit
@@ -193,6 +201,21 @@ describe("approval reviewer catalog", () => {
     );
     expect(validateReviewerSelection({ mode: "always", instanceId: "codex", model: "gpt-5.4" }, providers).ok).toBe(false);
   });
+
+  it("marks Codex OAuth available only after the server proves the existing login", () => {
+    const providers = buildApprovalReviewerCatalog(
+      [{
+        instanceId: "codex",
+        driverKind: "codex",
+        models: { options: [{ id: "gpt-5.4", label: "GPT-5.4" }] },
+        snapshot: { authenticated: true, state: "available" },
+      }],
+      {},
+      { codexOAuthAvailable: true },
+    );
+    expect(providers[0]).toMatchObject({ available: true, configured: true, reason: null, id: "openai" });
+    expect(validateReviewerSelection({ mode: "always", instanceId: "codex", model: "gpt-5.4" }, providers)).toEqual({ ok: true });
+  });
 });
 
 describe("CLI isolation detection", () => {
@@ -282,6 +305,104 @@ describe("direct provider payloads", () => {
     expect(payload.body).toBeUndefined();
     expect(seen[0]?.body).not.toContain("sk-secret-key");
     expect(chatCompletionReviewPayload("llama", "hi")).not.toHaveProperty("tools");
+  });
+});
+
+describe("Codex OAuth reviewer", () => {
+  function tempCodexHome(): string {
+    return mkdtempSync(join(tmpdir(), "omb-codex-auth-test-"));
+  }
+
+  it("reads only a valid owner-readable access token and never exposes refresh state", () => {
+    const home = tempCodexHome();
+    try {
+      const accessToken = "header.payload.signature";
+      writeFileSync(join(home, "auth.json"), JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: accessToken,
+          refresh_token: "refresh-secret",
+          id_token: "id-secret",
+          account_id: "account-123",
+        },
+      }));
+      chmodSync(join(home, "auth.json"), 0o600);
+      const credentials = readCodexOAuthCredentialsSync({ CODEX_HOME: home });
+      expect(credentials).toEqual({ accessToken, accountId: "account-123" });
+      expect(JSON.stringify(credentials)).not.toContain("refresh-secret");
+      chmodSync(join(home, "auth.json"), 0o644);
+      expect(readCodexOAuthCredentialsSync({ CODEX_HOME: home })).toBeNull();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("sends the first-party OAuth request without any tool, file, cwd, or persistence surface", async () => {
+    const seen: { url?: string; headers?: Headers; body?: string } = {};
+    const reviewer = createCodexOAuthReviewer({
+      model: "gpt-5.6-sol",
+      accessToken: "oauth-secret",
+      accountId: "account-123",
+      fetchImpl: async (url, init) => {
+        seen.url = String(url);
+        seen.headers = new Headers(init?.headers);
+        seen.body = String(init?.body);
+        return new Response(JSON.stringify({
+          output_text: JSON.stringify({
+            purpose: "Reads the requested file",
+            change: "Nothing; read-only",
+            where: "README.md on Mac mini",
+            risk: "low",
+          }),
+        }), { status: 200 });
+      },
+    });
+    const value = await reviewer({
+      tool: "terminal",
+      command: "cat README.md",
+      host: "Mac mini",
+      deterministic: explainApproval("terminal", "cat README.md", "Mac mini"),
+    }, new AbortController().signal);
+    expect(value).toMatchObject({ purpose: "Reads the requested file" });
+    expect(seen.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect(seen.headers?.get("chatgpt-account-id")).toBe("account-123");
+    expect(seen.headers?.get("authorization")).toBe("Bearer oauth-secret");
+    const payload = JSON.parse(seen.body ?? "{}");
+    assertCodexNoToolsPayload(payload);
+    expect(payload.tools).toBeUndefined();
+    expect(payload.functions).toBeUndefined();
+    expect(payload.input?.[0]?.content?.[0]?.type).toBe("input_text");
+    expect(payload.store).toBe(false);
+    expect(payload.stream).toBe(false);
+    expect(seen.body).not.toContain("oauth-secret");
+  });
+
+  it("rejects malformed output and endpoints outside the fixed OpenAI origin", async () => {
+    const reviewer = createCodexOAuthReviewer({
+      model: "gpt-5.6-sol",
+      accessToken: "oauth-secret",
+      accountId: "account-123",
+      endpoint: "https://evil.example/backend-api/codex/responses",
+      fetchImpl: vi.fn(),
+    });
+    await expect(reviewer({
+      tool: "terminal",
+      command: "pwd",
+      host: "Mac mini",
+      deterministic: explainApproval("terminal", "pwd", "Mac mini"),
+    }, new AbortController().signal)).rejects.toThrow(/endpoint|allowed/i);
+    const malformed = createCodexOAuthReviewer({
+      model: "gpt-5.6-sol",
+      accessToken: "oauth-secret",
+      accountId: "account-123",
+      fetchImpl: async () => new Response(JSON.stringify({ output_text: "not json" }), { status: 200 }),
+    });
+    await expect(malformed({
+      tool: "terminal",
+      command: "pwd",
+      host: "Mac mini",
+      deterministic: explainApproval("terminal", "pwd", "Mac mini"),
+    }, new AbortController().signal)).resolves.toBeNull();
   });
 });
 

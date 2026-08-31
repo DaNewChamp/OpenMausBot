@@ -37,7 +37,7 @@ export type ReviewDriverFamily =
   | "grok-auth"
   | "other";
 
-export type ReviewLaneKind = "direct" | "cli" | "unavailable";
+export type ReviewLaneKind = "direct" | "oauth" | "cli" | "unavailable";
 
 export interface ApprovalReviewerSelection {
   mode: ApprovalReviewerMode;
@@ -201,6 +201,7 @@ export function detectCliReviewCapability(
 
 export function reviewLaneForFamily(family: ReviewDriverFamily): ReviewLaneKind {
   if (family === "openai-compat" || family === "xai") return "direct";
+  if (family === "codex") return "oauth";
   if (family === "claude") return "cli";
   return "unavailable";
 }
@@ -289,6 +290,7 @@ export function unavailableReasonFor(
   family: ReviewDriverFamily,
   input: {
     configured: boolean;
+    oauthAvailable?: boolean;
     helpText?: string;
     installed?: boolean;
     cliValid?: boolean;
@@ -298,6 +300,11 @@ export function unavailableReasonFor(
   if (family === "other") return "This engine cannot power approval summaries.";
   if (family === "openai-compat" && !input.configured) return "No OpenAI-compatible API key is configured.";
   if (family === "xai" && !input.configured) return "No xAI API key is configured.";
+  if (family === "codex") {
+    if (!input.configured) return "Codex is not signed in.";
+    if (input.oauthAvailable !== true) return "Codex OAuth login is unavailable on this server.";
+    return null;
+  }
   if ((family === "openai-compat" || family === "xai") && input.configured && input.url && !isAllowedReviewerUrl(input.url)) {
     return "Reviewer URL must use HTTPS (or HTTP on localhost/127.0.0.1 only).";
   }
@@ -319,6 +326,8 @@ export interface ReviewerCapabilityHints {
   helpTextByCli?: Record<string, string>;
   installedByCli?: Record<string, boolean>;
   validCliByName?: Record<string, boolean>;
+  /** True only when the server can read a valid existing Codex OAuth login. */
+  codexOAuthAvailable?: boolean;
 }
 
 export function buildApprovalReviewerCatalog(
@@ -347,6 +356,7 @@ export function buildApprovalReviewerCatalog(
       helpText: cliName ? hints.helpTextByCli?.[cliName] : undefined,
       installed: cliName ? hints.installedByCli?.[cliName] : undefined,
       cliValid: cliName ? hints.validCliByName?.[cliName] : undefined,
+      oauthAvailable: family === "codex" ? hints.codexOAuthAvailable === true : undefined,
       url: family === "openai-compat"
         ? compact(credentials.openaiCompat?.url) || DEFAULT_OPENAI_COMPAT_URL
         : family === "xai"

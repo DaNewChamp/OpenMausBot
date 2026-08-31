@@ -18,6 +18,7 @@ import {
   type ReviewerCatalogInstance,
 } from "./approval-reviewer.ts";
 import { createDirectReviewer } from "./approval-reviewer-direct.ts";
+import { createCodexOAuthReviewer, readCodexOAuthCredentialsSync } from "./approval-reviewer-codex.ts";
 import { createCliReviewer, probeReviewerHints, validateReviewerCli, type IsolatedCliRunner } from "./approval-reviewer-cli.ts";
 
 export function credentialsFromConfig(cfg: AppConfig): DirectReviewCredentials {
@@ -48,7 +49,10 @@ export async function liveApprovalReviewerStatus(
   runCli?: IsolatedCliRunner,
 ): Promise<ApprovalReviewerStatus> {
   const credentials = credentialsFromConfig(cfg);
-  const hints = await probeReviewerHints(instances, runCli);
+  const hints = {
+    ...(await probeReviewerHints(instances, runCli)),
+    codexOAuthAvailable: readCodexOAuthCredentialsSync() !== null,
+  };
   const status = buildApprovalReviewerStatus(cfg, instances, credentials, hints);
   if (catalogContainsSecrets(status)) {
     throw new Error("approval reviewer status failed redaction");
@@ -85,6 +89,19 @@ export function bindApprovalReviewer(input: {
       fetchImpl: input.fetchImpl,
     });
     return { identity, review };
+  }
+  if (family === "codex") {
+    const oauth = readCodexOAuthCredentialsSync(input.env);
+    if (!oauth) return null;
+    return {
+      identity,
+      review: createCodexOAuthReviewer({
+        accessToken: oauth.accessToken,
+        accountId: oauth.accountId,
+        model: input.selection.model,
+        fetchImpl: input.fetchImpl,
+      }),
+    };
   }
   if (family === "claude") {
     const cli = instance?.cli?.trim() || instance?.cliDefault?.trim();
