@@ -56,6 +56,63 @@ There is **no cloud sync** between two databases. When you send a message, appro
 
 Deep architecture: [`docs/ios-companion.md`](docs/ios-companion.md) · iOS layout and build: [`ios/README.md`](ios/README.md)
 
+### Account, pairing, and host trust
+
+V Bot keeps account discovery separate from access to a hub:
+
+- **Account login** discovers systems and owns control-plane endpoints. It does
+  not grant access to bots, chats, computers, or provider credentials.
+- **Hub pairing** still grants client access. A QR code, pairing code, or
+  owner-approved invitation issues the hub's device credential.
+- The account control plane has no chats, transcripts, SQLite state, provider
+  secrets, or execution payloads. It publishes only safe fleet metadata.
+- Provider and headless account secrets stay on the host: Electron uses the
+  operating system's `safeStorage`, while headless hubs use the encrypted
+  `host-secret.key` + `host-secrets.bin` store.
+
+Each runtime has one canonical data directory. Electron resolves its existing
+compatibility path first, then uses the final `app.getPath("userData")` for
+`hub.json`, desktop credentials, and runtime state. A headless runtime must be
+given an explicit absolute `--data-dir`; `OMB_DATA_DIR` is reserved for local
+test fixtures and is not a production default. `hub.json`,
+`host-secret.key`, and `host-secrets.bin` are part of a headless hub backup or
+migration; an Electron archive includes `hub.json` and its OS-encrypted
+credential file under the final `app.getPath("userData")`.
+
+Presence has an explicit lifecycle. Sign-out calls `stopPresence()`, and app
+quit calls `dispose()` so no heartbeat survives teardown. `Node Only` and
+`Hub plus Node` are deployment compositions planned for Wave 4, not Wave 1
+runtime roles. Deleting `hub.json` creates a new hub identity; it is never a
+normal troubleshooting step and can strand the existing installation.
+
+## Wave 1 headless commands
+
+The Wave 1 CLI is intentionally small and one-shot. It does not run a
+background heartbeat service. `--data-dir` is required on every command and
+must be absolute:
+
+```sh
+pnpm run vbotctl -- --data-dir /var/lib/vbot account request-code --email owner@example.com
+pnpm run vbotctl -- --data-dir /var/lib/vbot account verify-code --email owner@example.com
+pnpm run vbotctl -- --data-dir /var/lib/vbot hub register --name "Home V Bot"
+pnpm run vbotctl -- --data-dir /var/lib/vbot hub heartbeat --once
+pnpm run vbotctl -- --data-dir /var/lib/vbot fleet list --json
+```
+
+The verification code is entered through a hidden TTY prompt. For a
+non-interactive local test, pipe only the short-lived code through stdin and
+set `OMB_DATA_DIR` only when the injected fixture explicitly permits it:
+
+```sh
+printf '%s\n' '12345678' | \
+  pnpm run vbotctl -- --data-dir "$OMB_DATA_DIR" account verify-code \
+  --email owner@example.com --stdin
+```
+
+The CLI never accepts a verification code, bearer, or installation credential
+as an argument and redacts credential-shaped output. A usage error exits `2`,
+an operational failure exits `1`, and a successful command exits `0`.
+
 ### What works on the phone today
 
 - QR / manual / Tailscale / **hosted HTTPS** pairing (`openmaus.posival.com`-style routes)

@@ -5,6 +5,31 @@ installation ownership, and per-installation managed companion endpoints. It
 does **not** store or move local bots, chats, desktop SQLite state, prompts, or
 tool output.
 
+## Trust boundary
+
+The control plane is an account-and-fleet directory, not the chat or execution
+plane. Account login can discover a user's installations and manage their
+managed endpoint metadata, but it never grants access to a hub. A client still
+needs the hub's normal pairing credential before it can reach the companion.
+Provider secrets, account bearers, installation credentials, chats, transcripts,
+prompts, and provider payloads remain on the runtime host; none are stored in
+D1 or returned in fleet responses. Headless hosts persist secrets in the
+encrypted `host-secret.key`/`host-secrets.bin` envelope, while Electron keeps
+desktop credentials in the OS-backed store under its final
+`app.getPath("userData")`.
+
+The stable `hub.json` identity is the installation `clientInstanceId`. Electron
+uses the final `app.getPath("userData")` after compatibility-path adoption;
+headless runtimes require an explicit absolute `--data-dir`. `OMB_DATA_DIR` is
+reserved for local dependency-injected tests only. Backups and migrations must
+retain `hub.json` plus the encrypted secret-store files. Deleting `hub.json`
+mints a new identity and is not a troubleshooting procedure.
+
+`stopPresence()` and `dispose()` are runtime lifecycle APIs, called on sign-out
+and app quit; this Worker only records one-shot heartbeats and does not provide
+a background heartbeat service. `Node Only` and `Hub plus Node` are Wave 4
+deployment compositions, not Wave 1 runtime-profile values.
+
 ## What is included
 
 - Better Auth 1.7.1 with email OTP, signed bearer sessions, hashed OTP storage,
@@ -78,6 +103,11 @@ An installation is online for 90 seconds after its last presence update. Fleet
 endpoint metadata is limited to an HTTPS URL and lifecycle status; tunnel IDs,
 DNS IDs, connector tokens, account identifiers, and email addresses are never
 published.
+
+The runtime-profile wire vocabulary is exactly `desktop-hub`, `headless-hub`, or
+`desktop-client`; `Node Only` and `Hub plus Node` are compositions introduced in
+Wave 4. Wire platforms are exactly `darwin`, `windows`, or `linux` (`win32` is
+normalized to `windows` at the Node boundary).
 
 Raw installation credentials contain a random lookup ID plus 32 random bytes.
 Only a SHA-256 digest is stored, and the raw value is returned only when an
@@ -162,6 +192,16 @@ pnpm --filter @openmausbot/control-plane exec wrangler dev --config wrangler.jso
 ```
 
 Do not commit `.dev.vars`.
+
+For a local OTP smoke test, use only a temporary `.dev.vars` copied from
+`.dev.vars.example` with test-only placeholder values and an explicitly
+loopback client URL such as `http://127.0.0.1:8787`. The
+`test/local-mail-fixture.ts` helper replaces only the local test `EMAIL`
+binding and captures the latest OTP in memory; it is not an HTTP route, Worker
+variable, or production binding. Read the code through the fixture's
+`readLatestOtp(email)` helper, pipe it to the headless CLI with `--stdin`, and
+remove the temporary variables, data directory, and capture afterward. Never
+use a production account, static OTP, or endpoint provisioning in local smoke.
 
 ## Production blockers
 
