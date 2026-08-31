@@ -65,7 +65,11 @@ V Bot keeps account discovery separate from access to a hub:
 - **Hub pairing** still grants client access. A QR code, pairing code, or
   owner-approved invitation issues the hub's device credential.
 - The account control plane has no chats, transcripts, SQLite state, provider
-  secrets, or execution payloads. It publishes only safe fleet metadata.
+  secrets, or execution payloads. Raw provider secrets, account bearer values,
+  installation credential values, and connector tokens are not stored in D1;
+  Better Auth still persists session records and hashed OTP values, while
+  installation rows retain credential metadata and SHA-256 digests. It
+  publishes only safe fleet metadata.
 - Provider and headless account secrets stay on the host: Electron uses the
   operating system's `safeStorage`, while headless hubs use the encrypted
   `host-secret.key` + `host-secrets.bin` store.
@@ -73,8 +77,9 @@ V Bot keeps account discovery separate from access to a hub:
 Each runtime has one canonical data directory. Electron resolves its existing
 compatibility path first, then uses the final `app.getPath("userData")` for
 `hub.json`, desktop credentials, and runtime state. A headless runtime must be
-given an explicit absolute `--data-dir`; `OMB_DATA_DIR` is reserved for local
-test fixtures and is not a production default. `hub.json`,
+given an explicit absolute `--data-dir`; the `vbotctl` compatibility override
+`OMB_DATA_DIR` is limited to injected local/headless test fixtures and is not a
+production or general-consumer default. `hub.json`,
 `host-secret.key`, and `host-secrets.bin` are part of a headless hub backup or
 migration; an Electron archive includes `hub.json` and its OS-encrypted
 credential file under the final `app.getPath("userData")`.

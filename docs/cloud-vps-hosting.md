@@ -23,7 +23,11 @@ The VPS is a `headless-hub`. Account login is only a control-plane operation:
 it discovers the VPS installation and owns managed endpoint metadata. It does
 not grant access to bots or machines. A phone or desktop still needs the
 hub-issued pairing credential before it can call the companion. The control
-plane has no chats, transcripts, provider secrets, or SQLite state.
+plane has no chats, transcripts, provider secrets, or SQLite state. Raw
+provider secrets, account bearer values, installation credential values, and
+connector tokens are not stored in D1; Better Auth persists session records and
+hashed OTP values, while installation rows retain credential metadata and
+SHA-256 digests.
 
 The headless runtime has one explicit data directory, normally
 `/var/lib/openmausbot`. Its stable `hub.json` identity is the installation's
@@ -83,7 +87,8 @@ printf '%s\n' '12345678' | \
   --email owner@example.com --stdin
 ```
 
-`OMB_DATA_DIR` is a local-test override, not a production default. The CLI
+`OMB_DATA_DIR` is a `vbotctl` compatibility override for injected local/headless
+test fixtures only, not a production or general-consumer default. The CLI
 does not accept OTPs, account bearers, or installation credentials as argv
 values. It emits safe JSON only and exits `0` on success, `1` on an operational
 failure, or `2` for a usage error.

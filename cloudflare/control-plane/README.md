@@ -11,17 +11,22 @@ The control plane is an account-and-fleet directory, not the chat or execution
 plane. Account login can discover a user's installations and manage their
 managed endpoint metadata, but it never grants access to a hub. A client still
 needs the hub's normal pairing credential before it can reach the companion.
-Provider secrets, account bearers, installation credentials, chats, transcripts,
-prompts, and provider payloads remain on the runtime host; none are stored in
-D1 or returned in fleet responses. Headless hosts persist secrets in the
+Provider secrets, account bearer values, installation credential values, chats,
+transcripts, prompts, and provider payloads remain on the runtime host. Raw
+provider/account/installation credential values and connector tokens are not
+stored in D1 or returned in fleet responses. Better Auth persists session
+records and hashed OTP values in D1, while installation rows retain credential
+metadata and SHA-256 digests. Headless hosts persist secrets in the
 encrypted `host-secret.key`/`host-secrets.bin` envelope, while Electron keeps
 desktop credentials in the OS-backed store under its final
 `app.getPath("userData")`.
 
 The stable `hub.json` identity is the installation `clientInstanceId`. Electron
 uses the final `app.getPath("userData")` after compatibility-path adoption;
-headless runtimes require an explicit absolute `--data-dir`. `OMB_DATA_DIR` is
-reserved for local dependency-injected tests only. Backups and migrations must
+headless runtimes require an explicit absolute `--data-dir`. The `vbotctl`
+compatibility override `OMB_DATA_DIR` is limited to injected local/headless
+test fixtures; production runtimes and other consumers must use their explicit
+data directory. Backups and migrations must
 retain `hub.json` plus the encrypted secret-store files. Deleting `hub.json`
 mints a new identity and is not a troubleshooting procedure.
 
@@ -202,6 +207,8 @@ variable, or production binding. Read the code through the fixture's
 `readLatestOtp(email)` helper, pipe it to the headless CLI with `--stdin`, and
 remove the temporary variables, data directory, and capture afterward. Never
 use a production account, static OTP, or endpoint provisioning in local smoke.
+The focused in-memory auth proof is
+`pnpm --filter @openmausbot/control-plane exec vitest run test/local-mail-fixture.test.ts`.
 
 ## Production blockers
 
