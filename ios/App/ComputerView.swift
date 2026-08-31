@@ -72,6 +72,7 @@ struct ComputerView: View {
     @State private var viewerReady = false
     @State private var viewerGeneration = 0
     @State private var viewerFailureCount = 0
+    @State private var localVmInputSuppressedUntil = Date.distantPast
     @State private var showingPhotoSettings = false
     @State private var vmTypeDraft = ""
     @State private var announcedLocalVmStatusEpisode: String?
@@ -716,7 +717,14 @@ struct ComputerView: View {
             keyboardActive: vmKeyboardFocused,
             pointerMode: Binding(
                 get: { vmPointerMode },
-                set: { vmPointerMode = $0 }
+                set: { mode in
+                    guard vmPointerMode != mode else { return }
+                    // The live desktop gesture can finish in the same event
+                    // as the overlaid mode button. Ignore that one stale
+                    // gesture so changing modes never clicks the VM.
+                    localVmInputSuppressedUntil = Date().addingTimeInterval(0.35)
+                    vmPointerMode = mode
+                }
             ),
             onPasteFromPhone: { Task { await pasteFromPhoneToVm() } },
             onCopyToPhone: { copyScreen() },
@@ -756,6 +764,7 @@ struct ComputerView: View {
 
     @MainActor
     private func sendLocalVmInput(_ body: [String: Any]) async {
+        guard Date() >= localVmInputSuppressedUntil else { return }
         if let error = await session.sendLocalVmInput(for: current, body: body) {
             localVmSurfaceError = error
         }
