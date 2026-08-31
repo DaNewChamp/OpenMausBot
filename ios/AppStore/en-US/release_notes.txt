@@ -1,7 +1,7 @@
-V Bot build 63: reliable sending plus cleaner home and model settings.
+V Bot build 64: smoother computer control and clearer approvals.
 
-• Chief now routes through the available Codex engine instead of failing instantly
-• Home hero avatar and caption no longer clip at the top or bottom
-• OpenAI uses a clean original provider mark instead of an emoji
-• OpenAI shows the curated Sol, Sol 1M, Terra, Luna, and GPT-5.5 choices only
-• Desktop bridge and reconstructed-engine capabilities now fail closed when unsupported
+• Trackpad mode now moves the remote pointer naturally by relative motion
+• Trackpad and touch controls no longer open the Create Local VM prompt accidentally
+• Home bot captions show the bot name cleanly without repeating hierarchy titles
+• Approval cards explain actions in plain language with clear Allow once and Deny choices
+• Global and per-bot Ask, Allow, or Deny permission policies now sync securely
