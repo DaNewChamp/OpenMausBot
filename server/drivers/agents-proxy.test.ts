@@ -232,6 +232,9 @@ describe("agents-proxy MCP surface", () => {
       "create_routine",
       "run_routine",
       "request_credential",
+      "skills_list",
+      "skill_view",
+      "skill_manage",
     ]);
   });
 
