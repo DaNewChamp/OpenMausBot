@@ -2,6 +2,22 @@ const INSTALLATION_CREDENTIAL =
   /^omb_install_[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/;
 const MAX_OPAQUE_ID_LENGTH = 256;
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const RUNTIME_PROFILES = new Set([
+  "desktop-hub",
+  "headless-hub",
+  "desktop-client",
+]);
+const WIRE_PLATFORMS = new Set(["darwin", "windows", "linux"]);
+const ENDPOINT_STATUSES = new Set([
+  "pending",
+  "provisioning",
+  "ready",
+  "deleting",
+  "error",
+]);
+const CAPABILITY_NAME = /^[a-z][a-z0-9-]{0,63}$/;
+const MAX_CAPABILITIES = 32;
+const MAX_FLEET_INSTALLATIONS = 100;
 
 const stringValue = (value) => (typeof value === "string" ? value : null);
 
@@ -170,6 +186,176 @@ function validatedEndpoint(value) {
   return { url: url.origin };
 }
 
+/** Return an object only when every enumerable property is explicitly named.
+ * Fleet responses are a trust boundary, so unlike the legacy installation
+ * reader this helper also rejects unknown and missing fields. */
+function strictRecord(value, keys, requiredKeys = keys) {
+  if (!isPlainRecord(value)) return null;
+  const allowed = new Set(keys);
+  try {
+    for (const key of Reflect.ownKeys(value)) {
+      if (!Object.prototype.propertyIsEnumerable.call(value, key)) continue;
+      if (typeof key !== "string" || !allowed.has(key)) return null;
+    }
+    for (const key of requiredKeys) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) return null;
+    }
+  } catch {
+    return null;
+  }
+  return value;
+}
+
+function validFleetString(value, maximum) {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= maximum &&
+    value.trim().length > 0 &&
+    !/[\p{Cc}\p{Cs}\p{Cf}]/u.test(value)
+  );
+}
+
+function validTimestamp(value) {
+  return value === null || (Number.isSafeInteger(value) && value >= 0);
+}
+
+function validCapabilities(value) {
+  try {
+    if (!Array.isArray(value) || value.length > MAX_CAPABILITIES) return null;
+    // Object.keys also rejects sparse arrays and enumerable non-index fields.
+    const keys = Object.keys(value);
+    if (
+      keys.length !== value.length ||
+      keys.some((key, index) => key !== String(index))
+    ) return null;
+    const capabilities = [];
+    const seen = new Set();
+    for (const capability of value) {
+      if (typeof capability !== "string" || !CAPABILITY_NAME.test(capability) || seen.has(capability)) {
+        return null;
+      }
+      seen.add(capability);
+      capabilities.push(capability);
+    }
+    return capabilities;
+  } catch {
+    return null;
+  }
+}
+
+function validatedFleetEndpoint(value) {
+  try {
+    if (value === null) return null;
+    const endpoint = strictRecord(value, ["url", "status"]);
+    if (!endpoint || typeof endpoint.url !== "string" || !ENDPOINT_STATUSES.has(endpoint.status)) {
+      return null;
+    }
+    let url;
+    try {
+      url = new URL(endpoint.url);
+    } catch {
+      return null;
+    }
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    ) {
+      return null;
+    }
+    return { url: url.origin, status: endpoint.status };
+  } catch {
+    return null;
+  }
+}
+
+function validatedFleetInstallation(value) {
+  try {
+    const installation = strictRecord(value, [
+      "id",
+      "clientInstanceId",
+      "name",
+      "platform",
+      "runtimeProfile",
+      "appVersion",
+      "capabilities",
+      "lastSeenAt",
+      "online",
+      "endpoint",
+    ]);
+    if (!installation) return null;
+    const capabilities = validCapabilities(installation.capabilities);
+    if (
+      !isValidOpaqueId(installation.id) ||
+      !isValidOpaqueId(installation.clientInstanceId) ||
+      !validFleetString(installation.name, 80) ||
+      !WIRE_PLATFORMS.has(installation.platform) ||
+      !RUNTIME_PROFILES.has(installation.runtimeProfile) ||
+      (installation.appVersion !== null && !validFleetString(installation.appVersion, 64)) ||
+      !capabilities ||
+      !validTimestamp(installation.lastSeenAt) ||
+      typeof installation.online !== "boolean"
+    ) {
+      return null;
+    }
+    const endpoint = validatedFleetEndpoint(installation.endpoint);
+    if (installation.endpoint !== null && !endpoint) return null;
+    return {
+      id: installation.id,
+      clientInstanceId: installation.clientInstanceId,
+      name: installation.name,
+      platform: installation.platform,
+      runtimeProfile: installation.runtimeProfile,
+      appVersion: installation.appVersion,
+      capabilities,
+      lastSeenAt: installation.lastSeenAt,
+      online: installation.online,
+      endpoint,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Decode the owner-scoped fleet response without carrying unknown fields. */
+export function decodeFleetResponse(value) {
+  try {
+    const payload = strictRecord(value, ["installations"]);
+    if (!payload || !Array.isArray(payload.installations) || payload.installations.length > MAX_FLEET_INSTALLATIONS) {
+      return null;
+    }
+    const installations = [];
+    for (const value of payload.installations) {
+      const installation = validatedFleetInstallation(value);
+      if (!installation) return null;
+      installations.push(installation);
+    }
+    return installations;
+  } catch {
+    return null;
+  }
+}
+
+function presenceBody(value) {
+  try {
+    const input = strictRecord(value, ["runtimeProfile", "appVersion", "capabilities"], ["runtimeProfile", "capabilities"]);
+    if (!input || !RUNTIME_PROFILES.has(input.runtimeProfile)) return null;
+    const capabilities = validCapabilities(input.capabilities);
+    if (!capabilities) return null;
+    if (input.appVersion !== undefined && !validFleetString(input.appVersion, 64)) return null;
+    const body = { runtimeProfile: input.runtimeProfile };
+    if (input.appVersion !== undefined) body.appVersion = input.appVersion;
+    body.capabilities = [...capabilities];
+    return body;
+  } catch {
+    return null;
+  }
+}
+
 export function createControlPlaneClient({
   baseURL,
   fetchImpl = globalThis.fetch,
@@ -304,6 +490,31 @@ export function createControlPlaneClient({
 
     async listInstallations(accountToken) {
       return accountInstallations(accountToken);
+    },
+
+    async listFleet(accountToken) {
+      if (!boundedSecret(accountToken)) throw new ControlPlaneError("signed_out", 401);
+      const { payload } = await request("/v1/fleet", { token: accountToken });
+      const installations = decodeFleetResponse(payload);
+      if (!installations) throw new ControlPlaneError("invalid_response");
+      return installations;
+    },
+
+    async updatePresence(installationCredential, presence) {
+      if (
+        typeof installationCredential !== "string" ||
+        !INSTALLATION_CREDENTIAL.test(installationCredential)
+      ) {
+        throw new ControlPlaneError("signed_out", 401);
+      }
+      const body = presenceBody(presence);
+      if (!body) throw new ControlPlaneError("invalid_request");
+      const { payload } = await request("/v1/installations/self/presence", {
+        method: "PUT",
+        token: installationCredential,
+        body,
+      });
+      if (payload.ok !== true) throw new ControlPlaneError("invalid_response");
     },
 
     async ensureInstallation({ accountToken, currentCredential, clientInstanceId, name, platform, appVersion }) {
