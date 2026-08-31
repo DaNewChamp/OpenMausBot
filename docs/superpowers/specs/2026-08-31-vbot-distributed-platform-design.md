@@ -25,6 +25,11 @@ The target interaction resembles Grok Bot's coordinator, provider router, Box, h
 5. **Machine capabilities are opt-in and revocable.** A newly paired node advertises no execution capabilities until the owner enables them. Existing bridge approval behavior remains the minimum security bar.
 6. **No wholesale Grok Reconstructed dependency.** The reconstructed repository is a behavioral and architectural reference. Native OpenMaus/V Bot drivers and contracts remain primary.
 7. **Backward compatibility is mandatory.** Existing iOS pairings, hosted URL, bundle ID, bots, transcripts, bridges, provider instances, Local VM data, and release paths must continue to work during staged migration.
+8. **Wire platform values are canonical.** The only platform values on a control-plane, hub, client, or node wire are `darwin`, `windows`, and `linux`. Node's `process.platform` value `win32` is mapped to `windows` at the runtime boundary and never crosses an API or enters fleet storage.
+9. **Runtime data directories are explicit and per-profile.** Electron uses the final `app.getPath("userData")` as the hub data directory, preserving the existing compatibility-path adoption before identity loading. Headless requires an explicit absolute runtime data directory; there is no implicit current-working-directory or home-directory fallback. `hub.json` and the encrypted secret-store files are part of that directory's backup/export surface.
+10. **Stable IDs are opaque.** Existing hub, client-instance, and installation IDs are adopted as non-empty, bounded opaque strings even when they are not UUIDs. Newly minted IDs may use UUIDs, but no reader or cleanup path requires UUID syntax. Unreadable, malformed, or empty persisted identity/credential records fail closed and are never replaced automatically.
+11. **Presence has an explicit lifecycle.** Every presence owner exposes idempotent `stopPresence()` and `dispose()` operations. Sign-out and app quit call them. Electron keeps its existing sign-out endpoint deletion and installation revocation behavior; headless sign-out removes only the account bearer and retains hub and installation identity for recovery.
+12. **Local authentication fixtures are test-only.** Local smoke uses an in-memory/test-mail OTP fixture and an explicitly configured loopback control-plane URL (`http://127.0.0.1:8787` or an explicitly selected loopback port). No production Worker route, static OTP, or authentication bypass is added.
 
 ## Current foundation
 
@@ -52,6 +57,17 @@ A V Bot runtime that owns durable product state and runs agent turns. A hub can 
 - `headless-hub`: service-managed harness and companion on a VPS or home server.
 
 A stable `hubId` survives reinstall, update, hostname change, endpoint rotation, and migration. It is stored in the hub data archive.
+
+The canonical hub data directory is profile-specific:
+
+- Electron resolves and, when needed, adopts the existing compatibility path, then uses the resulting `app.getPath("userData")` for `hub.json`, desktop credentials, and desktop runtime state. No parallel `~/.openmausbot` identity directory is introduced.
+- Headless runtimes require an explicit absolute `--data-dir` (the `OMB_DATA_DIR` environment variable is reserved for local tests). The directory contains `hub.json`, the encrypted host secret key/envelope, and the existing hub state.
+
+Backups and exports include the identity and encrypted secret-store files along with the rest of the selected runtime directory. A missing or corrupt identity is an unavailable hub, not a reason to mint a new ID.
+
+### Wire platform
+
+`platform` is a transport value, not an operating-system probe: `darwin | windows | linux`. At a Node boundary, map `process.platform === "win32"` to `windows`; reject any other unknown value before publishing presence or fleet metadata.
 
 ### Client
 
@@ -136,7 +152,10 @@ The account control plane is not in the chat or execution path. When it is unava
 | Desktop Client | Electron remote UI, optional node | paired-client token; optional node token | secondary computer |
 | Hub plus Node | headless hub plus node executor | hub state plus local executor config | capable VPS or home server |
 
-The same source tree builds every profile. Product behavior is selected by a runtime profile, not by divergent forks.
+The same source tree builds every profile. Product behavior is selected by a
+runtime profile, not by divergent forks. `Node Only` and `Hub plus Node` are
+deployment compositions rather than Wave 1 runtime-profile values; Wave 4 adds
+their composition and node-agent wiring.
 
 ## Identity and account discovery
 
@@ -145,6 +164,7 @@ Each hub has a stable local identity document:
 ```ts
 interface HubIdentity {
   schemaVersion: 1;
+  /** Stable opaque ID; existing values are not required to be UUIDs. */
   id: string;
   createdAt: number;
 }
@@ -168,6 +188,12 @@ interface FleetInstallation {
   } | null;
 }
 ```
+
+`shared/runtime-profile.ts` is the source of truth for the runtime-profile
+vocabulary. The Worker derives its validator from that exported list and a
+parity test fails if the native and Worker views diverge. Node Only and Hub plus
+Node are deployment compositions, not additional `runtimeProfile` wire values;
+their composition is introduced with the Node agent in Wave 4.
 
 The account session lists these records. The installation credential updates only its own presence and managed endpoint. An account bearer cannot call the companion or harness.
 
@@ -290,6 +316,17 @@ A shared target takes a lease per interactive turn. The lease includes bot, thre
 4. Complete hub pairing by QR, code, or an invitation approved on an existing owner client.
 5. The paired hub opens the bot roster.
 
+### Web client slice (Wave 2)
+
+Wave 2 includes a small responsive browser client with the same thin-client
+boundary as iOS and remote desktop. It uses the account control plane only for
+sign-in and hub discovery, then requires an explicit hub pairing challenge
+before it calls the hub API. The first slice presents Grok-Bot-like navigation
+for conversations, bots, fleet, settings, and approvals while reusing the
+hub's existing API and state. It has no separate backend, transcript store,
+provider store, or fleet database, and it is deliberately not implemented in
+Wave 1.
+
 ### Provider setup
 
 A Providers screen groups connections by provider and runtime host. Each row shows Ready, Sign in, Needs key, CLI missing, subscription inactive, or unavailable. Model selection remains on the bot profile and chat header.
@@ -312,7 +349,10 @@ The program produces:
 - the full Electron desktop suite;
 - existing iOS TestFlight builds.
 
-`vbotctl` provides:
+`vbotctl` provides the following eventual command surface. Wave 1 ships only
+the account request/verify, hub register/heartbeat, fleet list, and account
+sign-out subset; Wave 6 extends the same CLI and preserves those commands and
+their exit codes:
 
 ```text
 vbotctl init --profile headless-hub
@@ -331,6 +371,14 @@ vbotctl import <archive>
 
 No command prints stored secrets. Diagnostics redact tokens, URLs with credentials, environment values, and private host paths.
 
+Presence owners expose an explicit lifecycle API: `stopPresence()` cancels any
+interval and prevents a new heartbeat, while `dispose()` is idempotent and
+awaits any in-flight presence work before releasing resources. Sign-out calls
+`stopPresence()` first. Electron then keeps its current endpoint deletion and
+installation revocation cleanup; headless sign-out clears only the account
+bearer and retains `hub.json`, the adopted installation ID, and its encrypted
+installation credential. App quit calls `dispose()` before the process exits.
+
 ## Persistence and migration
 
 The hub export contains:
@@ -342,6 +390,14 @@ The hub export contains:
 - node registry and grants;
 - execution targets and bindings;
 - a versioned manifest with checksums.
+
+The archive is rooted at the canonical runtime data directory. For Electron,
+that includes `hub.json` and the OS-encrypted credential file under the final
+`app.getPath("userData")`; for headless, it includes `hub.json`,
+`host-secret.key`, and `host-secrets.bin` under the explicit `--data-dir`.
+Existing backup tooling must be audited for these files in Wave 1 and changed
+only if its current include/exclude rules omit them; that audit is local and
+does not deploy or alter production resources.
 
 Import is offline and atomic. It checkpoints SQLite, verifies every checksum, writes into a staging directory, and swaps only after validation. Existing scripts remain until the new round-trip has passed Mac-to-VPS-to-Mac verification.
 
@@ -366,16 +422,30 @@ Import is offline and atomic. It checkpoints SQLite, verifies every checksum, wr
 8. Revocation is immediate for future work and cancel-requests in-flight work.
 9. Every persisted format is versioned and migrates forward without deleting unknown fields.
 10. Production DNS, Cloudflare resources, migrations, and live hub deployment require a separate reviewed release step.
+11. Shared/native fleet decoders are strict: unknown fields, malformed IDs,
+    platforms, profiles, timestamps, or capabilities fail closed before data
+    reaches a client. CLI output adds a separate defense-in-depth redaction
+    pass for dependency-injected or legacy objects; that pass never weakens
+    strict decoding or turns a rejected response into trusted data.
 
 ## Delivery waves
 
 ### Wave 1: Hub identity and fleet discovery
 
-Add stable hub identity, headless secret storage, runtime profiles, control-plane presence, shared account client, and headless registration. No pairing semantics change.
+Add stable hub identity, canonical per-runtime data directories, headless secret
+storage, runtime profiles and platform-boundary normalization, control-plane
+presence, shared account client, and headless registration. Reconcile the
+legacy Electron client-instance field to the adopted hub ID, add explicit
+presence shutdown/disposal, and audit existing backup tooling for identity and
+encrypted secret files. No pairing semantics or production resources change.
 
 ### Wave 2: Account-aware clients and pairing invitations
 
-Add optional iOS and desktop account login, fleet picker, direct-pair fallback, and hub-approved invitations. Account login alone still cannot call the hub.
+Add optional iOS and desktop account login, fleet picker, direct-pair fallback,
+hub-approved invitations, and a small responsive Grok-Bot-like Web UI slice.
+The Web UI reuses the same hub/API/state, uses account login for discovery only,
+and requires explicit pairing for hub access; it has no separate backend or
+state store. Account login alone still cannot call the hub.
 
 ### Wave 3: Provider connections and authentication
 
@@ -383,7 +453,9 @@ Create the provider connection registry, migrate existing instances and secrets,
 
 ### Wave 4: Node agent v2
 
-Evolve bridge into the general node daemon, add desktop-embedded node mode, capability management, safe node APIs, and exact per-bot/node grants.
+Evolve bridge into the general node daemon, add desktop-embedded node mode,
+compose the Node Only and Hub plus Node deployment profiles, add capability
+management, safe node APIs, and exact per-bot/node grants.
 
 ### Wave 5: Execution targets and VM ownership
 
@@ -391,6 +463,8 @@ Normalize Local VM, VPS, Box, host computer, and browser into targets; add dedic
 
 ### Wave 6: Distribution and product closeout
 
-Ship unified headless installers, Docker image, desktop profile selection, account/provider/machine UI, export/import, updater path, end-to-end QA, and release documentation.
+Extend the Wave 1 runtime CLI (do not recreate it), ship unified headless
+installers, Docker image, desktop profile selection, account/provider/machine
+UI, export/import, updater path, end-to-end QA, and release documentation.
 
 Each wave is implemented in a separate worktree and reviewed before the next begins. The master plan names the branch, tests, and exit gate for every wave.

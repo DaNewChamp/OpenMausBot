@@ -25,6 +25,13 @@
 - Existing iOS bundle ID `com.posival.openmausmobile`, pairing protocol, data directory, hosted URL, and current user data remain compatible.
 - Existing `BotRecord.computer`, `cloudBackend`, bridge routes, provider instances, and deployment scripts remain readable until their replacements pass migration and rollback tests.
 - Production deploys, Cloudflare changes, App Store uploads, and DNS changes are separate explicit release actions.
+- Wire `platform` values are exactly `darwin`, `windows`, or `linux`; map Node's `process.platform` value `win32` to `windows` before any request or fleet write.
+- Electron hubs use the final `app.getPath("userData")` (including the existing compatibility-path adoption) as their canonical data directory. Headless hubs require an explicit absolute `--data-dir`; `OMB_DATA_DIR` is a local-test override, not a production default.
+- Existing hub/client/installation IDs are opaque stable strings. Adopt valid non-empty IDs without UUID validation; newly generated IDs may be UUIDs. Unreadable, malformed, or empty identity/credential state fails closed, and the legacy Electron client-instance field is reconciled to the adopted hub ID before registration or cleanup.
+- Presence owners expose idempotent `stopPresence()` and `dispose()`, called on sign-out and app quit. Electron retains endpoint deletion and installation revocation on sign-out; headless sign-out removes only the account bearer and retains the hub/installation identity and encrypted installation credential.
+- `shared/runtime-profile.ts` is the single runtime-profile vocabulary source. The Worker derives its validator from that list and a parity test fails on drift. Node Only and Hub plus Node are deployment compositions deferred to Wave 4, not Wave 1 runtime roles.
+- Shared/native fleet decoding is strict and rejects unknown or malformed fields. CLI redaction tests are separate defense-in-depth tests against dependency-injected or legacy objects and never weaken the strict decoder.
+- Local smoke uses a test-only in-memory OTP/mail fixture and an explicit loopback control-plane URL such as `http://127.0.0.1:8787`; no production OTP route, static code, or auth bypass is permitted.
 
 ---
 
@@ -35,7 +42,7 @@ This is not a one-branch feature. Implement six independently reviewable waves. 
 | Wave | Branch | Primary deliverable | Detailed plan |
 |---|---|---|---|
 | 1 | `feat/vbot-hub-fleet-foundation` | Stable hub identity, headless secret store, fleet presence/discovery | `docs/superpowers/plans/2026-08-31-vbot-wave-1-hub-fleet-foundation.md` |
-| 2 | `feat/vbot-account-pairing-clients` | Optional account login on clients plus hub-issued pairing invitations | Create after Wave 1 merges |
+| 2 | `feat/vbot-account-pairing-clients` | Optional account login on clients, hub-issued pairing invitations, and a thin responsive Web UI slice | Create after Wave 1 merges |
 | 3 | `feat/vbot-provider-connections` | Unified provider connection and authentication lifecycle | Create after Wave 2 merges |
 | 4 | `feat/vbot-node-agent-v2` | General machine node protocol and desktop-embedded node | Create after Wave 3 merges |
 | 5 | `feat/vbot-execution-targets` | Dedicated/shared execution targets and compatibility migration | Create after Wave 4 merges |
@@ -79,15 +86,21 @@ If the baseline fails, record the exact existing failures before editing. Do not
 
 ### Result
 
-Desktop and headless hubs share a stable hub identity, encrypted host secret abstraction, runtime profile vocabulary, and control-plane fleet presence contract. Account-authenticated clients can list owned systems, but no hub pairing behavior changes.
+Desktop and headless hubs share a stable hub identity, canonical per-runtime
+data directory, encrypted host secret abstraction, runtime profile and platform
+vocabulary, and control-plane fleet presence contract. Account-authenticated
+clients can list owned systems, but no hub pairing behavior changes.
 
 ### Interfaces produced
 
 ```ts
 type RuntimeProfile = "desktop-hub" | "headless-hub" | "desktop-client";
 
+type WirePlatform = "darwin" | "windows" | "linux";
+
 interface HubIdentity {
   schemaVersion: 1;
+  /** Existing IDs are opaque; UUID format is only a generation choice. */
   id: string;
   createdAt: number;
 }
@@ -96,7 +109,7 @@ interface FleetInstallation {
   id: string;
   clientInstanceId: string;
   name: string;
-  platform: "darwin" | "windows" | "linux";
+  platform: WirePlatform;
   runtimeProfile: RuntimeProfile;
   appVersion: string | null;
   capabilities: string[];
@@ -106,12 +119,21 @@ interface FleetInstallation {
 }
 ```
 
+`shared/runtime-profile.ts` owns the runtime-profile list consumed by native
+code and the Worker. The Worker exposes a derived schema, and a parity test
+enumerates both lists and exercises every accepted value. `win32` is never a
+wire value; the runtime maps it to `windows` before constructing this record.
+
 ### Exit gate
 
 - Existing desktop account and managed endpoint tests still pass.
 - A headless test runtime registers once, reuses its installation credential, heartbeats, and appears in `GET /v1/fleet`.
 - Restarting the runtime preserves `hubId` and does not create a second installation.
 - Deleting or corrupting the secret envelope reports unavailable and never overwrites the remote installation.
+- An existing opaque legacy client-instance ID is adopted without UUID validation, reconciled into `hub.json` and the legacy credential field, and used by cleanup; malformed or empty identity state fails closed.
+- `hub.json` and the encrypted secret-store files are present in the canonical runtime backup/export fixture, or a narrowly scoped existing backup-tool test proves their inclusion. No deployment is performed.
+- `stopPresence()` and `dispose()` stop heartbeats on sign-out and app quit; headless sign-out retains installation identity while Electron keeps its existing revocation cleanup.
+- Platform normalization tests cover `process.platform = win32 -> windows`, and the Worker/native runtime-profile parity test passes.
 - No companion or iOS route changes.
 
 Execute the checked-in Wave 1 plan exactly.
@@ -135,6 +157,11 @@ Execute the checked-in Wave 1 plan exactly.
 - Modify: `companion/src/routes.ts`
 - Modify: `companion/src/proxy.ts`
 - Modify: `src/components/CompanionSection.tsx`
+- Create: `src/components/WebClientShell.tsx`
+- Create: `src/components/WebClientShell.test.tsx`
+- Create: `src/lib/web-client-session.ts`
+- Create: `src/lib/web-client-session.test.ts`
+- Modify: `src/App.tsx` only to mount the web-client shell when the browser-client entry is selected.
 - Create corresponding Swift, server, companion, and desktop tests.
 
 ### Required behavior
@@ -146,6 +173,7 @@ Execute the checked-in Wave 1 plan exactly.
 - First pairing still requires a hub-displayed QR or code.
 - An already paired owner device may create a two-minute invitation. The invitation is single-use, hub-scoped, attempt-limited, and invalidated when the creating device is revoked.
 - A new client's account bearer is never forwarded to the companion.
+- Add a small responsive Web UI slice that reuses the existing hub API/state for conversations, bots, fleet, settings, and approvals. Account login is used only for `/v1/me` and `/v1/fleet` discovery; the browser must complete explicit hub pairing before any hub route. Do not add a Web UI backend, transcript store, provider store, or fleet database, and do not implement this slice in Wave 1.
 
 ### Contract
 
@@ -171,6 +199,16 @@ cd ios && swift test
 pnpm typecheck
 node scripts/test-floor.mjs
 ```
+
+Add the focused Web UI tests to the Wave 2 gate:
+
+```bash
+pnpm vitest run src/components/WebClientShell.test.tsx src/lib/web-client-session.test.ts
+```
+
+Those tests must prove that account discovery cannot call hub routes before
+pairing, that only the paired hub token reaches the hub, and that all five
+navigation areas render from shared state without a second persistence layer.
 
 Simulator verification:
 
@@ -448,11 +486,11 @@ Verify Local VM on an iOS simulator against a disposable local harness before an
 
 ### Files expected
 
-- Create: `runtime/src/cli.ts`
+- Modify: `runtime/src/cli.ts` (extend the Wave 1 command surface; do not recreate it)
 - Create: `runtime/src/doctor.ts`
 - Create: `runtime/src/service-install.ts`
 - Create: `runtime/src/export-import.ts`
-- Create: `runtime/src/*.test.ts`
+- Create or extend: `runtime/src/*.test.ts` while preserving Wave 1 parser and redaction coverage.
 - Create: `scripts/runtime/linux/vbot-hub.service`
 - Create: `scripts/runtime/linux/vbot-companion.service`
 - Create: `scripts/runtime/macos/com.posival.vbot-hub.plist`
@@ -466,11 +504,21 @@ Verify Local VM on an iOS simulator against a disposable local harness before an
 
 ### Runtime CLI
 
-The shipped command surface is fixed by the design spec. All commands support `--json` for machine-readable status except secret input. `provider set-key` accepts only stdin or an OS secret prompt and never a command-line value.
+Wave 6 extends the Wave 1 `runtime/src/cli.ts` implementation. It must
+preserve the Wave 1 commands (`account request-code`, `account verify-code`,
+`hub register`, `hub heartbeat --once`, `fleet list`, and `account sign-out`),
+their flags, and exit codes while adding the remaining command surface from the
+design spec. Do not recreate or replace the Wave 1 parser. All commands support
+`--json` for machine-readable status except secret input. `provider set-key`
+accepts only stdin or an OS secret prompt and never a command-line value.
 
 ### Export/import
 
-Archive manifest includes version, hub ID, paths, sizes, and SHA-256 checksums. Export checkpoints SQLite. Import writes into a staging data directory, validates all checksums and schemas, then performs one atomic swap while services are stopped. Failure preserves the original data directory.
+Archive manifest includes version, hub ID, paths, sizes, and SHA-256 checksums.
+Export checkpoints SQLite and includes `hub.json` plus the encrypted secret-store
+files from the canonical runtime data directory. Import writes into a staging
+data directory, validates all checksums and schemas, then performs one atomic
+swap while services are stopped. Failure preserves the original data directory.
 
 ### Release matrix
 
@@ -507,7 +555,10 @@ Then perform disposable end-to-end tests:
 7. Bind two bots to dedicated targets and two bots to one shared pool; verify isolation and lease serialization.
 8. Export the hub, import to a second disposable host, and reconnect the saved phone pairing.
 9. Build the desktop suite and headless bundle.
-10. Run `git diff --check`, inspect final status, and record exact commits.
+10. Exercise the local OTP/mail fixture through an explicitly configured
+    loopback control-plane URL, and verify that the Wave 1 CLI commands still
+    parse and retain their exit codes after the Wave 6 extension.
+11. Run `git diff --check`, inspect final status, and record exact commits.
 
 Production deployment and TestFlight begin only after this matrix passes and the release source is reviewed.
 
