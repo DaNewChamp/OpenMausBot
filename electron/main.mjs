@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
+import { app, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -60,6 +60,11 @@ const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource
 );
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 const { desktopViewerUrl, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
+const { createDesktopWorkspaceManager } = require("./desktop-workspace.cjs");
+const { createBrowserSurfaceManager } = require("./browser-surface.cjs");
+const { browserProfilePartition } = require("./browser-snapshot.cjs");
+const { createBrowserHost } = require("./browser-host.cjs");
+const { createCuaConnectionStore: createDescriptorStore } = require("./cua-connection.cjs");
 const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -91,6 +96,14 @@ const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 let desktopViewerWindow = null;
 let desktopViewerOwner = null;
 let desktopViewerContextId = null;
+let desktopWorkspaceManager = null;
+let desktopWorkspaceOwner = null;
+let browserSurface = null;
+let browserHost = null;
+const browserConnectionStore = createDescriptorStore({
+  getUserData: () => app.getPath("userData"),
+  fileName: "browser-connection.json",
+});
 let pendingPackageInstallUrl = packageUrlFromCommandLine(process.argv);
 let mainWindow = null;
 let unreadCount = 0;
@@ -194,6 +207,115 @@ function queuePackageInstall(rawLink) {
   deliverPackageInstall(target);
   return true;
 }
+
+function ensureDesktopWorkspace(owner) {
+  if (!owner || owner.isDestroyed()) throw new Error("The V Bot window is unavailable");
+  if (desktopWorkspaceManager) {
+    if (desktopWorkspaceOwner !== owner) throw new Error("The desktop workspace belongs to another app window");
+    return desktopWorkspaceManager;
+  }
+  desktopWorkspaceOwner = owner;
+  const manager = createDesktopWorkspaceManager({
+    owner,
+    createView: (options) => new WebContentsView(options),
+    partitionPrefix: `vbot-desktop-workspace-${randomUUID()}`,
+    notify: (state) => {
+      if (!owner.isDestroyed() && !owner.webContents.isDestroyed()) owner.webContents.send("desktop-workspace:state", state);
+    },
+  });
+  desktopWorkspaceManager = manager;
+  owner.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) manager.closeAll();
+  });
+  owner.webContents.on("render-process-gone", () => manager.closeAll());
+  owner.once("closed", () => {
+    manager.closeAll();
+    if (desktopWorkspaceManager === manager) {
+      desktopWorkspaceManager = null;
+      desktopWorkspaceOwner = null;
+    }
+  });
+  return manager;
+}
+
+function desktopWorkspaceForEvent(event, create = false) {
+  const owner = mainWindow;
+  if (!owner || owner.isDestroyed() || event.sender !== owner.webContents) {
+    throw new Error("The desktop workspace is available only to the main app window");
+  }
+  if (desktopWorkspaceManager && desktopWorkspaceOwner !== owner) throw new Error("The desktop workspace belongs to another app window");
+  return create ? ensureDesktopWorkspace(owner) : desktopWorkspaceManager;
+}
+
+async function startBrowserSurface(owner) {
+  try {
+    browserSurface = createBrowserSurfaceManager({
+      owner,
+      createView: (options) => new WebContentsView(options),
+      notify: (state) => {
+        if (!owner.isDestroyed() && !owner.webContents.isDestroyed()) owner.webContents.send("browser:state", state);
+      },
+      onUserInteraction: (event) => {
+        if (!owner.isDestroyed() && !owner.webContents.isDestroyed()) owner.webContents.send("browser:user-interaction", event);
+      },
+    });
+    if (!browserHost) {
+      browserHost = createBrowserHost({ manager: () => browserSurface });
+      await browserHost.start();
+      browserConnectionStore.persist(browserHost.descriptor());
+    }
+    owner.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace) browserSurface?.hideAll();
+    });
+    owner.webContents.on("render-process-gone", () => browserSurface?.hideAll());
+    const surface = browserSurface;
+    owner.once("closed", () => {
+      surface.closeAll();
+      if (browserSurface === surface) browserSurface = null;
+    });
+    slog(`browser surface ready for window ${owner.id} (host ${browserHost.url})`);
+  } catch (error) {
+    slog(`browser surface unavailable: ${error?.message ?? error}`);
+    browserSurface = null;
+  }
+}
+
+function browserSurfaceForEvent(event) {
+  const owner = mainWindow;
+  if (!owner || owner.isDestroyed() || event.sender !== owner.webContents) throw new Error("The browser is available only to the main app window");
+  if (!browserSurface) throw new Error("The built-in browser is unavailable");
+  return browserSurface;
+}
+
+ipcMain.handle("browser:available", () => Boolean(browserSurface && browserHost?.url));
+ipcMain.handle("browser:state", (event, botId) => browserSurfaceForEvent(event).state(botId));
+ipcMain.handle("browser:layout", (event, botId, bounds, profile, mode, layoutOwner) =>
+  browserSurfaceForEvent(event).layout(
+    botId,
+    bounds ?? null,
+    Object.prototype.toString.call(profile) === "[object String]" ? profile : undefined,
+    mode === "expanded" ? "expanded" : "compact",
+    Object.prototype.toString.call(layoutOwner) === "[object String]" ? layoutOwner : undefined,
+  ),
+);
+ipcMain.handle("browser:forward", async (event, botId, profile) => browserSurfaceForEvent(event).forward(botId, profile));
+ipcMain.handle("browser:navigate", async (event, botId, url, profile) => browserSurfaceForEvent(event).navigate(botId, url, profile));
+ipcMain.handle("browser:back", async (event, botId, profile) => browserSurfaceForEvent(event).back(botId, profile));
+ipcMain.handle("browser:reload", async (event, botId, profile) => browserSurfaceForEvent(event).reload(botId, profile));
+ipcMain.handle("browser:set-human-control", (event, botId, held, profile) => browserSurfaceForEvent(event).setHumanControl(botId, held, profile));
+ipcMain.handle("browser:close", (event, botId) => browserSurfaceForEvent(event).close(botId));
+ipcMain.handle("browser:forget-profile", async (event, profileId) => {
+  const surface = browserSurfaceForEvent(event);
+  const id = String(profileId ?? "");
+  if (!/^[A-Za-z0-9_-]{1,40}$/.test(id) || id === "guest") throw new Error("That browser profile id is invalid");
+  const dropped = surface.forgetProfile(id);
+  const ses = session.fromPartition(browserProfilePartition(id));
+  await ses.clearStorageData();
+  await ses.clearCache();
+  try { await ses.clearAuthCache(); } catch {}
+  try { ses.closeAllConnections(); } catch {}
+  return { dropped };
+});
 
 app.on("open-url", (event, url) => {
   if (!queuePackageInstall(url)) return;
@@ -973,6 +1095,10 @@ function createWindow({ waitingForServer = false } = {}) {
     },
   });
   mainWindow = win;
+  // The browser surface is optional: if WebContentsView or its local host
+  // cannot start, the rest of the desktop remains usable and the renderer
+  // reports the Browser tab as unavailable.
+  void startBrowserSurface(win);
   installWindowStatePersistence(win);
   applyUnreadBadge(win);
   if (restored.maximized) win.maximize();
@@ -1258,6 +1384,20 @@ ipcMain.handle("desktop:open-external", async (_event, rawUrl) => {
 ipcMain.handle("desktop-viewer:open", (event, rawUrl, title, contextId) => {
   const owner = BrowserWindow.fromWebContents(event.sender);
   return openDesktopViewer(owner, rawUrl, title, contextId);
+});
+
+ipcMain.handle("desktop-workspace:open", (event, input) => desktopWorkspaceForEvent(event, true).open(input));
+ipcMain.handle("desktop-workspace:layout", (event, items) => {
+  const manager = desktopWorkspaceForEvent(event);
+  return manager ? manager.layout(items) : false;
+});
+ipcMain.handle("desktop-workspace:set-interactive", (event, contextId) => {
+  const manager = desktopWorkspaceForEvent(event);
+  return manager ? manager.setInteractive(contextId) : contextId == null;
+});
+ipcMain.handle("desktop-workspace:close", (event, contextId) => {
+  const manager = desktopWorkspaceForEvent(event);
+  return manager ? manager.close(contextId) : true;
 });
 
 // Close only when the caller owns the current viewer — otherwise one bot's

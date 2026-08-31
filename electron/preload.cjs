@@ -138,6 +138,40 @@ contextBridge.exposeInMainWorld("ogb", {
       return () => ipcRenderer.removeListener("desktop-viewer:state", handler);
     },
   },
+  /** Built-in browser surfaces and two-up desktop workspace views. */
+  browser: {
+    available: () => ipcRenderer.invoke("browser:available"),
+    state: (botId) => ipcRenderer.invoke("browser:state", botId),
+    layout: (botId, bounds, profile, mode, layoutOwner) => ipcRenderer.invoke("browser:layout", botId, bounds, profile, mode, layoutOwner),
+    navigate: (botId, url, profile) => ipcRenderer.invoke("browser:navigate", botId, url, profile),
+    back: (botId, profile) => ipcRenderer.invoke("browser:back", botId, profile),
+    forward: (botId, profile) => ipcRenderer.invoke("browser:forward", botId, profile),
+    reload: (botId, profile) => ipcRenderer.invoke("browser:reload", botId, profile),
+    setHumanControl: (botId, held, profile) => ipcRenderer.invoke("browser:set-human-control", botId, held, profile),
+    close: (botId) => ipcRenderer.invoke("browser:close", botId),
+    forgetProfile: (profileId) => ipcRenderer.invoke("browser:forget-profile", profileId),
+    onState: (cb) => {
+      const handler = (_event, state) => cb(state);
+      ipcRenderer.on("browser:state", handler);
+      return () => ipcRenderer.removeListener("browser:state", handler);
+    },
+    onUserInteraction: (cb) => {
+      const handler = (_event, value) => cb(value);
+      ipcRenderer.on("browser:user-interaction", handler);
+      return () => ipcRenderer.removeListener("browser:user-interaction", handler);
+    },
+  },
+  desktopWorkspace: {
+    open: (input) => ipcRenderer.invoke("desktop-workspace:open", input),
+    layout: (items) => ipcRenderer.invoke("desktop-workspace:layout", items),
+    setInteractive: (contextId) => ipcRenderer.invoke("desktop-workspace:set-interactive", contextId),
+    close: (contextId) => ipcRenderer.invoke("desktop-workspace:close", contextId),
+    onState: (cb) => {
+      const handler = (_event, state) => cb(state);
+      ipcRenderer.on("desktop-workspace:state", handler);
+      return () => ipcRenderer.removeListener("desktop-workspace:state", handler);
+    },
+  },
   /** Native folder picker for a bot's working folder; null when cancelled. */
   pickFolder: (current) => ipcRenderer.invoke("desktop:pick-folder", current),
   /** Writes the redacted diagnostics report to a user-chosen file; resolves

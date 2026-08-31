@@ -215,6 +215,10 @@ export interface Bot {
   cwd?: string;
   /** auto mode: the bot approves its own tool permissions */
   autoApprove?: boolean;
+  /** Whether this bot gets the app's built-in browser surface. */
+  browser?: boolean;
+  /** Named browser profile; absent/null uses the bot's own session. */
+  browserProfile?: string | null;
   /** tools this bot may always use without asking */
   alwaysAllow?: string[];
   /** speak this bot's replies aloud as they settle */
@@ -289,12 +293,20 @@ export interface ConfigStatus {
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string };
   /** Experimental features are opt-in and default off when absent. */
-  features?: { skillRecorder: boolean };
+  features?: { skillRecorder: boolean; browser?: boolean };
+  /** Named browser sessions available to bots in the desktop app. */
+  browserProfiles?: BrowserProfile[];
+}
+
+export interface BrowserProfile {
+  id: string;
+  name: string;
+  partitionId?: string;
 }
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "composio" | "box" | "vps" | "rooms" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile" | "features"
+  "xai" | "composio" | "box" | "vps" | "rooms" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile" | "features" | "browserProfiles"
 >;
 
 export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
@@ -310,6 +322,7 @@ export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
     imageGen: frame.imageGen,
     profile: frame.profile,
     features: frame.features,
+    browserProfiles: frame.browserProfiles,
   };
 }
 

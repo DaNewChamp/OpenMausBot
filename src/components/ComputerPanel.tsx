@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ChevronsRight,
+  Globe,
   Hand,
   Loader2,
   Maximize2,
@@ -26,6 +27,8 @@ import { CloudBackendPicker } from "./CloudBackendPicker";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { RoutineEditor } from "./RoutinesPage";
 import { AndroidDevicePanel, useAndroidUsbDevices } from "./AndroidDevicePanel";
+import { BrowserPanel } from "./BrowserPanel";
+import { builtInBrowserEnabled } from "@/lib/feature-flags";
 import { LocalScreenPreview } from "./LocalScreenPreview";
 import { LinuxLocalControl } from "./LinuxLocalControl";
 import { MacLocalControl } from "./MacLocalControl";
@@ -89,7 +92,7 @@ function nextRunLabel(at: number | null) {
   return `${sameDay ? "Today" : date.toLocaleDateString([], { month: "short", day: "numeric" })}, ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 }
 
-export function ComputerPanel({ bot }: { bot: Bot }) {
+export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrowser?: (botId: string) => void }) {
   const { state, dispatch } = useStore();
   const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
   const localAvailable = capabilities.localComputer.available;
@@ -116,9 +119,10 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [creatingRoutine, setCreatingRoutine] = useState(false);
-  const [panelView, setPanelView] = useState<"computer" | "android">("computer");
+  const [panelView, setPanelView] = useState<"computer" | "android" | "browser">("computer");
   const androidStatus = useAndroidUsbDevices();
   const androidConnected = androidStatus.devices.length > 0;
+  const browserEnabled = builtInBrowserEnabled(state.config) && bot.browser !== false && Boolean(window.ogb?.browser);
   // bumped when a Box API key is saved inline, to re-run the spin-up flow
   const [retry, setRetry] = useState(0);
   const vmReadinessAttempts = useRef(0);
@@ -159,7 +163,8 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
 
   useEffect(() => {
     if (!androidConnected && panelView === "android") setPanelView("computer");
-  }, [androidConnected, panelView]);
+    if (!browserEnabled && panelView === "browser") setPanelView("computer");
+  }, [androidConnected, browserEnabled, panelView]);
   useEffect(() => {
     vmReadinessAttempts.current = 0;
   }, [bot.id, bot.computer]);
@@ -725,7 +730,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         >
           <Settings size={18} />
         </button>
-        {androidConnected ? (
+        {androidConnected || browserEnabled ? (
           <div className="flex overflow-hidden rounded-lg border border-hairline/40">
             <button
               onClick={() => setPanelView("computer")}
@@ -737,16 +742,30 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             >
               <Monitor size={13} /> Computer
             </button>
-            <button
-              onClick={() => setPanelView("android")}
-              aria-pressed={panelView === "android"}
-              className={cn(
-                "flex items-center gap-1.5 border-l border-hairline/40 px-2.5 py-1 text-[12.5px]",
-                panelView === "android" ? "bg-control text-ink" : "text-ink-secondary hover:text-ink",
-              )}
-            >
-              <Smartphone size={13} /> Android
-            </button>
+            {browserEnabled && (
+              <button
+                onClick={() => setPanelView("browser")}
+                aria-pressed={panelView === "browser"}
+                className={cn(
+                  "flex items-center gap-1.5 border-l border-hairline/40 px-2.5 py-1 text-[12.5px]",
+                  panelView === "browser" ? "bg-control text-ink" : "text-ink-secondary hover:text-ink",
+                )}
+              >
+                <Globe size={13} /> Browser
+              </button>
+            )}
+            {androidConnected && (
+              <button
+                onClick={() => setPanelView("android")}
+                aria-pressed={panelView === "android"}
+                className={cn(
+                  "flex items-center gap-1.5 border-l border-hairline/40 px-2.5 py-1 text-[12.5px]",
+                  panelView === "android" ? "bg-control text-ink" : "text-ink-secondary hover:text-ink",
+                )}
+              >
+                <Smartphone size={13} /> Android
+              </button>
+            )}
           </div>
         ) : (
           <span className="text-[15px] font-semibold text-ink">Computer</span>
@@ -764,6 +783,19 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       {panelView === "android" && androidConnected ? (
         <div className="flex-1 overflow-y-auto px-4 pt-2">
           <AndroidDevicePanel status={androidStatus} />
+        </div>
+      ) : panelView === "browser" && browserEnabled ? (
+        <div className="min-h-0 flex-1">
+          <BrowserPanel
+            bot={bot}
+            control={control}
+            controlPending={controlPending}
+            onExpand={onExpandBrowser ? () => onExpandBrowser(bot.id) : undefined}
+            onControl={async (action) => {
+              const snap = await requestControl(action);
+              return snap.held === (action === "take");
+            }}
+          />
         </div>
       ) : (
       <div className="flex-1 overflow-y-auto px-4 pb-4">

@@ -17,6 +17,7 @@ import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { RoutinesPage } from "@/components/RoutinesPage";
 import { NoEngines } from "@/components/NoEngines";
 import { CommandPalette } from "@/components/CommandPalette";
+import { BrowserWorkspace } from "@/components/BrowserWorkspace";
 import { SkillRecorderPage } from "@/components/SkillRecorderPage";
 import { TeamMapPage } from "@/components/TeamMapPage";
 import { isDesktopDemoMode } from "@/lib/desktop-demo";
@@ -53,6 +54,7 @@ function Shell() {
   // turn the aside into a containing block for its fixed descendants (see
   // Sidebar.tsx's className comment).
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [browserWorkspaceBotId, setBrowserWorkspaceBotId] = useState<string | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const group = state.groups.find((g) => g.id === state.selectedId);
   const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0]);
@@ -162,6 +164,21 @@ function Shell() {
     setDrawerOpen(false);
   }, [state.selectedId, state.activeView, state.pluginsOpen, state.settingsOpen]);
 
+  useEffect(() => {
+    if (browserWorkspaceBotId && (state.activeView !== "chat" || state.selectedId !== browserWorkspaceBotId)) {
+      setBrowserWorkspaceBotId(null);
+    }
+  }, [browserWorkspaceBotId, state.activeView, state.selectedId]);
+
+  const openBrowserWorkspace = (botId: string) => {
+    dispatch({ type: "toggleComputer", open: false });
+    setBrowserWorkspaceBotId(botId);
+  };
+  const closeBrowserWorkspace = () => {
+    setBrowserWorkspaceBotId(null);
+    dispatch({ type: "toggleComputer", open: true });
+  };
+
   // The viewer outlives ComputerPanel and can target any bot, so release control
   // here (always mounted) when a bot's viewer closes. release() is idempotent.
   useEffect(() => {
@@ -228,6 +245,8 @@ function Shell() {
         <RoutinesPage />
       ) : state.activeView === "skill-recorder" ? (
         <SkillRecorderPage />
+      ) : browserWorkspaceBotId && bot && bot.id === browserWorkspaceBotId ? (
+        <BrowserWorkspace bot={bot} onClose={closeBrowserWorkspace} />
       ) : noEngines ? (
         <NoEngines />
       ) : group ? (
@@ -248,7 +267,7 @@ function Shell() {
         </main>
       )}
       {state.settingsOpen && bot && <SettingsPanel bot={bot} />}
-      {showRightRail && bot && <ComputerPanel bot={bot} />}
+      {showRightRail && bot && <ComputerPanel bot={bot} onExpandBrowser={openBrowserWorkspace} />}
       {state.inspectorOpen && bot && <InspectorPanel bot={bot} />}
       {state.appSettingsOpen && <SettingsModal />}
       {state.pluginsOpen && <PluginsPanel />}

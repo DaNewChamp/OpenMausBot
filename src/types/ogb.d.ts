@@ -1,6 +1,35 @@
 // The narrow bridge the Electron preload exposes. Absent in the browser.
 
 declare global {
+  interface DesktopWorkspaceBounds {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }
+
+  interface BrowserSurfaceState {
+    botId: string;
+    open: boolean;
+    url: string;
+    title: string;
+    loading: boolean;
+    canGoBack: boolean;
+    canGoForward?: boolean;
+    visible: boolean;
+    partition?: string | null;
+    profile?: string | null;
+    mode?: "compact" | "expanded" | null;
+    code?: "renderer-gone" | "profile-deleted" | "evicted";
+  }
+
+  interface DesktopWorkspaceState {
+    contextId: string;
+    open: boolean;
+    status: "opening" | "ready" | "error" | "closed";
+    interactive: boolean;
+    code?: "load-failed" | "renderer-gone";
+  }
 type NativeSkillRecordingEvent = {
   type: "app" | "click" | "scroll" | "key" | "typing" | "clipboard" | "download";
   atMs: number;
@@ -171,6 +200,39 @@ type SkillRecordingPayload = {
         /** The current viewer state, for a panel to initialize from on mount. */
         currentState(): Promise<{ open: boolean; contextId: string | null }>;
         onState(cb: (state: { open: boolean; contextId: string | null }) => void): () => void;
+      };
+      /** Built-in per-bot browser surface, available in packaged desktop builds. */
+      browser?: {
+        available(): Promise<boolean>;
+        state(botId: string): Promise<BrowserSurfaceState>;
+        layout(
+          botId: string,
+          bounds: DesktopWorkspaceBounds | null,
+          profile?: string,
+          mode?: "compact" | "expanded",
+          layoutOwner?: string,
+        ): Promise<BrowserSurfaceState>;
+        navigate(botId: string, url: string, profile?: string): Promise<{ url: string; title: string }>;
+        back(botId: string, profile?: string): Promise<{ url: string; title: string }>;
+        forward?(botId: string, profile?: string): Promise<{ url: string; title: string }>;
+        reload?(botId: string, profile?: string): Promise<{ url: string; title: string }>;
+        setHumanControl?(botId: string, held: boolean, profile?: string): Promise<boolean>;
+        onUserInteraction?(cb: (event: { botId: string; profile: string }) => void): () => void;
+        forgetProfile?(partitionId: string): Promise<{ dropped: number }>;
+        close(botId: string): Promise<boolean>;
+        onState(cb: (state: BrowserSurfaceState) => void): () => void;
+      };
+      desktopWorkspace?: {
+        open(input: {
+          contextId: string;
+          url: string;
+          title: string;
+          bounds: DesktopWorkspaceBounds;
+        }): Promise<DesktopWorkspaceState>;
+        layout(items: Array<{ contextId: string; bounds: DesktopWorkspaceBounds; visible: boolean }>): Promise<boolean>;
+        setInteractive(contextId: string | null): Promise<boolean>;
+        close(contextId?: string): Promise<boolean>;
+        onState(cb: (state: DesktopWorkspaceState) => void): () => void;
       };
       /** Native folder picker; resolves null when the user cancels. */
       pickFolder?(current?: string): Promise<string | null>;
