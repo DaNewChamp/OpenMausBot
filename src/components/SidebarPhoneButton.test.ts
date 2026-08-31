@@ -7,6 +7,7 @@ import {
   phoneSettingsAction,
   SIDEBAR_PHONE_RECENT_MS,
   SidebarPhoneStatusButton,
+  SidebarPhonePrompt,
   type SidebarPhoneStatus,
 } from "./SidebarPhoneButton";
 
@@ -167,5 +168,13 @@ describe("SidebarPhoneStatusButton", () => {
     expect(markup).toContain('data-sidebar-density="compact"');
     expect(markup).toContain("size-10");
     expect(markup).toContain("shrink-0");
+  });
+});
+
+describe("SidebarPhonePrompt", () => {
+  it("keeps first-run pairing visible without exposing a route or token", () => {
+    const markup = renderToStaticMarkup(createElement(SidebarPhonePrompt, { onOpen: vi.fn() }));
+    expect(markup).toContain("Phone");
+    expect(markup).not.toMatch(/192\.168|\.local|\.ts\.net|pairing code|token/i);
   });
 });

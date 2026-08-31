@@ -40,6 +40,7 @@ import {
   localComputerSelectable,
 } from "@/lib/local-computer";
 import { vpsComputerNeedsReplacement, type VpsComputerStatus } from "@/lib/vps-computer";
+import { computerStatusSummary } from "@/lib/computer-status";
 
 async function api(path: string, init?: RequestInit): Promise<any> {
   const res = await fetch(path, { headers: { "content-type": "application/json" }, ...init });
@@ -704,6 +705,13 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     off: "This bot's computer is off",
     error: reconstructedEngine ? reconstructedComputerNotice : "Couldn't reach the computer",
   } satisfies Record<Exclude<Phase, "ready" | "local" | "vm">, string>;
+  const statusSummary = computerStatusSummary({
+    phase,
+    cloudBackend,
+    linux: isLinux,
+    reconstructed: reconstructedEngine,
+    error,
+  });
 
   return (
     <>
@@ -759,6 +767,19 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         </div>
       ) : (
       <div className="flex-1 overflow-y-auto px-4 pb-4">
+          <div
+            data-computer-status={phase}
+            className={cn(
+              "mb-2 rounded-xl border px-3 py-2.5",
+              statusSummary.tone === "positive" && "border-success/25 bg-success/8",
+              statusSummary.tone === "warning" && "border-warning/25 bg-warning/8",
+              statusSummary.tone === "danger" && "border-danger/25 bg-danger/8",
+              statusSummary.tone === "neutral" && "border-hairline/35 bg-card",
+            )}
+          >
+            <div className="text-[12.5px] font-medium text-ink">{statusSummary.title}</div>
+            <div className="mt-0.5 text-[11.5px] leading-relaxed text-ink-secondary">{statusSummary.detail}</div>
+          </div>
           {/* Screen preview */}
         <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-lg bg-card">
           {frameSrc && previewOpensDesktop ? (

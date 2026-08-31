@@ -915,9 +915,9 @@ export function PhoneSetupFlowView({
         <div className="flex size-14 items-center justify-center rounded-2xl bg-accent/12 text-accent">
           <Smartphone size={26} />
         </div>
-        <h2 className="mt-4 text-[19px] font-semibold text-ink">Use V Bot from your phone</h2>
+        <h2 className="mt-4 text-[19px] font-semibold text-ink">Connect your phone to V Bot</h2>
         <p className="mt-1.5 max-w-[460px] text-[13.5px] leading-relaxed text-ink-secondary">
-          Check chats, answer approvals, and send new work without staying at your computer.
+          Scan one QR code to carry your chats, approvals, and bot work with you. Your phone only gets the access you approve.
         </p>
         <ValuePoints />
         <button
@@ -929,7 +929,7 @@ export function PhoneSetupFlowView({
             ? c.state?.devices.length
               ? "Pair another phone"
               : "Pair a phone"
-            : "Set up my phone"}
+            : "Show pairing code"}
         </button>
         {c.error && <p role="alert" className="mt-3 max-w-[390px] text-[12.5px] text-danger">{c.error}</p>}
         {variant === "onboarding" && (

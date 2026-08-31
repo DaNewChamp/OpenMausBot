@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Smartphone } from "lucide-react";
+import { ChevronRight, Plus, Smartphone } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import type { Action } from "@/state/store";
@@ -151,6 +151,44 @@ function useSidebarPhoneStatus(): SidebarPhoneStatus {
   }, []);
 
   return deriveSidebarPhoneStatus(snapshot, Date.now());
+}
+
+/** Expanded-sidebar companion affordance. The compact icon remains useful in
+ * the narrow rail, but first-run users should not have to discover a tooltip
+ * before they can connect their phone. Routes and pairing codes stay inside
+ * Settings → Phone. */
+export function SidebarPhonePrompt({ onOpen }: { onOpen: () => void }) {
+  const status = useSidebarPhoneStatus();
+  const connected = status.kind === "connected";
+  const attention = status.kind === "unpaired" || status.kind === "unavailable";
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={status.label}
+      data-phone-status={status.kind}
+      className="flex min-h-10 w-full items-center gap-2.5 rounded-lg px-2 text-left text-ink-secondary hover:bg-raised/50 hover:text-ink"
+    >
+      <span className={cn(
+        "relative flex size-8 shrink-0 items-center justify-center rounded-lg bg-control",
+        connected && "text-success",
+        attention && "text-accent",
+      )}>
+        <Smartphone size={16} strokeWidth={1.8} />
+        {status.kind === "unpaired" && (
+          <span aria-hidden="true" className="absolute -bottom-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full border border-panel bg-panel text-accent">
+            <Plus size={9} strokeWidth={2.8} />
+          </span>
+        )}
+        {connected && <span aria-hidden="true" className="absolute -bottom-0.5 -right-0.5 size-2 rounded-full border border-panel bg-success" />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[13px] font-medium text-ink">Phone</span>
+        <span className="block truncate text-[11.5px] text-ink-secondary">{status.label}</span>
+      </span>
+      <ChevronRight size={14} className="shrink-0 text-ink-secondary/70" />
+    </button>
+  );
 }
 
 export function SidebarPhoneStatusButton({

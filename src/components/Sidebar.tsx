@@ -52,7 +52,7 @@ import {
 } from "@/lib/sidebar-preferences";
 import { conversationTitle, modelSuffix } from "@/lib/model-suffix";
 import { unreadAfterSelected } from "@/lib/shell-layout";
-import { phoneSettingsAction, SidebarPhoneButton } from "./SidebarPhoneButton";
+import { phoneSettingsAction, SidebarPhoneButton, SidebarPhonePrompt } from "./SidebarPhoneButton";
 
 /** "Milind Soni" → "MS", "milind" → "M", "you@x.dev" → "Y", unset → "?" */
 function profileInitials(profile?: { name?: string; email?: string }): string {
@@ -1591,6 +1591,11 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
             onOpen={() => dispatch(phoneSettingsAction())}
           />
         )}
+        {density !== "icons" && (
+          <div className="mt-1 border-t border-hairline/20 pt-1">
+            <SidebarPhonePrompt onOpen={() => dispatch(phoneSettingsAction())} />
+          </div>
+        )}
         <div className={cn("flex items-center", density === "icons" && "justify-center")}>
           <button
             onClick={() => dispatch({ type: "toggleAppSettings" })}
@@ -1603,12 +1608,6 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
               {state.config?.profile?.name?.trim() || state.config?.profile?.email?.trim() || "You"}
             </span>
           </button>
-          {density !== "icons" && (
-            <SidebarPhoneButton
-              density={density}
-              onOpen={() => dispatch(phoneSettingsAction())}
-            />
-          )}
           {density !== "icons" && <UpdateButton />}
         </div>
       </div>

@@ -73,7 +73,7 @@ export function ShellHealth({ bot }: { bot: Bot }) {
             className="shell-control flex w-full items-center gap-2 rounded-lg px-2 text-left text-[12.5px] text-ink-secondary hover:bg-raised/40 hover:text-ink"
           >
             <QrCode size={14} />
-            Secure pairing
+            {pairLive?.paired ? "Manage phones" : "Pair your phone"}
             <Cable size={12} className="ml-auto text-success" />
           </button>
           <button
