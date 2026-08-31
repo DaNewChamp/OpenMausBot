@@ -920,7 +920,7 @@ watchdog.start();
 /** Keep approval cards readable on a phone. Provider summaries remain
  * available as `details`, but the headline never exposes raw UUIDs, paths, or
  * gateway payloads. */
-function approvalPresentation(tool: string, summary: string, scope?: RuntimeEvent["approvalScope"]): {
+function approvalPresentation(tool: string, summary: string, scope?: "local-computer" | "bridge"): {
   toolLabel: string;
   hostLabel: string;
   actionSummary: string;
