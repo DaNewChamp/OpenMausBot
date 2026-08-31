@@ -1,13 +1,9 @@
-V Bot build 68: clearer approval details.
+V Bot build 69: professional approval reviews.
 
-• Trackpad mode now moves the remote pointer naturally by relative motion
-• Trackpad and touch controls no longer open the Create Local VM prompt accidentally
-• Home bot captions show the bot name cleanly without repeating hierarchy titles
-• Approval cards explain actions in plain language with clear Allow once and Deny choices
-• Global and per-bot Ask, Allow, or Deny permission policies now sync securely
-• Sending a message now uses a crisp, keyboard-light haptic instead of a heavy tap
-• Switching between Touch and Trackpad no longer sends a stray desktop click or opens an error
-• Approval requests are compact and explain the requested action in plain language
-• Approval details show exactly Deny and Allow, with Always allow kept separate
-• Computer unavailable, Local VM, VPS, and cloud states now show one accurate next step without duplicate copy
-• Approval sheets now separate Reason, Command or Details, and the plain-English Request
+• Approval requests explain what an action does, what changes, where it runs, and its risk
+• Read-only commands identify the specific files or resources being reviewed
+• Exact commands stay available in a clean collapsed detail section
+• Optional AI review can use an explicitly selected provider from your own deployment
+• Local facts and risk remain authoritative even when AI review is enabled
+• Provider credentials remain on the server and are never sent to the phone
+• Unsafe or unsupported reviewer connections are clearly unavailable instead of silently running
