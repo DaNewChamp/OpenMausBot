@@ -15,6 +15,8 @@ tool output.
 - Owner-scoped desktop installations and independently revocable
   `omb_install_…` credentials. Account bearer tokens are never accepted as
   installation credentials, or vice versa.
+- Installation presence heartbeats with shared runtime profiles, canonical
+  wire platforms, normalized capabilities, and owner-scoped fleet discovery.
 - Exact-origin CORS, bounded JSON bodies, redacted errors, and `no-store` on
   every response.
 - One remotely managed Cloudflare Tunnel per installation. Its opaque public
@@ -47,7 +49,9 @@ would make operator cleanup impossible.
 | `GET`, `POST` | `/v1/installations` | account bearer |
 | `POST` | `/v1/installations/:id/credentials/rotate` | owning account bearer |
 | `DELETE` | `/v1/installations/:id` | owning account bearer |
+| `GET` | `/v1/fleet` | account bearer |
 | `GET` | `/v1/installations/self` | installation credential |
+| `PUT` | `/v1/installations/self/presence` | installation credential |
 | `GET`, `POST`, `DELETE` | `/v1/installations/self/endpoint` | installation credential |
 
 Installation registration requires a stable `clientInstanceId`, a display
@@ -57,6 +61,23 @@ revocation, that account may register the stable ID again. Other accounts may
 independently use the same client ID. An account may have at most 100 active
 installations, matching the complete management-list limit. Creation is also
 limited to 100 attempts per account per hour.
+
+### Fleet presence contract
+
+An installation sends a `PUT /v1/installations/self/presence` heartbeat with a
+strict JSON body containing one of the shared runtime profiles
+(`desktop-hub`, `headless-hub`, or `desktop-client`), an optional app version,
+and up to 32 capability names. Capability names are lowercase, bounded,
+deduplicated, and sorted before storage. The installation credential may update
+only its own row; account bearers are rejected.
+
+`GET /v1/fleet` requires an account bearer and returns only that account's
+active installations. Rows created before presence support publish the legacy
+defaults `desktop-hub` and `[]` and remain offline until their first heartbeat.
+An installation is online for 90 seconds after its last presence update. Fleet
+endpoint metadata is limited to an HTTPS URL and lifecycle status; tunnel IDs,
+DNS IDs, connector tokens, account identifiers, and email addresses are never
+published.
 
 Raw installation credentials contain a random lookup ID plus 32 random bytes.
 Only a SHA-256 digest is stored, and the raw value is returned only when an

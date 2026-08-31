@@ -4,12 +4,13 @@ import { timingSafeEqual } from "node:crypto";
 import type { ControlPlaneAuth } from "./auth";
 import { accountSession } from "./auth";
 import { HTTPError, json, readBoundedJSON } from "./http";
+import { WIRE_PLATFORMS, type WirePlatform } from "../../../shared/runtime-platform";
 
 interface InstallationRow {
   id: string;
   client_instance_id: string;
   display_name: string;
-  platform: "darwin" | "windows" | "linux";
+  platform: WirePlatform;
   app_version: string | null;
   created_at: number;
   updated_at: number;
@@ -26,7 +27,7 @@ interface InstallationCredentialRow {
   secret_hash: string;
   display_name: string;
   client_instance_id: string;
-  platform: "darwin" | "windows" | "linux";
+  platform: WirePlatform;
   app_version: string | null;
   created_at: number;
   updated_at: number;
@@ -47,20 +48,43 @@ function printableString(maxLength: number) {
 const printableName = printableString(80);
 const printableVersion = printableString(64);
 
+const MAX_OPAQUE_ID_LENGTH = 256;
+
+const opaqueIdSchema = z.string()
+  .min(1)
+  .max(MAX_OPAQUE_ID_LENGTH)
+  .refine((value) => !/[\p{Cc}\p{Cs}\p{Cf}]/u.test(value));
+
+/** Existing installation IDs are opaque and may use any printable characters. */
+export function isValidOpaqueId(value: unknown): value is string {
+  return opaqueIdSchema.safeParse(value).success;
+}
+
+export function decodeInstallationPathId(value: string): string | null {
+  try {
+    const decoded = decodeURIComponent(value);
+    return isValidOpaqueId(decoded) ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+const opaqueId = opaqueIdSchema;
+
 const createInstallationSchema = z.strictObject({
   name: printableName,
-  clientInstanceId: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
-  platform: z.enum(["darwin", "windows", "linux"]),
+  clientInstanceId: opaqueId,
+  platform: z.enum(WIRE_PLATFORMS),
   appVersion: printableVersion.optional(),
 });
 
-const INSTALLATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const INSTALLATION_CREDENTIAL = /^omb_install_([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$/;
 const INSTALLATION_CREDENTIAL_TTL_MS = 90 * 24 * 60 * 60 * 1_000;
 const CREATION_RATE_WINDOW_MS = 60 * 60 * 1_000;
 const CREATION_RATE_MAX_ATTEMPTS = 100;
 
 function installationJSON(row: InstallationRow) {
+  if (!isValidOpaqueId(row.id) || !isValidOpaqueId(row.client_instance_id)) return null;
   return {
     id: row.id,
     clientInstanceId: row.client_instance_id,
@@ -160,7 +184,11 @@ export async function listInstallations(request: Request, env: Env, auth: Contro
       ORDER BY created_at ASC, id ASC
       LIMIT 100`,
   ).bind(session.user.id).all<InstallationRow>();
-  return json({ installations: result.results.map(installationJSON) });
+  return json({
+    installations: result.results
+      .map(installationJSON)
+      .filter((row): row is NonNullable<typeof row> => row !== null),
+  });
 }
 
 export async function createInstallation(request: Request, env: Env, auth: ControlPlaneAuth): Promise<Response> {
@@ -222,7 +250,7 @@ export async function createInstallation(request: Request, env: Env, auth: Contr
 }
 
 async function ownedActiveInstallation(id: string, ownerUserId: string, env: Env) {
-  if (!INSTALLATION_ID.test(id)) return null;
+  if (!isValidOpaqueId(id)) return null;
   return env.DB.prepare(
     `SELECT id, client_instance_id, display_name, platform, app_version,
             created_at, updated_at, last_seen_at
@@ -232,7 +260,7 @@ async function ownedActiveInstallation(id: string, ownerUserId: string, env: Env
 }
 
 async function ownedInstallation(id: string, ownerUserId: string, env: Env) {
-  if (!INSTALLATION_ID.test(id)) return null;
+  if (!isValidOpaqueId(id)) return null;
   return env.DB.prepare(
     `SELECT id, client_instance_id, display_name, platform, app_version,
             created_at, updated_at, last_seen_at, revoked_at
@@ -331,6 +359,7 @@ async function authenticateInstallation(request: Request, env: Env): Promise<Ins
         AND i.revoked_at IS NULL`,
   ).bind(parsed[1], Date.now()).first<InstallationCredentialRow>();
   if (!row) return null;
+  if (!isValidOpaqueId(row.installation_id) || !isValidOpaqueId(row.client_instance_id)) return null;
 
   const expected = fromHex(row.secret_hash);
   if (!expected) return null;

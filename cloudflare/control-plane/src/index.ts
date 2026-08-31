@@ -14,11 +14,13 @@ import {
 } from "./endpoints";
 import {
   createInstallation,
+  decodeInstallationPathId,
   installationSelf,
   listInstallations,
   revokeInstallation,
   rotateInstallationCredential,
 } from "./installations";
+import { listFleet, updateInstallationPresence } from "./fleet";
 
 const ROTATE_ROUTE = /^\/v1\/installations\/([^/]+)\/credentials\/rotate$/;
 const INSTALLATION_ROUTE = /^\/v1\/installations\/([^/]+)$/;
@@ -94,11 +96,17 @@ async function route(
   if (request.method === "GET" && url.pathname === "/v1/installations") {
     return listInstallations(request, env, auth);
   }
+  if (request.method === "GET" && url.pathname === "/v1/fleet") {
+    return listFleet(request, env, auth);
+  }
   if (request.method === "POST" && url.pathname === "/v1/installations") {
     return createInstallation(request, env, auth);
   }
   if (request.method === "GET" && url.pathname === "/v1/installations/self") {
     return installationSelf(request, env);
+  }
+  if (request.method === "PUT" && url.pathname === "/v1/installations/self/presence") {
+    return updateInstallationPresence(request, env);
   }
   if (url.pathname === "/v1/installations/self/endpoint") {
     if (request.method === "GET") return getManagedEndpoint(request, env);
@@ -112,15 +120,19 @@ async function route(
 
   const rotate = url.pathname.match(ROTATE_ROUTE);
   if (request.method === "POST" && rotate) {
-    return rotateInstallationCredential(request, rotate[1], env, auth);
+    const installationId = decodeInstallationPathId(rotate[1]);
+    if (!installationId) throw new HTTPError(404, "not_found");
+    return rotateInstallationCredential(request, installationId, env, auth);
   }
   const installation = url.pathname.match(INSTALLATION_ROUTE);
   if (request.method === "DELETE" && installation) {
-    const response = await revokeInstallation(request, installation[1], env, auth);
+    const installationId = decodeInstallationPathId(installation[1]);
+    if (!installationId) throw new HTTPError(404, "not_found");
+    const response = await revokeInstallation(request, installationId, env, auth);
     ctx.waitUntil(cleanupEndpointForInstallation(
       env,
       config,
-      installation[1],
+      installationId,
       cloudflareFetch,
       requestId,
     ).catch(() => {
