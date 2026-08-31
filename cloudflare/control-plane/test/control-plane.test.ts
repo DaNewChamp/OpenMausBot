@@ -659,5 +659,21 @@ describe("HTTP boundary hardening", () => {
     });
     expect(deniedPreflight.status).toBe(403);
     expect(deniedPreflight.headers.get("access-control-allow-origin")).toBe("https://app.openmausbot.test");
+
+    const presencePreflight = await call("/v1/installations/self/presence", {
+      method: "OPTIONS",
+      origin: "https://app.openmausbot.test",
+      headers: {
+        "access-control-request-method": "PUT",
+        "access-control-request-headers": "authorization, content-type",
+      },
+    });
+    expect(presencePreflight.status).toBe(204);
+    expect(presencePreflight.headers.get("access-control-allow-origin")).toBe(
+      "https://app.openmausbot.test",
+    );
+    expect(presencePreflight.headers.get("access-control-allow-methods")).toBe(
+      "GET, POST, PUT, DELETE",
+    );
   });
 });

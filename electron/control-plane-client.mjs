@@ -1,8 +1,6 @@
 const INSTALLATION_CREDENTIAL =
   /^omb_install_[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/;
-const INSTALLATION_ID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const CLIENT_INSTANCE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const MAX_OPAQUE_ID_LENGTH = 256;
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const stringValue = (value) => (typeof value === "string" ? value : null);
@@ -39,10 +37,18 @@ const plainObject = (value) => {
   return record;
 };
 
-const validClientInstance = (value) => {
-  const input = stringValue(value);
-  return input !== null && CLIENT_INSTANCE.test(input);
-};
+/** Existing installation and client IDs are opaque. UUIDs are a valid
+ * generation choice, but readers must retain bounded legacy values unchanged. */
+export function isValidOpaqueId(value) {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= MAX_OPAQUE_ID_LENGTH &&
+    !/[\p{Cc}\p{Cs}\p{Cf}]/u.test(value)
+  );
+}
+
+const validClientInstance = isValidOpaqueId;
 
 const boundedSecret = (value, maximum = 8_192) =>
   typeof value === "string" &&
@@ -126,7 +132,7 @@ function validatedInstallation(value) {
   const clientInstanceId = stringValue(installation?.clientInstanceId);
   if (
     id === null ||
-    !INSTALLATION_ID.test(id) ||
+    !isValidOpaqueId(id) ||
     clientInstanceId === null ||
     !validClientInstance(clientInstanceId)
   ) {
@@ -392,7 +398,7 @@ export function createControlPlaneClient({
       if (
         !boundedSecret(accountToken) ||
         typeof installationId !== "string" ||
-        !INSTALLATION_ID.test(installationId)
+        !isValidOpaqueId(installationId)
       ) {
         throw new ControlPlaneError("signed_out", 401);
       }

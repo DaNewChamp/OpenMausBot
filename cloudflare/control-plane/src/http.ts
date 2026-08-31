@@ -12,7 +12,7 @@ export type JSONValue = z.infer<typeof jsonValueSchema>;
 
 const MAX_API_BODY_BYTES = 16 * 1024;
 const BODYLESS_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-const ALLOWED_CORS_METHODS = new Set(["GET", "POST", "DELETE"]);
+const ALLOWED_CORS_METHODS = new Set(["GET", "POST", "PUT", "DELETE"]);
 const ALLOWED_CORS_HEADERS = new Set(["authorization", "content-type"]);
 
 export class HTTPError extends Error {
@@ -130,7 +130,7 @@ export function preflight(request: Request, config: ControlPlaneConfig): Respons
     headers: {
       "cache-control": "no-store",
       "access-control-allow-origin": origin,
-      "access-control-allow-methods": "GET, POST, DELETE",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE",
       "access-control-allow-headers": "authorization, content-type",
       "vary": "Origin",
     },

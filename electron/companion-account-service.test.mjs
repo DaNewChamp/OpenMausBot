@@ -258,6 +258,51 @@ describe("Companion account service", () => {
     expect(store.writes).toHaveLength(2);
   });
 
+  it("accepts opaque legacy IDs through provisioning and cleanup", async () => {
+    const legacyClientInstanceId = "legacy/client.instance: A_01+stable";
+    const legacyInstallationId = "legacy/installation.id: A_01+stable";
+    const client = readyClient({
+      ensureInstallation: vi.fn(async () => ({
+        installation: {
+          id: legacyInstallationId,
+          clientInstanceId: legacyClientInstanceId,
+          name: "Test Mac",
+          platform: "darwin",
+        },
+        credential: INSTALLATION_CREDENTIAL,
+      })),
+      listInstallations: vi.fn(async () => [{
+        id: legacyInstallationId,
+        clientInstanceId: legacyClientInstanceId,
+        name: "Test Mac",
+        platform: "darwin",
+      }]),
+    });
+    const { service, store } = serviceFixture({
+      client,
+      initial: { [COMPANION_CLIENT_INSTANCE_FIELD]: legacyClientInstanceId },
+    });
+
+    await expect(service.verifyCode("ada@example.com", "12345678")).resolves.toMatchObject({
+      status: "ready",
+      endpoint: ENDPOINT,
+    });
+    await expect(service.signOut()).resolves.toEqual({ available: true, status: "signed-out" });
+    expect(client.revokeInstallation).toHaveBeenCalledWith(ACCOUNT_TOKEN, legacyInstallationId);
+    expect(store.read()).toEqual({ [COMPANION_CLIENT_INSTANCE_FIELD]: legacyClientInstanceId });
+  });
+
+  it("fails closed instead of replacing an invalid persisted client ID", async () => {
+    const newClientInstanceId = vi.fn(() => "replacement-id");
+    const { service } = serviceFixture({
+      initial: { [COMPANION_CLIENT_INSTANCE_FIELD]: "bad\u0000id" },
+      newClientInstanceId,
+    });
+
+    await expect(service.restore()).rejects.toMatchObject({ code: "invalid_client_identity" });
+    expect(newClientInstanceId).not.toHaveBeenCalled();
+  });
+
   it("never exposes any bearer, connector token, installation ID, or credential", async () => {
     const { service } = serviceFixture({ initial: signedCredentials() });
     const state = await service.state();

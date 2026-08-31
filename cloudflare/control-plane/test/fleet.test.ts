@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { createAuth } from "../src/auth";
 import { readConfig } from "../src/config";
+import { endpointMetadata, isEndpointStatus } from "../src/fleet";
 import worker from "../src/index";
 
 const BASE_URL = "https://auth.openmausbot.test";
@@ -159,6 +160,17 @@ describe("fleet presence authentication and validation", () => {
 });
 
 describe("fleet listing", () => {
+  it("fails closed for unknown endpoint lifecycle statuses", () => {
+    expect(isEndpointStatus("ready")).toBe(true);
+    expect(isEndpointStatus("future-state")).toBe(false);
+    expect(endpointMetadata("c-safe.example.test", "ready")).toEqual({
+      url: "https://c-safe.example.test",
+      status: "ready",
+    });
+    expect(endpointMetadata("c-safe.example.test", "deleted")).toBeNull();
+    expect(endpointMetadata("c-safe.example.test", "future-state")).toBeNull();
+  });
+
   it("defaults legacy rows, isolates owners, and reports online through the TTL", async () => {
     const owner = await signIn("fleet-owner@example.com");
     const other = await signIn("fleet-other@example.com");

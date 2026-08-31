@@ -28,7 +28,22 @@ export const presenceSchema = z.strictObject({
 
 const PRESENCE_TTL_MS = 90_000;
 
-type EndpointStatus = "pending" | "provisioning" | "ready" | "deleting" | "deleted" | "error";
+export const ENDPOINT_STATUSES = [
+  "pending",
+  "provisioning",
+  "ready",
+  "deleting",
+  "deleted",
+  "error",
+] as const;
+export type EndpointStatus = (typeof ENDPOINT_STATUSES)[number];
+
+export function isEndpointStatus(value: unknown): value is EndpointStatus {
+  return (
+    typeof value === "string" &&
+    (ENDPOINT_STATUSES as readonly string[]).includes(value)
+  );
+}
 
 interface FleetRow {
   id: string;
@@ -42,7 +57,9 @@ interface FleetRow {
   presence_updated_at: number | null;
   capabilities_json: string | null;
   endpoint_hostname: string | null;
-  endpoint_status: EndpointStatus | null;
+  // D1 values are untrusted at the response boundary even though the schema
+  // has a CHECK constraint; legacy or manually repaired rows may predate it.
+  endpoint_status: string | null;
 }
 
 function normalizeCapabilities(values: readonly string[]): string[] {
@@ -70,7 +87,8 @@ function decodeStoredCapabilities(value: string | null): string[] {
     : [];
 }
 
-function endpointMetadata(hostname: string, status: EndpointStatus) {
+export function endpointMetadata(hostname: string, status: unknown) {
+  if (!isEndpointStatus(status) || status === "deleted") return null;
   let url: URL;
   try {
     url = new URL(`https://${hostname}`);
@@ -134,9 +152,7 @@ function fleetInstallation(row: FleetRow, now: number) {
   const runtimeProfile = isRuntimeProfile(row.runtime_profile)
     ? row.runtime_profile
     : "desktop-hub";
-  const endpoint = row.endpoint_status !== null
-    && row.endpoint_status !== "deleted"
-    && row.endpoint_hostname !== null
+  const endpoint = row.endpoint_hostname !== null
     ? endpointMetadata(row.endpoint_hostname, row.endpoint_status)
     : null;
 

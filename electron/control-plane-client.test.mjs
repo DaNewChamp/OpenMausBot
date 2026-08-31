@@ -223,11 +223,71 @@ describe("control-plane desktop client", () => {
     }]);
   });
 
+  it("retains bounded printable opaque installation and client IDs", async () => {
+    const installationId = "legacy/installation.id: A_01+stable";
+    const clientInstanceId = "legacy/client.instance: A_01+stable";
+    const rotated = `omb_install_${"c".repeat(22)}.${"d".repeat(43)}`;
+    const fetchImpl = vi.fn(async (url, init) => {
+      if (url.endsWith("/v1/installations")) {
+        expect(init.method).toBe("GET");
+        return jsonResponse({ installations: [{
+          id: installationId,
+          clientInstanceId,
+          name: "Mac",
+          platform: "darwin",
+        }] });
+      }
+      if (url.endsWith("/credentials/rotate")) {
+        expect(url).toBe(
+          `https://accounts.openmausbot.com/v1/installations/${encodeURIComponent(installationId)}/credentials/rotate`,
+        );
+        return jsonResponse({ credential: rotated }, { status: 201 });
+      }
+      expect(url).toBe(
+        `https://accounts.openmausbot.com/v1/installations/${encodeURIComponent(installationId)}`,
+      );
+      expect(init.method).toBe("DELETE");
+      return new Response(null, { status: 204 });
+    });
+    const client = createControlPlaneClient({
+      baseURL: "https://accounts.openmausbot.com",
+      fetchImpl,
+    });
+
+    await expect(client.ensureInstallation({
+      accountToken: ACCOUNT,
+      clientInstanceId,
+      name: "Mac",
+      platform: "darwin",
+    })).resolves.toMatchObject({
+      credential: rotated,
+      installation: { id: installationId, clientInstanceId },
+    });
+    await expect(client.revokeInstallation(ACCOUNT, installationId)).resolves.toBeUndefined();
+  });
+
+  it("rejects empty, control, oversized, and non-string native IDs", async () => {
+    const client = createControlPlaneClient({ baseURL: "https://accounts.openmausbot.com" });
+    for (const clientInstanceId of ["", "bad\u0000id", "x".repeat(257), 42, null]) {
+      await expect(client.ensureInstallation({
+        accountToken: ACCOUNT,
+        clientInstanceId,
+        name: "Mac",
+        platform: "darwin",
+      })).rejects.toMatchObject({ code: "invalid_client_identity" });
+    }
+    for (const installationId of ["", "bad\u0000id", "x".repeat(257), 42, null]) {
+      await expect(client.revokeInstallation(ACCOUNT, installationId)).rejects.toMatchObject({
+        code: "signed_out",
+      });
+    }
+  });
+
   it("rejects malformed installation lists instead of skipping cleanup targets", async () => {
     const client = createControlPlaneClient({
       baseURL: "https://accounts.openmausbot.com",
       fetchImpl: vi.fn(async () => jsonResponse({
-        installations: [{ id: "not-an-installation", clientInstanceId: "client-1" }],
+        installations: [{ id: "bad\u0000installation", clientInstanceId: "client-1" }],
       })),
     });
 

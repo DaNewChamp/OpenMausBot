@@ -1,5 +1,6 @@
 import {
   ControlPlaneError,
+  isValidOpaqueId,
   normalizeAccountEmail,
   normalizeControlPlaneURL,
 } from "./control-plane-client.mjs";
@@ -20,8 +21,6 @@ export const COMPANION_INSTALLATION_CREDENTIAL_FIELD = "companionInstallationCre
 export const COMPANION_INSTALLATION_EXPIRY_FIELD = "companionInstallationCredentialExpiresAt";
 export const COMPANION_ACCOUNT_CLEANUP_PENDING_FIELD = "companionAccountCleanupPending";
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const INSTALLATION_ID = UUID;
 const INSTALLATION_CREDENTIAL = /^omb_install_[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/;
 const DEFAULT_HEALTH_CACHE_MS = 30_000;
 
@@ -54,7 +53,7 @@ function storedAccount(credentials) {
     email,
     userId,
     accountToken: ownString(credentials, COMPANION_ACCOUNT_TOKEN_FIELD),
-    installationId: INSTALLATION_ID.test(ownString(credentials, COMPANION_INSTALLATION_ID_FIELD))
+    installationId: isValidOpaqueId(ownString(credentials, COMPANION_INSTALLATION_ID_FIELD))
       ? credentials[COMPANION_INSTALLATION_ID_FIELD]
       : "",
     installationCredential: INSTALLATION_CREDENTIAL.test(
@@ -78,7 +77,7 @@ function withoutCompanionAccount(credentials) {
   ]) {
     delete next[field];
   }
-  // The UUID identifies this installation, not an account. Keeping it across
+  // The stable opaque ID identifies this installation, not an account. Keeping it across
   // sign-outs lets a same-account recovery adopt the existing server record
   // rather than manufacturing a new computer every time.
   return next;
@@ -113,7 +112,7 @@ function withAuthenticatedAccount(
     [COMPANION_ACCOUNT_USER_ID_FIELD]: user.id,
     [COMPANION_ACCOUNT_EMAIL_FIELD]: user.email,
   };
-  if (!UUID.test(ownString(next, COMPANION_CLIENT_INSTANCE_FIELD))) {
+  if (!isValidOpaqueId(ownString(next, COMPANION_CLIENT_INSTANCE_FIELD))) {
     next[COMPANION_CLIENT_INSTANCE_FIELD] = clientInstanceId;
   }
   if (preserveCleanupPending) {
@@ -316,16 +315,36 @@ export function createCompanionAccountService({
     });
   };
 
-  const ensureClientIdentity = async () => {
-    const existing = ownString(credentials(), COMPANION_CLIENT_INSTANCE_FIELD);
-    if (UUID.test(existing)) return existing;
+  const resolveClientIdentity = () => {
+    const current = credentials();
+    if (Object.hasOwn(current, COMPANION_CLIENT_INSTANCE_FIELD)) {
+      const existing = current[COMPANION_CLIENT_INSTANCE_FIELD];
+      if (!isValidOpaqueId(existing)) throw new ControlPlaneError("invalid_client_identity");
+      return existing;
+    }
     const candidate = newClientInstanceId?.();
-    if (!UUID.test(candidate ?? "")) throw new Error("A stable computer identity could not be created");
+    if (!isValidOpaqueId(candidate)) throw new Error("A stable computer identity could not be created");
+    return candidate;
+  };
+
+  const ensureClientIdentity = async () => {
+    const current = credentials();
+    if (Object.hasOwn(current, COMPANION_CLIENT_INSTANCE_FIELD)) {
+      return resolveClientIdentity();
+    }
+    const candidate = resolveClientIdentity();
     await updateCredentials((document) => {
-      if (UUID.test(ownString(document, COMPANION_CLIENT_INSTANCE_FIELD))) return document;
+      if (Object.hasOwn(document, COMPANION_CLIENT_INSTANCE_FIELD)) {
+        if (!isValidOpaqueId(document[COMPANION_CLIENT_INSTANCE_FIELD])) {
+          throw new ControlPlaneError("invalid_client_identity");
+        }
+        return document;
+      }
       return { ...document, [COMPANION_CLIENT_INSTANCE_FIELD]: candidate };
     });
-    return ownString(credentials(), COMPANION_CLIENT_INSTANCE_FIELD);
+    const persisted = credentials()[COMPANION_CLIENT_INSTANCE_FIELD];
+    if (!isValidOpaqueId(persisted)) throw new ControlPlaneError("invalid_client_identity");
+    return persisted;
   };
 
   const markCleanupPending = async () => {
@@ -369,12 +388,12 @@ export function createCompanionAccountService({
 
     // A request can create an installation (and even its endpoint) while its
     // response is lost, leaving no local ID or connector material. The stable
-    // computer UUID is therefore the cleanup authority: list the account's
+    // stable computer ID is therefore the cleanup authority: list the account's
     // active installations and revoke every matching record before forgetting
     // the bearer. Revocation marks the owner row and durably schedules the
     // server-side endpoint sweep.
     const clientInstanceId = ownString(document, COMPANION_CLIENT_INSTANCE_FIELD);
-    if (!UUID.test(clientInstanceId)) {
+    if (!isValidOpaqueId(clientInstanceId)) {
       throw new ControlPlaneError("invalid_client_identity");
     }
 
@@ -514,13 +533,7 @@ export function createCompanionAccountService({
       if (previous && previous.userId !== verified.user.id) {
         await cleanupCurrentAccount();
       }
-      const existingIdentity = ownString(credentials(), COMPANION_CLIENT_INSTANCE_FIELD);
-      const clientInstanceId = UUID.test(existingIdentity)
-        ? existingIdentity
-        : newClientInstanceId?.();
-      if (!UUID.test(clientInstanceId ?? "")) {
-        throw new Error("A stable computer identity could not be created");
-      }
+      const clientInstanceId = resolveClientIdentity();
       await updateCredentials((document) =>
         withAuthenticatedAccount(document, {
           ...verified,
