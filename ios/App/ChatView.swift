@@ -1810,6 +1810,44 @@ private struct ApprovalDetailSheet: View {
         }
         return "This action needs your permission before the bot can continue. Nothing happens unless you approve."
     }
+    private var executiveSummary: String? {
+        guard let value = card.executiveSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return OptionCard.sanitizedPresentation(value)
+    }
+    private var changeSummary: String? {
+        guard let value = card.changeSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return OptionCard.sanitizedPresentation(value)
+    }
+    private var resourceSummary: String? {
+        guard let value = card.resourceSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return OptionCard.sanitizedPresentation(value)
+    }
+    private var riskSummary: String? {
+        guard let value = card.riskLevel?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return value.capitalized
+    }
+    private var riskColor: Color {
+        switch card.riskLevel?.lowercased() {
+        case "high": return .red
+        case "medium": return .orange
+        default: return .green
+        }
+    }
+    @ViewBuilder
+    private func explanationBlock(_ title: String, _ value: String, color: Color = .primary) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(typography.font(size: 15, relativeTo: .headline, weight: .semibold))
+                .foregroundStyle(Color.secondary)
+            Text(value)
+                .font(typography.font(size: 16, relativeTo: .body))
+                .foregroundStyle(color)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(VBotSurface.assistantBubble, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
     private var detailsLabel: String {
         card.toolLabel?.caseInsensitiveCompare("Terminal") == .orderedSame ? "Command" : "Details"
     }
@@ -1833,6 +1871,19 @@ private struct ApprovalDetailSheet: View {
                     .padding(16)
                     .background(VBotSurface.assistantBubble, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
+                    if let executiveSummary {
+                        explanationBlock("What this does", executiveSummary)
+                    }
+                    if let changeSummary {
+                        explanationBlock("What changes", changeSummary)
+                    }
+                    if let resourceSummary {
+                        explanationBlock("Where", resourceSummary)
+                    }
+                    if let riskSummary {
+                        explanationBlock("Risk", riskSummary, color: riskColor)
+                    }
+
                     if let held = card.held {
                         Label(held, systemImage: "exclamationmark.shield")
                             .font(typography.detail)
@@ -1840,10 +1891,7 @@ private struct ApprovalDetailSheet: View {
                     }
 
                     if let details {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(detailsLabel)
-                                .font(typography.compact.weight(.semibold))
-                                .foregroundStyle(Color.secondary)
+                        DisclosureGroup {
                             Text(details)
                                 .font(typography.code)
                                 .foregroundStyle(Color.primary.opacity(0.86))
@@ -1851,7 +1899,13 @@ private struct ApprovalDetailSheet: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(14)
                                 .background(VBotSurface.controlSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .padding(.top, 4)
+                        } label: {
+                            Text(detailsLabel)
+                                .font(typography.compact.weight(.semibold))
+                                .foregroundStyle(Color.secondary)
                         }
+                        .tint(Color.secondary)
                     }
 
                     VStack(alignment: .leading, spacing: 8) {

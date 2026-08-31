@@ -63,6 +63,17 @@ export interface OptionCardData {
   reason?: string;
   actionSummary?: string;
   details?: string;
+  /** Deterministic executive summary shown before the raw command. */
+  executiveSummary?: string;
+  /** Plain-language impact statement for the requested action. */
+  changeSummary?: string;
+  /** Bounded resource/host description; never a full private path. */
+  resourceSummary?: string;
+  /** Conservative display-only risk classification. */
+  riskLevel?: "low" | "medium" | "high";
+  /** How the display-only explanation was produced. */
+  explanationConfidence?: "high" | "medium" | "low";
+  explanationSource?: "local" | "ai-reviewed";
   /** why this stopped despite auto mode (destructive-looking command) */
   held?: string;
   /** the narrow grant "always allow" remembers, e.g. "Bash:git" */
@@ -248,6 +259,9 @@ function redactBotAuthored<T extends Omit<Message, "id" | "at"> & { at?: number 
     if (typeof card.subtitle === "string") card.subtitle = redactSecretsInText(card.subtitle);
     if (typeof card.summary === "string") card.summary = redactSecretsInText(card.summary);
     if (typeof card.details === "string") card.details = redactSecretsInText(card.details);
+    if (typeof card.executiveSummary === "string") card.executiveSummary = redactSecretsInText(card.executiveSummary);
+    if (typeof card.changeSummary === "string") card.changeSummary = redactSecretsInText(card.changeSummary);
+    if (typeof card.resourceSummary === "string") card.resourceSummary = redactSecretsInText(card.resourceSummary);
     out.card = card;
   }
   if (out.connector) {

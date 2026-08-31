@@ -19,6 +19,7 @@ import { newId } from "./contracts.ts";
 import { appendDecision } from "./decision-log.ts";
 import { buildNotification } from "./notify.ts";
 import { sanitizeLocalVmInvokeText } from "./local-vm-invoke.ts";
+import { explainApproval } from "./approval-explainer.ts";
 import type { ApprovalBus } from "./peer-approval.ts";
 import type { BotRecord, Message } from "./store.ts";
 
@@ -266,6 +267,7 @@ function pushApprovalCard(
   const actionSummary = `${readOnly ? "Run a read-only command" : "Run a command"} on ${hostLabel}`;
   const safeCommand = sanitizeLocalVmInvokeText(req.command).slice(0, 16_000);
   const subtitle = safeCommand.length > 200 ? `${safeCommand.slice(0, 200)}…` : safeCommand;
+  const explanation = explainApproval(req.tool, safeCommand, hostLabel);
   return bus.store.appendMessage(bot.threadId, {
     role: "bot",
     kind: "options",
@@ -277,6 +279,12 @@ function pushApprovalCard(
       details: subtitle,
       toolLabel: "Terminal",
       hostLabel,
+      executiveSummary: explanation.executiveSummary,
+      changeSummary: explanation.changeSummary,
+      resourceSummary: explanation.resourceSummary,
+      riskLevel: explanation.riskLevel,
+      explanationConfidence: explanation.confidence,
+      explanationSource: explanation.source ?? "local",
       options: allowKey ? ["Allow", "Deny", "Always allow"] : ["Allow", "Deny"],
       requestId,
       tool: req.tool,

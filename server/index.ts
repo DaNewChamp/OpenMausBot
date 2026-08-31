@@ -128,6 +128,7 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
 import { searchMessages } from "./message-db.ts";
 import { promptWithReply, transcriptText } from "./replies.ts";
+import { explainApproval } from "./approval-explainer.ts";
 import { _loadPending, discardDelegations, drainDelegations, pendingDelegationSnapshot, pendingThreads, queueDelegation, type QueueResult } from "./delegations.ts";
 import { drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { EventBus } from "./harness/bus.ts";
@@ -920,12 +921,18 @@ watchdog.start();
 /** Keep approval cards readable on a phone. Provider summaries remain
  * available as `details`, but the headline never exposes raw UUIDs, paths, or
  * gateway payloads. */
-function approvalPresentation(tool: string, summary: string, scope?: "local-computer" | "bridge"): {
+export function approvalPresentation(tool: string, summary: string, scope?: "local-computer" | "bridge"): {
   toolLabel: string;
   hostLabel: string;
   reason: string;
   actionSummary: string;
   details: string;
+  executiveSummary: string;
+  changeSummary: string;
+  resourceSummary: string;
+  riskLevel: "low" | "medium" | "high";
+  explanationConfidence: "high" | "medium" | "low";
+  explanationSource: "local" | "ai-reviewed";
 } {
   const bare = tool.replace(/^mcp__[^_]+__/, "").replace(/[_-]+/g, " ").trim().toLowerCase();
   const toolLabel = /computer|screenshot|click|type text|press key|scroll|open url/.test(bare)
@@ -951,7 +958,20 @@ function approvalPresentation(tool: string, summary: string, scope?: "local-comp
   // same local-VM redaction used for tool output so paths, private URLs,
   // viewer tokens, and credential-shaped values never cross the phone link.
   const details = sanitizeLocalVmInvokeText(String(summary ?? "").slice(0, 16_000));
-  return { toolLabel, hostLabel, reason, actionSummary, details };
+  const explanation = explainApproval(tool, details, hostLabel);
+  return {
+    toolLabel,
+    hostLabel,
+    reason,
+    actionSummary,
+    details,
+    executiveSummary: explanation.executiveSummary,
+    changeSummary: explanation.changeSummary,
+    resourceSummary: explanation.resourceSummary,
+    riskLevel: explanation.riskLevel,
+    explanationConfidence: explanation.confidence,
+    explanationSource: explanation.source ?? "local",
+  };
 }
 
 bus.subscribe((event: RuntimeEvent) => {
@@ -1321,6 +1341,12 @@ bus.subscribe((event: RuntimeEvent) => {
                     details: presentation.details,
                     toolLabel: presentation.toolLabel,
                     hostLabel: presentation.hostLabel,
+                    executiveSummary: presentation.executiveSummary,
+                    changeSummary: presentation.changeSummary,
+                    resourceSummary: presentation.resourceSummary,
+                    riskLevel: presentation.riskLevel,
+                    explanationConfidence: presentation.explanationConfidence,
+                    explanationSource: presentation.explanationSource,
                   };
                 })(),
                 options: ["Allow", "Deny"],
@@ -1363,6 +1389,12 @@ bus.subscribe((event: RuntimeEvent) => {
                 details: presentation.details,
                 toolLabel: presentation.toolLabel,
                 hostLabel: presentation.hostLabel,
+                executiveSummary: presentation.executiveSummary,
+                changeSummary: presentation.changeSummary,
+                resourceSummary: presentation.resourceSummary,
+                riskLevel: presentation.riskLevel,
+                explanationConfidence: presentation.explanationConfidence,
+                explanationSource: presentation.explanationSource,
               };
             })()
             : {

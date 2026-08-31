@@ -30,6 +30,13 @@ public struct OptionCard: Codable, Hashable, Sendable {
     public var reason: String?
     public var actionSummary: String?
     public var details: String?
+    /// Display-only executive explanation, kept separate from provider text.
+    public var executiveSummary: String?
+    public var changeSummary: String?
+    public var resourceSummary: String?
+    public var riskLevel: String?
+    public var explanationConfidence: String?
+    public var explanationSource: String?
     /// Why auto mode stopped to ask anyway.
     public var held: String?
     /// The narrow grant "always allow" would remember, e.g. `Bash:git`.
