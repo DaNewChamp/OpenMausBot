@@ -340,8 +340,18 @@ Required details:
 - if absent and `allowCreate === false`, throw without creating files;
 - validate `preferredId` as a non-empty bounded opaque string; otherwise use
   `randomUUID()` only for a newly minted identity;
-- write a temporary file with `openSync(..., 0o600)`, `fsyncSync()`, close, then rename into place;
-- reject a rename race by rereading the final file and accepting its valid identity rather than overwriting it;
+- write a temporary file in the same directory with `openSync(..., 0o600)`, write
+  all bytes, `fsyncSync()`, and close it before publication;
+- publish with an exclusive no-overwrite operation (`copyFileSync(...,
+  COPYFILE_EXCL)` or the platform equivalent). Do not use a replace-rename
+  operation: the destination must never be overwritten;
+- if another writer wins first, reread the destination and adopt its valid
+  identity. If the destination is unreadable or malformed, fail closed rather
+  than treating it as empty, retrying with a new ID, or overwriting it;
+- a concurrent reader may transiently observe the destination as unavailable
+  while the exclusive copy is in progress. If a crash leaves a partial
+  destination, it remains unavailable for manual recovery; it is never treated
+  as empty or reminted.
 - never change a valid persisted identity because a later preferred ID differs.
 
 `hub.json` lives under the canonical runtime data directory: the final

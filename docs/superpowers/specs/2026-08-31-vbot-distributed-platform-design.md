@@ -170,6 +170,19 @@ interface HubIdentity {
 }
 ```
 
+### Hub identity publication contract
+
+Identity creation is safety-first and never overwrites an existing
+destination. The runtime writes the complete `hub.json` bytes to a temporary
+file in the same directory, opens it with mode `0600`, then flushes (`fsync`)
+and closes it before publication. It publishes with an exclusive
+no-overwrite operation (`COPYFILE_EXCL` or the platform equivalent), not a
+replace-rename. After an `EEXIST` race, the writer rereads the destination and
+adopts the winner's valid identity. An unreadable, malformed, or crash-partial
+destination fails closed: it is unavailable for manual recovery and is never
+treated as missing or empty, overwritten, or reminted. A concurrent reader may
+also transiently observe unavailable while the exclusive copy is in progress.
+
 The control plane installation record contains only safe fleet metadata:
 
 ```ts
