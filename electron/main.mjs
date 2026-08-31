@@ -64,6 +64,7 @@ const { createDesktopWorkspaceManager } = require("./desktop-workspace.cjs");
 const { createBrowserSurfaceManager } = require("./browser-surface.cjs");
 const { browserProfilePartition } = require("./browser-snapshot.cjs");
 const { createBrowserHost } = require("./browser-host.cjs");
+const { postBrowserConnection } = require("./browser-connection-sync.cjs");
 const { createCuaConnectionStore: createDescriptorStore } = require("./cua-connection.cjs");
 const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
 
@@ -263,6 +264,7 @@ async function startBrowserSurface(owner) {
       browserHost = createBrowserHost({ manager: () => browserSurface });
       await browserHost.start();
       browserConnectionStore.persist(browserHost.descriptor());
+      if (serverProc) postBrowserConnection(serverProc, browserHost.descriptor());
     }
     owner.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
       if (isMainFrame && !isInPlace) browserSurface?.hideAll();
@@ -276,6 +278,11 @@ async function startBrowserSurface(owner) {
     slog(`browser surface ready for window ${owner.id} (host ${browserHost.url})`);
   } catch (error) {
     slog(`browser surface unavailable: ${error?.message ?? error}`);
+    try {
+      if (serverProc) postBrowserConnection(serverProc, null);
+    } catch (syncError) {
+      slog(`browser connection clear failed: ${syncError?.message ?? syncError}`);
+    }
     browserSurface = null;
   }
 }
@@ -821,6 +828,9 @@ async function startServerOn(port) {
     // the server prefers these over config.json, whose plaintext fields
     // the boot migration has deleted
     ...workspaceCredentialEnv(secureCredentials),
+    // Packaged utility processes use only the in-memory parent-port browser
+    // descriptor; they must never discover a stale token on disk.
+    OMB_DESKTOP_PARENT: "1",
   });
   slog(`fork ${entry} port=${port}`);
   const proc = utilityProcess.fork(entry, [], {
@@ -862,6 +872,13 @@ async function startServerPackaged() {
       if (proc) {
         serverProc = proc;
         SERVER_PORT = port;
+        if (browserHost?.url) {
+          try {
+            postBrowserConnection(serverProc, browserHost.descriptor());
+          } catch (error) {
+            slog(`browser connection sync failed: ${error?.message ?? error}`);
+          }
+        }
         return true;
       }
     }

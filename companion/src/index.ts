@@ -40,6 +40,7 @@ import { companionOriginSocket, listenCompanionOrigin } from "./origin.ts";
 import { bearerToken } from "./devices.ts";
 import { isLocalVmViewerUpgrade, localVmViewerBotId } from "./routes.ts";
 import { resolveViewerAccessDeviceId, stripViewerAccessQuery } from "./viewer-access.ts";
+import { viewerUpgradeHeaders } from "./viewer-upgrade-headers.ts";
 
 /** A port from the environment, or the default. Anything that is not a whole
  * number in range is the default — a typo'd port must not become port 0. */
@@ -178,7 +179,7 @@ companion.on("upgrade", (req, socket, head) => {
     path: stripViewerAccessQuery(fullUrl),
     method: req.method,
     headers: {
-      ...req.headers,
+      ...viewerUpgradeHeaders(req.headers),
       host: `127.0.0.1:${HARNESS_PORT}`,
       "x-openmausbot-companion": "1",
     },

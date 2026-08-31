@@ -103,6 +103,7 @@ final class ConnectionTests: XCTestCase {
 
         XCTAssertEqual(invite.connection.name, "Milind's Mac")
         XCTAssertEqual(invite.connection.pairingConsentOrigin, "https://other.example:9443")
+        XCTAssertFalse(try XCTUnwrap(invite.connection.activeEndpoint).isFirstPartyHosted)
         XCTAssertFalse(invite.connection.pairingConsentOrigin.contains("004209"))
     }
 

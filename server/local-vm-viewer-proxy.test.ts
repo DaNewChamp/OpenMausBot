@@ -27,12 +27,18 @@ describe("Local VM viewer join path", () => {
       "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
       "sec-websocket-version": "13",
       "x-openmausbot-companion": "1",
+      authorization: "Bearer leaked",
+      cookie: "session=leaked",
+      origin: "https://evil.example",
     });
     expect(forwarded.upgrade).toBe("websocket");
     expect(forwarded.connection).toBe("Upgrade");
     expect(forwarded["sec-websocket-key"]).toBe("dGhlIHNhbXBsZSBub25jZQ==");
     expect(forwarded["sec-websocket-version"]).toBe("13");
     expect(forwarded["x-openmausbot-companion"]).toBe("1");
+    expect(forwarded.authorization).toBeUndefined();
+    expect(forwarded.cookie).toBeUndefined();
+    expect(forwarded.origin).toBeUndefined();
   });
 });
 

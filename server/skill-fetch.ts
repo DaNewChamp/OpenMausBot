@@ -12,6 +12,7 @@ import { z } from "zod";
 const MAX_FILES = 30;
 const MAX_FILE_BYTES = 256 * 1024;
 const API = "https://api.github.com";
+const GITHUB_DOWNLOAD_HOSTS = new Set(["api.github.com", "raw.githubusercontent.com"]);
 
 export interface FetchedSkill {
   source: string;
@@ -56,6 +57,31 @@ type ContentEntry = z.infer<typeof CONTENT_ENTRY>;
 // only entries matching the documented shape, drop the rest silently.
 const CONTENT_LISTING = z.array(z.unknown()).catch([]);
 
+/** Download URLs come from user input or an untrusted GitHub API response.
+ * Keep the fetch boundary on GitHub's TLS endpoints; hostname preflight alone
+ * is not enough because redirects can otherwise leave the allowlist. */
+export function githubDownloadUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(String(raw));
+  } catch {
+    throw new Error("GitHub skill downloads must use a GitHub URL");
+  }
+  const authority = /^https:\/\/([^/]+)/i.exec(String(raw))?.[1] ?? "";
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.hash ||
+    authority.includes(":") ||
+    !GITHUB_DOWNLOAD_HOSTS.has(url.hostname.toLowerCase())
+  ) {
+    throw new Error("GitHub skill downloads are restricted to api.github.com and raw.githubusercontent.com");
+  }
+  return url.toString();
+}
+
 function asEntries(listing: z.infer<typeof CONTENT_LISTING>): ContentEntry[] {
   return listing.flatMap((item) => {
     const entry = CONTENT_ENTRY.safeParse(item);
@@ -64,15 +90,19 @@ function asEntries(listing: z.infer<typeof CONTENT_LISTING>): ContentEntry[] {
 }
 
 async function fetchListing(url: string, fetcher: typeof fetch): Promise<ContentEntry[]> {
-  const response = await fetcher(url, {
+  const response = await fetcher(githubDownloadUrl(url), {
     headers: { accept: "application/vnd.github+json", "user-agent": "OpenMausBot-skills" },
+    redirect: "error",
   });
   if (!response.ok) throw new Error(`GitHub API ${response.status} for ${url}`);
   return asEntries(CONTENT_LISTING.parse(await response.json()));
 }
 
 async function fetchText(url: string, fetcher: typeof fetch): Promise<string> {
-  const response = await fetcher(url, { headers: { "user-agent": "OpenMausBot-skills" } });
+  const response = await fetcher(githubDownloadUrl(url), {
+    headers: { "user-agent": "OpenMausBot-skills" },
+    redirect: "error",
+  });
   if (!response.ok) throw new Error(`download failed (${response.status})`);
   const text = await response.text();
   if (Buffer.byteLength(text, "utf8") > MAX_FILE_BYTES) throw new Error("file is larger than the 256KB import cap");

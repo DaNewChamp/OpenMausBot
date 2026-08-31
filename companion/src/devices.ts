@@ -65,6 +65,12 @@ interface PairingReplay {
 const DEVICES_FILE = join(DATA_DIR, "devices.json");
 export const PAIRING_TTL_MS = 120_000;
 export const MAX_PAIRING_ATTEMPTS = 5;
+/** Exact credentials emitted by this companion. Base64url is unpadded and
+ * 32 random bytes encode to 43 ASCII characters; reject malformed input
+ * before hashing or comparing it. */
+export const PAIRING_TOKEN_PATTERN = /^omb_pair_[A-Za-z0-9_-]{43}$/;
+export const DEVICE_TOKEN_PATTERN = /^omb_[A-Za-z0-9_-]{43}$/;
+const MANUAL_PAIRING_CODE_PATTERN = /^\d{6}$/;
 /** Bounds the file, and a fleet of 20 phones is already an odd story. */
 export const MAX_DEVICES = 20;
 /** lastSeen is a UI nicety, not an audit log — don't write on every request. */
@@ -247,7 +253,11 @@ export class DeviceRegistry {
 
     const window = this.pairing();
     if (!window) return { error: "no pairing is in progress — open Phone settings on your computer" };
-    if (!sameCredential(window.code, presented) && !sameCredential(window.token, presented)) {
+    const isCredentialShape = MANUAL_PAIRING_CODE_PATTERN.test(presented) || PAIRING_TOKEN_PATTERN.test(presented);
+    const matchesWindow = isCredentialShape && (
+      sameCredential(window.code, presented) || sameCredential(window.token, presented)
+    );
+    if (!matchesWindow) {
       window.attemptsLeft -= 1;
       // A burned window is the whole point: without this, six digits is a
       // few seconds of guessing.
@@ -316,7 +326,7 @@ export class DeviceRegistry {
 
   /** Resolve a bearer token to its device, or null. */
   authenticate(token: string | undefined): DeviceRecord | null {
-    if (!token) return null;
+    if (!token || !DEVICE_TOKEN_PATTERN.test(token)) return null;
     const hash = sha256(token);
     const device = this.devices.find((d) => sameDigest(d.tokenHash, hash));
     if (!device) return null;

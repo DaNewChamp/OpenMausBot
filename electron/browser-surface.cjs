@@ -34,6 +34,7 @@ const {
   formatSnapshot,
   snapshotFromAxNodes,
 } = require("./browser-snapshot.cjs");
+const { createPinnedBrowserProxy } = require("./browser-network-proxy.cjs");
 
 const BOT_ID = /^[A-Za-z0-9_-]{1,120}$/;
 const GUEST_PROFILE = "guest";
@@ -633,6 +634,7 @@ function createBrowserSurfaceManager({
     // Literal addresses were already checked by browserNavigationUrl.
     if (/^[\d.]+$/.test(hostname) || hostname.includes(":")) return;
     const security = sessionSecurity.get(ses);
+    if (security?.proxyReady) await security.proxyReady;
     const cached = security?.dns.get(hostname);
     if (cached && cached.until > now()) {
       // Map insertion order doubles as a tiny LRU.
@@ -738,7 +740,7 @@ function createBrowserSurfaceManager({
       entry.sessionSecurity = security;
       return;
     }
-    security = { dns: new Map(), entries: new Set([entry]) };
+    security = { dns: new Map(), entries: new Set([entry]), proxy: null, proxyReady: Promise.resolve() };
     sessionSecurity.set(ses, security);
     entry.sessionSecurity = security;
     ses.setPermissionCheckHandler(() => false);
@@ -747,6 +749,37 @@ function createBrowserSurfaceManager({
     // until there is a reviewed place for it to go. Install once: named
     // profiles share a session, and EventEmitter listeners accumulate.
     ses.on("will-download", (event) => event.preventDefault());
+    // Electron's request hooks cannot pin the DNS answer used by Chromium's
+    // socket. Route every web request through a loopback proxy that resolves
+    // once and connects to that literal address. Test doubles without
+    // setProxy keep the hook-only policy; real Electron sessions always have
+    // the method and fail closed if the proxy cannot be installed.
+    if (typeof ses.setProxy === "function") {
+      security.proxyReady = (async () => {
+        const proxy = createPinnedBrowserProxy({
+          session: ses,
+          resolveHost: resolveNavigationHost,
+          addressAllowed: browserAddressAllowed,
+        });
+        security.proxy = proxy;
+        try {
+          const bound = await proxy.start();
+          const port = Number(bound?.port);
+          if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("browser proxy did not bind a valid port");
+          await ses.setProxy({
+            proxyRules: `http=127.0.0.1:${port};https=127.0.0.1:${port};ws=127.0.0.1:${port};wss=127.0.0.1:${port}`,
+            proxyBypassRules: "",
+          });
+        } catch (error) {
+          proxy.close();
+          security.proxy = null;
+          throw new Error(`The built-in browser network boundary is unavailable: ${error?.message ?? error}`);
+        }
+      })();
+      // Keep a failed startup observable to the first navigation without
+      // allowing an unhandled-rejection process crash while the tab is idle.
+      void security.proxyReady.catch(() => {});
+    }
     ses.webRequest?.onBeforeRequest((details, callback) => {
       void (async () => {
         try {

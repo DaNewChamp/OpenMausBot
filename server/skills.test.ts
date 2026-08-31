@@ -13,7 +13,7 @@ import {
   setSkillEnabled,
   skillsSystemPrompt,
 } from "./skills.ts";
-import { parseSkillSource } from "./skill-fetch.ts";
+import { fetchSkillFromSource, githubDownloadUrl, parseSkillSource } from "./skill-fetch.ts";
 import { workspaceDir } from "./workspace.ts";
 
 // skills.ts resolves storage through workspaceDir(botId) → DATA_DIR, which
@@ -125,5 +125,49 @@ describe("parseSkillSource", () => {
   it("refuses non-GitHub input loudly", () => {
     expect("error" in parseSkillSource("https://evil.example/skill.md")).toBe(true);
     expect("error" in parseSkillSource("")).toBe(true);
+  });
+});
+
+describe("GitHub skill download boundary", () => {
+  it("accepts only HTTPS GitHub API/raw hosts", () => {
+    expect(githubDownloadUrl("https://raw.githubusercontent.com/o/r/main/SKILL.md")).toContain("raw.githubusercontent.com");
+    expect(githubDownloadUrl("https://api.github.com/repos/o/r/contents/skills?ref=main")).toContain("api.github.com");
+    for (const value of [
+      "http://raw.githubusercontent.com/o/r/main/SKILL.md",
+      "https://raw.githubusercontent.com.evil.example/o/r/main/SKILL.md",
+      "https://evil.example/skill.md",
+      "https://raw.githubusercontent.com:443/o/r/main/SKILL.md",
+      "https://raw.githubusercontent.com/o/r/main/SKILL.md#fragment",
+    ]) {
+      expect(() => githubDownloadUrl(value)).toThrow();
+    }
+  });
+
+  it("uses redirect:error for both API listings and markdown downloads", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init: init ?? {} });
+      if (url.includes("/contents/")) {
+        return new Response(JSON.stringify([{ type: "file", name: "SKILL.md", path: "SKILL.md", download_url: "https://raw.githubusercontent.com/o/r/main/SKILL.md" }]), { status: 200 });
+      }
+      return new Response("---\nname: safe\ndescription: Safe skill\n---\n", { status: 200 });
+    }) as typeof fetch;
+    const result = await fetchSkillFromSource("o/r", fetcher);
+    expect("error" in result).toBe(false);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(calls.every(({ init }) => init.redirect === "error")).toBe(true);
+  });
+
+  it("rejects an API response that points outside GitHub", async () => {
+    const fetcher = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/contents/")) {
+        return new Response(JSON.stringify([{ type: "file", name: "SKILL.md", path: "SKILL.md", download_url: "https://evil.example/SKILL.md" }]), { status: 200 });
+      }
+      throw new Error("unexpected download");
+    }) as typeof fetch;
+    const result = await fetchSkillFromSource("o/r", fetcher);
+    expect(result).toMatchObject({ error: expect.stringContaining("restricted") });
   });
 });

@@ -107,6 +107,11 @@ function CustomPicker({ instance, cliDefault, onClose, onSaved }: {
 
   return (
     <div className="mt-2.5 flex flex-col gap-2">
+      {(instance.driverKind === "customAcp" || instance.capabilities?.customMcp === true) && (
+        <div role="alert" className="rounded-lg border border-warning/25 bg-warning/10 px-2.5 py-2 text-[12px] leading-relaxed text-warning">
+          Desktop-only tools run on this computer with its account and filesystem. Only use an ACP/MCP command and server you trust; phone pairing cannot administer them.
+        </div>
+      )}
       {candidates !== null && candidates.length > 0 && (
         <div className="relative">
           <select

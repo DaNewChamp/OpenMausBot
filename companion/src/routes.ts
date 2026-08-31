@@ -703,6 +703,7 @@ const EXPLAINED: ReadonlyArray<{ path: RegExp; error: string }> = [
     error: "Phone settings are managed on your computer",
   },
   { path: /^\/api\/config$/, error: "API keys can only be changed on your computer" },
+  { path: /^\/api\/instances(\/|$)/, error: "custom ACP/MCP engines are configured on your computer" },
   { path: /^\/api\/local-computer(\/|$)/, error: "the Local VM is set up on your computer" },
   {
     path: /^\/api\/bots\/[\w-]+\/local-computer(\/|$)/,

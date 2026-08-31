@@ -287,8 +287,8 @@ struct PairingView: View {
             .accessibilityElement(children: .combine)
 
             if let credential = scannedCredential {
-                if !connectionIsProtected(connection) {
-                    Text("Only continue on a network you trust. Local connections are authenticated but are not encrypted by \(ProductIdentity.displayName).")
+                if let warning = connectionWarning(connection) {
+                    Text(warning)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -460,6 +460,18 @@ struct PairingView: View {
         connection.activeEndpoint?.protectsCredentials
             ?? connection.automaticEndpoints.first?.protectsCredentials
             ?? false
+    }
+
+    private func connectionWarning(_ connection: Connection) -> String? {
+        if let endpoint = connection.activeEndpoint,
+           endpoint.kind == .hosted,
+           !endpoint.isFirstPartyHosted {
+            return "This is a custom HTTPS address. It is encrypted, but it is not operated by \(ProductIdentity.displayName). Continue only if you recognize and trust this computer."
+        }
+        if !connectionIsProtected(connection) {
+            return "Only continue on a network you trust. Local connections are authenticated but are not encrypted by \(ProductIdentity.displayName)."
+        }
+        return nil
     }
 
     // MARK: - Helpers

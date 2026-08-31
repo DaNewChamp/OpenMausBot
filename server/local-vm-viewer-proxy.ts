@@ -20,6 +20,7 @@ const HOP_BY_HOP = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
+const DROP_ON_VIEWER_UPGRADE = new Set(["authorization", "cookie", "origin"]);
 
 export interface LocalVmViewerTarget {
   port: number;
@@ -119,6 +120,7 @@ export function upgradeHopByHopHeaders(headers: IncomingMessage["headers"]): Rec
       (entry): entry is [string, string | string[]] => {
         if (entry[1] === undefined) return false;
         const lower = entry[0].toLowerCase();
+        if (DROP_ON_VIEWER_UPGRADE.has(lower)) return false;
         if (lower === "upgrade" || lower === "connection") return true;
         if (lower.startsWith("sec-websocket-")) return true;
         return !HOP_BY_HOP.has(lower);

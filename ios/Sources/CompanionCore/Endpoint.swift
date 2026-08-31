@@ -53,6 +53,16 @@ public struct CompanionEndpoint: Codable, Hashable, Sendable {
         URLComponents(string: url)?.scheme?.lowercased() == "https"
     }
 
+    /// Hosted is also used for manually entered/self-hosted HTTPS origins.
+    /// Those routes are encrypted, but their certificate and operator are not
+    /// vouched for by V Bot; the pairing UI must call that distinction out.
+    public var isFirstPartyHosted: Bool {
+        guard kind == .hosted, let rawHost = URLComponents(string: url)?.host else { return false }
+        let host = Self.canonicalDNSHost(rawHost)
+        return host == "openmaus.posival.com"
+            || host.range(of: #"^c-[0-9a-f]{32}\.openmausbot\.com$"#, options: .regularExpression) != nil
+    }
+
     public var securityClass: CompanionEndpointSecurityClass {
         switch kind {
         case .hosted, .tailnet: return .protected
