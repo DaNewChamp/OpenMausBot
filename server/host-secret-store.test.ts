@@ -5,6 +5,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -85,6 +86,68 @@ describe("createFileEnvelopeSecretStore", () => {
       HostSecretStoreUnavailableError,
     );
     expect(readFileSync(join(dataDir, "host-secrets.bin"), "utf8")).toBe("corrupt");
+  });
+
+  it("does not treat a corrupt key without an envelope as empty", () => {
+    const store = createFileEnvelopeSecretStore({ dataDir });
+    writeFileSync(join(dataDir, "host-secret.key"), Buffer.from("corrupt"), { mode: 0o600 });
+    expect(store.read().status).toBe("unavailable");
+    expect(() => store.set("replacement", "12345678901234567890")).toThrow(
+      HostSecretStoreUnavailableError,
+    );
+  });
+
+  it("rejects unsafe key and envelope modes and fails mutations closed", () => {
+    const store = createFileEnvelopeSecretStore({ dataDir });
+    writeFileSync(join(dataDir, "host-secret.key"), Buffer.alloc(32), { mode: 0o644 });
+    expect(store.read().status).toBe("unavailable");
+    expect(() => store.set("x", "12345678901234567890")).toThrow(HostSecretStoreUnavailableError);
+
+    const validStore = createFileEnvelopeSecretStore({ dataDir: join(dataDir, "valid") });
+    validStore.set("x", "12345678901234567890");
+    const envelopePath = join(dataDir, "valid", "host-secrets.bin");
+    const before = readFileSync(envelopePath);
+    chmodSync(envelopePath, 0o644);
+    expect(validStore.read().status).toBe("unavailable");
+    expect(() => validStore.set("replacement", "12345678901234567890")).toThrow(
+      HostSecretStoreUnavailableError,
+    );
+    expect(readFileSync(envelopePath)).toEqual(before);
+  });
+
+  it.skipIf(process.platform === "win32")("rejects key symlinks and dangling key symlinks", () => {
+    const target = join(dataDir, "key-target");
+    writeFileSync(target, Buffer.alloc(32), { mode: 0o600 });
+    symlinkSync(target, join(dataDir, "host-secret.key"));
+    const store = createFileEnvelopeSecretStore({ dataDir });
+    expect(store.read().status).toBe("unavailable");
+    expect(() => store.set("x", "12345678901234567890")).toThrow(HostSecretStoreUnavailableError);
+
+    rmSync(join(dataDir, "host-secret.key"));
+    symlinkSync(join(dataDir, "missing-key"), join(dataDir, "host-secret.key"));
+    expect(store.read().status).toBe("unavailable");
+    expect(() => store.set("x", "12345678901234567890")).toThrow(HostSecretStoreUnavailableError);
+  });
+
+  it.skipIf(process.platform === "win32")("rejects envelope symlinks and dangling envelope symlinks", () => {
+    const store = createFileEnvelopeSecretStore({ dataDir });
+    store.set("x", "12345678901234567890");
+    const envelopePath = join(dataDir, "host-secrets.bin");
+    const target = join(dataDir, "envelope-target");
+    rmSync(envelopePath);
+    writeFileSync(target, "not-the-envelope", { mode: 0o600 });
+    symlinkSync(target, envelopePath);
+    expect(store.read().status).toBe("unavailable");
+    expect(() => store.set("replacement", "12345678901234567890")).toThrow(
+      HostSecretStoreUnavailableError,
+    );
+
+    rmSync(envelopePath);
+    symlinkSync(join(dataDir, "missing-envelope"), envelopePath);
+    expect(store.read().status).toBe("unavailable");
+    expect(() => store.set("replacement", "12345678901234567890")).toThrow(
+      HostSecretStoreUnavailableError,
+    );
   });
 
   it("returns unavailable when authenticated decryption fails with the wrong key", () => {

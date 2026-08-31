@@ -5,15 +5,19 @@ import {
   randomUUID,
 } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   fsyncSync,
+  fstatSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import type { Stats } from "node:fs";
 import { constants as fsConstants } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -85,9 +89,10 @@ export function createFileEnvelopeSecretStore(options?: {
 
   function read(): HostSecretSnapshot {
     try {
-      const envelope = readEnvelope();
-      if (envelope === null) return emptySnapshot();
       const key = readKey(false);
+      const envelope = readEnvelope();
+      if (key === null && envelope === null) return emptySnapshot();
+      if (key === null || envelope === null) throw unavailableError();
       return okSnapshot(decryptValues(key, envelope));
     } catch {
       return unavailableSnapshot();
@@ -104,6 +109,7 @@ export function createFileEnvelopeSecretStore(options?: {
 
     try {
       const key = current.key ?? readKey(true);
+      if (key === null) throw unavailableError();
       writeEnvelope(key, values);
     } catch (error) {
       throw asUnavailable(error);
@@ -122,6 +128,9 @@ export function createFileEnvelopeSecretStore(options?: {
     try {
       if (Object.keys(values).length === 0) {
         unlinkSync(envelopePath);
+        // With no encrypted values left, remove the now-unreferenced key as
+        // well so the next first write starts from a genuinely empty store.
+        unlinkSync(keyPath);
       } else {
         const key = current.key;
         if (key === null) throw unavailableError();
@@ -134,9 +143,16 @@ export function createFileEnvelopeSecretStore(options?: {
 
   function readMutationState(): { envelope: SecretEnvelopeV1 | null; key: Buffer | null; values: SecretValues } {
     try {
-      const envelope = readEnvelope();
-      if (envelope === null) return { envelope: null, key: null, values: {} };
       const key = readKey(false);
+      const envelope = readEnvelope();
+      if (key === null && envelope === null) return { envelope: null, key: null, values: {} };
+      if (envelope === null) {
+        // A valid key with no envelope has no values to decrypt, so a caller
+        // may initialize the first envelope. Invalid, unsafe, or unreadable
+        // keys have already failed closed in readKey above.
+        return { envelope: null, key, values: {} };
+      }
+      if (key === null) throw unavailableError();
       return { envelope, key, values: decryptValues(key, envelope) };
     } catch (error) {
       throw asUnavailable(error);
@@ -144,13 +160,9 @@ export function createFileEnvelopeSecretStore(options?: {
   }
 
   function readEnvelope(): SecretEnvelopeV1 | null {
-    let raw: string;
-    try {
-      raw = readFileSync(envelopePath, "utf8");
-    } catch (error) {
-      if (hasCode(error, "ENOENT")) return null;
-      throw unavailableError();
-    }
+    const bytes = readSecureFile(envelopePath);
+    if (bytes === null) return null;
+    const raw = bytes.toString("utf8");
 
     let parsed: unknown;
     try {
@@ -161,14 +173,43 @@ export function createFileEnvelopeSecretStore(options?: {
     return validateEnvelope(parsed);
   }
 
-  function readKey(createIfMissing: boolean): Buffer {
-    try {
-      const key = readFileSync(keyPath);
-      if (key.length !== KEY_BYTES) throw unavailableError();
-      return Buffer.from(key);
-    } catch (error) {
-      if (!createIfMissing || !hasCode(error, "ENOENT")) throw asUnavailable(error);
+  function readKey(createIfMissing: boolean): Buffer | null {
+    const key = readSecureFile(keyPath);
+    if (key === null) {
+      if (!createIfMissing) return null;
       return createKeyExclusive();
+    }
+    if (key.length !== KEY_BYTES) throw unavailableError();
+    return Buffer.from(key);
+  }
+
+  function readSecureFile(path: string): Buffer | null {
+    let initial;
+    try {
+      initial = lstatSync(path);
+    } catch (error) {
+      if (hasCode(error, "ENOENT")) return null;
+      throw unavailableError();
+    }
+    assertSecureFile(initial);
+
+    let fd: number | null = null;
+    try {
+      const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+      fd = openSync(path, fsConstants.O_RDONLY | noFollow);
+      const opened = fstatSync(fd);
+      assertSecureFile(opened);
+      if (opened.dev !== initial.dev || opened.ino !== initial.ino) throw unavailableError();
+      const bytes = readFileSync(fd);
+      const final = lstatSync(path);
+      assertSecureFile(final);
+      if (final.dev !== opened.dev || final.ino !== opened.ino) throw unavailableError();
+      return bytes;
+    } catch (error) {
+      if (error instanceof HostSecretStoreUnavailableError) throw error;
+      throw unavailableError();
+    } finally {
+      if (fd !== null) closeSync(fd);
     }
   }
 
@@ -179,6 +220,7 @@ export function createFileEnvelopeSecretStore(options?: {
     try {
       fd = openSync(tempPath, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, FILE_MODE);
       writeFileSync(fd, key);
+      chmodSync(tempPath, FILE_MODE);
       fsyncSync(fd);
       closeSync(fd);
       fd = null;
@@ -190,7 +232,9 @@ export function createFileEnvelopeSecretStore(options?: {
       } catch (error) {
         if (!hasCode(error, "EEXIST")) throw error;
         unlinkSync(tempPath);
-        return readKey(false);
+        const existing = readKey(false);
+        if (existing === null) throw unavailableError();
+        return existing;
       }
       unlinkSync(tempPath);
       return key;
@@ -338,6 +382,18 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function hasCode(error: unknown, code: string): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === code;
+}
+
+function assertSecureFile(stat: Stats): void {
+  if (!stat.isFile()) throw unavailableError();
+  // 0600 or stricter: only owner read/write bits are permitted. An operator
+  // may reduce those bits further, but execute, special, group, and other
+  // permissions are all rejected.
+  const permissions = stat.mode & 0o7777;
+  if ((permissions & ~FILE_MODE) !== 0) throw unavailableError();
+  if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
+    throw unavailableError();
+  }
 }
 
 function unavailableError(): HostSecretStoreUnavailableError {
