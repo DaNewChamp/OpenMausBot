@@ -25,6 +25,7 @@ const INSTALLATION_ID = "22222222-2222-4222-8222-222222222222";
 const DUPLICATE_INSTALLATION_ID = "33333333-3333-4333-8333-333333333333";
 const ACCOUNT_TOKEN = `signed.${"a".repeat(80)}`;
 const INSTALLATION_CREDENTIAL = `omb_install_${"b".repeat(22)}.${"c".repeat(43)}`;
+const ROTATED_INSTALLATION_CREDENTIAL = `omb_install_${"e".repeat(22)}.${"f".repeat(43)}`;
 const CONNECTOR_TOKEN = `eyJ${"d".repeat(100)}`;
 const ENDPOINT = "https://c-opaque.openmausbot.com";
 
@@ -914,6 +915,76 @@ describe("Companion account service", () => {
     expect(client.ensureInstallation).toHaveBeenCalledTimes(2);
     expect(client.ensureEndpoint).toHaveBeenCalledOnce();
     expect(updatePresence).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves an existing installation when credential rotation is followed by presence failure", async () => {
+    const updatePresence = vi.fn(async () => {
+      throw new ControlPlaneError("network_unavailable");
+    });
+    const client = readyClient({
+      updatePresence,
+      ensureInstallation: vi.fn(async () => ({
+        installation: {
+          id: INSTALLATION_ID,
+          clientInstanceId: UUID,
+          name: "Test Mac",
+          platform: "darwin",
+        },
+        credential: ROTATED_INSTALLATION_CREDENTIAL,
+      })),
+    });
+    const { service, store } = serviceFixture({
+      client,
+      initial: signedCredentials(),
+      schedulePresence: vi.fn(),
+    });
+
+    await expect(service.retry()).resolves.toMatchObject({
+      available: true,
+      status: "error",
+      email: "ada@example.com",
+      message: expect.stringContaining("Check your internet"),
+    });
+    expect(client.ensureInstallation).toHaveBeenCalledWith(expect.objectContaining({
+      currentCredential: INSTALLATION_CREDENTIAL,
+    }));
+    expect(client.ensureEndpoint).not.toHaveBeenCalled();
+    expect(client.deleteEndpoint).not.toHaveBeenCalled();
+    expect(client.revokeInstallation).not.toHaveBeenCalled();
+    expect(store.read()[COMPANION_INSTALLATION_ID_FIELD]).toBe(INSTALLATION_ID);
+    expect(store.read()[COMPANION_INSTALLATION_CREDENTIAL_FIELD]).toBe(INSTALLATION_CREDENTIAL);
+  });
+
+  it("preserves an existing installation when credential rotation is followed by endpoint failure", async () => {
+    const client = readyClient({
+      ensureInstallation: vi.fn(async () => ({
+        installation: {
+          id: INSTALLATION_ID,
+          clientInstanceId: UUID,
+          name: "Test Mac",
+          platform: "darwin",
+        },
+        credential: ROTATED_INSTALLATION_CREDENTIAL,
+      })),
+      ensureEndpoint: vi.fn(async () => {
+        throw new ControlPlaneError("network_unavailable");
+      }),
+    });
+    const incomplete = signedCredentials();
+    delete incomplete[MANAGED_COMPANION_ENDPOINT_FIELD];
+    delete incomplete[MANAGED_COMPANION_TOKEN_FIELD];
+    const { service, store } = serviceFixture({ client, initial: incomplete });
+
+    await expect(service.retry()).resolves.toMatchObject({
+      available: true,
+      status: "error",
+      email: "ada@example.com",
+      message: expect.stringContaining("Check your internet"),
+    });
+    expect(client.deleteEndpoint).not.toHaveBeenCalled();
+    expect(client.revokeInstallation).not.toHaveBeenCalled();
+    expect(store.read()[COMPANION_INSTALLATION_ID_FIELD]).toBe(INSTALLATION_ID);
+    expect(store.read()[COMPANION_INSTALLATION_CREDENTIAL_FIELD]).toBe(INSTALLATION_CREDENTIAL);
   });
 
   it("keeps startup state unavailable until the initial restore presence completes", async () => {

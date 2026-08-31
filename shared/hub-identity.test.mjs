@@ -353,6 +353,46 @@ describe("stable hub identity", () => {
     }
   });
 
+  it("uses Windows mode semantics deterministically without relaxing file-type checks", () => {
+    const dataDir = makeDataDir();
+    chmodSync(dataDir, 0o755);
+    assert.equal(inspectPrivateDataDir(dataDir, { platform: "win32" }), "ok");
+    ensurePrivateDataDir(dataDir, { platform: "win32" });
+    if (process.platform !== "win32") {
+      assert.equal(statSync(dataDir).mode & 0o777, 0o755);
+    }
+
+    const identity = loadOrCreateHubIdentity({
+      dataDir,
+      platform: "win32",
+      preferredId: "windows-mode-id",
+      now: () => 123,
+    });
+    assert.deepEqual(readHubIdentity({ dataDir, platform: "win32" }), {
+      status: "ok",
+      identity,
+    });
+
+    const typeRoot = makeDataDir();
+    const target = join(typeRoot, "target");
+    const link = join(typeRoot, "link");
+    const file = join(typeRoot, "file");
+    if (process.platform !== "win32") symlinkSync(target, link);
+    writeFileSync(file, "not a directory");
+    if (process.platform !== "win32") {
+      assert.equal(inspectPrivateDataDir(link, { platform: "win32" }), "unavailable");
+      assert.throws(
+        () => ensurePrivateDataDir(link, { platform: "win32" }),
+        HubIdentityUnavailableError,
+      );
+    }
+    assert.equal(inspectPrivateDataDir(file, { platform: "win32" }), "unavailable");
+    assert.throws(
+      () => ensurePrivateDataDir(file, { platform: "win32" }),
+      HubIdentityUnavailableError,
+    );
+  });
+
   it("rejects empty, overlong, and non-printable existing ids", () => {
     for (const id of ["", "x".repeat(257), "has\ttab", "has\u0000nul"]) {
       const dataDir = makeDataDir();

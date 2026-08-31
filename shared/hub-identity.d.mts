@@ -8,6 +8,7 @@ export type PrivateDataDirStatus = "missing" | "ok" | "needs-repair" | "unavaila
 
 export interface HubIdentityReadOptions {
   dataDir: string;
+  platform?: string;
 }
 
 export interface HubIdentityCreateOptions extends HubIdentityReadOptions {
@@ -24,8 +25,8 @@ export class HubIdentityUnavailableError extends Error {
   constructor(message?: string);
 }
 
-export function inspectPrivateDataDir(dataDir: string): PrivateDataDirStatus;
-export function ensurePrivateDataDir(dataDir: string): void;
+export function inspectPrivateDataDir(dataDir: string, options?: { platform?: string }): PrivateDataDirStatus;
+export function ensurePrivateDataDir(dataDir: string, options?: { platform?: string }): void;
 
 export type HubIdentityReadResult =
   | { status: "missing" }

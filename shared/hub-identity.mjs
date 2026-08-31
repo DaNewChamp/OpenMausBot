@@ -29,17 +29,17 @@ const publicationWaitCell = new Int32Array(new SharedArrayBuffer(4));
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 let publicationLockSequence = 0;
 
-function isPosixPlatform() {
-  return process.platform !== "win32";
+function isPosixPlatform(platform = process.platform) {
+  return platform !== "win32";
 }
 
-function hasCurrentPosixOwner(stat) {
-  return !isPosixPlatform() || typeof process.getuid !== "function" || stat.uid === process.getuid();
+function hasCurrentPosixOwner(stat, platform = process.platform) {
+  return !isPosixPlatform(platform) || typeof process.getuid !== "function" || stat.uid === process.getuid();
 }
 
-function hasPrivatePosixMetadata(stat, mode) {
-  if (!isPosixPlatform()) return true;
-  return hasCurrentPosixOwner(stat) && (stat.mode & 0o7777 & ~mode) === 0;
+function hasPrivatePosixMetadata(stat, mode, platform = process.platform) {
+  if (!isPosixPlatform(platform)) return true;
+  return hasCurrentPosixOwner(stat, platform) && (stat.mode & 0o7777 & ~mode) === 0;
 }
 
 export class HubIdentityUnavailableError extends Error {
@@ -65,10 +65,10 @@ function validDataDir(dataDir) {
 /**
  * Inspect the caller-provided runtime directory without creating it or
  * following a final-component symlink. A missing directory is safe to create;
- * every existing directory must be an owner-controlled directory with no
+ * on POSIX every existing directory must be owner-controlled with no
  * group/other permissions before identity or secret files are touched.
  */
-export function inspectPrivateDataDir(dataDir) {
+export function inspectPrivateDataDir(dataDir, { platform = process.platform } = {}) {
   if (!validDataDir(dataDir)) return "unavailable";
   const directoryPath = resolve(dataDir);
   let directory;
@@ -79,17 +79,20 @@ export function inspectPrivateDataDir(dataDir) {
     return "unavailable";
   }
   if (!directory.isDirectory() || directory.isSymbolicLink()) return "unavailable";
-  if (!hasCurrentPosixOwner(directory)) return "unavailable";
-  if ((directory.mode & 0o7777 & ~PRIVATE_DIRECTORY_MODE) !== 0) return "needs-repair";
+  if (!hasCurrentPosixOwner(directory, platform)) return "unavailable";
+  if (isPosixPlatform(platform) && (directory.mode & 0o7777 & ~PRIVATE_DIRECTORY_MODE) !== 0) {
+    return "needs-repair";
+  }
   return "ok";
 }
 
 /**
- * Prepare and revalidate the explicit runtime directory. Existing unsafe
- * modes are narrowed to 0700 only after ownership and directory type checks;
- * symlinks, files, ownership mismatches, and races fail closed.
+ * Prepare and revalidate the explicit runtime directory. On POSIX, existing
+ * unsafe modes are narrowed to 0700 only after ownership and directory type
+ * checks; symlinks, files, ownership mismatches, and races fail closed on all
+ * platforms.
  */
-export function ensurePrivateDataDir(dataDir) {
+export function ensurePrivateDataDir(dataDir, { platform = process.platform } = {}) {
   if (!validDataDir(dataDir)) throwUnavailable("Hub data directory is invalid");
   const directoryPath = resolve(dataDir);
 
@@ -109,19 +112,19 @@ export function ensurePrivateDataDir(dataDir) {
   if (!before.isDirectory() || before.isSymbolicLink()) {
     throwUnavailable("Hub data directory is unavailable");
   }
-  if (isPosixPlatform() && typeof process.getuid === "function" && before.uid !== process.getuid()) {
+  if (isPosixPlatform(platform) && typeof process.getuid === "function" && before.uid !== process.getuid()) {
     throwUnavailable("Hub data directory is unavailable");
   }
 
   try {
-    if (isPosixPlatform()) chmodSync(directoryPath, PRIVATE_DIRECTORY_MODE);
+    if (isPosixPlatform(platform)) chmodSync(directoryPath, PRIVATE_DIRECTORY_MODE);
     const after = lstatSync(directoryPath);
     if (
       !after.isDirectory() ||
       after.isSymbolicLink() ||
       after.dev !== before.dev ||
       after.ino !== before.ino ||
-      !hasPrivatePosixMetadata(after, PRIVATE_DIRECTORY_MODE)
+      !hasPrivatePosixMetadata(after, PRIVATE_DIRECTORY_MODE, platform)
     ) {
       throwUnavailable("Hub data directory is unavailable");
     }
@@ -178,10 +181,10 @@ function publicationLockPath(dataDir) {
  * readable. No directory or fallback home-directory path is inferred here.
  */
 export function readHubIdentity(options = {}) {
-  const { dataDir } = options ?? {};
+  const { dataDir, platform = process.platform } = options ?? {};
   if (!validDataDir(dataDir)) return unavailable("Hub data directory is invalid");
 
-  const directoryStatus = inspectPrivateDataDir(dataDir);
+  const directoryStatus = inspectPrivateDataDir(dataDir, { platform });
   if (directoryStatus === "missing") return { status: "missing" };
   if (directoryStatus !== "ok") return unavailable("Hub data directory is unavailable");
 
@@ -194,14 +197,18 @@ export function readHubIdentity(options = {}) {
     return unavailable("Hub identity could not be read");
   }
 
-  if (!initial.isFile() || initial.isSymbolicLink() || !hasPrivatePosixMetadata(initial, PRIVATE_FILE_MODE)) {
+  if (
+    !initial.isFile() ||
+    initial.isSymbolicLink() ||
+    !hasPrivatePosixMetadata(initial, PRIVATE_FILE_MODE, platform)
+  ) {
     return unavailable("Hub identity could not be read");
   }
 
   let bytes;
   let fd;
   try {
-    const noFollow = isPosixPlatform() ? constants.O_NOFOLLOW ?? 0 : 0;
+    const noFollow = isPosixPlatform(platform) ? constants.O_NOFOLLOW ?? 0 : 0;
     fd = openSync(filePath, constants.O_RDONLY | noFollow);
     const opened = fstatSync(fd);
     if (
@@ -209,7 +216,7 @@ export function readHubIdentity(options = {}) {
       opened.isSymbolicLink() ||
       opened.dev !== initial.dev ||
       opened.ino !== initial.ino ||
-      !hasPrivatePosixMetadata(opened, PRIVATE_FILE_MODE)
+      !hasPrivatePosixMetadata(opened, PRIVATE_FILE_MODE, platform)
     ) {
       return unavailable("Hub identity could not be read");
     }
@@ -220,7 +227,7 @@ export function readHubIdentity(options = {}) {
       final.isSymbolicLink() ||
       final.dev !== opened.dev ||
       final.ino !== opened.ino ||
-      !hasPrivatePosixMetadata(final, PRIVATE_FILE_MODE)
+      !hasPrivatePosixMetadata(final, PRIVATE_FILE_MODE, platform)
     ) {
       return unavailable("Hub identity could not be read");
     }
@@ -251,7 +258,7 @@ function throwUnavailable(message) {
   throw new HubIdentityUnavailableError(message);
 }
 
-function writeDurableTemp(tempPath, serialized) {
+function writeDurableTemp(tempPath, serialized, platform) {
   let fd;
   let created = false;
   try {
@@ -260,7 +267,7 @@ function writeDurableTemp(tempPath, serialized) {
     const bytes = Buffer.from(serialized, "utf8");
     let offset = 0;
     while (offset < bytes.length) offset += writeSync(fd, bytes, offset);
-    if (isPosixPlatform()) chmodSync(tempPath, PRIVATE_FILE_MODE);
+    if (isPosixPlatform(platform)) chmodSync(tempPath, PRIVATE_FILE_MODE);
     fsyncSync(fd);
     closeSync(fd);
     fd = undefined;
@@ -292,10 +299,10 @@ function temporaryPath(dataDir, randomUuid) {
  * A stale lock fails closed rather than being removed speculatively. The lock
  * token and inode are retained so release cannot remove a replacement lock.
  */
-function acquirePublicationLock(dataDir) {
+function acquirePublicationLock(dataDir, platform) {
   const lockPath = publicationLockPath(dataDir);
   for (let attempt = 0; attempt < PUBLICATION_LOCK_ATTEMPTS; attempt += 1) {
-    const current = readHubIdentity({ dataDir });
+    const current = readHubIdentity({ dataDir, platform });
     if (current.status === "ok") return { identity: current.identity };
     if (current.status === "unavailable") throwUnavailable(current.error);
 
@@ -365,8 +372,8 @@ function syncPublishedFile(filePath) {
   }
 }
 
-function publishIdentity(dataDir, identity, { tempPathFactory, beforePublish }) {
-  const acquired = acquirePublicationLock(dataDir);
+function publishIdentity(dataDir, identity, { platform, tempPathFactory, beforePublish }) {
+  const acquired = acquirePublicationLock(dataDir, platform);
   if (acquired.identity) return acquired.identity;
 
   const filePath = hubPath(dataDir);
@@ -375,7 +382,7 @@ function publishIdentity(dataDir, identity, { tempPathFactory, beforePublish }) 
   try {
     // Recheck after acquiring the lock in case a non-cooperating writer won
     // between acquirePublicationLock's final read and lock creation.
-    const beforeWrite = readHubIdentity({ dataDir });
+    const beforeWrite = readHubIdentity({ dataDir, platform });
     if (beforeWrite.status === "ok") return beforeWrite.identity;
     if (beforeWrite.status === "unavailable") throwUnavailable(beforeWrite.error);
 
@@ -385,12 +392,12 @@ function publishIdentity(dataDir, identity, { tempPathFactory, beforePublish }) 
       throwUnavailable("Hub identity temporary path could not be generated");
     }
     if (tempPath === filePath) throwUnavailable("Hub identity temporary path is invalid");
-    writeDurableTemp(tempPath, `${JSON.stringify(identity)}\n`);
+    writeDurableTemp(tempPath, `${JSON.stringify(identity)}\n`, platform);
     tempCreated = true;
 
     // Keep no-overwrite semantics even if an external writer does not use our
     // sidecar lock but appears before the exclusive copy.
-    const beforeRename = readHubIdentity({ dataDir });
+    const beforeRename = readHubIdentity({ dataDir, platform });
     if (beforeRename.status === "ok") return beforeRename.identity;
     if (beforeRename.status === "unavailable") throwUnavailable(beforeRename.error);
 
@@ -404,10 +411,10 @@ function publishIdentity(dataDir, identity, { tempPathFactory, beforePublish }) 
 
     try {
       copyFileSync(tempPath, filePath, COPYFILE_EXCL);
-      if (isPosixPlatform()) chmodSync(filePath, PRIVATE_FILE_MODE);
+      if (isPosixPlatform(platform)) chmodSync(filePath, PRIVATE_FILE_MODE);
       syncPublishedFile(filePath);
     } catch (error) {
-      const raced = readHubIdentity({ dataDir });
+      const raced = readHubIdentity({ dataDir, platform });
       if (raced.status === "ok") return raced.identity;
       if (raced.status === "unavailable") throwUnavailable(raced.error);
       if (error?.code === "EEXIST") {
@@ -416,7 +423,7 @@ function publishIdentity(dataDir, identity, { tempPathFactory, beforePublish }) 
       throwUnavailable("Hub identity could not be published");
     }
 
-    const persisted = readHubIdentity({ dataDir });
+    const persisted = readHubIdentity({ dataDir, platform });
     if (persisted.status === "ok") return persisted.identity;
     if (persisted.status === "unavailable") throwUnavailable(persisted.error);
     throwUnavailable("Hub identity disappeared after publication");
@@ -440,6 +447,7 @@ function publishIdentity(dataDir, identity, { tempPathFactory, beforePublish }) 
 export function loadOrCreateHubIdentity(options = {}) {
   const {
     dataDir,
+    platform = process.platform,
     preferredId,
     allowCreate = true,
     now = () => Date.now(),
@@ -450,22 +458,23 @@ export function loadOrCreateHubIdentity(options = {}) {
   } = options ?? {};
   if (!validDataDir(dataDir)) throwUnavailable("Hub data directory is invalid");
 
-  const directoryStatus = inspectPrivateDataDir(dataDir);
+  const directoryStatus = inspectPrivateDataDir(dataDir, { platform });
   if (directoryStatus === "missing" && allowCreate === false) {
     throwUnavailable("Hub identity is unavailable until credential state is known");
   }
-  // Existing unsafe modes are narrowed before reading or publishing identity
-  // data; symlinks, files, ownership mismatches, and races fail closed.
-  ensurePrivateDataDir(dataDir);
+  // On POSIX, existing unsafe modes are narrowed before reading or publishing
+  // identity data; symlinks, files, ownership mismatches, and races fail
+  // closed on all platforms.
+  ensurePrivateDataDir(dataDir, { platform });
 
-  const existing = readHubIdentity({ dataDir });
+  const existing = readHubIdentity({ dataDir, platform });
   if (existing.status === "ok") return existing.identity;
   if (existing.status === "unavailable") throwUnavailable(existing.error);
   if (allowCreate === false) throwUnavailable("Hub identity is unavailable until credential state is known");
 
   // Recheck after preparing the directory: another process may have created
   // the identity while this process was making the directory private.
-  const afterPrepare = readHubIdentity({ dataDir });
+  const afterPrepare = readHubIdentity({ dataDir, platform });
   if (afterPrepare.status === "ok") return afterPrepare.identity;
   if (afterPrepare.status === "unavailable") throwUnavailable(afterPrepare.error);
 
@@ -488,6 +497,7 @@ export function loadOrCreateHubIdentity(options = {}) {
   if (!isValidCreatedAt(createdAt)) throwUnavailable("Hub identity timestamp is invalid");
 
   return publishIdentity(dataDir, Object.freeze({ schemaVersion: 1, id, createdAt }), {
+    platform,
     tempPathFactory,
     beforePublish,
   });

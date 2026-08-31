@@ -599,8 +599,7 @@ export function createCompanionAccountService({
 
     const reusedExistingInstallation = Boolean(
       previous?.userId === user.id &&
-      previous.installationId === installation.installation.id &&
-      previous.installationCredential === installation.credential,
+      previous.installationId === installation.installation.id,
     );
     const rollbackProvisioning = async ({
       endpointProvisioned = false,
