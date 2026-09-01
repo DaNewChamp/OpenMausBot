@@ -81,7 +81,6 @@ function envelopeMarkersUnavailable(payload: RecordLike): boolean {
     if (!hasOwn(payload, key)) continue;
     const value = payload[key];
     if (value === null) continue;
-    if (typeof value === "string" || isRecord(value)) return true;
     return true;
   }
 
