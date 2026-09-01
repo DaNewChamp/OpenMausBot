@@ -4,7 +4,7 @@
 
 **Goal:** Ship a first-party V Bot foreground iPhone half-duplex voice MVP for 1:1 bots and team rooms by reusing Apple on-device speech recognition, the existing paired chat/SSE/TTS path, tap interrupt, 850ms silence endpointing, group turn sequencing, and spoken yes/no approvals.
 
-**Architecture:** The phone is only the microphone, speaker, and call surface. Capture uses in-process `SFSpeechRecognizer` on `AVAudioEngine` with the mic closed during playback because this recognizer has no acoustic echo cancellation. Final transcripts go through the existing companion `CompanionClient.send` / `respond` / `interrupt` APIs; the Hub folds replies, `tool.spoken` narration, and approval cards over the existing SSE stream; `/api/tts/prepare` plus `/api/tts/speak` stay on the Hub so credentials never reach the phone. Team calls queue one member at a time and route spoken names onto the room's existing `@mention` syntax. Full duplex stays deferred until a proven AEC capture path exists. Kokoro is the next Hub TTS provider, not part of this MVP.
+**Architecture:** The phone is only the microphone, speaker, and call surface. Capture uses in-process `SFSpeechRecognizer` on `AVAudioEngine` with the mic closed during playback because this recognizer has no acoustic echo cancellation. Final user turns go through existing `Session.send(_:to:mode:)` so `VBotMutationRouting` keeps native OpenMaus vs reconstructed routing; overlays must not call `CompanionClient.send`. Approvals use `Session.answer`; interrupt uses `Session.interrupt`. Reconstructed chats are reference-only and not a call MVP target. The Hub folds replies, `tool.spoken` narration, and approval cards over the existing SSE stream; `/api/tts/prepare` plus `/api/tts/speak` stay on the Hub so credentials never reach the phone. Team calls queue one member at a time and route spoken names onto the room's existing `@mention` syntax. Full duplex stays deferred until a proven AEC capture path exists. Kokoro is the next Hub TTS provider, not part of this MVP.
 
 **Tech Stack:** Swift 6 / SwiftUI / Speech / AVFoundation, CompanionCore (Foundation-only policies + HTTP), existing Node companion allowlist, Hub `server/tts/*` and `/api/events`, zero new dependencies.
 
@@ -17,7 +17,8 @@
 - Do not leave the mic open during TTS playback. Full-duplex barge-in is out of scope until a proven AEC capture path exists and is tested on device.
 - Foreground iPhone only. No CallKit, no background VoIP, no lock-screen continuation. Background, lock, audio interruption, revoked pairing, or leaving the chat hangs up and releases the mic.
 - Apple on-device recognition when `supportsOnDeviceRecognition` is true; never send call audio to a cloud STT. Composer dictation stays press-to-stop with no silence timeout.
-- Reuse current chat, SSE, group send, interrupt, approval respond, and TTS prepare/speak. Do not invent a voice websocket or a second transcript store.
+- Reuse current chat, SSE, group send, interrupt, approval respond, and TTS prepare/speak. Call overlays submit finals through `Session.send(_:to:mode:)` (which applies `VBotMutationRouting`), not `CompanionClient.send`. Do not invent a voice websocket or a second transcript store.
+- Reconstructed engine chats are reference-only in this MVP: hide the call button when `CallModePolicy.allowsNativeCall(mutationTarget:)` is false. Do not treat reconstructed rooms as sendable call targets.
 - TTS credentials stay on the Hub. The phone receives voice labels and audio bytes only.
 - Bridges keep their current advertised capabilities (`shell`, `local-vm`, `ssh-forward`). Do not add a `tts` bridge capability in this MVP.
 - Roleplay personas and local-model bots use the same send/SSE path as every other bot. Do not add a voice-only system prompt or a special engine.
@@ -37,10 +38,10 @@ Read-only pass on 2026-09-01. Implementers should treat these as the source of t
 | Desktop 1:1 call | `src/components/CallView.tsx`, `src/lib/call.ts` | Phase loop is `listening → sending → working → speaking`. Mic closed during playback. Tap / Space interrupts. Escape hangs up. `CALL_ENDPOINT_MS = 850`. |
 | Desktop team call | `src/components/GroupCallView.tsx`, `src/lib/group-call.ts` | One mic, queued member speech, `routeSpokenGroupMessage`, `busyBotId` gates listen, interrupt also POSTs group interrupt. DMs have no call button. Rooms require every member to have a voice. |
 | Desktop STT | `electron/resources/speech-helper.swift` | Buffer-backed `SFSpeechRecognizer` does not finalize on silence; helper `--endpoint-ms` calls `endAudio()`. Intentional stops must not emit a final transcript. |
-| Desktop TTS | `src/lib/tts/index.ts`, `server/tts/index.ts`, `server/index.ts` `/api/tts/prepare` + `/api/tts/speak` | Prepare splits utterances on the Hub. Speak returns opaque audio bytes. Prefetch utterance n+1 while n plays. Abortable. 500-char speak cap (Hub 413). |
+| Desktop TTS | `src/lib/tts/index.ts`, `server/tts/index.ts`, `server/index.ts` `/api/tts/prepare` + `/api/tts/speak` | Prepare splits utterances on the Hub. Speak returns opaque audio bytes. Prefetch utterance n+1 while n plays. Abortable. Speak cap is Hub `text.length > 500` (JS UTF-16 code units, 413). Desktop `JSON.stringify({ text, voiceId })` omits `voiceId` when undefined for both prepare and speak. |
 | iOS STT | `ios/App/SpeechDictation.swift`, `ios/Sources/CompanionCore/Dictation.swift` | Composer only. Category `.record`. No silence endpointing. On-device when supported. `ChatView` already stops dictation on background, leave, and audio interruption. |
-| iOS TTS | `CompanionClient.previewVoice` → `POST /api/tts/speak`; `AgentProfileView` plays with `AVAudioPlayer` | Preview exists and silently `prefix(500)`. Prepare is missing on the iOS client. Companion allowlist has voices + speak, **not** prepare. Call synthesis must reject oversize text instead of truncating. |
-| Chat / SSE | `CompanionClient.send` bot/room, `CompanionClient.interrupt`, `CompanionClient.respond`, `ios/Sources/CompanionCore/SSE.swift` | Call sends ordinary messages and folds ordinary frames. `Message.tool.spoken` is already decoded. |
+| iOS TTS | `CompanionClient.previewVoice` → `POST /api/tts/speak`; `AgentProfileView` plays with `AVAudioPlayer` | Preview exists and silently `prefix(500)` (Swift graphemes; leave it). Prepare is missing on the iOS client. Companion allowlist has voices + speak, **not** prepare. Call synthesis must reject oversize text using Hub UTF-16 `text.length`, not `String.count`, and must not truncate. |
+| Chat / SSE | `Session.send` (`VBotMutationRouting` → OpenMaus `CompanionClient.send` or reconstructed `sendReconstructed`); `Session.interrupt`; `Session.answer`; `ios/Sources/CompanionCore/SSE.swift` | Call finals use `Session.send`, never overlay→`CompanionClient.send`. Reconstructed is reference-only (no call button). `Message.tool.spoken` is already decoded. |
 | Group routing | `ios/Sources/CompanionCore/GroupRouting.swift`, `src/lib/group-routing.ts` | Composer `@mentions`. Spoken “Atlas, …” must be rewritten before send (`src/lib/group-call.ts` already does this on desktop). |
 | Approvals | `CompanionClient.respond(threadId:requestId:behavior:message:)`, desktop YES/NO **prefix** regex in `CallView.tsx` / `GroupCallView.tsx` | Speak the card. iOS grants or denies only on a strict whole-utterance yes/no after trim. Ambiguous speech re-asks. Non-permission questions take the next complete turn as the answer. Do not port the desktop `\b` regex. |
 | Capability / bridges | `server/bridge-registry.ts` `BridgeCapability = "shell" \| "local-vm" \| "ssh-forward"` | TTS is Hub-owned. Phones talk only to the companion. Do not place STT or TTS on a bridge in this MVP. |
@@ -60,7 +61,7 @@ Create:
 - `ios/Sources/CompanionCore/GroupCallRouting.swift` — Swift port of `routeSpokenGroupMessage`.
 - `ios/Sources/CompanionCore/CallSpeaker.swift` — Hub prepare/synthesize client orchestration (HTTP only, no AVFoundation) plus `CallAudioPlaying`.
 - `ios/App/CallCapture.swift` — call-mode `SFSpeechRecognizer` with 850ms silence endpointing.
-- `ios/App/CallAudioPlayer.swift` — App-target `AVAudioPlayer` conformer of `CallAudioPlaying`.
+- `ios/App/CallAudioPlayer.swift` — App-target `NSObject` + `AVAudioPlayerDelegate` + `CallAudioPlaying` conformer.
 - `ios/App/CallView.swift` — 1:1 overlay. Wires CompanionCore helpers; does not own approval parsing.
 - `ios/App/GroupCallView.swift` — team overlay. Created in Task 8; consumes Task 3/7 CompanionCore helpers. Task 7 must not edit this file.
 - `ios/Tests/CompanionCoreTests/CallModePolicyTests.swift`
@@ -75,7 +76,7 @@ Modify:
 - `ios/Sources/CompanionCore/Client.swift` — `prepareSpeech` and `synthesizeSpeech` next to `previewVoice`.
 - `ios/Sources/CompanionCore/Models.swift` — decode optional `ConfigStatus.features.iosVoiceCalls`.
 - `ios/App/SpeechDictation.swift` is **not** modified. `CallCapture` calls `Dictation.localeCandidates()` directly.
-- `ios/App/ChatView.swift`, `ios/App/ChatChromeView.swift`, `ios/App/Session.swift` — call button, overlay, hang-up on leave/background/pairing loss.
+- `ios/App/ChatView.swift`, `ios/App/ChatChromeView.swift`, `ios/App/Session.swift` — call button, overlay, hang-up on leave/background/pairing loss. Call overlays use existing `Session.send` / `interrupt` / `answer` (optional deny `message`); do not add a parallel send API.
 - `ios/project.yml` — purpose strings mention calls.
 - `docs/voice-mode.md`, `docs/ios-companion.md`, `ios/TESTING.md` — current-state + device gates.
 - `server/tts/index.ts` is **not** modified in MVP. Kokoro is Task 11 (next), after the phone loop works.
@@ -153,10 +154,19 @@ public enum CallSendPath: Equatable, Sendable {
 
 public struct QueuedSpeech: Equatable, Sendable {
     public var text: String
-    public var botId: String
+    /// Nil when `tool.spoken` / a reply has no matching room member. Never invent a member id.
+    public var botId: String?
     public var voiceId: String?
     public var messageId: String?
-    public init(text: String, botId: String, voiceId: String? = nil, messageId: String? = nil)
+    /// Caption. Missing sender uses `CallModePolicy.unnamedSpeakerLabel`, not a fake name.
+    public var speakerLabel: String
+    public init(
+        text: String,
+        botId: String?,
+        voiceId: String? = nil,
+        messageId: String? = nil,
+        speakerLabel: String
+    )
 }
 
 /// App-target playback. CompanionCore never imports AVFoundation.
@@ -189,11 +199,11 @@ public enum CallModePolicy {
     ) -> CallAvailability
 
     /// Single reducer used by every test and both overlays.
-    /// `availability` is always passed (never omitted).
-    /// If `availability.foreground == false` or `availability.paired == false`,
-    /// return `.ended` unless `phase == .idle`, in which case stay `.idle`.
-    /// `.start` becomes `.listening` only when `availability.canStart`; otherwise stay `.idle`.
-    /// `awaitingSpokenDecision == true` keeps `.listening` on `.botBusy(true, ...)`.
+    /// `availability` is always passed (never omitted). Full transition table is
+    /// under "Reducer contract" below this interfaces block. Fail-closed:
+    /// never open the mic during playback (`.speaking`); stray `captureFinal`
+    /// outside `.listening` does not send; `botBusy(false)` does not leave
+    /// `.speaking`.
     public static func reduce(
         phase: CallPhase,
         availability: CallAvailability,
@@ -222,6 +232,11 @@ public enum CallModePolicy {
     public static func requiresAddress(defaultResponderKind: String) -> Bool
     public static func allowsRoomCall(isDm: Bool, engineSupportsGroups: Bool) -> Bool
     public static func sendPath(isRoom: Bool) -> CallSendPath
+    /// True iff `mutationTarget == .openmaus`. Reconstructed is reference-only, not a call target.
+    public static func allowsNativeCall(mutationTarget: VBotPrimaryEngine) -> Bool
+
+    /// Desktop GroupCallView caption when `speakingMember` is missing: "Channel member".
+    public static let unnamedSpeakerLabel = "Channel member"
 
     public static func permissionPrompt(name: String, tool: String, detail: String) -> String
     public static func questionPrompt(name: String, detail: String, options: [String]) -> String
@@ -229,7 +244,15 @@ public enum CallModePolicy {
 
     public struct SpeechQueue: Equatable, Sendable {
         public init()
-        public mutating func enqueue(_ text: String, botId: String, voiceId: String? = nil, messageId: String? = nil)
+        /// `botId`/`voiceId` nil = missing sender. Default label is `unnamedSpeakerLabel`.
+        /// Overlay must not invent a `Member` to satisfy this call.
+        public mutating func enqueue(
+            _ text: String,
+            botId: String?,
+            voiceId: String? = nil,
+            messageId: String? = nil,
+            speakerLabel: String = CallModePolicy.unnamedSpeakerLabel
+        )
         public mutating func next() -> QueuedSpeech?
         /// Drops remaining items. Does not speak.
         public mutating func interrupt()
@@ -247,23 +270,29 @@ public enum GroupCallRouting {
 
 extension CompanionClient {
     /// POST `/api/tts/prepare` body `{ text, voiceId? }` → `{ ready, utterances }`.
+    /// `voiceId` omission: if `voiceId` is nil or empty after trim, omit the JSON key
+    /// (do not send `null`). Same rule as `synthesizeSpeech` and desktop
+    /// `JSON.stringify({ text, voiceId })` which drops `undefined`.
     /// If `ready == false`, throw `APIError.status(code: 409, message:)` with desktop Speaker.prepare copy:
     /// "Add the shared ElevenLabs key in an agent profile on this computer, then pick a voice for the agent."
     public func prepareSpeech(text: String, voiceId: String?) async throws -> PreparedSpeech
 
     /// POST `/api/tts/speak` body `{ text, voiceId? }` → opaque audio bytes.
     /// Calls `CallSpeaker.assertSpeakable` first. Does not silently `prefix(500)`.
+    /// Omit `voiceId` with the same nil/empty rule as `prepareSpeech`.
     /// `previewVoice(text:voiceId:)` stays for the profile sheet and keeps its existing truncation.
     public func synthesizeSpeech(text: String, voiceId: String?) async throws -> Data
 }
 
 public final class CallSpeaker: @unchecked Sendable {
-    public static let maxSpeakCharacters = 500
+    /// Hub `POST /api/tts/speak` rejects `text.length > 500` (JavaScript UTF-16 code units).
+    /// Do not use Swift `String.count` (extended grapheme clusters).
+    public static let maxSpeakUTF16CodeUnits = 500
     public enum SpeakError: Error, Equatable, Sendable {
         case tooLong(Int)
     }
 
-    /// Throws `SpeakError.tooLong(text.count)` when `text.count > maxSpeakCharacters`.
+    /// Throws `SpeakError.tooLong(text.utf16.count)` when `text.utf16.count > maxSpeakUTF16CodeUnits`.
     /// Empty text is allowed here; `synthesizeSpeech` still needs Hub-nonempty text.
     public static func assertSpeakable(_ text: String) throws
 
@@ -283,10 +312,12 @@ public final class CallSpeaker: @unchecked Sendable {
     public func stop()
 }
 
-/// App target only. Conforms to `CallAudioPlaying` with `AVAudioPlayer`.
-final class CallAudioPlayer: NSObject, CallAudioPlaying {
+/// App target only. `AVAudioPlayer` requires `NSObject` + `AVAudioPlayerDelegate`
+/// for `audioPlayerDidFinishPlaying(_:successfully:)`.
+final class CallAudioPlayer: NSObject, AVAudioPlayerDelegate, CallAudioPlaying {
     func play(_ data: Data) async -> Bool
     func cancel()
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool)
 }
 
 /// App target only.
@@ -295,6 +326,18 @@ final class CallCapture {
     var onFinal: ((String) -> Void)?
     func start()
     func stop(intentional: Bool)
+}
+
+// Existing App-target Session API. Call overlays must use these so
+// VBotMutationRouting stays intact. Do not call CompanionClient.send
+// / interrupt / respond from CallView or GroupCallView.
+extension Session {
+    @discardableResult
+    func send(_ text: String, to chat: Chat, mode: MessageDeliveryMode = .auto) async -> MessageDeliveryReceipt?
+    func interrupt(chat: Chat) async
+    /// Optional `message` is passed to `respond` for allow/deny (call deny copy).
+    /// Existing composer / Live Activity callers omit it.
+    func answer(threadId: String, requestId: String, choice: String, isPermission: Bool, message: String? = nil) async
 }
 ```
 
@@ -322,11 +365,15 @@ Those `\b` prefix matchers live in `src/components/CallView.tsx` and `src/compon
 
 `sendPath(isRoom:)` is `.groupMessage` iff `isRoom`, else `.botMessage`.
 
+`allowsNativeCall(mutationTarget:)` is true iff `mutationTarget == .openmaus`. `.grokReconstructed` is reference-only: no call button, no call overlay.
+
+`unnamedSpeakerLabel` is `"Channel member"` (desktop GroupCallView when `speakingMember` is missing). Missing-sender `QueuedSpeech` uses this label, `botId == nil`, and `voiceId == nil` (Hub workspace default). Do not invent a member.
+
 `shouldSend` is true iff `intentionalStop == false` and `finalText` is non-empty after trim.
 
 `shouldTreatSpeechAsApproval` is true iff both request ids are non-nil and equal.
 
-`micOpen` is true iff `phase == .listening` (including when `awaitingSpokenDecision == true`). False for `.speaking`, `.sending`, `.working`, `.ended`, `.idle`.
+`micOpen` is true iff `phase == .listening` (including when `awaitingSpokenDecision == true`). False for `.speaking`, `.sending`, `.working`, `.ended`, `.idle`. Overlay must not start `CallCapture` unless `micOpen` is true.
 
 `permissionPrompt` = `"{name} wants to {tool}. {detail}. Should I allow it?"`
 
@@ -336,13 +383,46 @@ Those `\b` prefix matchers live in `src/components/CallView.tsx` and `src/compon
 
 `denyMessage(isRoom: true)` = `"Denied by the user, on a group call."`
 
+### Reducer contract
+
+Apply in this order. Overlay drives `CallCapture` / `CallSpeaker` from the returned phase (`micOpen` iff `.listening`). Overlay must `CallSpeaker.stop()` and `CallCapture.stop(intentional: true)` before reducing `.tapInterrupt` so leftover playback cannot be captured.
+
+**Guards (all events):**
+
+1. If `phase == .ended` → `.ended` (including `.start`).
+2. If `availability.foreground == false` or `availability.paired == false` → `.idle` stays `.idle`, every other phase → `.ended`.
+3. `.hangUp`, `.backgrounded`, `.pairingRevoked` → `.idle` stays `.idle`, every other phase → `.ended`.
+
+**Then, by event:**
+
+| Event | From `.idle` | `.listening` | `.sending` | `.working` | `.speaking` |
+| --- | --- | --- | --- | --- | --- |
+| `.start` | `.listening` iff `canStart`, else `.idle` | stay | stay | stay | stay |
+| `.capturePartial` | stay | stay | stay | stay | stay |
+| `.captureFinal` empty/whitespace | stay | `.listening` | stay | stay | stay |
+| `.captureFinal` non-empty | stay | `.sending` | stay | stay | stay |
+| `.captureFailed` | stay | stay | stay | stay | stay |
+| `.speakText` | stay | `.speaking` | `.speaking` | `.speaking` | `.speaking` |
+| `.playbackFinished` | stay | stay | stay | stay | `.listening` if `awaitingSpokenDecision`, else `.working` |
+| `.botBusy(true)` | stay | `.listening` if `awaitingSpokenDecision`, else `.working` | `.working` | `.listening` if `awaitingSpokenDecision`, else `.working` | `.speaking` |
+| `.botBusy(false)` | stay | `.listening` | `.listening` | `.listening` | `.speaking` |
+| `.tapInterrupt` | stay | `.listening` | `.listening` | `.listening` | `.listening` |
+
+Fail-closed rules encoded above:
+
+- No mic while playback: `.speakText` always enters `.speaking` from an active call; `.botBusy(false)` and stray `.captureFinal`/`.captureFailed` never leave `.speaking`.
+- Stray `.captureFinal` outside `.listening` does not become a user turn (stay). Overlay must not call `Session.send` unless the reduced phase is `.sending`.
+- `.captureFailed` never opens the mic and never sends. Overlay may later emit `.hangUp` for a fatal on-device/permission failure.
+- `.playbackFinished` defaults to `.working` (mic closed). Overlay emits `.botBusy(false)` to listen when the bot is idle. After a spoken approval/question prompt, `awaitingSpokenDecision == true` so playback reopens listen.
+- Overlay emission: dispatch `.captureFinal` only for a committed user turn (send) or a resolved allow/deny/answer. Reask swallows the transcript and dispatches `.speakText(reaskPrompt, ...)` without `.captureFinal`.
+
 Hub/client HTTP (already exists except the allowlist + iOS prepare/synthesize wrappers):
 
-- `POST /api/tts/prepare` body `{ text, voiceId? }` → `{ ready, utterances }`
-- `POST /api/tts/speak` body `{ text, voiceId? }` → audio bytes, max 500 characters (Hub 413)
-- `POST /api/bots/:id/messages` and `POST /api/groups/:id/messages`
-- `POST /api/bots/:id/interrupt` and `POST /api/groups/:id/interrupt`
-- `POST /api/threads/:id/respond` body `{ requestId, behavior, message? }`
+- `POST /api/tts/prepare` body `{ text }` or `{ text, voiceId }` — omit `voiceId` when nil/empty, never `null`
+- `POST /api/tts/speak` body `{ text }` or `{ text, voiceId }` — same omission; reject when `text.utf16.count > 500` before the wire; Hub backstop is `text.length > 500` (JS UTF-16 code units, 413)
+- Call **user turns** are submitted only via `Session.send(_:to:mode:)` (OpenMaus `POST /api/bots/:id/messages` or `POST /api/groups/:id/messages`, or reconstructed `sendReconstructed` which this MVP never starts a call into). Overlays do not call `CompanionClient.send`.
+- `POST /api/bots/:id/interrupt` and `POST /api/groups/:id/interrupt` via `Session.interrupt(chat:)`
+- Approvals via `Session.answer` → `POST /api/threads/:id/respond` body `{ requestId, behavior, message? }`
 - `GET /api/events` existing SSE
 
 Desktop constants to copy, not reinvent:
@@ -431,7 +511,7 @@ Commit message: `feat(companion): allow TTS prepare for iOS calls`
 
 **Interfaces:**
 - Consumes: locked `CallPhase`, `CallTarget`, `CallAvailability`, `CallEvent`.
-- Produces: `CallModePolicy.reduce(phase:availability:awaitingSpokenDecision:event:) -> CallPhase`, `CallModePolicy.availability(...)`, `micOpen`, `allowsOpenMicDuringPlayback`. Mic-open is true only in `listening`.
+- Produces: `CallModePolicy.reduce(phase:availability:awaitingSpokenDecision:event:) -> CallPhase`, `CallModePolicy.availability(...)`, `micOpen`, `allowsOpenMicDuringPlayback`, `allowsNativeCall(mutationTarget:)`. Mic-open is true only in `listening`. Reducer table in Interfaces is the implementation spec.
 
 - [ ] **Step 1: Write failing policy tests**
 
@@ -608,6 +688,58 @@ func testRoomCallRequiresEveryMemberVoice() {
 func testFullDuplexIsRejected() {
     XCTAssertFalse(CallModePolicy.allowsOpenMicDuringPlayback)
 }
+
+func testReconstructedEngineIsNotACallTarget() {
+    XCTAssertTrue(CallModePolicy.allowsNativeCall(mutationTarget: .openmaus))
+    XCTAssertFalse(CallModePolicy.allowsNativeCall(mutationTarget: .grokReconstructed))
+}
+
+func testReducerCaptureSpeakPlaybackBusyInterruptMatrix() {
+    let ready = readyAvailability()
+    func reduce(_ phase: CallPhase, _ event: CallEvent, awaiting: Bool = false) -> CallPhase {
+        CallModePolicy.reduce(phase: phase, availability: ready, awaitingSpokenDecision: awaiting, event: event)
+    }
+
+    XCTAssertEqual(reduce(.listening, .captureFinal("hello")), .sending)
+    XCTAssertEqual(reduce(.listening, .captureFinal("  ")), .listening)
+    XCTAssertEqual(reduce(.speaking, .captureFinal("hello")), .speaking)
+    XCTAssertEqual(reduce(.working, .captureFinal("hello")), .working)
+    XCTAssertEqual(reduce(.sending, .captureFinal("hello")), .sending)
+    XCTAssertEqual(reduce(.idle, .captureFinal("hello")), .idle)
+
+    XCTAssertEqual(reduce(.listening, .captureFailed("denied")), .listening)
+    XCTAssertEqual(reduce(.speaking, .captureFailed("denied")), .speaking)
+    XCTAssertEqual(reduce(.working, .captureFailed("denied")), .working)
+    XCTAssertFalse(CallModePolicy.micOpen(phase: .speaking, awaitingSpokenDecision: false))
+
+    XCTAssertEqual(reduce(.listening, .speakText("hi", botId: "b", voiceId: "v", messageId: "m")), .speaking)
+    XCTAssertEqual(reduce(.working, .speakText("hi", botId: "b", voiceId: nil, messageId: nil)), .speaking)
+    XCTAssertEqual(reduce(.sending, .speakText("hi", botId: nil, voiceId: nil, messageId: nil)), .speaking)
+    XCTAssertEqual(reduce(.idle, .speakText("hi", botId: "b", voiceId: "v", messageId: nil)), .idle)
+    XCTAssertFalse(CallModePolicy.micOpen(phase: .speaking, awaitingSpokenDecision: true))
+
+    XCTAssertEqual(reduce(.speaking, .playbackFinished), .working)
+    XCTAssertEqual(reduce(.speaking, .playbackFinished, awaiting: true), .listening)
+    XCTAssertEqual(reduce(.listening, .playbackFinished), .listening)
+    XCTAssertEqual(reduce(.working, .playbackFinished), .working)
+
+    XCTAssertEqual(reduce(.working, .botBusy(false, speakerBotId: nil)), .listening)
+    XCTAssertEqual(reduce(.sending, .botBusy(false, speakerBotId: nil)), .listening)
+    XCTAssertEqual(reduce(.speaking, .botBusy(false, speakerBotId: "b1")), .speaking)
+    XCTAssertEqual(reduce(.listening, .botBusy(false, speakerBotId: nil)), .listening)
+    XCTAssertEqual(reduce(.speaking, .botBusy(true, speakerBotId: "b1")), .speaking)
+    XCTAssertEqual(reduce(.sending, .botBusy(true, speakerBotId: "b1")), .working)
+
+    XCTAssertEqual(reduce(.speaking, .tapInterrupt), .listening)
+    XCTAssertEqual(reduce(.working, .tapInterrupt), .listening)
+    XCTAssertEqual(reduce(.sending, .tapInterrupt), .listening)
+    XCTAssertEqual(reduce(.listening, .tapInterrupt), .listening)
+    XCTAssertEqual(reduce(.idle, .tapInterrupt), .idle)
+    XCTAssertEqual(
+        CallModePolicy.reduce(phase: .ended, availability: ready, awaitingSpokenDecision: false, event: .tapInterrupt),
+        .ended
+    )
+}
 ```
 
 - [ ] **Step 2: Run the suite and confirm failures**
@@ -617,7 +749,7 @@ Expected: FAIL because `CallModePolicy` does not exist.
 
 - [ ] **Step 3: Implement the minimal reducer**
 
-Keep it pure. `allowsOpenMicDuringPlayback` is a `static let` of `false` so a future AEC patch has to change an explicit flag and the test above. Room availability copies desktop `requireExplicitVoices`: workspace fallback is not enough when several members speak. There is one `reduce` signature; tests and both overlays call it with `availability` every time.
+Keep it pure. `allowsOpenMicDuringPlayback` is a `static let` of `false` so a future AEC patch has to change an explicit flag and the test above. Room availability copies desktop `requireExplicitVoices`: workspace fallback is not enough when several members speak. There is one `reduce` signature; tests and both overlays call it with `availability` every time. Implement the locked reducer table verbatim, including fail-closed stay-in-phase for stray `captureFinal` during `.speaking` and `botBusy(false)` that does not leave `.speaking`. `allowsNativeCall(.grokReconstructed)` is false.
 
 - [ ] **Step 4: Re-run the suite**
 
@@ -711,7 +843,7 @@ Commit message: `feat(ios): route spoken group turns and approvals`
 
 **Interfaces:**
 - Consumes: `POST /api/tts/prepare` and `POST /api/tts/speak`.
-- Produces: `CompanionClient.prepareSpeech(text:voiceId:)`, `CompanionClient.synthesizeSpeech(text:voiceId:)`, `CallSpeaker.assertSpeakable`, `CallSpeaker.speak` / `stop`, `CallAudioPlaying.play` / `cancel`.
+- Produces: `CompanionClient.prepareSpeech(text:voiceId:)`, `CompanionClient.synthesizeSpeech(text:voiceId:)` (shared omit-nil `voiceId` body), `CallSpeaker.assertSpeakable` (`utf16.count` vs 500), `CallSpeaker.speak` / `stop`, `CallAudioPlaying.play` / `cancel`, `CallAudioPlayer: NSObject, AVAudioPlayerDelegate, CallAudioPlaying`.
 
 - [ ] **Step 1: Write failing HTTP and speaker tests**
 
@@ -753,6 +885,9 @@ func testSynthesizePostsSpeakAndReturnsBytes() async throws {
     VoiceRequestStub.responseBody = Data("RIFF".utf8)
     let data = try await client.synthesizeSpeech(text: "Hello world", voiceId: "v1")
     XCTAssertEqual(VoiceRequestStub.capturedRequest?.url?.path, "/api/tts/speak")
+    let speakBody = try JSONSerialization.jsonObject(with: VoiceRequestStub.capturedBody!) as! [String: Any]
+    XCTAssertEqual(speakBody["text"] as? String, "Hello world")
+    XCTAssertEqual(speakBody["voiceId"] as? String, "v1")
     XCTAssertEqual(data, Data("RIFF".utf8))
 }
 
@@ -763,6 +898,41 @@ func testSpeakRejectsOversizeUtterancesBeforeTheWire() {
         }
     }
     XCTAssertNoThrow(try CallSpeaker.assertSpeakable(String(repeating: "x", count: 500)))
+    XCTAssertEqual(CallSpeaker.maxSpeakUTF16CodeUnits, 500)
+    // Hub `text.length` is UTF-16 code units. U+1F44D is one Swift Character, two UTF-16 units.
+    let thumbsOver = String(repeating: "👍", count: 251)
+    XCTAssertEqual(thumbsOver.count, 251)
+    XCTAssertEqual(thumbsOver.utf16.count, 502)
+    XCTAssertThrowsError(try CallSpeaker.assertSpeakable(thumbsOver)) { error in
+        guard case CallSpeaker.SpeakError.tooLong(502) = error else {
+            return XCTFail("expected tooLong(502) utf16, not grapheme count")
+        }
+    }
+    XCTAssertNoThrow(try CallSpeaker.assertSpeakable(String(repeating: "👍", count: 250)))
+}
+
+func testPrepareAndSynthesizeOmitNilAndEmptyVoiceId() async throws {
+    VoiceRequestStub.responseBody = Data(#"{"ready":true,"utterances":["Hi"]}"#.utf8)
+    _ = try await client.prepareSpeech(text: "Hi", voiceId: nil)
+    var body = try JSONSerialization.jsonObject(with: VoiceRequestStub.capturedBody!) as! [String: Any]
+    XCTAssertEqual(body["text"] as? String, "Hi")
+    XCTAssertNil(body["voiceId"])
+
+    VoiceRequestStub.responseBody = Data(#"{"ready":true,"utterances":["Hi"]}"#.utf8)
+    _ = try await client.prepareSpeech(text: "Hi", voiceId: "  ")
+    body = try JSONSerialization.jsonObject(with: VoiceRequestStub.capturedBody!) as! [String: Any]
+    XCTAssertNil(body["voiceId"])
+
+    VoiceRequestStub.responseBody = Data("RIFF".utf8)
+    _ = try await client.synthesizeSpeech(text: "Hi", voiceId: nil)
+    body = try JSONSerialization.jsonObject(with: VoiceRequestStub.capturedBody!) as! [String: Any]
+    XCTAssertEqual(body["text"] as? String, "Hi")
+    XCTAssertNil(body["voiceId"])
+
+    VoiceRequestStub.responseBody = Data("RIFF".utf8)
+    _ = try await client.synthesizeSpeech(text: "Hi", voiceId: "")
+    body = try JSONSerialization.jsonObject(with: VoiceRequestStub.capturedBody!) as! [String: Any]
+    XCTAssertNil(body["voiceId"])
 }
 
 func testStopCancelsPlaybackAndDropsPrefetch() async {
@@ -791,9 +961,21 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement prepare + speaker + player**
 
-`CompanionClient.prepareSpeech` POSTs `/api/tts/prepare` with `{ text, voiceId }` (omit `voiceId` when nil) and decodes `{ ready, utterances }`. If `ready == false`, throw the locked 409 copy. `previewVoice` remains for the profile sheet and is not used on the call path.
+`CompanionClient.prepareSpeech` and `synthesizeSpeech` share one body builder:
 
-`CompanionClient.synthesizeSpeech` calls `CallSpeaker.assertSpeakable` then POSTs `/api/tts/speak` with the full text (no `prefix(500)`). Hub 413 remains the server-side backstop.
+```swift
+func ttsBody(text: String, voiceId: String?) -> [String: Any] {
+    var body: [String: Any] = ["text": text]
+    if let voiceId, !voiceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        body["voiceId"] = voiceId
+    }
+    return body
+}
+```
+
+Both POST with that body. Nil or whitespace `voiceId` omits the key (never `NSNull` / JSON null). Non-empty `voiceId` is sent on both routes. Decode `{ ready, utterances }` from prepare. If `ready == false`, throw the locked 409 copy. `previewVoice` remains for the profile sheet and is not used on the call path.
+
+`CompanionClient.synthesizeSpeech` calls `CallSpeaker.assertSpeakable` then POSTs `/api/tts/speak` with the full text (no `prefix(500)`). Hub 413 remains the server-side backstop. `assertSpeakable` compares `text.utf16.count` to `maxSpeakUTF16CodeUnits` (500), matching Hub `text.length`.
 
 `CallSpeaker` algorithm, copied from `src/lib/tts/index.ts`:
 
@@ -802,7 +984,7 @@ Expected: FAIL.
 3. `assertSpeakable` + synthesize utterance 0; while it `play`s, synthesize utterance 1; continue.
 4. Resolve when finished, interrupted, or failed. Failures set `error`; they do not throw.
 
-`CallAudioPlayer` (App target) plays the returned `Data` with `AVAudioPlayer`, matching `AgentProfileView`. `play` resolves true on `audioPlayerDidFinishPlaying(_:successfully: true)`, false on `cancel()` or decode failure. Session category while a call is alive is `.playAndRecord` with voiceChat / spokenAudio as needed, then deactivated on hang-up so composer dictation can return to `.record`.
+`CallAudioPlayer` (App target) is `final class CallAudioPlayer: NSObject, AVAudioPlayerDelegate, CallAudioPlaying`. It plays the returned `Data` with `AVAudioPlayer`, matching `AgentProfileView`, and sets `player.delegate = self`. `play` resumes `true` from `audioPlayerDidFinishPlaying(_:successfully: true)`, `false` from `cancel()`, decode failure, or `successfully: false`. Session category while a call is alive is `.playAndRecord` with voiceChat / spokenAudio as needed, then deactivated on hang-up so composer dictation can return to `.record`.
 
 - [ ] **Step 4: Re-run VoiceClientTests**
 
@@ -875,7 +1057,7 @@ Commit message: `feat(ios): add silence-endpointed call capture`
 - Modify: `ios/App/Session.swift`
 
 **Interfaces:**
-- Consumes: Tasks 2–5, `CompanionClient.send(text:toBot:)`, SSE-folded messages, `bot.busy`, `tool.spoken`, `CallModePolicy.transfer`, `CallModePolicy.end`.
+- Consumes: Tasks 2–5, `Session.send(_:to:mode:)` (applies `VBotMutationRouting`; do not call `CompanionClient.send`), SSE-folded messages, `bot.busy`, `tool.spoken`, `CallModePolicy.transfer`, `CallModePolicy.end`, `CallModePolicy.allowsNativeCall`.
 - Produces: one call at a time on `Session.currentCallId: String?`. Overlay with avatar, phase label, caption, Interrupt, Hang up.
 
 - [ ] **Step 1: Add ownership tests on `CallModePolicy`**
@@ -900,14 +1082,14 @@ Expected: FAIL until transfer/end helpers exist.
 
 Loop, matching desktop `CallView.tsx`:
 
-1. Start: if `bot.busy` and no open approval/question → `working`; else `listening` + `CallCapture.start()`. Drive phases with `CallModePolicy.reduce(phase:availability:awaitingSpokenDecision:event:)`.
-2. Partial transcripts update the caption. Final non-empty text → `sending` + `CompanionClient.send`.
-3. SSE: newest unseen `kind == text` bot reply is spoken via `CallSpeaker.speak`; during `working`, newest unseen `tool.spoken` is spoken then return to `working`; do not recite the backlog present at start.
-4. `bot.busy` true → close mic unless a spoken approval is open (`awaitingSpokenDecision`).
-5. After playback finishes and the bot is not busy → listen again.
-6. Tap Interrupt: `CallSpeaker.stop()`, `CallCapture.start()`, phase `.listening`. Do **not** POST `/interrupt` on a 1:1 tap unless the bot is still `busy` after speech stopped and the product copy says so. Desktop 1:1 interrupt only stops local TTS and reopens the mic; keep that. Group interrupt is Task 8.
+1. Start: if `bot.busy` and no open approval/question → `working`; else `listening` + `CallCapture.start()`. Drive phases with `CallModePolicy.reduce(phase:availability:awaitingSpokenDecision:event:)`. Start `CallCapture` only when `micOpen` is true.
+2. Partial transcripts update the caption (`.capturePartial`, no phase change). Final non-empty text → reduce `.captureFinal` → `.sending`, then `Session.send(text, to: .bot(bot))`. Do **not** call `CompanionClient.send`. `VBotMutationRouting` inside `Session.send` is what keeps native OpenMaus routing intact.
+3. SSE: newest unseen `kind == text` bot reply is spoken via `CallSpeaker.speak` after reduce `.speakText`; during `working`, newest unseen `tool.spoken` is spoken then reduce `.playbackFinished` (→ `.working` when not awaiting a decision); do not recite the backlog present at start.
+4. `bot.busy` true → reduce `.botBusy(true, ...)` (closes mic unless `awaitingSpokenDecision`).
+5. After playback finishes: reduce `.playbackFinished`. If the bot is not busy, then reduce `.botBusy(false, ...)` so the phase becomes `.listening` (mic closed during playback; listen only after that). If `awaitingSpokenDecision`, `.playbackFinished` already returns `.listening`.
+6. Tap Interrupt: `CallSpeaker.stop()`, `CallCapture.stop(intentional: true)`, then reduce `.tapInterrupt` → `.listening` and `CallCapture.start()`. Do **not** call `Session.interrupt` on a 1:1 tap unless the bot is still `busy` after speech stopped and the product copy says so. Desktop 1:1 interrupt only stops local TTS and reopens the mic; keep that. Group interrupt is Task 8.
 7. Hang up / Back / `scenePhase != .active` / `AVAudioSession` interruption / pairing loss → `ended` only if `CallModePolicy.end(current:targetId:)` is true; stop capture, stop speaker, deactivate session.
-8. Call button sits in chat chrome next to the existing overflow. Disabled state uses `CallAvailability.reason` (flag off, no voice, no speech, not foreground). DMs that are 1:1 bots use this view; `group.dm == true` rooms do not get a team call button.
+8. Call button sits in chat chrome next to the existing overflow. Hidden when `allowsNativeCall(mutationTarget: VBotMutationRouting.target(for: session.engineSync))` is false (reconstructed is reference-only, not a call target). Disabled state uses `CallAvailability.reason` (flag off, no voice, no speech, not foreground). DMs that are 1:1 bots use this view; `group.dm == true` rooms do not get a team call button.
 
 Original V Bot visuals: existing `MausAvatar`, liquid-glass hang-up, no Grok Bot assets. VoiceOver labels: “Call {name}”, “Hang up”, “Interrupt {name}”.
 
@@ -931,7 +1113,7 @@ Commit message: `feat(ios): add foreground 1:1 bot calls`
 - Do **not** modify `ios/App/GroupCallView.swift` (that file is created in Task 8). Shared approval protocol lives in CompanionCore so Task 8 can call it without this task editing a future file.
 
 **Interfaces:**
-- Consumes: `CallModePolicy.approvalDecision`, `CallModePolicy.permissionPrompt`, `CallModePolicy.questionPrompt`, `CallModePolicy.reaskPrompt`, `CallModePolicy.denyMessage(isRoom:)`, `CompanionClient.respond(threadId:requestId:behavior:message:)`.
+- Consumes: `CallModePolicy.approvalDecision`, `CallModePolicy.permissionPrompt`, `CallModePolicy.questionPrompt`, `CallModePolicy.reaskPrompt`, `CallModePolicy.denyMessage(isRoom:)`, `Session.answer(threadId:requestId:choice:isPermission:)` (existing `CompanionClient.respond` wrapper). Do not add a call-specific send/respond path.
 - Produces: permission cards spoken and answered with allow/deny only; non-permission `options` cards spoken and answered with the next complete user turn. `shouldTreatSpeechAsApproval(askedRequestId:currentRequestId:)`.
 
 - [ ] **Step 1: Add failing card-state tests**
@@ -970,11 +1152,11 @@ Expected: FAIL until those helpers exist.
 
 - [ ] **Step 3: Implement the desktop card loop in CompanionCore + 1:1 UI**
 
-When an unseen permission card appears and phase is not `speaking`, speak `permissionPrompt`, set `awaitingSpokenDecision`, then listen. Yes → `respond(..., behavior: "allow")`. No → `respond(..., behavior: "deny", message: CallModePolicy.denyMessage(isRoom: false))`. Anything else → speak `reaskPrompt` and listen again. If another client answers the card, clear `askedRequestId`. `shouldTreatSpeechAsApproval` is what prevents a later turn from being treated as consent.
+When an unseen permission card appears and phase is not `speaking`, speak `permissionPrompt`, set `awaitingSpokenDecision`, then listen. Yes → `Session.answer(threadId:requestId:choice:"Allow", isPermission: true)`. No → `Session.answer(..., choice: "Deny", isPermission: true, message: CallModePolicy.denyMessage(isRoom: false))`. Add optional `message: String? = nil` to the existing `Session.answer(threadId:requestId:choice:isPermission:)` and pass it through to `CompanionClient.respond` for allow/deny; composer and Live Activity callers omit it. Anything else → reduce `.speakText` for `reaskPrompt` (do not dispatch `.captureFinal`) and listen again. If another client answers the card, clear `askedRequestId`. `shouldTreatSpeechAsApproval` is what prevents a later turn from being treated as consent.
 
-Non-permission questions: speak `questionPrompt`, then the next final transcript is `respond(..., behavior: "answer", message: said)`.
+Non-permission questions: speak `questionPrompt`, then the next final transcript is `Session.answer(..., choice: said, isPermission: false)` (existing answer behavior).
 
-Do not route approval speech through `alwaysAllow`. Do not infer consent from a sentence that merely contains “sure”. Parsing stays in `approvalDecision`; `CallView` only switches on `.allow` / `.deny` / `.reask`.
+Do not route approval speech through `alwaysAllow`. Do not infer consent from a sentence that merely contains “sure”. Parsing stays in `approvalDecision`; `CallView` only switches on `.allow` / `.deny` / `.reask`. Overlay never calls `CompanionClient.send` or `CompanionClient.respond` directly.
 
 - [ ] **Step 4: Re-run policy tests**
 
@@ -995,18 +1177,28 @@ Commit message: `feat(ios): speak and answer call approvals`
 - Test: `ios/Tests/CompanionCoreTests/CallModePolicyTests.swift`
 
 **Interfaces:**
-- Consumes: `GroupCallRouting.route`, `CallModePolicy.approvalDecision`, `CallModePolicy.denyMessage(isRoom: true)`, `CompanionClient.send(text:toRoom:)`, `CompanionClient.interrupt(roomId:)`, `room.busyBotId`, per-member `bot.voice`.
-- Produces: `CallModePolicy.SpeechQueue`, `requiresAddress(defaultResponderKind:)`, `allowsRoomCall(isDm:engineSupportsGroups:)`. One queued speaker at a time; a fast second member cannot cut off the first except via tap interrupt.
+- Consumes: `GroupCallRouting.route`, `CallModePolicy.approvalDecision`, `CallModePolicy.denyMessage(isRoom: true)`, `Session.send(_:to:mode:)` (not `CompanionClient.send`), `Session.interrupt(chat:)`, `room.busyBotId`, per-member `bot.voice`, `CallModePolicy.allowsNativeCall`.
+- Produces: `CallModePolicy.SpeechQueue` with optional `botId`, `requiresAddress(defaultResponderKind:)`, `allowsRoomCall(isDm:engineSupportsGroups:)`. One queued speaker at a time; a fast second member cannot cut off the first except via tap interrupt.
 
 - [ ] **Step 1: Write failing queue tests**
 
 ```swift
 func testGroupSpeechQueueIsFIFO() {
     var queue = CallModePolicy.SpeechQueue()
-    queue.enqueue("working", botId: "a")
-    queue.enqueue("done", botId: "b")
+    queue.enqueue("working", botId: "a", speakerLabel: "Atlas")
+    queue.enqueue("done", botId: "b", speakerLabel: "Research")
     XCTAssertEqual(queue.next()?.botId, "a")
     XCTAssertEqual(queue.next()?.botId, "b")
+}
+
+func testMissingSpokenSenderUsesFallbackNotInventedMember() {
+    var queue = CallModePolicy.SpeechQueue()
+    queue.enqueue("searching the docs", botId: nil, voiceId: nil)
+    let item = queue.next()
+    XCTAssertNil(item?.botId)
+    XCTAssertNil(item?.voiceId)
+    XCTAssertEqual(item?.speakerLabel, CallModePolicy.unnamedSpeakerLabel)
+    XCTAssertEqual(CallModePolicy.unnamedSpeakerLabel, "Channel member")
 }
 
 func testInterruptDropsTheQueueAndFlagsListen() {
@@ -1036,17 +1228,17 @@ Expected: FAIL.
 
 Match `GroupCallView.tsx`, calling the CompanionCore helpers from Tasks 3 and 7 rather than reimplementing yes/no or prompts:
 
-- Button hidden when `allowsRoomCall` is false (`room.dm == true`, or engine cannot do groups — Task 9).
+- Button hidden when `allowsNativeCall` is false **or** `allowsRoomCall` is false (`room.dm == true`, reconstructed/unsupported engine, or engine cannot do groups — Task 9). Reconstructed rooms are reference-only; they are not team-call targets.
 - Start requires every visible member to have a voice (`requireEveryMemberVoice`).
-- Capture finals run through `GroupCallRouting.route`. `requiresAddress` + `addressed == false` → do not send; show “Say a member's name — {names} — or say everyone.”
-- Enqueue `tool.spoken` and member replies with that member's `voice` / avatar via `SpeechQueue.enqueue(_:botId:voiceId:messageId:)`. `sayGeneration` / `queueGeneration` tokens drop stale work.
-- `busyBotId` keeps phase `working` until the queue drains, then listen after ~140ms (desktop `scheduleListen`). After a user send while the room is still busy, wait ~600ms before listening so the first chip can arrive.
-- Tap Interrupt: `queue.interrupt()`, `CallSpeaker.stop()`, if `busyBotId != nil` then `CompanionClient.interrupt(roomId:)`, then listen. This is still tap barge-in, not voice barge-in.
-- Spoken approvals use `approvalDecision` and `denyMessage(isRoom: true)` from CompanionCore.
-- Caption shows which member is speaking.
+- Capture finals run through `GroupCallRouting.route`. `requiresAddress` + `addressed == false` → do not send; show “Say a member's name — {names} — or say everyone.” Addressed finals → reduce `.captureFinal` then `Session.send(text, to: .room(room))`. Do **not** call `CompanionClient.send`.
+- Enqueue `tool.spoken` and member replies via `SpeechQueue.enqueue(_:botId:voiceId:messageId:speakerLabel:)`. If `members.first(where: { $0.id == from.botId })` is nil, enqueue `botId: nil`, `voiceId: nil`, default `speakerLabel` (`"Channel member"`). Do not invent a `Member` or pick another room member. `sayGeneration` / `queueGeneration` tokens drop stale work. `CallSpeaker.speak` uses the queued `voiceId` (nil → Hub workspace default, same omit rule as prepare/synthesize).
+- `busyBotId` keeps phase `working` until the queue drains, then listen after ~140ms (desktop `scheduleListen`) by reducing `.botBusy(false)` only once playback is done. After a user send while the room is still busy, wait ~600ms before listening so the first chip can arrive.
+- Tap Interrupt: `queue.interrupt()`, `CallSpeaker.stop()`, `CallCapture.stop(intentional: true)`, if `busyBotId != nil` then `Session.interrupt(chat: .room(room))`, then reduce `.tapInterrupt` and listen. This is still tap barge-in, not voice barge-in.
+- Spoken approvals use `approvalDecision` and `denyMessage(isRoom: true)` from CompanionCore, answered through `Session.answer` as in Task 7.
+- Caption shows `QueuedSpeech.speakerLabel` (fallback `"Channel member"`, never a fake roster row).
 - Same hang-up rules as 1:1 via `CallModePolicy.end`. Only one `Session.currentCallId` globally.
 
-Skip reconstructed/unsupported rooms: if the Hub has no `/api/groups/:id/messages` semantics for that room (already true for reconstructed groups), `CallAvailability.canStart` is false with “Team calls need a V Bot room.” Combine with `allowsRoomCall(isDm: false, engineSupportsGroups: false)` in Task 9.
+Skip reconstructed/unsupported rooms: `allowsNativeCall` is false for `.grokReconstructed`. If the Hub has no `/api/groups/:id/messages` semantics for that room (already true for reconstructed groups), do not start a call. Combine with `allowsRoomCall(isDm: false, engineSupportsGroups: false)` in Task 9. Reason copy: “Team calls need a V Bot room.”
 
 - [ ] **Step 4: Run Swift tests and simulator build**
 
@@ -1066,8 +1258,8 @@ Commit message: `feat(ios): add half-duplex team calls`
 - Test: `ios/Tests/CompanionCoreTests/CallModePolicyTests.swift`
 
 **Interfaces:**
-- Consumes: existing bot model selection, persona/instructions, engine capability flags, bridge roster, `allowsRoomCall(isDm:engineSupportsGroups:)`.
-- Produces: `CallModePolicy.sendPath(isRoom:)`, `CallModePolicy.requiredBridgeCapabilities == []`. Call path that does not special-case engines; unsupported capabilities stay hidden.
+- Consumes: existing bot model selection, persona/instructions, engine capability flags, bridge roster, `allowsRoomCall(isDm:engineSupportsGroups:)`, `allowsNativeCall(mutationTarget:)`, `Session.send`.
+- Produces: `CallModePolicy.sendPath(isRoom:)`, `CallModePolicy.requiredBridgeCapabilities == []`, `CallModePolicy.allowsNativeCall`. Call path that does not special-case engines; unsupported and reconstructed stay hidden.
 
 - [ ] **Step 1: Write failing honesty tests**
 
@@ -1084,6 +1276,11 @@ func testCallDoesNotRequireABridgeTtsCapability() {
 func testUnsupportedGroupEnginesCannotStartATeamCall() {
     XCTAssertFalse(CallModePolicy.allowsRoomCall(isDm: false, engineSupportsGroups: false))
 }
+
+func testReconstructedIsReferenceOnlyNotACallEngine() {
+    XCTAssertFalse(CallModePolicy.allowsNativeCall(mutationTarget: .grokReconstructed))
+    XCTAssertTrue(CallModePolicy.allowsNativeCall(mutationTarget: .openmaus))
+}
 ```
 
 - [ ] **Step 2: Run the tests**
@@ -1092,7 +1289,7 @@ Expected: FAIL until those predicates exist.
 
 - [ ] **Step 3: Keep the brain on the Hub**
 
-No speech-to-speech provider. A roleplay bot already has its persona on the Hub; the phone sends transcribed text and speaks `speech-text.ts` output. A local model (LM Studio, injected Codex/Claude local slugs, Hermes local) is just a slower `working` phase — narration of `tool.spoken` is what keeps the call from sounding dead. If a local model emits no chips, keep the Working spinner; do not fake progress.
+No speech-to-speech provider. A roleplay bot already has its persona on the Hub; the phone sends transcribed text through `Session.send` (so `VBotMutationRouting` stays intact) and speaks `speech-text.ts` output. A local model (LM Studio, injected Codex/Claude local slugs, Hermes local) is just a slower `working` phase — narration of `tool.spoken` is what keeps the call from sounding dead. If a local model emits no chips, keep the Working spinner; do not fake progress. Reconstructed chats remain reference-only: `allowsNativeCall` is false, so the call button never appears even though `Session.send` could theoretically route a reconstructed 1:1 prompt.
 
 Bridge placement for this MVP:
 
@@ -1148,12 +1345,13 @@ Physical iPhone, flag on, paired Hub with a ready voice:
 8. LAN companion and hosted HTTPS companion both work.
 9. Revoked pairing ends the call and cannot restart it.
 10. Flag off: no call button.
+11. Reconstructed engine chat: no call button (reference-only).
 
 Simulator cannot prove AEC, silence endpointing quality, or speakerphone echo. Record those as device gates, not as green CI.
 
 - [ ] **Step 3: Update `docs/voice-mode.md`**
 
-Replace “Calls are macOS-only” and “Rooms don't speak yet” with: desktop remains the reference implementation; iOS is foreground half-duplex behind `features.iosVoiceCalls`. Keep the AEC paragraph. State Kokoro is the next Hub provider, not a renderer bundle. Note that iOS spoken approvals are whole-utterance; desktop prefix regex hardening is a follow-up.
+Replace “Calls are macOS-only” and “Rooms don't speak yet” with: desktop remains the reference implementation; iOS is foreground half-duplex behind `features.iosVoiceCalls`. Keep the AEC paragraph. State Kokoro is the next Hub provider, not a renderer bundle. Note that iOS spoken approvals are whole-utterance; desktop prefix regex hardening is a follow-up. Note reconstructed chats are reference-only and not a call target.
 
 - [ ] **Step 4: Run the automated gate**
 
@@ -1240,7 +1438,8 @@ All of these on a physical iPhone with `features.iosVoiceCalls: true`, a paired 
 - Automatic silence (~850ms) sends without a second tap.
 - Team call sequences two members; the second waits.
 - Approval yes/no safety holds; rambling speech and prefix-yes sentences re-ask; “yes!” still grants.
-- Roleplay bot and a local-model bot both work through ordinary send/SSE.
+- Roleplay bot and a local-model bot both work through ordinary `Session.send` / SSE.
+- Reconstructed chats show no call button.
 - Background / lock / interruption / leave chat / revoked pairing release the mic.
 - Composer dictation still works afterward.
 - LAN and hosted HTTPS both work.
@@ -1256,6 +1455,7 @@ All of these on a physical iPhone with `features.iosVoiceCalls: true`, a paired 
 - Bridge-hosted TTS.
 - Background calls.
 - Opening the mic during playback.
+- Calls on reconstructed engine chats (reference-only; hide the button).
 - Hardening desktop `CallView.tsx` / `GroupCallView.tsx` YES/NO prefix regexes to the iOS whole-utterance parser. Ship the strict matcher on iPhone first; desktop stays unchanged in this MVP.
 
 ---
@@ -1271,16 +1471,21 @@ All of these on a physical iPhone with `features.iosVoiceCalls: true`, a paired 
 | Half-duplex 1:1 | 2, 5, 6 |
 | Team / group calls | 3, 8 |
 | Apple on-device STT | 5 |
-| Reuse chat / SSE / TTS | 1, 4, 6 |
+| Reuse chat / SSE / TTS | 1, 4, 6, 8 (`Session.send` / `VBotMutationRouting`) |
 | Tap interrupt | 2, 6, 8 |
 | Automatic silence 850ms | 5 |
 | Group turn sequencing | 8 |
+| Missing-sender `tool.spoken` fallback | 8 |
 | Spoken approvals (whole-utterance) | 3, 7 |
 | Roleplay / local models | 9 |
+| Reconstructed reference-only | 2, 6, 8, 9 |
 | Kokoro next (Hub, not phone) | 11 |
 | Capability negotiation / bridge placement | 2, 9, 11 |
 | Tests / flags | 1, 2, 10 |
 | Defer full duplex until proven AEC | 2, 12 |
+| UTF-16 speak cap matching Hub `text.length` | 4 |
+| Optional `voiceId` omit on prepare and speak | 4 |
+| `CallAudioPlayer` `AVAudioPlayerDelegate` | 4 |
 | Desktop approval-regex hardening | out of scope (named follow-up) |
 | No new dependencies / no extra files in this planning commit | this document only |
 
@@ -1292,13 +1497,17 @@ No TBD/TODO/implement-later steps. Kokoro, full duplex, and desktop YES/NO regex
 
 Locked once in Interfaces and reused:
 
-- `CallModePolicy.reduce(phase:availability:awaitingSpokenDecision:event:)` — every test passes `availability`
+- `CallModePolicy.reduce(phase:availability:awaitingSpokenDecision:event:)` — every test passes `availability`; full event×phase table including `captureFinal`, `captureFailed`, `speakText`, `playbackFinished`, `botBusy(false)`, `tapInterrupt`
 - `CallModePolicy.availability(...)` including `canStart`
 - `CallModePolicy.approvalDecision(from:)` whole-utterance, not desktop prefix regex
-- `CompanionClient.prepareSpeech` / `synthesizeSpeech`; `previewVoice` unchanged
-- `CallSpeaker.assertSpeakable`, `speak`, `stop`; `CallAudioPlaying.play` / `cancel`
+- `Session.send(_:to:mode:)` / `Session.interrupt(chat:)` / `Session.answer(..., message:)` — overlays never call `CompanionClient.send`
+- `CallModePolicy.allowsNativeCall(mutationTarget:)` — reconstructed is reference-only
+- `CompanionClient.prepareSpeech` / `synthesizeSpeech` share omit-nil/empty `voiceId`; `previewVoice` unchanged
+- `CallSpeaker.assertSpeakable` uses `text.utf16.count` vs `maxSpeakUTF16CodeUnits` (500), not `String.count`
+- `CallSpeaker.speak`, `stop`; `CallAudioPlaying.play` / `cancel`
+- `CallAudioPlayer: NSObject, AVAudioPlayerDelegate, CallAudioPlaying`
 - `CallModePolicy.transfer` / `end`
-- `CallModePolicy.SpeechQueue` (`enqueue` / `next` / `interrupt`)
+- `CallModePolicy.SpeechQueue` (`enqueue` / `next` / `interrupt`); `QueuedSpeech.botId` is `String?`; missing sender uses `unnamedSpeakerLabel` (`"Channel member"`) and nil voice
 - `requiresAddress(defaultResponderKind:)`
 - `allowsRoomCall(isDm:engineSupportsGroups:)` — Task 8 and Task 9 use the same two-argument signature
 - `sendPath`, `requiredBridgeCapabilities`, `shouldSend`, `shouldTreatSpeechAsApproval`, `endpointMs`
