@@ -196,7 +196,7 @@ struct PairingView: View {
                             Image(systemName: "laptopcomputer")
                                 .foregroundStyle(MausPalette.color("blue"))
                                 .frame(width: 30, height: 30)
-                            Text(service.name)
+                            Text(ConnectionPresentationPolicy.displayName(name: service.name, host: ""))
                                 .font(.body.weight(.medium))
                                 .foregroundStyle(.primary)
                             Spacer()
@@ -260,7 +260,7 @@ struct PairingView: View {
             .accessibilityHidden(true)
 
             VStack(spacing: 8) {
-                Text(connection.name)
+                Text(ConnectionPresentationPolicy.displayName(for: connection))
                     .font(.title2.bold())
                     .multilineTextAlignment(.center)
                 Label(badge.title, systemImage: badge.systemImage)

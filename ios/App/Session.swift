@@ -153,6 +153,7 @@ final class Session: ObservableObject {
     private var inBackoff = false
     private var engineSyncGeneration = 0
     private var modelCatalogGate = ModelCatalogRefreshGate()
+    private var bridgeRosterGate = BridgeRosterRefreshGate()
     private var modelUpdateGenerations: [String: Int] = [:]
     private var routerWriteGeneration = 0
     private let modelWriter = SerializedLatestWriter<String, ModelWriteIntent, Bot>()
@@ -494,6 +495,7 @@ final class Session: ObservableObject {
         self.modelCatalog = []
         self.modelCatalogError = nil
         self.modelCatalogRefreshing = false
+        invalidateBridgeRoster()
         engineSyncGeneration = EngineSyncPolicy.nextGeneration(after: engineSyncGeneration)
         modelCatalogGate.invalidate()
         routerWriteGeneration = EngineSyncPolicy.nextGeneration(after: routerWriteGeneration)
@@ -571,6 +573,9 @@ final class Session: ObservableObject {
         connections = registry.connections
         configureActiveConnection(saved, token: stored)
         connect()
+        Task { [weak self] in
+            await self?.refreshBridgeRoster()
+        }
     }
 
     func renameConnection(id: String, alias: String) {
@@ -587,15 +592,20 @@ final class Session: ObservableObject {
 
     @MainActor
     func refreshBridgeRoster() async {
-        guard let client else {
-            bridgeRoster = []
+        guard let client, let connectionID = connection?.id else {
+            invalidateBridgeRoster()
             return
         }
+        let request = bridgeRosterGate.beginLoad(for: connectionID)
         bridgeRosterLoading = true
-        defer { bridgeRosterLoading = false }
         do {
-            bridgeRoster = try await client.bridgeRoster()
+            let roster = try await client.bridgeRoster()
+            guard bridgeRosterGate.finishLoad(request, currentConnectionID: connection?.id) else { return }
+            bridgeRosterLoading = false
+            bridgeRoster = roster
         } catch {
+            guard bridgeRosterGate.finishLoad(request, currentConnectionID: connection?.id) else { return }
+            bridgeRosterLoading = false
             bridgeRoster = []
         }
     }
@@ -617,7 +627,12 @@ final class Session: ObservableObject {
         resetAvatarCache()
         NotificationCoordinator.shared.setBadge(0)
         restoreSelectedConnection()
-        if connection != nil { connect() }
+        if connection != nil {
+            connect()
+            Task { [weak self] in
+                await self?.refreshBridgeRoster()
+            }
+        }
         if connections.isEmpty {
             UserDefaults.standard.removeObject(forKey: CompanionOnboardingPreferences.pendingNotificationOnboardingKey)
         }
@@ -674,6 +689,7 @@ final class Session: ObservableObject {
         pendingLocalVmActions.removeAll()
         resetAvatarCache()
         NotificationCoordinator.shared.setBadge(0)
+        invalidateBridgeRoster()
         status = .unpaired
     }
 
@@ -712,6 +728,7 @@ final class Session: ObservableObject {
         localVmAccess = false
         localVmAccessDenied = false
         pendingLocalVmActions.removeAll()
+        invalidateBridgeRoster()
         state = CompanionState()
         clearQueueReceipts()
         client = nil
@@ -719,6 +736,12 @@ final class Session: ObservableObject {
         resetAvatarCache()
         NotificationCoordinator.shared.setBadge(0)
         status = .unpaired
+    }
+
+    private func invalidateBridgeRoster() {
+        bridgeRosterGate.invalidate()
+        bridgeRosterLoading = false
+        bridgeRoster = []
     }
 
     private func persistRegistry() {

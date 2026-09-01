@@ -41,6 +41,10 @@ final class AccountPresentationPolicyTests: XCTestCase {
             ConnectionPresentationPolicy.displayName(name: "OpenMaus", host: "studio-mac.local"),
             "Studio Mac"
         )
+        XCTAssertEqual(
+            ConnectionPresentationPolicy.displayName(name: "OpenMausBot", host: ""),
+            "Connected computer"
+        )
     }
 
     func testGenericNameDoesNotTurnAnAddressIntoAComputerName() {
