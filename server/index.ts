@@ -130,7 +130,7 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
 import { searchMessages } from "./message-db.ts";
 import { promptWithReply, transcriptText } from "./replies.ts";
-import { explainApproval, isReadOnlyShellCommand, reviewApproval } from "./approval-explainer.ts";
+import { explainApproval, reviewApproval } from "./approval-explainer.ts";
 import {
   approvalReviewerSelection,
   parseApprovalReviewerPatch,
@@ -1016,7 +1016,9 @@ export function approvalPresentation(tool: string, summary: string, scope?: "loc
     : scope === "bridge"
       ? "This action needs permission because it will run through your paired computer. Nothing runs unless you approve."
       : "This action needs permission before the bot can continue. Nothing runs unless you approve.";
-  const readOnlyCommand = isReadOnlyShellCommand(tool, summary);
+  const details = sanitizeLocalVmInvokeText(String(summary ?? "").slice(0, 16_000));
+  const explanation = explainApproval(tool, details, hostLabel);
+  const readOnlyCommand = explanation.riskLevel === "low" && explanation.changeSummary === "Nothing; read-only";
   const actionSummary = toolLabel === "Terminal"
     ? `${readOnlyCommand ? "Run a read-only command" : "Run a command"} on ${hostLabel}`
     : toolLabel === "Computer"
@@ -1025,8 +1027,6 @@ export function approvalPresentation(tool: string, summary: string, scope?: "loc
   // Preserve the command's shape for the disclosure, while applying the
   // same local-VM redaction used for tool output so paths, private URLs,
   // viewer tokens, and credential-shaped values never cross the phone link.
-  const details = sanitizeLocalVmInvokeText(String(summary ?? "").slice(0, 16_000));
-  const explanation = explainApproval(tool, details, hostLabel);
   return {
     toolLabel,
     hostLabel,

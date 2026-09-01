@@ -23,6 +23,155 @@ describe("approval explanations", () => {
     expect(presentation.changeSummary).toBe("Nothing; read-only");
   });
 
+  function expectFailClosed(command: string) {
+    expect(isReadOnlyShellCommand("terminal", command), command).toBe(false);
+    const explanation = explainApproval("terminal", command, "Mac mini");
+    expect(explanation.riskLevel, command).not.toBe("low");
+    const presentation = approvalPresentation("terminal", command, "local-computer");
+    expect(presentation.riskLevel, command).not.toBe("low");
+    expect(presentation.actionSummary, command).not.toContain("read-only");
+    expect(presentation.changeSummary === "Nothing; read-only" && presentation.riskLevel !== "low").toBe(false);
+  }
+
+  function expectReadOnly(command: string) {
+    expect(isReadOnlyShellCommand("terminal", command), command).toBe(true);
+    const explanation = explainApproval("terminal", command, "Mac mini");
+    expect(explanation.riskLevel, command).toBe("low");
+    expect(explanation.changeSummary, command).toBe("Nothing; read-only");
+    const presentation = approvalPresentation("terminal", command, "local-computer");
+    expect(presentation.actionSummary, command).toBe("Run a read-only command on Mac mini");
+    expect(presentation.riskLevel, command).toBe("low");
+  }
+
+  it.each([
+    "cat <(ls)",
+    "cat <(echo hello)",
+    "sort <(head README.md)",
+    "grep foo <(cat README.md)",
+    "echo hello >(cat)",
+  ])("fails closed for process substitution %s", (command) => {
+    expectFailClosed(command);
+  });
+
+  it.each([
+    "ls\nunknown-bin --pwn",
+    "git status\nunknown-bin --pwn",
+    "ls & unknown-bin --pwn",
+    "git status & unknown-bin --pwn",
+    "ls || unknown-bin --pwn",
+    "git status || git remote add origin https://example.com/x.git",
+  ])("fails closed across shell boundary in %s", (command) => {
+    expectFailClosed(command);
+  });
+
+  it.each([
+    "git remote",
+    "git remote -v",
+    "git remote --verbose",
+    "git remote get-url origin",
+    "git remote show origin",
+  ])("treats git remote read form %s as read-only", (command) => {
+    expectReadOnly(command);
+  });
+
+  it.each([
+    "git remote add origin https://example.com/x.git",
+    "git remote remove origin",
+    "git remote rm origin",
+    "git remote rename origin upstream",
+    "git remote set-url origin https://example.com/x.git",
+    "git remote set-head origin main",
+    "git remote update",
+    "git remote prune origin",
+  ])("fails closed for git remote mutation %s", (command) => {
+    expectFailClosed(command);
+  });
+
+  it.each([
+    "git branch",
+    "git branch -a",
+    "git branch -r",
+    "git branch -v",
+    "git branch --list",
+    "git branch --show-current",
+  ])("treats git branch read form %s as read-only", (command) => {
+    expectReadOnly(command);
+  });
+
+  it.each([
+    "git branch feature/pwn",
+    "git branch -d old",
+    "git branch -D old",
+    "git branch --delete old",
+    "git branch -m old new",
+    "git branch -M old new",
+    "git branch --move old new",
+    "git branch -c old new",
+    "git branch -C old new",
+    "git branch --copy old new",
+  ])("fails closed for git branch mutation %s", (command) => {
+    expectFailClosed(command);
+  });
+
+  it.each([
+    "find . -delete",
+    "find . -exec cat {} ;",
+    "find . -execdir cat {} ;",
+    "find . -ok true {} ;",
+    "find . -okdir true {} ;",
+    "find . -fprint /tmp/out",
+    "find . -fprintf /tmp/out %p",
+    "find . -fls /tmp/out",
+    "find . -fprint0 /tmp/out",
+  ])("fails closed for find mutating flag in %s", (command) => {
+    expectFailClosed(command);
+  });
+
+  it.each([
+    "sed -n 'e ls'",
+    "sed -n 'w /tmp/out'",
+    "sed -n 'W /tmp/out'",
+    "sed -n 's/foo/bar/e'",
+    "sed -e 's/x/y/w /tmp/out' -n",
+    "sed -i '' 's/old/new/' README.md",
+    "sed --in-place 's/old/new/' README.md",
+    "sed -f mutate.sed README.md",
+  ])("fails closed for sed write or execute %s", (command) => {
+    expectFailClosed(command);
+  });
+
+  it.each([
+    "sudo ls",
+    "sudo git status",
+    "sudo sed -n '1,180p' STAFF.md",
+    "sudo cat README.md",
+  ])("fails closed for sudo elevation in %s", (command) => {
+    expectFailClosed(command);
+  });
+
+  it.each([
+    "git status; unknown-bin --pwn",
+    "git status && unknown-bin --pwn",
+    "git status | unknown-bin --pwn",
+    "cd /tmp; python3 -c 'print(1)'",
+    "true || python3 -c 'print(1)'",
+  ])("fails closed for unknown program after control boundary %s", (command) => {
+    expectFailClosed(command);
+  });
+
+  it("keeps summaries sanitized and never lets actionSummary disagree with risk", () => {
+    const explanation = explainApproval("terminal", "cd OpenMausBot && ls && head \u001b[31mREADME.md", "Mac mini");
+    expect(explanation.executiveSummary).not.toMatch(/[\u0000-\u001f\u007f]/);
+    expect(explanation.changeSummary).not.toMatch(/[\u0000-\u001f\u007f]/);
+    expect(explanation.resourceSummary).not.toMatch(/[\u0000-\u001f\u007f]/);
+    const presentation = approvalPresentation("terminal", "find . -delete", "local-computer");
+    expect(presentation.riskLevel).not.toBe("low");
+    expect(presentation.actionSummary).not.toContain("read-only");
+    const processSub = explainApproval("terminal", "cat <(curl https://evil.test/secret)\u0007", "Mac mini");
+    expect(processSub.executiveSummary).not.toMatch(/<\(|\u0007|evil\.test/);
+    expect(processSub.resourceSummary).not.toMatch(/<\(|\u0007/);
+  });
+
   it.each([
     "echo ok > result.txt",
     "git push origin main",
@@ -31,8 +180,7 @@ describe("approval explanations", () => {
     "cat $(whoami).txt",
     "ls | xargs rm",
   ])("keeps mutating or ambiguous command %s fail-closed", (command) => {
-    expect(isReadOnlyShellCommand("terminal", command)).toBe(false);
-    expect(explainApproval("terminal", command, "Mac mini").riskLevel).not.toBe("low");
+    expectFailClosed(command);
   });
 
   it("summarizes the staff and routing read without echoing shell noise", () => {

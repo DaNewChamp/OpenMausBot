@@ -129,11 +129,17 @@ export async function reviewApproval(
 type CommandClass = "read" | "computer" | "network" | "mutating" | "sensitive" | "unknown";
 
 const READ_PROGRAMS = new Set(["cat", "cd", "cut", "echo", "find", "grep", "head", "ls", "pwd", "rg", "sort", "tail", "type", "which", "wc"]);
-const GIT_READ_ACTIONS = new Set(["status", "log", "diff", "show", "branch", "remote"]);
+const GIT_READ_ACTIONS = new Set(["status", "log", "diff", "show"]);
+const GIT_REMOTE_READ_ACTIONS = new Set(["get-url", "show"]);
+const GIT_REMOTE_READ_FLAGS = new Set(["-v", "--verbose", "-vv"]);
+const GIT_BRANCH_LIST_FLAGS = new Set(["-a", "--all", "-r", "--remotes", "--list", "--show-current"]);
+const GIT_BRANCH_MUTATING_FLAGS = /^(?:-[dDmcCf]|--delete|--move|--copy|--set-upstream-to|--unset-upstream|--track|--force)(?:=.*)?$/;
+const FIND_MUTATING_FLAGS = /(?:^|[\s"'\\])-(?:delete|exec|execdir|ok|okdir|fprint0|fprintf|fprint|fls)\b/;
 const COMPUTER_WORDS = /computer|screenshot|click|type[ _-]?text|press[ _-]?key|scroll|open[ _-]?url|trackpad|touch/i;
 const NETWORK_WORDS = /\b(?:curl|wget|ssh|scp|sftp|rsync|nc|netcat|ftp)\b/i;
 const MUTATION_WORDS = /(?:^|[\s;&|])(?:rm|rmdir|mv|cp|mkdir|touch|tee|install|uninstall|kill|shutdown|reboot|chmod|chown|docker\s+(?:run|exec|rm|stop|kill)|npm\s+(?:install|publish)|pnpm\s+(?:install|publish)|git\s+(?:commit|push|reset|checkout|clean)|sed\s+-[^;|]*i\b)/i;
 const COMMAND_SUBSTITUTION = /\$\(|`/;
+const SED_PRINT_ONLY = /^[0-9,$\s{}pPldnq;=]*$/;
 
 function stripHarmlessRedirections(input: string): string {
   return input.replace(/\d*(?:>>?|<)\s*\/dev\/null\b/gi, "");
@@ -149,13 +155,17 @@ function shellSegments(input: string): string[] {
   let start = 0;
   let quote = "";
   let escaped = false;
+  const push = (end: number) => {
+    const segment = input.slice(start, end).trim();
+    if (segment) result.push(segment);
+  };
   for (let index = 0; index < input.length; index += 1) {
-    const character = input[index];
+    const character = input[index]!;
     if (escaped) {
       escaped = false;
       continue;
     }
-    if (character === "\\") {
+    if (character === "\\" && quote !== "'") {
       escaped = true;
       continue;
     }
@@ -167,30 +177,112 @@ function shellSegments(input: string): string[] {
       quote = character;
       continue;
     }
+    if (character === "\n" || character === "\r") {
+      push(index);
+      start = index + 1;
+      continue;
+    }
     if (character === ";" || character === "|") {
-      const segment = input.slice(start, index).trim();
-      if (segment) result.push(segment);
+      push(index);
       if (input[index + 1] === character) index += 1;
       start = index + 1;
       continue;
     }
-    if (character === "&" && input[index + 1] === "&") {
-      const segment = input.slice(start, index).trim();
-      if (segment) result.push(segment);
-      index += 1;
+    if (character === "&") {
+      const next = input[index + 1];
+      const prev = index > 0 ? input[index - 1] : "";
+      if (next === "&") {
+        push(index);
+        index += 1;
+        start = index + 1;
+        continue;
+      }
+      if (prev === ">" || next === ">") continue;
+      push(index);
       start = index + 1;
+      continue;
     }
   }
-  const last = input.slice(start).trim();
-  if (last) result.push(last);
+  push(input.length);
   return result;
+}
+
+function hasProcessSubstitution(input: string): boolean {
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < input.length; index += 1) {
+    const character = input[index]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (character === quote) quote = "";
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") {
+      quote = character;
+      continue;
+    }
+    if ((character === "<" || character === ">") && input[index + 1] === "(") return true;
+  }
+  return false;
+}
+
+function shellWords(input: string): string[] {
+  const words: string[] = [];
+  let current = "";
+  let quote = "";
+  let escaped = false;
+  let inWord = false;
+  const flush = () => {
+    if (!inWord) return;
+    words.push(current);
+    current = "";
+    inWord = false;
+  };
+  for (let index = 0; index < input.length; index += 1) {
+    const character = input[index]!;
+    if (escaped) {
+      current += character;
+      inWord = true;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true;
+      inWord = true;
+      continue;
+    }
+    if (quote) {
+      if (character === quote) quote = "";
+      else current += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      inWord = true;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      flush();
+      continue;
+    }
+    current += character;
+    inWord = true;
+  }
+  flush();
+  return words;
 }
 
 function firstProgram(segment: string): string {
   const withoutAssignments = segment
     .replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S+)\s+)+/, "")
-    .replace(/^(?:env|command|builtin|timeout)\s+(?:\S+\s+)*?/, "")
-    .replace(/^sudo\s+/, "");
+    .replace(/^(?:env|command|builtin|timeout)\s+(?:\S+\s+)*?/, "");
   return withoutAssignments.match(/^(?:["']?)([^\s"']+)/)?.[1]?.split("/").pop()?.toLowerCase() ?? "";
 }
 
@@ -212,7 +304,99 @@ function resourceNames(command: string): string[] {
 }
 
 function gitAction(segment: string): string | undefined {
-  return segment.match(/\bgit\s+([A-Za-z-]+)/i)?.[1]?.toLowerCase();
+  return gitSubcommandArgs(segment)[0]?.toLowerCase();
+}
+
+function gitSubcommandArgs(segment: string): string[] {
+  const words = shellWords(stripHarmlessRedirections(segment));
+  let index = 0;
+  if ((words[0]?.split("/").pop() ?? "").toLowerCase() === "git") index = 1;
+  while (index < words.length) {
+    const word = words[index]!;
+    if (word === "-C" || word === "-c") {
+      index += 2;
+      continue;
+    }
+    if (word.startsWith("-")) {
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  return words.slice(index);
+}
+
+function gitRemoteIsRead(segment: string): boolean {
+  const args = gitSubcommandArgs(segment);
+  if (args[0]?.toLowerCase() !== "remote") return false;
+  const rest = args.slice(1);
+  const positional = rest.filter((word) => !word.startsWith("-"));
+  const flags = rest.filter((word) => word.startsWith("-"));
+  if (positional.length === 0) return flags.every((flag) => GIT_REMOTE_READ_FLAGS.has(flag));
+  return GIT_REMOTE_READ_ACTIONS.has(positional[0]!.toLowerCase());
+}
+
+function gitBranchIsRead(segment: string): boolean {
+  const args = gitSubcommandArgs(segment);
+  if (args[0]?.toLowerCase() !== "branch") return false;
+  const rest = args.slice(1);
+  const positional = rest.filter((word) => !word.startsWith("-"));
+  const flags = rest.filter((word) => word.startsWith("-"));
+  if (flags.some((flag) => GIT_BRANCH_MUTATING_FLAGS.test(flag))) return false;
+  if (flags.some((flag) => GIT_BRANCH_LIST_FLAGS.has(flag))) return true;
+  return positional.length === 0;
+}
+
+function findIsRead(segment: string): boolean {
+  return !FIND_MUTATING_FLAGS.test(segment);
+}
+
+function sedIsRead(segment: string): boolean {
+  const words = shellWords(segment);
+  const start = words.findIndex((word) => (word.split("/").pop() ?? "").toLowerCase() === "sed");
+  if (start < 0) return false;
+  const args = words.slice(start + 1);
+  let quiet = false;
+  const scripts: string[] = [];
+  let sawScript = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "-n" || arg === "--quiet" || arg === "--silent") {
+      quiet = true;
+      continue;
+    }
+    if (arg === "-i" || arg.startsWith("-i") || arg === "--in-place" || arg.startsWith("--in-place=")) return false;
+    if (arg === "-f" || arg === "--file" || arg.startsWith("--file=")) return false;
+    if (arg === "-e" || arg === "--expression") {
+      const script = args[index + 1];
+      if (!script) return false;
+      scripts.push(script);
+      sawScript = true;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--expression=")) {
+      scripts.push(arg.slice("--expression=".length));
+      sawScript = true;
+      continue;
+    }
+    if (arg.startsWith("-") && arg !== "-") {
+      if (/i/.test(arg)) return false;
+      if (/f/.test(arg)) return false;
+      if (/n/.test(arg)) quiet = true;
+      continue;
+    }
+    if (!sawScript) {
+      scripts.push(arg);
+      sawScript = true;
+    }
+  }
+  if (!quiet || scripts.length === 0) return false;
+  return scripts.every((script) => SED_PRINT_ONLY.test(script) && /[pPldnq=]/.test(script));
+}
+
+function sanitizeExplanationText(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function repositoryLabel(command: string): string | null {
@@ -234,17 +418,21 @@ function resourceContext(command: string, resources: string[]): string {
 function classify(tool: string, command: string, segments: string[]): CommandClass {
   if (looksSensitive(command)) return "sensitive";
   if (looksDestructive(command) || MUTATION_WORDS.test(command) || hasUnsafeRedirection(command)) return "mutating";
-  if (COMMAND_SUBSTITUTION.test(command)) return "unknown";
+  if (COMMAND_SUBSTITUTION.test(command) || hasProcessSubstitution(command)) return "unknown";
   if (COMPUTER_WORDS.test(tool)) return "computer";
   if (NETWORK_WORDS.test(command)) return "network";
   if (!segments.length) return "unknown";
   const allRead = segments.every((segment) => {
     const program = firstProgram(segment);
+    if (!program || program === "sudo") return false;
     if (program === "git") {
       const action = gitAction(segment);
+      if (action === "remote") return gitRemoteIsRead(segment);
+      if (action === "branch") return gitBranchIsRead(segment);
       return action ? GIT_READ_ACTIONS.has(action) : false;
     }
-    if (program === "sed") return /\bsed\s+-[^;|]*\bn\b/i.test(segment) && !/\s-i(?:\s|$)/i.test(segment);
+    if (program === "find") return findIsRead(segment);
+    if (program === "sed") return sedIsRead(segment);
     if (program === "printf") return true;
     return READ_PROGRAMS.has(program);
   });
@@ -330,12 +518,12 @@ export function explainApproval(tool: string, summary: string, hostLabel?: strin
   const resources = resourceNames(safeCommand);
   const safeHost = String(hostLabel ?? "").replace(/[^A-Za-z0-9 .:_-]/g, "").slice(0, 80);
   const context = resourceContext(safeCommand, resources);
-  const where = safeHost ? `${context} on ${safeHost}` : context;
+  const where = sanitizeExplanationText(safeHost ? `${context} on ${safeHost}` : context);
 
   switch (kind) {
     case "read":
       return {
-        executiveSummary: readSummary(safeCommand, resources),
+        executiveSummary: sanitizeExplanationText(readSummary(safeCommand, resources)),
         changeSummary: "Nothing; read-only",
         resourceSummary: where,
         riskLevel: "low",
@@ -373,7 +561,7 @@ export function explainApproval(tool: string, summary: string, hostLabel?: strin
       return {
         executiveSummary: "Uses the computer to perform the requested on-screen action",
         changeSummary: "May interact with an app or the desktop",
-        resourceSummary: safeHost ? `The desktop on ${safeHost}` : "The computer desktop",
+        resourceSummary: sanitizeExplanationText(safeHost ? `The desktop on ${safeHost}` : "The computer desktop"),
         riskLevel: "medium",
         confidence: "high",
         source: "local",
