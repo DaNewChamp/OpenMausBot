@@ -31,7 +31,6 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var replyingTo: Message?
     @State private var composerRequestGate = ComposerRequestGate()
-    @State private var pendingQueueNotices: [String: PendingQueueNotice] = [:]
     @State private var showingTasks = false
     @State private var showingComputer = false
     @State private var showingModelPicker = false
@@ -180,7 +179,11 @@ struct ChatView: View {
                 // Only a completed full hydrate can retire notices that are no
                 // longer represented by the server transcript. Resumed SSE
                 // reconnects leave this revision alone, preserving local notices.
-                reconcilePendingQueue(in: messages, authoritativeRefresh: true)
+                session.reconcileQueueReceipts(
+                    forThread: threadId,
+                    transcript: messages,
+                    authoritativeRefresh: true
+                )
             }
             .onDisappear {
                 dictation.stop()
@@ -271,7 +274,7 @@ struct ChatView: View {
                 streamA11yPhase: $streamA11yPhase,
                 draftIsEmpty: draft.isEmpty,
                 onTranscriptChanged: { transcript in
-                    reconcilePendingQueue(in: transcript)
+                    session.reconcileQueueReceipts(forThread: threadId, transcript: transcript)
                 }
             )
             ChatComposerView(
@@ -290,7 +293,7 @@ struct ChatView: View {
                 composerRequestGate: $composerRequestGate,
                 attachmentError: $attachmentError,
                 isUploadingAttachments: isUploadingAttachments,
-                pendingQueueCount: pendingQueueNotices.values.filter { $0.threadId == threadId }.count,
+                pendingQueueCount: session.queueReceipts.filter { $0.threadId == threadId }.count,
                 dictation: dictation,
                 onSubmit: { text, mode in
                     if let text {
@@ -610,17 +613,7 @@ struct ChatView: View {
             }
             let receipt = await session.send(prompt, to: target, mode: mode)
             if let receipt, receipt.ok {
-                if let queueId = receipt.queueId {
-                    pendingQueueNotices[queueId] = PendingQueueNotice(
-                        queueId: queueId,
-                        threadId: target.threadId
-                    )
-                    // The queued line may have landed on the transcript before
-                    // the HTTP acknowledgement returned. Reconcile now as
-                    // well as from the normal transcript-change path so that
-                    // SSE-before-HTTP cannot leave a stale local notice.
-                    reconcilePendingQueue(in: messages)
-                }
+                session.recordQueueReceipt(receipt, forThread: target.threadId)
                 // The editor remains usable while the request is in flight.
                 // Do not erase a newer draft that was typed after submission.
                 if draft == draftAtSubmission { draft = "" }
@@ -653,26 +646,6 @@ struct ChatView: View {
             submit(mode: mode)
         case .none:
             break
-        }
-    }
-
-    private func reconcilePendingQueue(in transcript: [Message], authoritativeRefresh: Bool = false) {
-        guard !pendingQueueNotices.isEmpty else { return }
-        if authoritativeRefresh {
-            pendingQueueNotices = pendingQueueNotices.filter { _, pending in
-                pending.threadId != threadId
-            }
-            return
-        }
-        let pendingForThread = pendingQueueNotices.values
-            .filter { $0.threadId == threadId }
-            .map(\.queueId)
-        let remaining = PendingQueueReconciliation.remainingQueueIDs(
-            pendingQueueIDs: pendingForThread,
-            transcript: transcript
-        )
-        pendingQueueNotices = pendingQueueNotices.filter { _, pending in
-            pending.threadId != threadId || remaining.contains(pending.queueId)
         }
     }
 
@@ -837,11 +810,6 @@ struct PendingImageAttachment: Identifiable, Equatable {
         self.mime = mime
         self.name = name
     }
-}
-
-private struct PendingQueueNotice: Equatable {
-    let queueId: String
-    let threadId: String
 }
 
 private struct ActivityShareSheet: UIViewControllerRepresentable {

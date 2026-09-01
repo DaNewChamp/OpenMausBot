@@ -17,7 +17,8 @@ public struct HomeActivityQueueReceipt: Hashable, Sendable {
     }
 
     public init?(receipt: MessageDeliveryReceipt, enqueuedAt: Double = 0) {
-        guard receipt.disposition == .queued,
+        guard receipt.ok,
+              receipt.disposition == .queued,
               let queueId = receipt.queueId,
               let threadId = receipt.threadId
         else { return nil }

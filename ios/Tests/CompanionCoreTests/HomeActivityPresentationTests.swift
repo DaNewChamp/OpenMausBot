@@ -73,6 +73,18 @@ struct HomeActivityPresentationTests {
         #expect(!presentation.collapsedTitle.localizedCaseInsensitiveContains("provider"))
     }
 
+    @Test
+    func failedQueueReceiptIsRejected() {
+        let receipt = MessageDeliveryReceipt(
+            ok: false,
+            disposition: .queued,
+            queueId: "q-failed",
+            threadId: "thread-1"
+        )
+
+        #expect(HomeActivityQueueReceipt(receipt: receipt) == nil)
+    }
+
     private func fixtureState() throws -> CompanionState {
         let url = try #require(
             Bundle.module.url(forResource: "bots-paged", withExtension: "json", subdirectory: "Fixtures")

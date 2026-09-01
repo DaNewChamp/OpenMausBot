@@ -42,6 +42,10 @@ final class Session: ObservableObject {
     }
 
     @Published private(set) var state = CompanionState()
+    /// Queue acknowledgements observed by this phone. The Hub exposes no
+    /// global queue snapshot, so this stays a local projection and is retired
+    /// as transcript outcomes arrive or a full hydrate replaces the view.
+    @Published private(set) var queueReceipts: [HomeActivityQueueReceipt] = []
     /// Advances only after the server has replaced local state with a full
     /// fleet hydrate. Resumed SSE connections leave it unchanged so views do
     /// not mistake a reconnect for an authoritative refresh.
@@ -159,6 +163,7 @@ final class Session: ObservableObject {
     /// Token bursts land here and publish on a frame cadence, so SwiftUI does
     /// not rebuild the chat on every provider delta.
     private var streamCoalescer = StreamCoalescer()
+    private var queueReceiptStore = HomeActivityQueueReceiptStore()
     private var streamFlushTask: Task<Void, Never>?
     private var streamFlushDeadlineMs: Int?
     /// Last seq of a buffered delta that has not yet been folded. Held back
@@ -481,6 +486,7 @@ final class Session: ObservableObject {
             token: paired.token
         )
         self.state = CompanionState()
+        clearQueueReceipts()
         self.engineSync = nil
         self.modelCatalog = []
         self.modelCatalogError = nil
@@ -631,6 +637,7 @@ final class Session: ObservableObject {
         inBackoff = false
         resetStreamCoalescer()
         state = CompanionState()
+        clearQueueReceipts()
         localVmStatuses.removeAll()
         localVmAccess = false
         localVmAccessDenied = false
@@ -676,6 +683,7 @@ final class Session: ObservableObject {
         localVmAccessDenied = false
         pendingLocalVmActions.removeAll()
         state = CompanionState()
+        clearQueueReceipts()
         client = nil
         token = nil
         resetAvatarCache()
@@ -1016,6 +1024,7 @@ final class Session: ObservableObject {
         resetStreamCoalescer()
         let previousAppearanceOverrides = state.appearanceOverrides
         state.hydrate(fleet)
+        reconcileQueueReceipts(authoritativeRefresh: true)
         state.reconcileReadReceiptsAfterHydrate()
         state.reconcileUnreadIndicators(visibleThreadId: visibleThreadId)
         if commit.persistPins { persistPinnedOverrides() }
@@ -1137,6 +1146,7 @@ final class Session: ObservableObject {
         }
         state = next
         bufferedStreamSeq = nil
+        reconcileQueueReceipts()
         state.reconcileUnreadIndicators(visibleThreadId: visibleThreadId)
         NotificationCoordinator.shared.setBadge(state.unreadCount)
     }
@@ -1149,6 +1159,7 @@ final class Session: ObservableObject {
         next.apply(frame)
         next.advance(to: seq)
         state = next
+        reconcileQueueReceipts()
         applyUnreadEffects(for: frame, before: before)
         if state.pinnedOverrides != previousOverrides { persistPinnedOverrides() }
         if state.appearanceOverrides != previousAppearanceOverrides { persistAppearanceOverrides() }
@@ -1317,6 +1328,60 @@ final class Session: ObservableObject {
     // result. Nothing here writes to `state` optimistically: the harness is
     // the source of truth, and a phone that draws its own version of events
     // is a phone that disagrees with the laptop.
+
+    /// Keep queue acknowledgements at the app boundary rather than inside a
+    /// chat view, so the home rail and updates sheet can share the same local
+    /// observation without implying a Hub-wide queue snapshot.
+    @discardableResult
+    func recordQueueReceipt(
+        _ receipt: MessageDeliveryReceipt,
+        forThread threadId: String,
+        enqueuedAt: Double = 0
+    ) -> Bool {
+        let observed = queueReceiptStore.observe(
+            receipt,
+            forThread: threadId,
+            enqueuedAt: enqueuedAt
+        )
+        guard observed else { return false }
+        queueReceiptStore.reconcile(
+            threadId: threadId,
+            transcript: state.visibleTranscript(forThread: threadId)
+        )
+        publishQueueReceipts()
+        return true
+    }
+
+    /// Retire local queue acknowledgements after a transcript update. A full
+    /// hydrate is the only operation allowed to discard receipts absent from
+    /// the returned transcript; resumed streams retain the local unknowns.
+    func reconcileQueueReceipts(
+        forThread threadId: String,
+        transcript: [Message],
+        authoritativeRefresh: Bool = false
+    ) {
+        queueReceiptStore.reconcile(
+            threadId: threadId,
+            transcript: transcript,
+            authoritativeRefresh: authoritativeRefresh
+        )
+        publishQueueReceipts()
+    }
+
+    private func reconcileQueueReceipts(authoritativeRefresh: Bool = false) {
+        queueReceiptStore.reconcile(state: state, authoritativeRefresh: authoritativeRefresh)
+        publishQueueReceipts()
+    }
+
+    private func publishQueueReceipts() {
+        let receipts = queueReceiptStore.receipts
+        if queueReceipts != receipts { queueReceipts = receipts }
+    }
+
+    private func clearQueueReceipts() {
+        queueReceiptStore = HomeActivityQueueReceiptStore()
+        if !queueReceipts.isEmpty { queueReceipts = [] }
+    }
 
     @discardableResult
     func send(
@@ -1839,6 +1904,10 @@ final class Session: ObservableObject {
         do {
             let page = try await client.messages(threadId: threadId, before: oldest.id, limit: 50)
             state.prepend(page, toThread: threadId)
+            reconcileQueueReceipts(
+                forThread: threadId,
+                transcript: state.visibleTranscript(forThread: threadId)
+            )
         } catch {
             if !error.isCancellation {
                 actionError = error.localizedDescription
@@ -1876,6 +1945,10 @@ final class Session: ObservableObject {
                 }
                 let page = try await client.messages(threadId: hit.threadId, around: hit.messageId)
                 state.merge(page, intoThread: hit.threadId)
+                reconcileQueueReceipts(
+                    forThread: hit.threadId,
+                    transcript: state.visibleTranscript(forThread: hit.threadId)
+                )
                 focusedMessageId = hit.messageId
                 return state.bot(bot.id).map(Chat.bot)
             }
@@ -1883,6 +1956,10 @@ final class Session: ObservableObject {
                let room = state.rooms.first(where: { $0.id == groupId }) {
                 let page = try await client.messages(threadId: hit.threadId, around: hit.messageId)
                 state.merge(page, intoThread: hit.threadId)
+                reconcileQueueReceipts(
+                    forThread: hit.threadId,
+                    transcript: state.visibleTranscript(forThread: hit.threadId)
+                )
                 focusedMessageId = hit.messageId
                 return .room(room)
             }
@@ -2935,6 +3012,10 @@ final class Session: ObservableObject {
             let page = try await client.messages(threadId: threadId, limit: 50)
             guard !Task.isCancelled else { return }
             state.merge(page, intoThread: threadId)
+            reconcileQueueReceipts(
+                forThread: threadId,
+                transcript: state.visibleTranscript(forThread: threadId)
+            )
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
         } catch {

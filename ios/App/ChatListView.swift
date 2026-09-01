@@ -115,9 +115,10 @@ struct ChatListView: View {
                 // content gains exactly the pill's height, so rows remain
                 // visible while the activity details expand upward in place.
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    HomeActivityPill { chat in
-                        path.append(chat)
-                    }
+                    HomeActivityPill(
+                        open: { chat in path.append(chat) },
+                        queuedReceipts: session.queueReceipts
+                    )
                     .environmentObject(session)
                 }
             }
@@ -198,10 +199,13 @@ struct ChatListView: View {
             }
 #endif
             .sheet(isPresented: $showingUpdates) {
-                UpdatesSheet { chat in
-                    showingUpdates = false
-                    path.append(chat)
-                }
+                UpdatesSheet(
+                    open: { chat in
+                        showingUpdates = false
+                        path.append(chat)
+                    },
+                    queuedReceipts: session.queueReceipts
+                )
             }
             .sheet(isPresented: $showingNewGroup) {
                 NewGroupSheet { room in
