@@ -193,6 +193,19 @@ struct ModelPickerView: View {
         railInstance?.models.options ?? []
     }
 
+    private var claudeRows: [CompactClaudeModelRow] {
+        guard railInstance?.instanceId == "claude" else { return [] }
+        let mobile = models.map {
+            MobileCatalogModel(
+                id: $0.id,
+                label: $0.label,
+                instanceId: $0.instanceId ?? railInstance?.instanceId ?? "claude",
+                isDefault: $0.id == railInstance?.models.default
+            )
+        }
+        return ClaudeModelFamilyPolicy.compactRows(from: mobile, preservingSelection: selectedModelId)
+    }
+
     private var rowsDisabled: Bool {
         disabled || modelsDisabled || ProviderCatalogPolicy.modelsDisabled(
             advertised: instances,
@@ -272,6 +285,8 @@ struct ModelPickerView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 12)
+                    } else if railInstance.instanceId == "claude" {
+                        claudeModelRows(rail: railInstance)
                     } else {
                         ForEach(Array(models.enumerated()), id: \.element.id) { index, option in
                             ModelRow(
@@ -323,6 +338,46 @@ struct ModelPickerView: View {
                     }
                 }
                 .background(ModelPickerStyle.listSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func claudeModelRows(rail: Instance) -> some View {
+        ForEach(Array(claudeRows.enumerated()), id: \.element.id) { index, row in
+            VStack(alignment: .leading, spacing: 8) {
+                ModelRow(
+                    label: row.label,
+                    selected: selectedModelId == row.standardModelId || selectedModelId == row.oneMModelId,
+                    isDefault: row.standardModelId == rail.models.default || row.oneMModelId == rail.models.default,
+                    disabled: rowsDisabled
+                ) {
+                    let nextId = row.selectedModelId(forOneMEnabled: row.oneMEnabled(for: selectedModelId))
+                    guard selectedModelId != nextId else { return }
+                    selectedInstanceId = row.instanceId
+                    selectedModelId = nextId
+                    onSelectionChange()
+                }
+                if row.showsOneMToggle {
+                    Toggle("1M context", isOn: Binding(
+                        get: { row.oneMEnabled(for: selectedModelId) },
+                        set: { enabled in
+                            let nextId = row.selectedModelId(forOneMEnabled: enabled)
+                            guard selectedModelId != nextId else { return }
+                            selectedInstanceId = row.instanceId
+                            selectedModelId = nextId
+                            onSelectionChange()
+                        }
+                    ))
+                    .font(.footnote)
+                    .disabled(rowsDisabled)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+                }
+            }
+
+            if index < claudeRows.count - 1 {
+                Divider().overlay(ModelPickerStyle.divider).padding(.leading, 14)
             }
         }
     }

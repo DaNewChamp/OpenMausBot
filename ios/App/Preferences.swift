@@ -22,12 +22,54 @@ struct ActivityDetailOverridePicker: View {
     @AppStorage(PrefKey.activityDetail) private var globalDetail = ActivityDetail.reduced.rawValue
     @AppStorage(PrefKey.activityDetailOverrides) private var overrides = "{}"
 
-    private var selection: Binding<String> {
+    private var globalStored: ActivityDetail {
+        ActivityDetail(rawValue: globalDetail) ?? .reduced
+    }
+
+    private var overrideStored: ActivityDetail? {
+        ActivityDetailOverrides.detail(for: threadId, in: overrides)
+    }
+
+    private var usesGlobal: Binding<Bool> {
         Binding(
-            get: { ActivityDetailOverrides.detail(for: threadId, in: overrides)?.rawValue ?? "" },
-            set: { raw in
+            get: { ActivityDetailTogglePolicy.usesGlobalSetting(for: threadId, in: overrides) },
+            set: { useGlobal in
+                if useGlobal {
+                    overrides = ActivityDetailOverrides.setting(nil, for: threadId, in: overrides)
+                } else {
+                    let show = ActivityDetailTogglePolicy.perBotShowsToolActivity(
+                        override: overrideStored,
+                        global: globalStored
+                    )
+                    overrides = ActivityDetailOverrides.setting(
+                        ActivityDetailTogglePolicy.perBotStoredValue(
+                            useGlobal: false,
+                            showToolActivity: show,
+                            previous: overrideStored
+                        ),
+                        for: threadId,
+                        in: overrides
+                    )
+                }
+            }
+        )
+    }
+
+    private var showToolActivity: Binding<Bool> {
+        Binding(
+            get: {
+                ActivityDetailTogglePolicy.perBotShowsToolActivity(
+                    override: overrideStored,
+                    global: globalStored
+                )
+            },
+            set: { show in
                 overrides = ActivityDetailOverrides.setting(
-                    ActivityDetail(rawValue: raw),
+                    ActivityDetailTogglePolicy.perBotStoredValue(
+                        useGlobal: false,
+                        showToolActivity: show,
+                        previous: overrideStored
+                    ),
                     for: threadId,
                     in: overrides
                 )
@@ -36,25 +78,20 @@ struct ActivityDetailOverridePicker: View {
     }
 
     private var effectiveDetail: ActivityDetail {
-        ActivityDetailOverrides.detail(for: threadId, in: overrides)
-            ?? ActivityDetail(rawValue: globalDetail)
-            ?? .reduced
+        overrideStored ?? globalStored
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Tool activity")
                 .font(.body)
-            Picker("Tool activity", selection: selection) {
-                Text("Use global").tag("")
-                ForEach(ActivityDetail.allCases, id: \.rawValue) { detail in
-                    Text(detail.label).tag(detail.rawValue)
-                }
+            Toggle("Use global setting", isOn: usesGlobal)
+            if !usesGlobal.wrappedValue {
+                Toggle("Show tool activity", isOn: showToolActivity)
             }
-            .pickerStyle(.menu)
-            Text(selection.wrappedValue.isEmpty
-                ? "Using global: \(effectiveDetail.label)."
-                : effectiveDetail.caption)
+            Text(usesGlobal.wrappedValue
+                ? "Using global: \(effectiveDetail == .full ? ActivityDetail.reduced.label : effectiveDetail.label)."
+                : (effectiveDetail == .full ? ActivityDetail.reduced.caption : effectiveDetail.caption))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }

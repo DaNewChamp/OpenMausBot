@@ -52,7 +52,7 @@ struct AgentProfileView: View {
     @State private var routines: [Routine] = []
     @State private var routinesLoading = true
     @State private var showingMedia = false
-    @State private var showingModelAndVoice = true
+    @State private var showingModelPicker = false
 
     init(bot: Bot) {
         self.bot = bot
@@ -139,6 +139,7 @@ struct AgentProfileView: View {
                         routinesSection
                         notificationsRow
                         toolActivitySection
+                        modelAndVoiceSection
                         secondaryControls
                     }
                     .padding(.horizontal, VBotSurface.Space.page)
@@ -210,13 +211,14 @@ struct AgentProfileView: View {
                 Task { await save() }
             }
             .onDisappear {
-                modelSaveTask?.cancel()
                 appearanceSaveTask?.cancel()
-                guard !leavingProfile, hasUnsavedChanges else { return }
-                // The interactive-pop gesture has no button action to await.
-                // Keep its final character choice rather than dropping it
-                // when SwiftUI removes this view from the stack.
+                guard !leavingProfile else { return }
+                let plan = ProfileLeaveSavePolicy.swipeDismissPlan(profileDirty: !profilePatchIsEmpty)
+                guard plan.saveProfileAfterDismiss else { return }
                 Task { @MainActor in await saveAll() }
+            }
+            .sheet(isPresented: $showingModelPicker) {
+                profileModelPickerSheet
             }
             .sheet(isPresented: $showingInstructions) {
                 instructionsEditor
@@ -259,7 +261,7 @@ struct AgentProfileView: View {
                 }
                 .disabled(!canEdit)
                 Button("Model & voice", systemImage: "slider.horizontal.3") {
-                    showingModelAndVoice = true
+                    showingModelPicker = true
                 }
                 Divider()
                 Button(
@@ -674,10 +676,100 @@ struct AgentProfileView: View {
             mediaControls
                 .padding(.top, 30)
         }
-        if showingModelAndVoice {
-            modelAndVoiceControls
-                .padding(.top, 30)
+    }
+
+    private var modelAndVoiceSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            profileSectionLabel("Model & voice")
+            VStack(alignment: .leading, spacing: 14) {
+                Button {
+                    showingModelPicker = true
+                } label: {
+                    modelSelectionSummary
+                }
+                .buttonStyle(.plain)
+                .disabled(!canEdit && instances.isEmpty)
+
+                Toggle(isOn: $fastMode) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Fast mode")
+                        Text(ModelSelectionPolicy.fastModeHint)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(!canEdit || modelSwitchBlocked)
+                .onChange(of: fastMode) { _, enabled in
+                    Task { _ = await session.updateFastMode(enabled, for: current) }
+                }
+
+                if voiceConfigured || !canEdit {
+                    VBotHairline()
+                    voiceControls
+                }
+            }
+            .padding(18)
+            .profileCard()
         }
+        .padding(.top, 18)
+    }
+
+    private var modelSelectionSummary: ModelSelectionSummaryRow {
+        let selection = ModelSelection(instanceId: pickedInstanceId, model: pickedModel)
+        let rail = ProviderCatalogPolicy.resolvedRail(
+            advertised: instances,
+            selection: selection,
+            activeRailId: nil
+        )
+        return ModelSelectionSummaryRow(
+            instanceTitle: rail?.pickerTitle ?? AdvertisedModelCatalog.displayModelLabel(pickedInstanceId),
+            modelTitle: rail?.modelLabel(for: pickedModel) ?? AdvertisedModelCatalog.displayModelLabel(pickedModel),
+            providerKey: rail?.markKey ?? pickedInstanceId,
+            subtitle: savingModel ? "Saving…" : nil,
+            disabled: modelSwitchBlocked
+        )
+    }
+
+    private var profileModelPickerSheet: some View {
+        NavigationStack {
+            ScrollView {
+                ModelPickerCatalogHost(
+                    instances: instances,
+                    loading: ModelCatalogLoadPolicy.hostLoading(
+                        localLoading: instancesLoading,
+                        sessionRefreshing: session.modelCatalogRefreshing
+                    ),
+                    error: instancesError,
+                    canEdit: canEdit,
+                    working: current.busy == true,
+                    saving: savingModel,
+                    selectedInstanceId: $pickedInstanceId,
+                    selectedModelId: $pickedModel,
+                    effortLevels: effortLevels,
+                    selectedEffort: $pickedEffort,
+                    showsEffort: showsEffortPicker,
+                    hostWide: hostWide,
+                    onRetry: { Task { await loadInstances() } },
+                    onSelectionChange: {
+                        let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances)?.capabilities?.effortLevels ?? []
+                        if let effort = pickedEffort, !levels.contains(effort) {
+                            pickedEffort = nil
+                        }
+                        scheduleModelSave()
+                    }
+                )
+                .padding(20)
+            }
+            .background(VBotSurface.background.ignoresSafeArea())
+            .navigationTitle("Model")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showingModelPicker = false }
+                }
+            }
+        }
+        .presentationDragIndicator(.visible)
     }
 
     private var mediaControls: some View {
@@ -733,63 +825,6 @@ struct AgentProfileView: View {
             }
             .padding(18)
             .profileCard()
-        }
-    }
-
-    private var modelAndVoiceControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            profileSectionLabel("Model & voice")
-            VStack(alignment: .leading, spacing: 14) {
-                modelControls
-                VBotHairline()
-                voiceControls
-            }
-            .padding(18)
-            .profileCard()
-        }
-    }
-
-    @ViewBuilder
-    private var modelControls: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            ModelPickerCatalogHost(
-                instances: instances,
-                loading: ModelCatalogLoadPolicy.hostLoading(
-                    localLoading: instancesLoading,
-                    sessionRefreshing: session.modelCatalogRefreshing
-                ),
-                error: instancesError,
-                canEdit: canEdit,
-                working: current.busy == true,
-                saving: savingModel,
-                selectedInstanceId: $pickedInstanceId,
-                selectedModelId: $pickedModel,
-                effortLevels: effortLevels,
-                selectedEffort: $pickedEffort,
-                showsEffort: showsEffortPicker,
-                hostWide: hostWide,
-                onRetry: { Task { await loadInstances() } },
-                onSelectionChange: {
-                    let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances)?.capabilities?.effortLevels ?? []
-                    if let effort = pickedEffort, !levels.contains(effort) {
-                        pickedEffort = nil
-                    }
-                    scheduleModelSave()
-                }
-            )
-
-            Toggle(isOn: $fastMode) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Fast mode")
-                    Text(ModelSelectionPolicy.fastModeHint)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .disabled(!canEdit || modelSwitchBlocked)
-            .onChange(of: fastMode) { _, enabled in
-                Task { _ = await session.updateFastMode(enabled, for: current) }
-            }
         }
     }
 
@@ -1094,9 +1129,16 @@ struct AgentProfileView: View {
     private func leaveProfile() {
         guard !leavingProfile else { return }
         leavingProfile = true
+        let plan = ProfileLeaveSavePolicy.leavePlan(
+            profileDirty: !profilePatchIsEmpty,
+            modelDirty: pickedInstanceId != current.modelSelection.instanceId
+                || pickedModel != current.modelSelection.model
+                || pickedEffort != current.modelSelection.effort
+        )
+        dismiss()
+        guard plan.saveProfileAfterDismiss else { return }
         Task { @MainActor in
             await saveAll()
-            dismiss()
         }
     }
 

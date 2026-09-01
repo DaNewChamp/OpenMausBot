@@ -209,16 +209,11 @@ struct SettingsView: View {
             title: "Chat",
             footer: "These preferences stay on this iPhone and do not change the desktop.") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Tool activity")
-                    .font(.body)
-                Picker("Tool activity", selection: $activityDetail) {
-                    ForEach(ActivityDetail.allCases, id: \.rawValue) { detail in
-                        Text(detail.label).tag(detail.rawValue)
-                    }
+                Toggle(isOn: globalShowToolActivity) {
+                    Text("Show tool activity")
+                        .font(.body)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                Text(ActivityDetail(rawValue: activityDetail)?.caption ?? ActivityDetail.reduced.caption)
+                Text(globalActivityCaption)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -317,11 +312,13 @@ struct SettingsView: View {
 
     private var approvalReviewerSection: some View {
         VBotSurfaceGroup(
-            title: "Approval summaries",
+            title: ApprovalReviewerModelPolicy.sectionTitle,
             footer: approvalReviewerFooter
         ) {
             VStack(alignment: .leading, spacing: 10) {
-                Picker("Approval summaries", selection: approvalReviewerModeBinding) {
+                Text("When to summarize")
+                    .font(.body)
+                Picker("When to summarize", selection: approvalReviewerModeBinding) {
                     ForEach(ApprovalReviewerMode.allCases, id: \.self) { mode in
                         Text(mode.label).tag(mode)
                     }
@@ -330,21 +327,42 @@ struct SettingsView: View {
                 .labelsHidden()
                 .disabled(!approvalReviewerLoaded)
 
+                Text(ApprovalReviewerModelPolicy.sectionExplanation)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
                 if let reviewer = approvalReviewer, !reviewer.providers.isEmpty {
-                    Picker("Reviewer", selection: approvalReviewerProviderBinding) {
+                    Picker("Reviewer provider", selection: approvalReviewerProviderBinding) {
                         ForEach(reviewer.providers, id: \.pickerId) { provider in
                             Text(provider.available ? provider.label : "\(provider.label) — unavailable")
                                 .tag(provider.pickerId)
                         }
                     }
+                    .pickerStyle(.menu)
                     .disabled(!approvalReviewerLoaded)
-                    if let active = selectedReviewerProvider, active.models.count > 1 {
-                        Picker("Model", selection: approvalReviewerModelBinding) {
-                            ForEach(active.models) { model in
-                                Text(model.label).tag(model.id)
+                    if let active = selectedReviewerProvider {
+                        let compactModels = ApprovalReviewerModelPolicy.compactModels(
+                            providerId: active.id,
+                            models: active.models,
+                            selectedModelId: modelId(in: active)
+                        )
+                        if compactModels.count > 1 {
+                            Picker("Approval summary model", selection: approvalReviewerModelBinding) {
+                                ForEach(compactModels) { model in
+                                    Text(model.label).tag(model.id)
+                                }
                             }
+                            .pickerStyle(.menu)
+                            .disabled(!approvalReviewerLoaded || !active.available)
+                        } else if let only = compactModels.first {
+                            HStack {
+                                Text("Summary model")
+                                Spacer()
+                                Text(only.label)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .font(.body)
                         }
-                        .disabled(!approvalReviewerLoaded || !active.available)
                     }
                 }
             }
@@ -358,7 +376,30 @@ struct SettingsView: View {
         if let reason = selectedReviewerProvider?.reason, selectedReviewerProvider?.available == false {
             return reason
         }
-        return "Optional summaries only. This never approves or denies, and it cannot lower the local risk."
+        return ApprovalReviewerModelPolicy.sectionExplanation
+    }
+
+    private var globalStoredActivityDetail: ActivityDetail {
+        ActivityDetail(rawValue: activityDetail) ?? .reduced
+    }
+
+    private var globalShowToolActivity: Binding<Bool> {
+        Binding(
+            get: { ActivityDetailTogglePolicy.globalShowsToolActivity(globalStoredActivityDetail) },
+            set: { show in
+                activityDetail = ActivityDetailTogglePolicy.storedValuePreservingLegacyFull(
+                    showToolActivity: show,
+                    previous: globalStoredActivityDetail,
+                    userChanged: true
+                ).rawValue
+            }
+        )
+    }
+
+    private var globalActivityCaption: String {
+        let stored = globalStoredActivityDetail
+        let effective = stored == .full ? ActivityDetail.reduced : stored
+        return effective.caption
     }
 
     private var selectedReviewerProvider: ApprovalReviewerProvider? {
