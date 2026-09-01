@@ -98,6 +98,8 @@ import {
 } from "./container-computer.ts";
 import {
   ensureDirs,
+  hermesBotEnabled,
+  hermesBotInstanceId,
   instanceConfigs,
   loadConfig,
   localVmMaxInstances,
@@ -122,7 +124,7 @@ import { ComputerControl } from "./computer-control.ts";
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
 import { buildNotification, type Notification } from "./notify.ts";
-import { isEffortLevel, type EffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
+import { isEffortLevel, newEventId, type EffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
 import { RETRY_MAX_ATTEMPTS } from "./drivers/retry.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
@@ -145,6 +147,9 @@ import { _loadPending, discardDelegations, drainDelegations, pendingDelegationSn
 import { drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
+import { createHermesEngineRegistry, type HermesEngineRegistry } from "./engines/index.ts";
+import { loadHermesBindings } from "./engines/bindings.ts";
+import { HermesEngineError } from "./engines/contracts.ts";
 import {
   abortSignalFromHttp,
   cancelBridgeApprovalsFor,
@@ -303,6 +308,16 @@ utilityParentPort?.on("message", (event) => {
 
 const bus = new EventBus();
 bus.attach(registry.instances());
+// Hermes Bot Chat is intentionally a separate internal adapter. Generic
+// Hermes ACP remains in ProviderRegistry; only this opt-in registry can read
+// the binding sidecar and publish normalized events into the existing bus.
+let hermesRegistry: HermesEngineRegistry = createHermesEngineRegistry({
+  config: cfg,
+  instanceConfigs: instanceConfigs(cfg),
+  providerRegistry: registry,
+  onEvent: (event, instanceId) => publishHermesEvent(event, instanceId),
+});
+await hermesRegistry.discover();
 
 // ── peer-agent comms wiring ────────────────────────────────────────────
 // A shared secret guards the localhost-only /api/internal endpoints the
@@ -2024,13 +2039,30 @@ async function startTurn(
   const task = store.taskByThread(bot.id, threadId);
   if (!task) throw Object.assign(new Error("no such task"), { status: 404 });
   const commsDepth = opts?.commsDepth ?? 0;
+  // Read the sidecar once for this turn. A valid binding is immutable for the
+  // duration of dispatch; an unreadable sidecar is not equivalent to an empty
+  // map and must never fall through to the normal OpenMaus provider path.
+  const hermesBindings = hermesBotEnabled(cfg) ? loadHermesBindings() : null;
+  const hermesBinding = hermesBindings?.state === "available"
+    ? hermesBindings.value.get(bot.id)
+    : undefined;
+  const hermesBindingError = hermesBindings?.state === "unavailable" ? hermesBindings : null;
+  const hermesDispatch = Boolean(hermesBinding || hermesBindingError);
+  const hermesEngine = hermesBinding ? hermesRegistry.forBinding(hermesBinding) : null;
   // a task takes its name from the first thing you asked it to do
   if (text.trim() && !opts?.cardContinuation) store.titleTaskFromFirstMessage(bot.id, text, threadId);
 
   let instance = opts?.runOn === "cloud"
     ? registry.instances().find((candidate) => candidate.driverKind === "boxAgent") ?? null
     : registry.get(bot.modelSelection.instanceId);
-  if (!instance) {
+  // A bound Hermes bot may retain an older/non-Hermes modelSelection for
+  // compatibility. Use the configured Hermes provider instance for setup
+  // metadata when the stored selection is unavailable, while leaving the
+  // selection itself untouched.
+  if ((hermesBinding || hermesBindingError) && !instance) {
+    instance = registry.get(hermesBotInstanceId(cfg));
+  }
+  if (!instance && !hermesDispatch) {
     throw Object.assign(
       new Error(
         opts?.runOn === "cloud"
@@ -2040,12 +2072,12 @@ async function startTurn(
       { status: 409 },
     );
   }
-  let instanceId = instance.instanceId;
-  let model = opts?.runOn === "cloud" ? instance.models.default : bot.modelSelection.model;
+  let instanceId = instance?.instanceId ?? hermesBotInstanceId(cfg);
+  let model = opts?.runOn === "cloud" ? instance?.models.default : bot.modelSelection.model;
   // a cloud routine borrows the instance default model, so it borrows no
   // per-bot effort either
   let effort = opts?.runOn === "cloud" ? undefined : bot.modelSelection.effort;
-  if (opts?.runOn !== "cloud" && bot.fastMode) {
+  if (opts?.runOn !== "cloud" && !hermesDispatch && bot.fastMode) {
     const fast = resolveFastDispatch({
       stored: bot.modelSelection,
       instances: registry.instances().map((candidate) => ({
@@ -2067,7 +2099,7 @@ async function startTurn(
   }
   // A selection can be persisted while its engine is offline. Re-check when
   // the engine returns so an old or unsupported value never reaches a CLI.
-  if (effort && !instance.adapter.capabilities.effortLevels?.includes(effort)) {
+  if (!hermesDispatch && effort && instance && !instance.adapter.capabilities.effortLevels?.includes(effort)) {
     throw Object.assign(
       new Error(`effort "${effort}" is not offered by this bot's engine — choose another level in settings`),
       { status: 409 },
@@ -2118,7 +2150,7 @@ async function startTurn(
     transcript,
     rewound,
     fresh,
-    replaysNatively: instance.driverKind === "grok",
+    replaysNatively: instance?.driverKind === "grok",
   });
 
   const manager = bot.reportsToBotId ? store.bot(bot.reportsToBotId) : null;
@@ -2144,6 +2176,62 @@ async function startTurn(
 
   void (async () => {
     try {
+      // A bound bot uses the internal Hermes Bot Chat adapter exclusively.
+      // Keep this branch ahead of integrations/computer setup: Hermes Bot
+      // Mode has no MCP, queue, steer, or attachment contract, and a bound
+      // turn must never silently fall back to the stored provider instance.
+      if (hermesBinding || hermesBindingError) {
+        const adapterTurnId = randomUUID();
+        const adapterInstanceId = hermesBotInstanceId(cfg);
+        if (!hermesBinding || !hermesEngine) {
+          const safe = publishHermesFailure(
+            threadId,
+            adapterTurnId,
+            adapterInstanceId,
+            new HermesEngineError(hermesBindingError?.code ?? "state_unavailable"),
+          );
+          opts?.onDispatchError?.(safe.message);
+          return;
+        }
+
+        let terminal = false;
+        const unsubscribe = hermesEngine.onEvent((event) => {
+          if (event.threadId === threadId && event.turnId === adapterTurnId && event.type === "turn.completed") {
+            terminal = true;
+          }
+        });
+        watchdog.watch(threadId, bot.id);
+        try {
+          await hermesEngine.send({
+            profile: hermesBinding.profile,
+            text: turnText,
+            model,
+            threadId,
+            turnId: adapterTurnId,
+          });
+          if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
+          // Preserve the V Bot selection and task bookkeeping; Hermes session
+          // ids are intentionally never stored as resume cursors.
+          store.markTaskDispatched(bot.id, threadId, instanceId);
+          return;
+        } catch (error) {
+          if (!terminal) {
+            const safe = publishHermesFailure(threadId, adapterTurnId, adapterInstanceId, error);
+            opts?.onDispatchError?.(safe.message);
+          } else {
+            opts?.onDispatchError?.(hermesFailure(error).message);
+          }
+          return;
+        } finally {
+          unsubscribe();
+        }
+      }
+
+      // A bound turn with no live generic provider has already emitted its
+      // safe Hermes setup failure above. This guard keeps the legacy branch
+      // type-safe without ever selecting a fallback engine.
+      if (!instance) return;
+
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
       const selectedSkills = selectBundledSkills(
         text,
@@ -3863,13 +3951,122 @@ function configStatus() {
   };
 }
 
+/** Attach only the safe Hermes Bot Chat readiness flags to its provider row.
+ * Profile/session/path details stay inside the hub and never enter the
+ * mobile/provider projection. Disabled mode omits the additive field so old
+ * `/api/instances` snapshots remain byte-for-byte compatible. */
+async function describeProviderInstances() {
+  const instances = await registry.describe();
+  if (!hermesRegistry.isEnabled) return instances;
+  const hermes = await hermesRegistry.describe();
+  return instances.map((instance) => {
+    if (instance.instanceId !== hermesRegistry.instanceId) return instance;
+    return {
+      ...instance,
+      capabilities: {
+        ...instance.capabilities,
+        hermesBot: {
+          state: hermes.state,
+          ...(hermes.reason ? { reason: hermes.reason } : {}),
+          capabilities: { ...hermes.capabilities },
+        },
+      },
+    };
+  });
+}
+
+function hermesFailure(error: unknown): HermesEngineError {
+  if (error instanceof HermesEngineError) return error;
+  return new HermesEngineError("upstream_error");
+}
+
+function hermesSetupCode(code: HermesEngineError["code"]): boolean {
+  return [
+    "missing_cli",
+    "invalid_credentials",
+    "gateway_unavailable",
+    "state_unavailable",
+    "malformed_response",
+    "timeout",
+    "profile_unavailable",
+  ].includes(code);
+}
+
+const HERMES_SETUP_MESSAGES = new Set([
+  "Hermes is not installed",
+  "Hermes credentials are unavailable",
+  "Hermes gateway is unavailable",
+  "Hermes state is unavailable",
+  "Hermes returned an invalid response",
+  "Hermes request timed out",
+  "Hermes profile is unavailable",
+]);
+
+/** Preserve setup-vs-transient semantics for adapter runtime errors. The
+ * adapter exposes only fixed messages, so this map never parses or forwards
+ * provider diagnostics. */
+function publishHermesEvent(event: RuntimeEvent, instanceId: string): void {
+  if (event.type === "runtime.error" && HERMES_SETUP_MESSAGES.has(event.message)) {
+    bus.publish({ ...event, providerInstanceId: instanceId, setup: true });
+    return;
+  }
+  bus.publish({ ...event, providerInstanceId: instanceId });
+}
+
+/** Complete a Hermes dispatch that failed before the adapter could create a
+ * runtime. The normal bus fold remains the sole owner of Store/activity/SSE
+ * state, so this emits the same canonical terminal pair as a provider. */
+function publishHermesFailure(
+  threadId: string,
+  turnId: string,
+  instanceId: string,
+  error: unknown,
+): HermesEngineError {
+  const safe = hermesFailure(error);
+  const base = {
+    provider: "hermesBot",
+    providerInstanceId: instanceId,
+    threadId,
+    turnId,
+    createdAt: new Date().toISOString(),
+  } as const;
+  bus.publish({
+    ...base,
+    eventId: newEventId(),
+    type: "turn.started",
+  });
+  bus.publish({
+    ...base,
+    eventId: newEventId(),
+    type: "runtime.error",
+    message: safe.message,
+    setup: hermesSetupCode(safe.code),
+  });
+  bus.publish({
+    ...base,
+    eventId: newEventId(),
+    type: "turn.completed",
+    ok: false,
+    stopReason: safe.code,
+  });
+  return safe;
+}
+
 /** Rebuild the provider fleet after a config change so new keys take
  * effect without a server restart (kills any in-flight turns). */
 async function reloadProviders() {
   bus.detachAll();
+  await hermesRegistry.disposeAll();
   await registry.disposeAll();
   await registry.load(instanceConfigs(cfg));
   bus.attach(registry.instances());
+  hermesRegistry = createHermesEngineRegistry({
+    config: cfg,
+    instanceConfigs: instanceConfigs(cfg),
+    providerRegistry: registry,
+    onEvent: (event, instanceId) => publishHermesEvent(event, instanceId),
+  });
+  await hermesRegistry.discover();
   // A killed turn's terminal events can die with the old fleet (dispose is
   // async under the hood), stranding the bot busy — and its screen poller —
   // forever. Settle anything still marked busy.
@@ -6397,7 +6594,13 @@ const server = createServer(async (req, res) => {
       const mode = parseDeliveryModeFromBody(body);
       const replyTo = resolveReplyTarget(bot.threadId, body.replyToId);
       const instance = bot.busy ? registry.get(bot.modelSelection.instanceId) : undefined;
-      const canSteer = Boolean(instance?.adapter.capabilities.queueing && instance.adapter.steer);
+      const hermesBindingResult = hermesBotEnabled(cfg) ? loadHermesBindings() : null;
+      // An unavailable sidecar cannot prove this bot is unbound. Disable
+      // steer in that state so an active turn never receives a generic
+      // provider message while Hermes binding state is unreadable.
+      const hermesBound = hermesBindingResult?.state === "unavailable"
+        || (hermesBindingResult?.state === "available" && hermesBindingResult.value.has(bot.id));
+      const canSteer = !hermesBound && Boolean(instance?.adapter.capabilities.queueing && instance.adapter.steer);
       const action = decideDelivery({ mode, busy: Boolean(bot.busy), canSteer });
       if (action === "unsupported") {
         return json(res, 409, { error: "this bot's current engine cannot steer an active turn — choose Queue or wait for it to finish" });
@@ -6587,7 +6790,16 @@ const server = createServer(async (req, res) => {
         await instance?.adapter.interruptTurn(busyGroup.threadId).catch(() => {});
         closeOpenApprovals(busyGroup.threadId);
       }
-      await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
+      const bindingResult = hermesBotEnabled(cfg) ? loadHermesBindings() : null;
+      const binding = bindingResult?.state === "available" ? bindingResult.value.get(bot.id) : undefined;
+      const hermes = binding ? hermesRegistry.forBinding(binding) : null;
+      if (binding && hermes) {
+        await hermes.interrupt(binding.profile).catch(() => {});
+      } else if (!busyGroup) {
+        // Existing provider interrupt behavior is unchanged for unbound bots
+        // and for a binding that is not usable during this request.
+        await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
+      }
       closeOpenApprovals(bot.threadId);
       return json(res, 200, { ok: true });
     }
@@ -6992,7 +7204,7 @@ const server = createServer(async (req, res) => {
       // Windows never pushes PATH changes into a live process, so without
       // this the answer is frozen at boot and "check again" is a no-op.
       resetPathCache();
-      const instances = await registry.describe();
+      const instances = await describeProviderInstances();
       return json(res, 200, {
         instances,
         providerCatalog: sanitizeMobileProviderCatalog(instances),
@@ -7166,7 +7378,7 @@ const server = createServer(async (req, res) => {
         // from the memoized PATH, so resetting after would answer this request
         // with the pre-reset cache
         resetPathCache();
-        const instances = await registry.describe();
+        const instances = await describeProviderInstances();
         return json(res, 200, {
           instances,
           providerCatalog: sanitizeMobileProviderCatalog(instances),
@@ -7694,6 +7906,6 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     watchdog.stop();
     routines?.stop();
     webhookIngress?.server.close();
-    void registry.disposeAll().finally(() => process.exit(0));
+    void hermesRegistry.disposeAll().finally(() => registry.disposeAll()).finally(() => process.exit(0));
   });
 }

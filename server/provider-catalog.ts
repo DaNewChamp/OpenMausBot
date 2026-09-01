@@ -35,7 +35,37 @@ export interface AdvertisedCatalogInstance {
     default?: string;
     options?: Array<{ id?: string; label?: string }>;
   };
-  capabilities?: { effortLevels?: readonly string[]; computerMcp?: boolean; localComputerMcp?: boolean };
+  capabilities?: {
+    effortLevels?: readonly string[];
+    computerMcp?: boolean;
+    localComputerMcp?: boolean;
+    /** Safe additive hub metadata; never contains Hermes ids/paths/tokens. */
+    hermesBot?: {
+      state: "available" | "unavailable";
+      reason?:
+        | "missing_cli"
+        | "invalid_credentials"
+        | "gateway_unavailable"
+        | "state_unavailable"
+        | "malformed_response"
+        | "timeout";
+      capabilities: {
+        roster: boolean;
+        canonicalChat: boolean;
+        send: boolean;
+        finalResponse: boolean;
+        events: boolean;
+        stop: boolean;
+        routinesRead: boolean;
+        messageAgent: boolean;
+        groups: boolean;
+        crossMachine: boolean;
+        queueing: boolean;
+        steer: boolean;
+        attachments: boolean;
+      };
+    };
+  };
 }
 
 export interface MobileCatalogModel {

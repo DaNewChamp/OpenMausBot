@@ -81,6 +81,10 @@ const approvalReviewerConfigSchema = z.object({
 }).strict();
 const vbotConfigSchema = z.object({
   primaryEngine: z.enum(["openmaus", "grokReconstructed"]).optional(),
+  hermes: z.object({
+    enabled: z.boolean().optional(),
+    instanceId: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/).optional(),
+  }).strict().optional(),
 });
 const bridgeSshTargetSchema = z.object({
   bridge: z.string().optional(),
@@ -160,7 +164,11 @@ export interface AppConfig {
     model?: string;
   };
   /** V Bot engine selection. OpenMaus remains the default fallback. */
-  vbot?: { primaryEngine?: "openmaus" | "grokReconstructed" };
+  vbot?: {
+    primaryEngine?: "openmaus" | "grokReconstructed";
+    /** Disabled-by-default local Hermes Bot Chat adapter metadata. */
+    hermes?: { enabled?: boolean; instanceId?: string };
+  };
   /** Named SSH targets executed through home bridges (alias from ~/.ssh/config). */
   bridgeSshTargets?: Record<string, { bridge?: string; alias: string }>;
   instances?: InstanceConfigMap;
@@ -214,6 +222,20 @@ export function skillRecorderEnabled(cfg: AppConfig): boolean {
  * safest mode until an owner explicitly chooses another behavior. */
 export function defaultPermissionMode(cfg: AppConfig): PermissionMode {
   return cfg.permissions?.defaultMode ?? "ask";
+}
+
+/** Hermes Bot Chat is an opt-in adapter separate from generic Hermes ACP. */
+export function hermesBotEnabled(cfg: AppConfig): boolean {
+  return cfg.vbot?.hermes?.enabled === true;
+}
+
+/** Select the existing Hermes provider instance without exposing any path or
+ * executable metadata to clients. */
+export function hermesBotInstanceId(cfg: AppConfig): string {
+  const value = cfg.vbot?.hermes?.instanceId;
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value)
+    ? value
+    : "hermes";
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.
@@ -352,7 +374,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     /* first write */
   }
   const checkedPatch = appConfigSchema.partial().parse(patch);
-  for (const key of ["xai", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm", "features", "permissions", "approvalReviewer"] as const) {
+  for (const key of ["xai", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm", "features", "permissions", "approvalReviewer", "vbot"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);
