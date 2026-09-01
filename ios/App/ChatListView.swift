@@ -115,6 +115,11 @@ struct ChatListView: View {
                     }
                     .padding(.bottom, 24)
                 }
+                .frame(
+                    minHeight: HomeRosterLayoutPolicy.rowMinHeight,
+                    maxHeight: .infinity,
+                    alignment: .top
+                )
                 .refreshable { await session.refresh() }
                 .overlay {
                     if chats.isEmpty && pinnedChats.isEmpty && searchHits.isEmpty {
@@ -129,6 +134,13 @@ struct ChatListView: View {
                         )
                     }
                 }
+
+                // Keep the activity rail in normal stack flow. A safe-area
+                // overlay allows a translucent sheet to blur list rows behind
+                // it; this sibling boundary lets the roster scroll container
+                // yield space to the rail instead.
+                activityRail
+
             }
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: pinnedChats.map(\.id))
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: pinnedShelfCollapseReserve)
@@ -150,33 +162,15 @@ struct ChatListView: View {
             }
             // top-aligned: the roster fills downward from the header
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            // The dismissal surface belongs to the parent, but the activity
-            // rail is inserted with safeAreaInset below it. This keeps the
-            // full-screen island tap target while the rail remains tappable.
+            // The dismissal surface belongs to the parent. The activity rail
+            // is a sibling in the stack above, so this full-screen island tap
+            // target remains behind the rail and never steals its tap.
             .overlay {
                 if needsYouIslandExpanded && homeActivityArbitration.islandDismissalLayerAllowed {
                     Color.black.opacity(0.001)
                         .ignoresSafeArea()
                         .accessibilityHidden(true)
                         .onTapGesture { needsYouIslandExpanded = false }
-                }
-            }
-            // Keep the activity rail out of the overlay stack. safeAreaInset
-            // reserves its full expanded height without geometry offsets.
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                // Do not put even an empty/padded view in the inset when the
-                // projection is quiet. SwiftUI reserves the inset content's
-                // layout height before rendering it, so an internally hidden
-                // pill would still steal the bottom safe-area space.
-                if HomeActivityRailLayoutPolicy.showsRail(for: homeActivityPresentation.state) {
-                    HomeActivityPill(
-                        open: { chat in path.append(chat) },
-                        expanded: $activityExpanded,
-                        queuedReceipts: session.queueReceipts
-                    )
-                    .environmentObject(session)
-                    .padding(.bottom, max(8, geo.safeAreaInsets.bottom))
-                    .zIndex(1)
                 }
             }
             .accessibilityAction(named: "Show updates") {
@@ -446,6 +440,21 @@ struct ChatListView: View {
 
     private func open(_ chat: Chat) {
         path.append(chat)
+    }
+
+    @ViewBuilder
+    private var activityRail: some View {
+        // Keep quiet truly absent. Even an empty view with padding would
+        // reserve bottom space in a safe-area inset and move the roster.
+        if HomeActivityRailLayoutPolicy.showsRail(for: homeActivityPresentation.state) {
+            HomeActivityPill(
+                open: { chat in path.append(chat) },
+                expanded: $activityExpanded,
+                queuedReceipts: session.queueReceipts
+            )
+            .environmentObject(session)
+            .zIndex(1)
+        }
     }
 
 }

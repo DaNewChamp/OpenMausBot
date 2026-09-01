@@ -17,3 +17,8 @@ remain outside the expanded panel and that detail text remains readable at
 XXXL. These are QA captures, not App Store
 marketing screenshots; fixture arguments and test commands are recorded in
 `.superpowers/sdd/task-4-report.md`.
+
+`task-4-home-activity-2026-09-01/` is the current layout-regression rerun. It
+contains quiet, active, and expanded active captures at `large` and
+accessibility XXXL after moving the rail into normal stack flow; quiet captures
+have no activity view or reserved bottom inset.

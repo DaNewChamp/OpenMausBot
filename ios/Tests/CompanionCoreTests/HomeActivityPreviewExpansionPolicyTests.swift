@@ -4,6 +4,49 @@ import Testing
 
 struct HomeActivityPreviewExpansionPolicyTests {
     @Test
+    func regularExpandedPanelHugsRowsInsteadOfMaxingOut() {
+        #expect(HomeActivityPreviewExpansionPolicy.expandedPanelHeight(
+            isAccessibilitySize: false,
+            itemCount: 1,
+            sectionCount: 1
+        ) == 88)
+        #expect(HomeActivityPreviewExpansionPolicy.expandedPanelHeight(
+            isAccessibilitySize: false,
+            itemCount: 2,
+            sectionCount: 2
+        ) == 152)
+        #expect(HomeActivityPreviewExpansionPolicy.expandedPanelHeight(
+            isAccessibilitySize: false,
+            itemCount: 1,
+            sectionCount: 1
+        ) < 320)
+    }
+
+    @Test
+    func accessibilityExpandedPanelKeepsScrollableBudget() {
+        #expect(HomeActivityPreviewExpansionPolicy.expandedPanelHeight(
+            isAccessibilitySize: true,
+            itemCount: 1,
+            sectionCount: 1,
+            hasNeedsYou: true
+        ) == 400)
+        #expect(HomeActivityPreviewExpansionPolicy.expandedPanelHeight(
+            isAccessibilitySize: true,
+            itemCount: 1,
+            sectionCount: 1
+        ) == 260)
+    }
+
+    @Test
+    func emptyExpandedPanelReservesNoHeight() {
+        #expect(HomeActivityPreviewExpansionPolicy.expandedPanelHeight(
+            isAccessibilitySize: false,
+            itemCount: 0,
+            sectionCount: 0
+        ) == 0)
+    }
+
+    @Test
     func previewExpansionWaitsForActivityItemsToArrive() throws {
         let arguments = ["-store-preview", "-preview-expand-activity"]
         let empty = HomeActivityPresentation(state: CompanionState())

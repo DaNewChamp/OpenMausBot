@@ -170,13 +170,12 @@ struct HomeActivityPill: View {
             }
             .padding(.bottom, 8)
         }
-        .frame(
-            minHeight: HomeActivityPreviewExpansionPolicy.expandedPanelMinHeight(
-                isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
-                isExpanded: expanded
-            ),
-            maxHeight: dynamicTypeSize.isAccessibilitySize ? 400 : 320
-        )
+        .frame(height: HomeActivityPreviewExpansionPolicy.expandedPanelHeight(
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+            itemCount: presentation.items.count,
+            sectionCount: presentation.sections.filter { !$0.items.isEmpty }.count,
+            hasNeedsYou: !presentation.needsYou.isEmpty
+        ))
         .glassSheet(cornerRadius: VBotSurface.Radius.sheet)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Activity details")

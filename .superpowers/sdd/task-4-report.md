@@ -475,3 +475,47 @@ request detail with no island overlap. Reduce Motion on/off were each set
 explicitly; the off capture retains the expected glass material effect but all
 copy remains readable. No signing, upload, deploy, merge, or production
 resource change was attempted.
+
+## Home activity layout regression rerun
+
+Date: 2026-09-01 (America/Chicago)
+Starting commit: `a1e3ec8 fix(ios): retry read receipts and remove quiet inset`
+
+The activity rail now participates in the home `VStack` below the roster
+`ScrollView`; quiet state omits the rail entirely, so it contributes no bottom
+inset. Expanded panel height is content-hugging for regular text sizes and
+reserves a 260-point accessibility budget for active work (400 points remains
+for needs-you details). The panel remains a vertical `ScrollView`, and the
+collapsed button stays content-hugging while retaining one tap target.
+
+Verification:
+
+```sh
+swift test --package-path ios --filter 'HomeActivityRailLayoutPolicyTests|HomeActivityArbitrationPolicyTests|HomeActivityPresentationTests|HomeActivityPreviewExpansionPolicyTests'
+swift test --package-path ios
+(cd ios && xcodegen generate)
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Debug \
+  -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
+  -derivedDataPath /tmp/vbot-activity-debug-0901 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Release \
+  -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
+  -derivedDataPath /tmp/vbot-activity-release-0901 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+git diff --check
+```
+
+Focused tests passed (9 XCTest + 10 Swift Testing); full Swift tests passed
+707 XCTest cases with zero failures and 23 Swift Testing cases. XcodeGen and
+unsigned Debug/Release simulator builds passed on iOS Simulator SDK 26.5.
+
+Current portable captures are in
+`ios/AppStore/screenshots/task-4-home-activity-2026-09-01/` (iPhone 17 Pro,
+iOS 26.5, dark): quiet, active, and expanded active at `large` and
+accessibility XXXL. Full-resolution inspection confirms the quiet screen has
+no activity rail or reserved inset, compact active rails remain below the last
+visible roster row, and expanded active panels reserve stack space without
+blurring or covering rows. The accessibility expanded panel keeps the enlarged
+Forge row readable; remaining roster content is reachable by scrolling.
