@@ -223,4 +223,26 @@ describe("Hermes profile connect", () => {
     })).rejects.toMatchObject({ code: "state_unavailable" });
     expect(deleteBot).toHaveBeenCalledWith("bot-orphan");
   });
+
+  it("does not hide a rollback delete failure when the newly-created bot remains", async () => {
+    const registry = fakeRegistry({ ensureCanonical: vi.fn(async () => canonical) });
+    const bots = new Map<string, { id: string }>();
+    const deleteBot = vi.fn(() => false);
+    const createBot = vi.fn(() => {
+      const bot = { id: "bot-stuck" };
+      bots.set(bot.id, bot);
+      return bot;
+    });
+    await expect(connectHermesProfile({
+      registry,
+      profile: "default",
+      loadBindings: () => ({ state: "available", value: new Map() }),
+      setBinding: () => ({ state: "unavailable", code: "state_unavailable", message: "Hermes state is unavailable" }),
+      deleteBot,
+      bot: (id) => bots.get(id) ?? null,
+      createBot,
+    })).rejects.toMatchObject({ code: "state_unavailable" });
+    expect(deleteBot).toHaveBeenCalledWith("bot-stuck");
+    expect(bots.has("bot-stuck")).toBe(true);
+  });
 });

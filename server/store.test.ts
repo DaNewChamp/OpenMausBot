@@ -1,7 +1,7 @@
 // Store persistence contract: bots.json + messages-<threadId>.json are
 // the durable record — everything here must survive a process restart
 // except `busy`, which never does (no turn survives one either).
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +9,7 @@ import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { peerAllowKey } from "./peer-approval-key.ts";
 import { Store, type BotRecord } from "./store.ts";
+import { ensureWorkspace, workspaceDir } from "./workspace.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 
@@ -432,6 +433,32 @@ describe("Store", () => {
     expect(new Store(selection).messagesFor(bot.threadId)).toHaveLength(0);
     expect(store.deleteBot(bot.id)).toBe(false);
   });
+
+  it("rolls back every deletion plane when bot persistence fails", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    ensureWorkspace(bot.id);
+    const botsFile = join(DATA_DIR, "bots.json");
+    const before = readFileSync(botsFile, "utf8");
+    const saveBots = vi.spyOn(store as unknown as { saveBots: () => void }, "saveBots");
+    saveBots.mockImplementation(() => {
+      // Model a writer that published the deletion and then reported failure.
+      writeFileSync(botsFile, JSON.stringify(store.bots));
+      throw new Error("injected delete save failure");
+    });
+
+    expect(() => store.deleteBot(bot.id)).toThrow("injected delete save failure");
+    expect(store.bot(bot.id)).not.toBeNull();
+    expect(readFileSync(botsFile, "utf8")).toBe(before);
+    expect(existsSync(workspaceDir(bot.id))).toBe(true);
+    expect(store.messagesFor(bot.threadId)).toHaveLength(2);
+
+    const reloaded = new Store(selection);
+    expect(reloaded.bot(bot.id)).not.toBeNull();
+    expect(reloaded.messagesFor(bot.threadId)).toHaveLength(2);
+    expect(existsSync(workspaceDir(bot.id))).toBe(true);
+  });
+
   it("migrates a pre-branching flat transcript file", () => {
     const store = new Store(selection);
     // seedMessages:false — a legacy-era thread has its history ONLY in the

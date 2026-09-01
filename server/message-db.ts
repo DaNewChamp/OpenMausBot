@@ -74,6 +74,87 @@ export interface ThreadRows {
   activeLeafId: string | null;
 }
 
+/** A reversible snapshot used by higher-level store transactions.  Keeping
+ * the rows in memory is bounded by the bot's existing transcript and lets a
+ * failed bot deletion restore SQLite before the caller reports failure. */
+export interface ThreadSnapshot extends ThreadRows {
+  threadId: string;
+  statePresent: boolean;
+}
+
+export function snapshotThreads(threadIds: readonly string[]): ThreadSnapshot[] {
+  const unique = [...new Set(threadIds)];
+  const rows = db().prepare("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid");
+  const states = db().prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?");
+  return unique.map((threadId) => {
+    const messages = (rows.all(threadId) as Array<{ json: string }>).map(rowToMessage);
+    const state = states.get(threadId) as { active_leaf_id: string | null } | undefined;
+    return {
+      threadId,
+      messages,
+      activeLeafId: state?.active_leaf_id ?? null,
+      statePresent: state !== undefined,
+    };
+  });
+}
+
+/** Delete several threads as one SQLite transaction. */
+export function deleteThreads(threadIds: readonly string[]): void {
+  const unique = [...new Set(threadIds)];
+  if (unique.length === 0) return;
+  const database = db();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const messages = database.prepare("DELETE FROM messages WHERE thread_id = ?");
+    const states = database.prepare("DELETE FROM thread_state WHERE thread_id = ?");
+    for (const threadId of unique) {
+      messages.run(threadId);
+      states.run(threadId);
+    }
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/** Restore rows captured by snapshotThreads after a surrounding transaction
+ * failed. Existing rows are replaced so a partial delete cannot survive. */
+export function restoreThreadSnapshots(snapshots: readonly ThreadSnapshot[]): void {
+  if (snapshots.length === 0) return;
+  const database = db();
+  const insert = database.prepare(
+    "INSERT OR REPLACE INTO messages (thread_id, id, at, role, kind, text, json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  );
+  const deleteMessages = database.prepare("DELETE FROM messages WHERE thread_id = ?");
+  const deleteState = database.prepare("DELETE FROM thread_state WHERE thread_id = ?");
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    for (const snapshot of snapshots) {
+      deleteMessages.run(snapshot.threadId);
+      deleteState.run(snapshot.threadId);
+      for (const message of snapshot.messages) {
+        insert.run(
+          snapshot.threadId,
+          message.id,
+          message.at,
+          message.role,
+          message.kind,
+          message.text ?? null,
+          JSON.stringify(message),
+        );
+      }
+      if (snapshot.statePresent) {
+        setActiveLeaf(snapshot.threadId, snapshot.activeLeafId);
+      }
+    }
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 /** Read one thread, importing its legacy JSON file on first touch. */
 export function readThread(threadId: string, legacyFile: string): ThreadRows {
   const rows = db()
@@ -163,8 +244,7 @@ export function setActiveLeaf(threadId: string, leafId: string | null): void {
 }
 
 export function deleteThread(threadId: string): void {
-  db().prepare("DELETE FROM messages WHERE thread_id = ?").run(threadId);
-  db().prepare("DELETE FROM thread_state WHERE thread_id = ?").run(threadId);
+  deleteThreads([threadId]);
 }
 
 export interface SearchHit {

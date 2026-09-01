@@ -900,11 +900,20 @@ export class HermesBotAdapter implements HermesBotEngine {
       if (this.closed) throw new HermesEngineError("gateway_unavailable");
       const pending = loadHermesPendingProfiles(this.pendingPath);
       if (pending.state === "unavailable") throw new HermesEngineError(pending.code);
-      const hasPending = pending.value.has(normalizedProfile);
       let canonical = await this.lookupCanonicalOutsideLock(normalizedProfile);
+      // `hermes` is a public handle for the built-in `default` profile. Use
+      // the discovered canonical slug for marker/create RPCs so setup cannot
+      // accidentally mint a second profile named after the alias. A real
+      // profile named `hermes` remains usable only when it is the sole match.
+      const resolvedProfile = canonical.state === "present"
+        ? canonical.chat.profile
+        : this.discoveredProfileFor(normalizedProfile);
+      if (!resolvedProfile) throw new HermesEngineError("profile_unavailable");
+      const hasPending = pending.value.has(resolvedProfile) || pending.value.has(normalizedProfile);
       if (canonical.state === "present") {
-        if (hasPending) {
-          const cleared = clearHermesPendingProfile(normalizedProfile, this.pendingPath);
+        for (const marker of new Set([normalizedProfile, resolvedProfile])) {
+          if (!pending.value.has(marker)) continue;
+          const cleared = clearHermesPendingProfile(marker, this.pendingPath);
           if (cleared.state === "unavailable") throw new HermesEngineError(cleared.code);
         }
         return canonical.chat;
@@ -919,7 +928,7 @@ export class HermesBotAdapter implements HermesBotEngine {
       }
 
       await this.client.start();
-      const marked = markHermesPendingProfile(normalizedProfile, this.pendingPath);
+      const marked = markHermesPendingProfile(resolvedProfile, this.pendingPath);
       if (marked.state === "unavailable") throw new HermesEngineError(marked.code);
       if (!marked.value) {
         this.demoteCapabilities();
@@ -928,7 +937,7 @@ export class HermesBotAdapter implements HermesBotEngine {
 
       try {
         const created = await this.client.request("session.create", {
-          profile: normalizedProfile,
+          profile: resolvedProfile,
           title: "Bot Chat",
           hidden: true,
           source: "tui",
@@ -938,11 +947,20 @@ export class HermesBotAdapter implements HermesBotEngine {
           throw new HermesEngineError("malformed_response");
         }
       } catch (error) {
+        const safe = asHermesError(error);
         this.demoteCapabilities();
-        throw asHermesError(error);
+        // An explicit JSON-RPC rejection proves that no session was created;
+        // a retry may safely attempt the operation. Timeouts, gateway closes,
+        // malformed frames, and lost responses remain marked because create
+        // may have succeeded before the client lost its reply.
+        if (safe.code === "upstream_error" || safe.code === "invalid_credentials") {
+          const cleared = clearHermesPendingProfile(resolvedProfile, this.pendingPath);
+          if (cleared.state === "unavailable") throw new HermesEngineError(cleared.code);
+        }
+        throw safe;
       }
 
-      canonical = await this.lookupCanonicalOutsideLock(normalizedProfile);
+      canonical = await this.lookupCanonicalOutsideLock(resolvedProfile);
       if (canonical.state !== "present") {
         this.demoteCapabilities();
         // A create response is not canonical identity. If the exact title
@@ -953,7 +971,7 @@ export class HermesBotAdapter implements HermesBotEngine {
           ? errorForLookup(canonical)
           : new HermesEngineError("malformed_response");
       }
-      const cleared = clearHermesPendingProfile(normalizedProfile, this.pendingPath);
+      const cleared = clearHermesPendingProfile(resolvedProfile, this.pendingPath);
       if (cleared.state === "unavailable") {
         this.demoteCapabilities();
         throw new HermesEngineError(cleared.code);
@@ -1127,6 +1145,12 @@ export class HermesBotAdapter implements HermesBotEngine {
       this.demoteCapabilities();
       return { state: "unknown", code: canonicalUnknownCode(safe.code), message: safe.message };
     }
+  }
+
+  private discoveredProfileFor(requestedProfile: string): string | undefined {
+    const matches = this.lastProfiles.filter((row) =>
+      row.availability === "available" && (row.profile === requestedProfile || row.handle === requestedProfile));
+    return matches.length === 1 ? matches[0]?.profile || undefined : undefined;
   }
 
   private async requireDiscoveredProfile(

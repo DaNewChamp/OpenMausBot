@@ -182,3 +182,60 @@ credential operation was performed.
   cover the create/lookup failure matrix. The pre-existing dirty
   `pnpm-workspace.yaml` remains outside this change and must not be included
   when the root orchestrator reconciles commits.
+
+## Final review-fix pass (2026-09-01)
+
+The final review fixes close the remaining setup and rollback hazards:
+
+- `HermesBotAdapter.ensureCanonical` now clears its profile-only pending
+  marker only after a definitive JSON-RPC `session.create` rejection
+  (`upstream_error` or `invalid_credentials`). Timeouts, gateway closes,
+  malformed frames, lost responses, and failed post-create re-lookups retain
+  the marker and therefore cannot mint a duplicate hidden `Bot Chat`.
+- Direct `hermes` requests resolve the discovered canonical profile slug
+  before writing a marker or sending `session.create`; the built-in alias now
+  always creates against `default` rather than a second alias-named profile.
+- `Store.deleteBot` now stages legacy transcripts and the bot workspace with
+  reversible renames, deletes SQLite rows transactionally, and publishes the
+  filtered bot roster only inside the same rollback boundary. A persistence or
+  cleanup failure restores in-memory state, `bots.json`, SQLite rows, staged
+  files, and workspace data; recovery failure is surfaced instead of hidden.
+- Hermes setup rollback now checks binding removal, bot deletion, and a fresh
+  post-rollback read of both stores. A delete that throws or leaves the new
+  bot/binding visible fails closed rather than being swallowed.
+
+## Final review-fix verification
+
+Exact Task 2 focused suite passed: 5 test files, 184 tests, 0 failures
+(17:38:03, 6.39s).
+
+Broader reviewer regression suite (25 files) passed: 25 test files, 576 tests,
+0 failures (17:39:46, 172.67s).
+
+Final rerun after the recovery-path hardening passed the same gates: the exact
+five-file suite passed 5 files and 184 tests with 0 failures (17:47:03, 4.01s);
+the broader 25-file suite passed 25 files and 576 tests with 0 failures
+(17:47:16 start, 151.21s).
+
+TypeScript and whitespace checks passed:
+
+- `./node_modules/.bin/tsc -p tsconfig.server.json --noEmit`
+- `./node_modules/.bin/tsc -p tsconfig.companion.build.json --noEmit`
+- `git diff --check`
+
+Added regressions cover both definitive create rejections and ambiguous
+post-create outcomes, alias canonicalization, injected bot-save failure with
+full data restoration, and setup rollback reconciliation.
+
+## Final security rationale and residuals
+
+- Pending markers remain profile-only, owner-readable, and free of provider
+  session ids, prompts, paths, stderr, or credentials. Automatic clearing is
+  limited to an explicit JSON-RPC rejection or an exact current canonical row.
+- Deletion rejects symlinked/non-regular state paths, uses the existing
+  owner-only atomic writer for `bots.json` restoration, and keeps SQLite and
+  legacy transcript restoration inside bounded snapshots. A partial cleanup
+  is never reported as a successful deletion.
+- No provider delete RPC was invented; an ambiguous Hermes create still
+  remains marked and requires operator/provider reconciliation. No live Hermes
+  account, gateway, deployment, iOS build, or credential operation was used.

@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -333,6 +333,109 @@ describe("Hermes Bot Chat loopback transport", () => {
     });
     await expect(ensure).resolves.toMatchObject({ profile: "coder", title: "Bot Chat", resolvedSessionId: "tip-new" });
     await engine.close();
+  });
+
+  it.each([
+    ["upstream rejection", { code: 500 }, "upstream_error"],
+    ["credential rejection", { code: 401 }, "invalid_credentials"],
+  ])("clears the pending marker after a definitive session.create %s so retry may create", async (_label, rpcError, expectedCode) => {
+    const pendingDir = mkdtempSync(join(tmpdir(), "hermes-pending-"));
+    const pendingPath = join(pendingDir, "pending.json");
+    const { child } = harness();
+    const engine = new HermesBotAdapter({
+      spawn: vi.fn(() => child),
+      pendingPath,
+      timeouts: { requestMs: 100 },
+    });
+    try {
+      const first = engine.ensureCanonical("coder");
+      await settle();
+      ready(child);
+      await settle();
+      const firstRoster = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: firstRoster.id, result: { profiles: [{ name: "coder" }] } });
+      await settle();
+      const firstList = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: firstList.id, result: { sessions: [] } });
+      await settle();
+      const firstCreate = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: firstCreate.id, error: rpcError });
+      await expect(first).rejects.toMatchObject({ code: expectedCode });
+      expect(existsSync(pendingPath)).toBe(false);
+
+      const retry = engine.ensureCanonical("coder");
+      await settle();
+      const retryRoster = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: retryRoster.id, result: { profiles: [{ name: "coder" }] } });
+      await settle();
+      const retryList = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: retryList.id, result: { sessions: [] } });
+      await settle();
+      const retryCreate = JSON.parse(child.stdin.writes.at(-1)!);
+      expect(retryCreate.method).toBe("session.create");
+      child.frame({ jsonrpc: "2.0", id: retryCreate.id, result: { session_id: "created-after-rejection" } });
+      await settle();
+      const refreshedRoster = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: refreshedRoster.id, result: { profiles: [{ name: "coder" }] } });
+      await settle();
+      const refreshedList = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({
+        jsonrpc: "2.0",
+        id: refreshedList.id,
+        result: { sessions: [{ id: "root-created", title: "Bot Chat", source: "tui" }] },
+      });
+      await expect(retry).resolves.toMatchObject({ profile: "coder" });
+      expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).toEqual([
+        "profiles.list", "session.list", "session.create",
+        "profiles.list", "session.list", "session.create", "profiles.list", "session.list",
+      ]);
+    } finally {
+      await engine.close();
+      rmSync(pendingDir, { recursive: true, force: true });
+    }
+  });
+
+  it("canonicalizes the direct hermes alias to default before marker and create", async () => {
+    const pendingDir = mkdtempSync(join(tmpdir(), "hermes-pending-"));
+    const pendingPath = join(pendingDir, "pending.json");
+    const { child } = harness();
+    const engine = new HermesBotAdapter({
+      spawn: vi.fn(() => child),
+      pendingPath,
+      timeouts: { requestMs: 100 },
+    });
+    try {
+      const ensure = engine.ensureCanonical("hermes");
+      await settle();
+      ready(child);
+      await settle();
+      const roster = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "default", is_default: true }] } });
+      await settle();
+      const list = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [] } });
+      await settle();
+      const create = JSON.parse(child.stdin.writes.at(-1)!);
+      expect(create.method).toBe("session.create");
+      expect(create.params.profile).toBe("default");
+      expect(JSON.parse(readFileSync(pendingPath, "utf8"))).toEqual({ version: 1, profiles: ["default"] });
+      child.frame({ jsonrpc: "2.0", id: create.id, result: { session_id: "created-default" } });
+      await settle();
+      const refreshedRoster = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: refreshedRoster.id, result: { profiles: [{ name: "default", is_default: true }] } });
+      await settle();
+      const refreshedList = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({
+        jsonrpc: "2.0",
+        id: refreshedList.id,
+        result: { sessions: [{ id: "root-default", title: "Bot Chat", source: "tui" }] },
+      });
+      await expect(ensure).resolves.toMatchObject({ profile: "default" });
+      expect(existsSync(pendingPath)).toBe(false);
+    } finally {
+      await engine.close();
+      rmSync(pendingDir, { recursive: true, force: true });
+    }
   });
 
   it("persists a profile-only pending marker when post-create lookup is absent and never mints again", async () => {

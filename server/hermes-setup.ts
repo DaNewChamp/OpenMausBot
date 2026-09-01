@@ -443,12 +443,36 @@ async function connectHermesProfileUnlocked(options: ConnectHermesProfileOptions
     throw setupError("malformed_response");
   }
 
-  const rollback = () => {
+  const rollback = (): boolean => {
     // Remove even when the writer reported failure: an injected or interrupted
     // writer may have published before returning its safe error. The bot id is
-    // freshly minted, so this cannot disturb an existing binding.
-    try { removeBinding(created.id); } catch { /* leave the safe failure for the caller */ }
-    try { options.deleteBot(created.id); } catch { /* best effort */ }
+    // freshly minted, so this cannot disturb an existing binding. Reconcile
+    // both stores before allowing the original failure to escape; a failed
+    // delete must never be hidden as a harmless setup error.
+    let ok = true;
+    try {
+      const removed = removeBinding(created.id);
+      if (removed.state === "unavailable") ok = false;
+    } catch {
+      ok = false;
+    }
+    try {
+      options.deleteBot(created.id);
+    } catch {
+      ok = false;
+    }
+    try {
+      const remaining = loadBindings();
+      if (remaining.state === "unavailable" || remaining.value.has(created.id)) ok = false;
+    } catch {
+      ok = false;
+    }
+    try {
+      if (options.bot(created.id)) ok = false;
+    } catch {
+      ok = false;
+    }
+    return ok;
   };
   try {
     const persisted = setBinding(created.id, binding);
@@ -467,7 +491,7 @@ async function connectHermesProfileUnlocked(options: ConnectHermesProfileOptions
     if (!connectedProfile) throw setupError("state_unavailable");
     return { botId: created.id, profile: connectedProfile, status, created: true };
   } catch (error) {
-    rollback();
+    if (!rollback()) throw setupError("state_unavailable");
     if (error instanceof HermesEngineError) throw error;
     throw setupError("state_unavailable");
   }

@@ -2,7 +2,7 @@
 // thread→instance binding and per-instance resume cursors — upstream's
 // ProviderSessionDirectory, recipe step 6: persist the binding from day
 // one). messages-<threadId>.json holds the folded transcript.
-import { existsSync, lstatSync, readFileSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, mkdirSync, renameSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
@@ -432,6 +432,68 @@ export interface InstalledPackageMetadata {
 const BOTS_FILE = join(DATA_DIR, "bots.json");
 const GROUPS_FILE = join(DATA_DIR, "groups.json");
 const messagesFile = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
+
+type DurableFileSnapshot =
+  | { kind: "missing" }
+  | { kind: "file"; bytes: Buffer; mode: number };
+
+function snapshotDurableFile(path: string): DurableFileSnapshot {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("state is not a regular file");
+    return { kind: "file", bytes: readFileSync(path), mode: stat.mode & 0o777 };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+    throw new Error("durable state is unavailable");
+  }
+}
+
+function restoreDurableFile(path: string, snapshot: DurableFileSnapshot): void {
+  if (snapshot.kind === "missing") {
+    try {
+      unlinkSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("durable state recovery failed");
+    }
+    return;
+  }
+  writeFileAtomic(path, snapshot.bytes.toString("utf8"), { mode: snapshot.mode });
+}
+
+interface StagedPath {
+  original: string;
+  backup: string;
+  directory: boolean;
+  discarded: boolean;
+}
+
+function stagePath(path: string, directory: boolean): StagedPath | undefined {
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error("durable state is unavailable");
+  }
+  if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile())) {
+    throw new Error("durable state is unavailable");
+  }
+  const backup = `${path}.delete-${newId()}`;
+  renameSync(path, backup);
+  return { original: path, backup, directory, discarded: false };
+}
+
+function restoreStagedPath(staged: StagedPath): void {
+  if (!existsSync(staged.backup)) throw new Error("durable state recovery failed");
+  if (existsSync(staged.original)) throw new Error("durable state recovery failed");
+  renameSync(staged.backup, staged.original);
+}
+
+function discardStagedPath(staged: StagedPath): void {
+  rmSync(staged.backup, { recursive: staged.directory, force: true });
+  if (existsSync(staged.backup)) throw new Error("durable state cleanup failed");
+  staged.discarded = true;
+}
 
 const COLORS: MausColor[] = [
   "green",
@@ -1037,17 +1099,60 @@ export class Store {
   deleteBot(id: string): boolean {
     const bot = this.bot(id);
     if (!bot) return false;
-    this.bots = this.bots.filter((b) => b.id !== id);
-    // every task's transcript goes with the bot, not just the open one
-    for (const threadId of new Set([bot.threadId, ...(bot.tasks ?? []).map((t) => t.threadId)])) {
-      this.deleteThreadRecord(threadId);
-    }
-    // the bot's workspace (files + memory) goes with it — same rule as its
-    // transcripts: deleting a bot deletes what it knew
+    const threadIds = [...new Set([bot.threadId, ...(bot.tasks ?? []).map((t) => t.threadId)])];
+    const previousBots = this.bots;
+    const botsFile = snapshotDurableFile(BOTS_FILE);
+    const threadSnapshots = mdb.snapshotThreads(threadIds);
+    const staged: StagedPath[] = [];
     try {
-      rmSync(workspaceDir(id), { recursive: true, force: true });
-    } catch {}
-    this.saveBots();
+      // Move filesystem-owned records aside first. Rename is reversible, so a
+      // failed bots.json publication never leaves a bot without its history.
+      for (const threadId of threadIds) {
+        for (const file of [messagesFile(threadId), `${messagesFile(threadId)}.imported`]) {
+          const moved = stagePath(file, false);
+          if (moved) staged.push(moved);
+        }
+      }
+      const workspace = stagePath(workspaceDir(id), true);
+      if (workspace) staged.push(workspace);
+
+      this.bots = this.bots.filter((candidate) => candidate.id !== id);
+      mdb.deleteThreads(threadIds);
+      this.saveBots();
+
+      // Deletion is committed only after every staged artifact can be
+      // discarded. If cleanup is interrupted, the rollback below restores
+      // both the durable bot record and its data rather than hiding failure.
+      for (const path of staged) discardStagedPath(path);
+    } catch (error) {
+      this.bots = previousBots;
+      let recovered = true;
+      try {
+        mdb.restoreThreadSnapshots(threadSnapshots);
+      } catch {
+        recovered = false;
+      }
+      for (const path of [...staged].reverse()) {
+        if (path.discarded) {
+          recovered = false;
+          continue;
+        }
+        try {
+          restoreStagedPath(path);
+        } catch {
+          recovered = false;
+        }
+      }
+      try {
+        restoreDurableFile(BOTS_FILE, botsFile);
+      } catch {
+        recovered = false;
+      }
+      if (!recovered) throw new Error("bot deletion failed and state recovery failed");
+      throw error;
+    }
+
+    for (const threadId of threadIds) this.threads.delete(threadId);
     this.emit({ type: "bot.deleted", botId: id });
     return true;
   }
