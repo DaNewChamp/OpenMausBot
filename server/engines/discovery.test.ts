@@ -271,6 +271,35 @@ describe("Hermes discovery normalization", () => {
     expect(normalizeCanonicalLookup({ sessions: "not-an-array" }, "default")).toMatchObject({ state: "unknown" });
   });
 
+  it.each([
+    { ok: false },
+    { success: false },
+    { failed: true },
+    { status: "error" },
+    { status: "pending" },
+    { state: "error" },
+    { state: "pending" },
+    { state: "unknown" },
+    { ok: "false" },
+    { success: 0 },
+    { failed: "true" },
+    { status: null },
+    { state: 1 },
+  ])("never treats an explicit canonical failure or pending marker as absent (%j)", (marker) => {
+    const result = normalizeCanonicalLookup({ sessions: [], ...marker }, "default");
+    expect(result).toMatchObject({ state: "unknown", code: "state_unavailable" });
+  });
+
+  it.each([
+    { ok: true },
+    { success: true },
+    { failed: false },
+    { status: "ready" },
+    { state: "success" },
+  ])("keeps an explicitly successful canonical envelope absent when no session exists (%j)", (marker) => {
+    expect(normalizeCanonicalLookup({ sessions: [], ...marker }, "default")).toEqual({ state: "absent" });
+  });
+
   it("denies malformed or whitespace-padded canonical sources", () => {
     expect(
       normalizeCanonicalLookup(

@@ -315,8 +315,10 @@ function canonicalRowTypesValid(value: RecordLike): boolean {
 export function normalizeCanonicalLookup(payload: unknown, profile: string): HermesCanonicalLookup {
   const normalizedProfile = validProfileSlug(profile);
   if (!normalizedProfile || !isRecord(payload)) return unknownCanonical("malformed_response");
-  if (payload.ok !== undefined && typeof payload.ok !== "boolean") return unknownCanonical("malformed_response");
-  if (Object.prototype.hasOwnProperty.call(payload, "error") || payload.ok === false) {
+  // An explicit unavailable/pending envelope must never be mistaken for an
+  // authoritative empty session list. Keep marker handling consistent with
+  // profile discovery, including malformed marker types that fail closed.
+  if (envelopeMarkersUnavailable(payload)) {
     return unknownCanonical("state_unavailable");
   }
   if (payload.limit !== undefined && payload.limit !== HERMES_SESSION_LIST_LIMIT) return unknownCanonical("malformed_response");

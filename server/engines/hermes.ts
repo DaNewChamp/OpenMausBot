@@ -395,11 +395,11 @@ export class HermesGatewayClient extends EventEmitter {
     generation.child.stderr?.on("error", () => {});
     generation.child.stdin?.on?.("error", () => {});
 
-    generation.child.on("error", () => {
+    generation.child.on("error", (error: unknown) => {
       // A spawn throw is classified as missing_cli.  Once a ChildProcess has
       // been returned, an error/exit is a gateway failure regardless of when
       // it occurs; do not expose Node's path or stderr text.
-      this.finishGeneration(generation, "gateway_unavailable");
+      this.finishGeneration(generation, childErrorCode(error));
     });
     generation.child.on("close", () => {
       // A trailing partial line is not a valid JSON-RPC frame.  Treat it as a
@@ -542,6 +542,8 @@ export class HermesGatewayClient extends EventEmitter {
 
 interface RuntimeRecord {
   profile: string;
+  /** Normalized profile or handle supplied by the caller at send time. */
+  requestedProfile: string;
   generation: number;
   runtimeId: string;
   threadId: string;
@@ -832,7 +834,6 @@ export class HermesBotAdapter implements HermesBotEngine {
       this.rosterAvailable = true;
       return {
         state: "available",
-        authenticated: true,
         ...(this.version() ? { version: this.version() } : {}),
         capabilities: projectHermesCapabilities(this.readiness),
         profiles: normalized.profiles,
@@ -900,6 +901,7 @@ export class HermesBotAdapter implements HermesBotEngine {
       const generation = this.client.generationId;
       const runtime: RuntimeRecord = {
         profile: resolvedProfile,
+        requestedProfile: profile,
         generation,
         runtimeId,
         threadId: input.threadId,
@@ -1142,14 +1144,13 @@ export class HermesBotAdapter implements HermesBotEngine {
 
   private runtimeFor(profile: string): RuntimeRecord | undefined {
     const generation = this.client.generationId;
-    const exact = this.runtimes.get(this.runtimeKey(profile, generation));
-    if (exact) return exact;
-    // The default profile is exposed under the `hermes` handle.  Keep runtime
-    // identity canonical while allowing interrupt/duplicate checks through
-    // that safe, currently discovered alias.
-    const alias = this.lastProfiles.find((row) =>
-      row.availability === "available" && row.handle === profile)?.profile;
-    return alias ? this.runtimes.get(this.runtimeKey(alias, generation)) : undefined;
+    // Match the canonical profile and the caller's original normalized
+    // profile/handle. The latter is captured at runtime start so an active
+    // turn remains interruptible after a roster refresh deletes or ambiguates
+    // that handle; no stale identity is guessed or reminted.
+    return [...this.runtimes.values()].find((candidate) =>
+      candidate.generation === generation
+      && (candidate.profile === profile || candidate.requestedProfile === profile));
   }
 
   private lockFor(profile: string): AsyncLock {
@@ -1199,6 +1200,12 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 function asHermesError(error: unknown): HermesEngineError {
   if (error instanceof HermesEngineError) return error;
   return new HermesEngineError("upstream_error");
+}
+
+function childErrorCode(error: unknown): HermesFailureCode {
+  const rawCode = asRecord(error)?.code;
+  const code = typeof rawCode === "string" ? rawCode.toUpperCase() : "";
+  return code === "ENOENT" || code === "EACCES" ? "missing_cli" : "gateway_unavailable";
 }
 
 function canonicalUnknownCode(code: HermesFailureCode): "state_unavailable" | "malformed_response" {

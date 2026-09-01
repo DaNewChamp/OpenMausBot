@@ -85,11 +85,13 @@ describe("Hermes Bot Chat loopback transport", () => {
     expect(request.method).toBe("profiles.list");
     child.frame({ jsonrpc: "2.0", method: "event", params: { type: "status.update", payload: { text: "ignored" } } });
     child.frame({ jsonrpc: "2.0", id: request.id, result: { profiles: [{ name: "default", is_default: true }] } });
-    expect(await discover).toMatchObject({
+    const discoveryResult = await discover;
+    expect(discoveryResult).toMatchObject({
       state: "available",
       version: "0.21.0",
       profiles: [{ profile: "default", handle: "hermes" }],
     });
+    expect(discoveryResult.authenticated).not.toBe(true);
     expect(spawn).toHaveBeenCalledWith(
       "/opt/hermes",
       ["--tui"],
@@ -115,6 +117,18 @@ describe("Hermes Bot Chat loopback transport", () => {
       state: "unavailable",
       reason: "gateway_unavailable",
     });
+    await engine.close();
+  });
+
+  it.each(["ENOENT", "EACCES"])("maps an asynchronous child %s error to fixed missing_cli diagnostics", async (code) => {
+    const { child } = harness();
+    const engine = createHermesBotEngine({ spawn: vi.fn<HermesSpawn>(() => child) });
+    const discovery = engine.discover();
+    await settle();
+    child.emit("error", Object.assign(new Error("/private/hermes/bin/hermes"), { code }));
+    const result = await discovery;
+    expect(result).toMatchObject({ state: "unavailable", reason: "missing_cli" });
+    expect(JSON.stringify(result)).not.toContain("/private/hermes");
     await engine.close();
   });
 
@@ -218,6 +232,69 @@ describe("Hermes Bot Chat loopback transport", () => {
     expect(events.filter((event) => event.type === "turn.completed")).toHaveLength(1);
     expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: false, stopReason: "interrupted" });
     await expect(engine.interrupt("coder", "turn")).resolves.toBeUndefined();
+    await engine.close();
+  });
+
+  it.each([
+    {
+      label: "ambiguity",
+      expectedState: "available",
+      response: { profiles: [{ name: "default", is_default: true }, { name: "default", is_default: true }] },
+    },
+    {
+      label: "deletion",
+      expectedState: "available",
+      response: { profiles: [{ name: "other" }] },
+    },
+    {
+      label: "unavailability",
+      expectedState: "unavailable",
+      response: { profiles: [], success: false },
+    },
+  ])("keeps a runtime started through the hermes alias interruptible after roster $label", async ({ expectedState, response }) => {
+    const { child } = harness();
+    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const events: RuntimeEvent[] = [];
+    engine.onEvent((event) => events.push(event));
+
+    const send = engine.send({ profile: "hermes", text: "wait", threadId: "t", turnId: "turn" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(roster.method).toBe("profiles.list");
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "default", is_default: true }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "ephemeral-runtime-secret" } });
+    await settle();
+    const prompt = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: prompt.id, result: { accepted: true } });
+    await send;
+
+    const refresh = engine.discover();
+    await settle();
+    const refreshRequest = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(refreshRequest.method).toBe("profiles.list");
+    child.frame({
+      jsonrpc: "2.0",
+      id: refreshRequest.id,
+      result: response,
+    });
+    await expect(refresh).resolves.toMatchObject({ state: expectedState });
+
+    const interrupt = engine.interrupt("hermes", "turn");
+    await settle();
+    const interruptRequest = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(interruptRequest.method).toBe("session.interrupt");
+    expect(interruptRequest.params).toEqual({ session_id: "ephemeral-runtime-secret" });
+    child.frame({ jsonrpc: "2.0", id: interruptRequest.id, result: { status: "interrupted" } });
+    await expect(interrupt).resolves.toBeUndefined();
+    expect(events.filter((event) => event.type === "turn.completed")).toHaveLength(1);
+    expect(JSON.stringify(events)).not.toContain("ephemeral-runtime-secret");
     await engine.close();
   });
 
