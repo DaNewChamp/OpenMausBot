@@ -30,6 +30,7 @@ struct SettingsView: View {
                 notificationsSection
                 hapticsSection
                 if session.connection != nil {
+                    hermesSection
                     workspaceSection
                     appearanceSection
                     chatPreferencesSection
@@ -177,6 +178,20 @@ struct SettingsView: View {
                 symbol: "cpu",
                 color: .purple,
                 destination: EngineSelectionView()
+            )
+        }
+    }
+
+    private var hermesSection: some View {
+        VBotSurfaceGroup(
+            title: "Integrations",
+            footer: "Connect Hermes on this computer. To use Hermes on another machine, pair that V Bot first, then connect Hermes there."
+        ) {
+            workspaceLink(
+                title: "Hermes",
+                symbol: "sparkles",
+                color: .mint,
+                destination: HermesSetupView()
             )
         }
     }

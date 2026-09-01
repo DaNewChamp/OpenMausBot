@@ -202,10 +202,19 @@ struct ChatListView: View {
                 open(chat)
                 session.consumeNotificationChat()
             }
+            .onChange(of: session.hermesChat) { _, chat in
+                guard let chat else { return }
+                open(chat)
+                session.consumeHermesChat()
+            }
             .task {
                 if let chat = session.notificationChat {
                     open(chat)
                     session.consumeNotificationChat()
+                }
+                if let chat = session.hermesChat {
+                    open(chat)
+                    session.consumeHermesChat()
                 }
             }
 #if DEBUG

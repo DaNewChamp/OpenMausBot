@@ -93,6 +93,10 @@ final class Session: ObservableObject {
     /// A notification response that should be pushed by the roster's
     /// NavigationStack after the exact detached task has been activated.
     @Published private(set) var notificationChat: Chat?
+    /// A Hermes setup response that should be opened by the roster after the
+    /// imported bot has been hydrated. Keeping this as a pending destination
+    /// lets the setup sheet dismiss cleanly before the chat is pushed.
+    @Published private(set) var hermesChat: Chat?
     /// A pin request in flight for each conversation. Pinning is server-backed
     /// rather than optimistic, so the roster disables the action until the
     /// acknowledgement arrives and cannot apply an older toggle out of order.
@@ -651,6 +655,7 @@ final class Session: ObservableObject {
         endpointRefreshTask = nil
         restorePending = false
         pendingNotification = nil
+        hermesChat = nil
         pairingInvite = CompanionPairingInvitePolicy.nextInvite(
             current: pairingInvite,
             after: .signedOut
@@ -713,6 +718,7 @@ final class Session: ObservableObject {
         endpointRefreshTask = nil
         restorePending = false
         pendingNotification = nil
+        hermesChat = nil
         endLinger()
         resetStreamCoalescer()
         engineSync = nil
@@ -742,6 +748,61 @@ final class Session: ObservableObject {
         bridgeRosterGate.invalidate()
         bridgeRosterLoading = false
         bridgeRoster = []
+    }
+
+    /// Read Hermes' safe setup projection for the current paired computer.
+    /// Transport failures become a fixed unavailable state rather than an
+    /// alert containing provider diagnostics; cancellation simply leaves the
+    /// current screen alone.
+    func hermesSetupStatus() async -> HermesSetupStatus? {
+        guard let client else {
+            return HermesSetupStatus(state: .unavailable, reason: .stateUnavailable)
+        }
+        do {
+            return try await client.hermesSetupStatus()
+        } catch {
+            if error.isCancellation { return nil }
+            if let api = error as? APIError, api.isUnauthorized {
+                status = .unauthorized
+            }
+            return HermesSetupStatus(state: .unavailable, reason: .gatewayUnavailable)
+        }
+    }
+
+    /// Connect/import a Hermes profile on the selected computer, then refresh
+    /// the fleet and queue the imported bot for navigation. The server owns
+    /// idempotency and profile validation; the phone only sends an optional
+    /// safe profile slug.
+    @discardableResult
+    func connectHermes(profile: String? = nil) async -> HermesSetupConnectionResponse? {
+        guard let client else {
+            actionError = "Pair this phone with a computer before connecting Hermes."
+            return nil
+        }
+        do {
+            let result = try await client.connectHermes(profile: profile)
+            guard !Task.isCancelled else { return nil }
+            do {
+                _ = try await hydrate()
+            } catch {
+                if error.isCancellation { return nil }
+                actionError = "Hermes connected, but the fleet could not be refreshed. Try again."
+                return nil
+            }
+            guard let bot = state.bot(result.botId) else {
+                actionError = "Hermes connected, but its chat is not available yet. Try again."
+                return nil
+            }
+            hermesChat = .bot(bot)
+            return result
+        } catch {
+            if error.isCancellation { return nil }
+            if let api = error as? APIError, api.isUnauthorized {
+                status = .unauthorized
+            }
+            actionError = error.localizedDescription
+            return nil
+        }
     }
 
     private func persistRegistry() {
@@ -2932,6 +2993,8 @@ final class Session: ObservableObject {
     }
 
     func consumeNotificationChat() { notificationChat = nil }
+
+    func consumeHermesChat() { hermesChat = nil }
 
     func react(to message: Message, in threadId: String, emoji: String) async {
         guard let client else { return }
