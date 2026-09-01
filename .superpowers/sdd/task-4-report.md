@@ -411,3 +411,67 @@ ios/AppStore/screenshots/task-4-home-activity-2026-08-31/24-expanded-active-xxxl
 ```
 
 No signing, upload, deploy, merge, or device release action was attempted.
+
+## Final activity/island arbitration fix
+
+Date: 2026-09-01 (America/Chicago)
+Starting commit: `4c6da5d fix(ios): contain accessibility activity rail`
+
+The remaining Important interaction finding is closed. `ChatListView` now
+owns a small `HomeActivityArbitrationPolicy` state: an expanded activity panel
+suppresses the needs-you island and its dismissal layer, while the normal
+island dismissal layer is installed by the parent below the `safeAreaInset`
+activity rail. The rail therefore keeps its reserved expanded height and its
+collapsed button always wins the first tap; collapsing the panel re-reconciles
+the pending needs-you card. The island shell and VoiceOver labels remain
+unchanged in the normal collapsed/expanded flow, with no geometry offsets.
+
+TDD evidence: `HomeActivityArbitrationPolicyTests` was first run before the
+policy existed and failed to compile (`cannot find 'HomeActivityArbitrationPolicy'`),
+then passed four state-transition tests after implementation.
+
+Final verification (all passed):
+
+```sh
+swift test --package-path ios --filter 'HomeActivityArbitrationPolicyTests|HomeActivityPresentationTests|HomeActivityPreviewExpansionPolicyTests'
+swift test --package-path ios
+(cd ios && xcodegen generate)
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Debug \
+  -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
+  -derivedDataPath /tmp/vbot-arbitration-debug-final-0901 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Release \
+  -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
+  -derivedDataPath /tmp/vbot-arbitration-release-final-0901 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+git diff --check
+```
+
+The focused gate passed four XCTest cases and seven Swift Testing cases. The
+full Swift gate passed 704 XCTest cases with zero failures and 20 Swift Testing
+cases in five suites. Both unsigned simulator builds ended with
+`** BUILD SUCCEEDED **`; logs are `/tmp/vbot-arbitration-focused-final-0901.log`,
+`/tmp/vbot-arbitration-swift-final-0901.log`,
+`/tmp/vbot-arbitration-debug-final-0901.log`, and
+`/tmp/vbot-arbitration-release-final-0901.log`.
+
+On the iPhone 17 Pro simulator (iOS 26.5, dark appearance, accessibility
+XXXL), the final Debug build was exercised with
+`-store-preview -preview-expand-activity`. Tapping the collapsed activity rail
+while the needs-you island was expanded opened the activity panel instead of
+dismissing the island; the island disappeared immediately. The pending card
+returned after collapsing the panel, preserving normal island behavior. Full-
+resolution (1206 x 2622) screenshots were recaptured and inspected:
+
+```text
+ios/AppStore/screenshots/task-4-home-activity-2026-08-31/18-expanded-needs-xxxl-reduce-motion-on-post-preview-expansion-fix.png
+ios/AppStore/screenshots/task-4-home-activity-2026-08-31/19-expanded-needs-xxxl-reduce-motion-off-post-preview-expansion-fix.png
+```
+
+Both captures show the readable `NEEDS YOU` heading, Scout row, and complete
+request detail with no island overlap. Reduce Motion on/off were each set
+explicitly; the off capture retains the expected glass material effect but all
+copy remains readable. No signing, upload, deploy, merge, or production
+resource change was attempted.

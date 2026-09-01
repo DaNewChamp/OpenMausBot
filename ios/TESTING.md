@@ -406,3 +406,18 @@ For Swift errors, the compiler's own output is the most useful thing — file,
 line, and message. For runtime problems, the harness log is usually more
 informative than the phone: it is where the pairing, auth and stream decisions
 are actually made.
+
+## Final activity/island arbitration closure (2026-09-01)
+
+The parent home stack now arbitrates the needs-you island and activity rail.
+Expanding the activity panel suppresses the island and its full-screen
+dismissal layer; while the island is expanded, that dismissal layer stays
+behind the `safeAreaInset` rail so the collapsed activity button remains
+tappable. Collapsing the panel re-reconciles the pending card, preserving the
+normal island and VoiceOver behavior without geometry offsets. The policy and
+state transition tests live in `HomeActivityArbitrationPolicyTests.swift`.
+
+The final XXXL needs-attention captures (`18` and `19`) were recaptured from the
+unsigned Debug simulator build with Reduce Motion explicitly on and off. Both
+are 1206 x 2622 PNGs and show a fully readable `NEEDS YOU` heading, Scout row,
+and complete request detail with no island overlap.

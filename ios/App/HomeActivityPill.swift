@@ -8,12 +8,12 @@ import CompanionCore
 /// phone.
 struct HomeActivityPill: View {
     let open: (Chat) -> Void
+    @Binding var expanded: Bool
     var queuedReceipts: [HomeActivityQueueReceipt] = []
 
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @State private var expanded = false
 
     private var presentation: HomeActivityPresentation {
         session.state.homeActivityPresentation(queuedReceipts: queuedReceipts)

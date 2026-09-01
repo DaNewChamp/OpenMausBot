@@ -24,11 +24,25 @@ struct ChatListView: View {
     @State private var showingAccount = false
     @State private var groupProfile: Room?
     @State private var pinnedShelfCollapseReserve = false
+    @State private var activityExpanded = false
+    @State private var needsYouIslandExpanded = false
     @FocusState private var searchFocused: Bool
+
+    private var needsYouUpdate: ChatUpdate? {
+        session.state.updates.first { $0.kind == .needsYou }
+    }
+
+    private var homeActivityArbitration: HomeActivityArbitrationPolicy.State {
+        HomeActivityArbitrationPolicy.State(
+            activityExpanded: activityExpanded,
+            needsYouAvailable: needsYouUpdate != nil
+        )
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
             GeometryReader { geo in
+            ZStack(alignment: .top) {
             VStack(spacing: 0) {
                 header
                 StatusBanner()
@@ -111,16 +125,6 @@ struct ChatListView: View {
                         )
                     }
                 }
-                // Keep the activity rail in the stack rather than overlaying
-                // it on the scroll view. At accessibility sizes, expanded
-                // rows grow vertically; making the rail a sibling reserves
-                // its full height so it cannot cover the last roster row.
-                HomeActivityPill(
-                    open: { chat in path.append(chat) },
-                    queuedReceipts: session.queueReceipts
-                )
-                .environmentObject(session)
-                .padding(.bottom, max(8, geo.safeAreaInsets.bottom))
             }
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: pinnedChats.map(\.id))
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: pinnedShelfCollapseReserve)
@@ -139,18 +143,45 @@ struct ChatListView: View {
             }
             // top-aligned: the roster fills downward from the header
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            // a bot that stopped for you grows out of the island
-            .overlay(alignment: .top) {
-                NeedsYouIsland(
-                    update: session.state.updates.first { $0.kind == .needsYou },
-                    hasIsland: IslandGeometry.hasIsland(topInset: geo.safeAreaInsets.top)
-                ) { chat in
-                    Haptics.selection()
-                    path.append(chat)
+            // The dismissal surface belongs to the parent, but the activity
+            // rail is inserted with safeAreaInset below it. This keeps the
+            // full-screen island tap target while the rail remains tappable.
+            .overlay {
+                if needsYouIslandExpanded && homeActivityArbitration.islandDismissalLayerAllowed {
+                    Color.black.opacity(0.001)
+                        .ignoresSafeArea()
+                        .accessibilityHidden(true)
+                        .onTapGesture { needsYouIslandExpanded = false }
                 }
+            }
+            // Keep the activity rail out of the overlay stack. safeAreaInset
+            // reserves its full expanded height without geometry offsets.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                HomeActivityPill(
+                    open: { chat in path.append(chat) },
+                    expanded: $activityExpanded,
+                    queuedReceipts: session.queueReceipts
+                )
+                .environmentObject(session)
+                .padding(.bottom, max(8, geo.safeAreaInsets.bottom))
+                .zIndex(1)
             }
             .accessibilityAction(named: "Show updates") {
                 showingUpdates = true
+            }
+            // A bot that stopped for you grows out of the island. It is the
+            // top sibling so the island shell remains visible while its
+            // parent-owned dismissal layer stays behind the rail.
+            NeedsYouIsland(
+                update: needsYouUpdate,
+                hasIsland: IslandGeometry.hasIsland(topInset: geo.safeAreaInsets.top),
+                activityExpanded: activityExpanded,
+                islandPresentationAllowed: homeActivityArbitration.islandPresentationAllowed,
+                isExpanded: $needsYouIslandExpanded
+            ) { chat in
+                Haptics.selection()
+                path.append(chat)
+            }
             }
             }
             .background(VBotSurface.background.ignoresSafeArea())

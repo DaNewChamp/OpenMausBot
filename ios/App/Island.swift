@@ -75,6 +75,9 @@ struct IslandShell<Content: View>: View {
 struct NeedsYouIsland: View {
     let update: ChatUpdate?
     let hasIsland: Bool
+    let activityExpanded: Bool
+    let islandPresentationAllowed: Bool
+    @Binding var isExpanded: Bool
     let open: (Chat) -> Void
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -88,13 +91,36 @@ struct NeedsYouIsland: View {
     private var expanded: Bool { shown != nil }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            if expanded {
-                // tap anywhere else: put it away, keep the row's tag
-                Color.black.opacity(0.001)
-                    .ignoresSafeArea()
-                    .onTapGesture { dismiss() }
+        Group {
+            if islandPresentationAllowed {
+                islandContent
             }
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+        .animation(reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.78), value: expanded)
+        .transaction { transaction in
+            if reduceMotion {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+        }
+        .onChange(of: update?.card?.requestId) { _, _ in reconcile() }
+        .onAppear { reconcile() }
+        .onChange(of: activityExpanded) { _, expanded in
+            if expanded {
+                setShown(nil)
+            } else {
+                reconcile()
+            }
+        }
+        .onChange(of: isExpanded) { _, expanded in
+            guard !expanded, shown != nil else { return }
+            dismiss()
+        }
+    }
+
+    private var islandContent: some View {
+        ZStack(alignment: .top) {
             IslandShell(expanded: expanded, hasIsland: hasIsland) {
                 if let shown {
                     VStack(spacing: 10) {
@@ -148,31 +174,30 @@ struct NeedsYouIsland: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .top)
-        .animation(reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.78), value: expanded)
-        .transaction { transaction in
-            if reduceMotion {
-                transaction.animation = nil
-                transaction.disablesAnimations = true
-            }
-        }
-        .onChange(of: update?.card?.requestId) { _, _ in reconcile() }
-        .onAppear { reconcile() }
     }
 
     /// Show a new needs-you the moment it lands; never re-show one the user
     /// put away; fold away when it is answered elsewhere.
     private func reconcile() {
-        guard let update, update.kind == .needsYou, let id = update.card?.requestId else {
-            shown = nil
+        guard !activityExpanded else {
+            setShown(nil)
             return
         }
-        if dismissedCardIds.contains(id) { shown = nil; return }
-        shown = update
+        guard let update, update.kind == .needsYou, let id = update.card?.requestId else {
+            setShown(nil)
+            return
+        }
+        if dismissedCardIds.contains(id) { setShown(nil); return }
+        setShown(update)
     }
 
     private func dismiss() {
         if let id = shown?.card?.requestId { dismissedCardIds.insert(id) }
-        shown = nil
+        setShown(nil)
+    }
+
+    private func setShown(_ update: ChatUpdate?) {
+        shown = update
+        isExpanded = update != nil
     }
 }
