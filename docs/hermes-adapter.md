@@ -1,115 +1,138 @@
-# Hermes Bot Chat adapter
+# Hermes Bot Chat adapter (Wave 1)
 
-## Purpose and boundary
+Wave 1 adds a narrow, hub-owned Hermes Bot Chat adapter. It is disabled by default,
+projects only the shared V Bot event contract, and never replaces V Bot pairing or
+becomes a new primary engine.
 
-Hermes Bot Chat is an optional, model-agnostic Wave 1 adapter for V Bot. The
-headless OpenMausBot hub owns storage, authorization, transcripts, events, and
-all provider processes. The desktop app is an optional UI for that hub. The iOS
-companion speaks the existing authenticated companion/control-plane contract;
-it does not launch Hermes or learn a Hermes session id.
+## Trust path
 
-The adapter starts the locally installed Hermes CLI in `--tui` mode and
-exchanges typed JSON-RPC frames over the loopback process. Only normalized V Bot events
-cross the hub boundary. Credentials, host paths, ports, runtime handles,
-provider payloads, and gateway diagnostics stay on the hub.
-
-## Exact binding
-
-The hub's binding record is the authority for a bot selected for Hermes Bot
-Chat. Version 1 has exactly these fields:
-
-```json
-{
-  "adapter": "hermesBot",
-  "profile": "<validated Hermes profile>",
-  "canonicalTitle": "Bot Chat",
-  "bindingVersion": 1
-}
+```text
+V Bot iOS
+  -> authenticated OpenMaus companion/control plane
+  -> paired Mac hub
+  -> local Hermes CLI in `--tui` loopback mode
+  -> Hermes TUI JSON-RPC gateway (line-delimited stdio)
 ```
 
-The profile is normalized and validated before use. The binding store is
-private hub state and is never projected into the mobile provider catalog.
-The canonical `Bot Chat` session is resolved from Hermes state; ephemeral
-runtime session handles are not persisted as V Bot resume cursors.
+The phone never receives Hermes tokens, `HERMES_HOME`, executable paths, profile
+paths, durable SessionDB ids, runtime session ids, prompts, raw stderr, or JSON-RPC
+payloads. Hermes account login remains Hermes' own setup flow; V Bot device pairing
+remains the authorization boundary. Login never replaces pairing.
 
-## Fail-closed routing
+## Canonical identity
 
-Every stop path uses the hub's binding-aware interrupt dispatcher: the HTTP bot
-and room endpoints, routine cancellation, room timeout/stall cleanup,
-watchdog recovery, deletion/settings cleanup, and adapter cancellation races.
+Each bound bot resolves the exact canonical chat:
 
-- A readable valid binding routes to the Hermes registry and its profile.
-- A valid binding with Hermes disabled, unavailable, or unreadable fails with a
-  fixed setup error; it never falls through to the bot's stored generic
-  ProviderAdapter.
-- An unreadable or malformed binding store is not treated as an empty store.
-- Only a readable store that proves a bot is unbound may use the normal
-  ProviderAdapter, including generic Hermes ACP.
-- A Hermes interrupt failure is not retried through another provider.
-- Room/group membership and send are fail-closed while `groups` is false.
-  Creating a room, PATCHing members, or dispatching `runGroupMemberTurn`
-  (including connector/secret resumes) rejects a valid Hermes-bound bot and
-  any unreadable/unknown binding state with a stable setup error. Unbound
-  bots keep the existing generic room path. Room interrupt, timeout, stall,
-  and delete cleanup surface that same setup failure instead of treating a
-  swallowed generic stop as success. Stop targets the busy member only: an
-  idle Hermes-bound roommate does not block interrupting an unbound speaker.
-- Bot-to-bot peer comms use the same gate: `getOrCreateChannel`,
-  `/api/internal/ask-bot`, and delegation drains refuse to mint a DM when
-  either peer is Hermes-bound or binding state cannot be proven unbound.
-- Team import, package import, and project-mode room creation apply the
-  membership gate to every direct `createGroup` path and roll back partial
-  imports instead of leaving half-built rooms behind.
+- profile: validated Hermes profile slug from the binding sidecar
+- title: literal `Bot Chat`
+- lookup: `session.list` with `{ profile, title: "Bot Chat", include_hidden: true, limit: 200 }`
 
-The same rule applies to steer decisions: a bound or unknown-binding bot
-cannot be steered through a generic engine. It must queue or report that the
-capability is unavailable until Hermes exposes a verified steer contract.
+Hermes may return a compression tip via `resolved_id`. The adapter resumes that
+resolved id internally and keeps the root id internal only. The gateway's runtime
+`session_id` is memory-only and is never written to Store, bindings, logs, SSE,
+`/api/*` responses, or `resumeCursors`.
 
-## Supported and deferred capabilities
+Lookup results are fail-closed:
 
-Wave 1 advertises only capabilities exercised by the adapter and gateway:
+- `present`: exactly one matching hidden canonical row
+- `absent`: successful empty list (`sessions: []`) — Wave 1 never creates a chat
+- `unknown` / `unavailable`: RPC, auth, protocol, timeout, corrupt/unreadable
+  state, profile rename/deletion, or malformed payloads
 
-- Hermes profile discovery and safe roster projection
-- canonical `Bot Chat` lookup
-- send and final assistant response
-- normalized streaming/content and lifecycle events
-- stop/interrupt
+Treating lookup failure as an empty roster and minting a second Bot Chat is
+explicitly forbidden.
 
-These remain explicitly deferred (and are reported as unsupported rather than
-guessed): routines, `messageAgent`, groups, cross-machine execution, queueing,
-steer, attachments, MCP/computer tools, and arbitrary provider/model controls.
-The existing OpenMaus provider fleet and generic Hermes ACP behavior remain
-unchanged for unbound bots.
+## Binding sidecar
 
-## Setup and install
+Bindings live in `${DATA_DIR}/hermes-bindings.json` (mode `0600`, parent dir `0700`).
 
-1. Install and authenticate the Hermes CLI on the paired Mac using Hermes' own
-   documented installer and profile setup. Verify that `hermes --tui` starts
-   the local gateway.
-2. Enable Hermes Bot Chat in V Bot's desktop settings and select the Hermes
-   provider instance. Keep the adapter disabled until the local gateway is
-   installed and authenticated.
-3. Bind a bot to its Hermes profile through the hub's settings flow. The hub
-   validates and writes the binding; do not edit the record while a turn is in
-   flight.
-4. Confirm the provider panel reports `available`, the expected profile is
-   present, and the canonical `Bot Chat` is found. Then send a short test from
-   the desktop or iOS client.
-5. If discovery or a turn fails, fix the local Hermes installation/profile and
-   retry. Do not substitute a different provider for a still-bound bot.
+Each record stores only:
 
-No iOS wire migration is required for Wave 1. Existing pairing, companion
-authorization, SSE/event folding, URL scheme, and bundle identity stay intact.
+- `adapter: "hermesBot"`
+- `profile` (validated slug, not a path)
+- `canonicalTitle: "Bot Chat"`
+- `bindingVersion: 1`
 
-## Security invariants
+A missing sidecar is an available empty binding set. An unreadable or malformed
+existing file is `unavailable` and must not decode to `{}`. Failed writes leave
+prior bytes unchanged.
 
-- Hermes runs only on the paired hub through a loopback process boundary.
-- Binding files and local runtime state are hub-private and least-privilege;
-  never commit them or include them in diagnostics.
-- Public errors use fixed, user-actionable messages and omit paths, tokens,
-  profile internals, raw RPC frames, and provider text.
-- The mobile client receives capability flags and normalized events only.
-- No adapter change weakens companion authorization, enables host computer
-  access, or uploads a TestFlight build.
-- Hermes remains opt-in; an unconfigured or disabled adapter does not alter
-  legacy OpenMaus provider selection.
+## Capability flags
+
+Capabilities are affirmative. Wave 1 enables only what the loopback gateway proves:
+
+| Flag | Wave 1 |
+| --- | --- |
+| roster, canonicalChat, send, finalResponse, events, stop | true when live |
+| routinesRead, messageAgent, groups, crossMachine, queueing, steer, attachments | false |
+
+Generic Hermes ACP/MCP availability does **not** enable `message_agent`, groups,
+relay, routines mutation, queue, steer, attachments, or computer integrations.
+While `groups` is false, Hermes-bound bots cannot join V Bot rooms.
+
+## Send, interrupt, and transcript source of truth
+
+Dispatch reuses the existing hub turn path:
+
+1. append the V Bot user message to Store
+2. optional `content.delta` events
+3. exactly one `assistant_text` from authoritative `message.complete`
+4. one terminal `turn.completed`
+5. activity reset without writing Hermes ids into public JSON
+
+`session.interrupt` is the only turn mutation exposed in Wave 1. V Bot Store and
+SSE remain the mobile transcript source of truth; Hermes history is not mirrored
+into V Bot transcripts.
+
+## Child process hygiene
+
+The adapter spawns `hermes --tui` with a positive environment allowlist. V Bot and
+provider credential variables are stripped before spawn. Prompt text is passed as
+JSON-RPC parameters, never shell-interpolated. stderr, argv, paths, provider
+payloads, and query text are redacted from public errors, logs, activity, SSE, and
+API fixtures.
+
+## Recovery behavior
+
+| Condition | Result |
+| --- | --- |
+| missing CLI | `missing_cli`, capabilities demoted |
+| gateway/auth/protocol failure | typed unavailable; no OpenMaus fallback |
+| unreadable binding sidecar | setup failure; binding not treated as empty |
+| profile rename/deletion | `profile_unavailable` / unavailable roster row |
+| timeout | terminal failed turn; safe code only |
+| malformed final/event | `malformed_response`; no guessed assistant text |
+| upstream Hermes error | typed runtime/setup error; binding retained |
+
+After a gateway crash, the next send performs a fresh hidden title lookup and
+resumes the compression tip; it does not reuse a stale runtime id or create a
+second canonical chat.
+
+## Hub placement
+
+Hermes Bot Mode is a provider/profile adapter behind the existing hub. It is **not**
+a `VBotPrimaryEngine`, does not change iOS/companion contracts, and does not
+replace OpenMaus/Grok paths or generic Hermes ACP.
+
+## Wave 1 deferrals
+
+Wave 1 explicitly does **not** include:
+
+- Hermes `message_agent` / V Bot–Hermes A2A protocol
+- groups/rooms, `bot_relay.*`, peer gateways, cross-machine delivery
+- provider login/OAuth UI, billing, or provider secrets in bindings
+- remote/node-hosted Hermes runtimes or fleet control planes
+- routine create/edit/run/cancel or raw SessionDB/`jobs.json` reads from TypeScript
+- attachments/vision, computer/phone/composio/custom MCP, queue, steer, fork/rewind
+- automatic canonical Bot Chat creation or CLI one-shot fallback
+- any change in the Hermes source checkout (`/Users/Vincent/Github/hermes-agent`)
+
+API gaps require a separately reviewed Hermes proposal with versioned compatibility
+tests. V Bot Wave 1 ships adapter-side only.
+
+## Deterministic test fixture
+
+`server/testing/fake-hermes-tui-gateway.ts` implements the tag-pinned `v2026.8.31`
+handshake/events for CI and release gates. It uses deterministic session ids
+(`session-root`, `session-tip`) and fixture text only. It is imported by tests,
+never by production code.

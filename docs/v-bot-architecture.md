@@ -90,3 +90,16 @@ and room send use the same fail-closed membership/send boundary. Unbound bots
 retain the existing ProviderAdapter behavior, including generic Hermes ACP.
 
 Queueing, attachments, MCP, computer-use, reconstructed `/events`, and merged transcripts remain out of scope. Companion still does not proxy reconstructed loopback URLs, tokens, or host paths.
+
+## Hermes Bot Mode adapter boundary (Wave 1)
+
+Hermes Bot Mode is a hub-owned, opt-in profile adapter behind the existing provider
+fleet. It is **not** a `VBotPrimaryEngine` and does not change iOS/companion wire
+contracts. The separate internal registry talks to the locally installed Hermes CLI
+in `--tui` loopback mode and publishes normalized events into the existing EventBus.
+
+V Bot Store and SSE remain the mobile transcript source of truth. Bindings store
+only V Bot bot id, validated profile slug, literal `Bot Chat` title, and schema
+version in private hub state. Wave 1 does not expose a CLI fallback, raw SessionDB
+path, account token, or Hermes runtime/durable ids on public surfaces. See
+[hermes-adapter.md](./hermes-adapter.md) for the full Wave 1 contract and deferrals.
