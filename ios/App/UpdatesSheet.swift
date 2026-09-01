@@ -9,9 +9,14 @@ import CompanionCore
 struct UpdatesSheet: View {
     let open: (Chat) -> Void
     @EnvironmentObject private var session: Session
-    @Environment(\.dismiss) private var dismiss
+    /// Queue receipts are deliberately supplied by the caller. The paired
+    /// hub has no global queue snapshot, so this sheet must not infer queued
+    /// work from a busy flag or from provider names.
+    var queuedReceipts: [HomeActivityQueueReceipt] = []
 
-    private var updates: [ChatUpdate] { session.state.updates }
+    private var presentation: HomeActivityPresentation {
+        session.state.homeActivityPresentation(queuedReceipts: queuedReceipts)
+    }
 
     var body: some View {
         ScrollView {
@@ -20,7 +25,7 @@ struct UpdatesSheet: View {
                     Text("Updates")
                         .font(.system(size: 22, weight: .bold))
                     Spacer()
-                    Text(updates.isEmpty ? "All quiet" : "\(updates.count) active")
+                    Text(presentation.collapsedTitle)
                         .font(.system(size: 13))
                         .foregroundStyle(Color.secondary)
                 }
@@ -28,7 +33,7 @@ struct UpdatesSheet: View {
                 .padding(.top, 22)
                 .padding(.bottom, 6)
 
-                if updates.isEmpty {
+                if presentation.items.isEmpty {
                     ContentUnavailableView(
                         "Nothing needs you",
                         systemImage: "checkmark.circle",
@@ -36,9 +41,9 @@ struct UpdatesSheet: View {
                     )
                     .padding(.top, 24)
                 } else {
-                    section("Needs you", tint: nil, kind: .needsYou)
-                    section("Working", tint: nil, kind: .working)
-                    section("To review", tint: nil, kind: .toReview)
+                    ForEach(presentation.sections) { section in
+                        sectionView(section)
+                    }
                 }
             }
             .padding(.bottom, 24)
@@ -50,45 +55,49 @@ struct UpdatesSheet: View {
     }
 
     @ViewBuilder
-    private func section(_ title: String, tint: Color?, kind: ChatUpdate.Kind) -> some View {
-        let items = updates.filter { $0.kind == kind }
-        if !items.isEmpty {
-            let color = kind == .needsYou ? MausPalette.color(items[0].chat.color) : Color.secondary
-            Text(title.uppercased())
+    private func sectionView(_ section: HomeActivityPresentation.Section) -> some View {
+        let rows = section.items.compactMap { item -> (HomeActivityPresentation.Item, Chat)? in
+            guard let chat = session.state.chat(forThread: item.threadId) else { return nil }
+            return (item, chat)
+        }
+        if !rows.isEmpty {
+            Text(section.title.uppercased())
                 .font(.system(size: 12, weight: .bold))
                 .tracking(0.5)
-                .foregroundStyle(color)
+                .foregroundStyle(section.kind == .needsYou ? Color.accentColor : Color.secondary)
                 .padding(.horizontal, 20)
                 .padding(.top, 14)
                 .padding(.bottom, 2)
 
-            ForEach(items) { update in
-                UpdateRow(update: update) { open(update.chat) }
-            }
+                ForEach(rows, id: \.0.id) { item, chat in
+                    HomeActivityUpdateRow(item: item, chat: chat) { open(chat) }
+                }
         }
     }
 }
 
-private struct UpdateRow: View {
-    let update: ChatUpdate
+private struct HomeActivityUpdateRow: View {
+    let item: HomeActivityPresentation.Item
+    let chat: Chat
     let open: () -> Void
     @EnvironmentObject private var session: Session
+
     var body: some View {
         Button(action: open) {
             HStack(alignment: .top, spacing: 12) {
-                ChatAvatarView(chat: update.chat, size: 40, state: MausState.forChat(update.chat, in: session.state))
+                ChatAvatarView(chat: chat, size: 40, state: MausState.forChat(chat, in: session.state))
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(update.chat.name)
+                    Text(chat.name)
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color.primary)
-                    Text(update.line.isEmpty ? " " : update.line)
+                    Text(item.subtitle.isEmpty ? fallback : item.subtitle)
                         .font(.system(size: 14))
                         .foregroundStyle(Color.secondary)
-                        .lineLimit(update.kind == .needsYou ? 3 : 1)
+                        .lineLimit(item.group == .needsYou ? 3 : 1)
                         .multilineTextAlignment(.leading)
 
-                    if let card = update.card, card.isPending, card.isPermission {
+                    if let card = item.card, card.isPending, card.isPermission {
                         Text(card.actionSummary.map(OptionCard.sanitizedPresentation) ?? OptionCard.sanitizedPresentation(card.title.replacingOccurrences(of: "?", with: "")))
                             .font(.system(size: 13))
                             .foregroundStyle(Color.secondary)
@@ -98,26 +107,47 @@ private struct UpdateRow: View {
                 }
 
                 Spacer(minLength: 0)
-
-                switch update.kind {
-                case .needsYou:
-                    EmptyView()
-                case .working:
-                    ProgressView().controlSize(.small).padding(.top, 10)
-                case .toReview:
-                    HStack(spacing: 6) {
-                        Circle().fill(MausPalette.color(update.chat.color)).frame(width: 10, height: 10)
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.secondary.opacity(0.5))
-                    }
-                    .padding(.top, 12)
-                }
+                trailing
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(chat.name), \(item.group.title)")
+        .accessibilityValue(item.subtitle.isEmpty ? fallback : item.subtitle)
+    }
+
+    @ViewBuilder
+    private var trailing: some View {
+        switch item.group {
+        case .needsYou:
+            EmptyView()
+        case .active:
+            ProgressView().controlSize(.small).padding(.top, 10)
+        case .queued:
+            Label("\(max(item.queueCount, 1))", systemImage: "clock")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.secondary)
+                .padding(.top, 10)
+        case .recentlyFinished:
+            HStack(spacing: 6) {
+                Circle().fill(VBotSurface.unread).frame(width: 10, height: 10)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.secondary.opacity(0.5))
+            }
+            .padding(.top, 12)
+        }
+    }
+
+    private var fallback: String {
+        switch item.group {
+        case .needsYou: return "Waiting on you"
+        case .active: return "Working now"
+        case .queued: return "Queued"
+        case .recentlyFinished: return "Finished"
+        }
     }
 }

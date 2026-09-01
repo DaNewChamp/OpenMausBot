@@ -21,9 +21,35 @@ struct ChatUpdate: Identifiable, Hashable {
     let card: OptionCard?
 
     var id: String { chat.id }
+
+    init(chat: Chat, kind: Kind, line: String, card: OptionCard?) {
+        self.chat = chat
+        self.kind = kind
+        self.line = line
+        self.card = card
+    }
+
+    /// Bridges the renderer-neutral home projection to the app's existing
+    /// chat update row. Keeping this adapter in the app layer means core
+    /// never needs to know SwiftUI's `Chat` enum or navigation stack.
+    init?(item: HomeActivityPresentation.Item, chat: Chat) {
+        let kind: Kind
+        switch item.group {
+        case .needsYou: kind = .needsYou
+        case .active: kind = .working
+        case .queued, .recentlyFinished: kind = .toReview
+        }
+        self.init(chat: chat, kind: kind, line: item.subtitle, card: item.card)
+    }
 }
 
 extension CompanionState {
+    /// The home rail's single projection. Queue receipts are intentionally
+    /// supplied by the caller because this state has no global queue truth.
+    func homeActivity(queuedReceipts: [HomeActivityQueueReceipt] = []) -> HomeActivityPresentation {
+        homeActivityPresentation(queuedReceipts: queuedReceipts)
+    }
+
     var updates: [ChatUpdate] {
         var out: [ChatUpdate] = []
         var seen = Set<String>()
