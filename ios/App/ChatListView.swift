@@ -111,16 +111,16 @@ struct ChatListView: View {
                         )
                     }
                 }
-                // This is an inset, not an overlay: the roster's scrollable
-                // content gains exactly the pill's height, so rows remain
-                // visible while the activity details expand upward in place.
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    HomeActivityPill(
-                        open: { chat in path.append(chat) },
-                        queuedReceipts: session.queueReceipts
-                    )
-                    .environmentObject(session)
-                }
+                // Keep the activity rail in the stack rather than overlaying
+                // it on the scroll view. At accessibility sizes, expanded
+                // rows grow vertically; making the rail a sibling reserves
+                // its full height so it cannot cover the last roster row.
+                HomeActivityPill(
+                    open: { chat in path.append(chat) },
+                    queuedReceipts: session.queueReceipts
+                )
+                .environmentObject(session)
+                .padding(.bottom, max(8, geo.safeAreaInsets.bottom))
             }
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: pinnedChats.map(\.id))
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: pinnedShelfCollapseReserve)

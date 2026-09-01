@@ -1,10 +1,11 @@
 import SwiftUI
 import CompanionCore
 
-/// The home activity rail. It lives in a bottom safe-area inset so expanding
-/// it reserves space in the roster rather than covering a row. Queue receipts
-/// are optional because the hub does not expose a global queue snapshot; the
-/// caller may pass only receipts it genuinely observed on this phone.
+/// The home activity rail. The home stack places it below the roster so
+/// expansion reserves the full panel height instead of covering a row. Queue
+/// receipts are optional because the hub does not expose a global queue
+/// snapshot; the caller may pass only receipts it genuinely observed on this
+/// phone.
 struct HomeActivityPill: View {
     let open: (Chat) -> Void
     var queuedReceipts: [HomeActivityQueueReceipt] = []
@@ -36,6 +37,16 @@ struct HomeActivityPill: View {
                 transaction.disablesAnimations = true
             }
         }
+#if DEBUG
+        .onAppear {
+            // Keep expanded-state captures deterministic without adding any
+            // production state or changing the normal collapsed launch.
+            if ProcessInfo.processInfo.arguments.contains("-preview-expand-activity"),
+               !presentation.items.isEmpty {
+                expanded = true
+            }
+        }
+#endif
         .onChange(of: presentation.state) { _, state in
             if state == .quiet, expanded { expanded = false }
         }

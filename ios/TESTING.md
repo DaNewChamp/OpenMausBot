@@ -188,11 +188,30 @@ Device and fixture:
   `accessibility-extra-extra-extra-large`. Reduce Motion was tested both off
   and on with the simulator Accessibility setting.
 
+The fixture controls are DEBUG-only and do not change the production pairing,
+stream, or state contracts:
+
+- `-preview-connecting` keeps the initial connection in the profile halo.
+- `-preview-quiet` clears activity; `-preview-active` marks the selected bot
+  as working. Use `-preview-single-pin -preview-bot=preview-forge` to keep the
+  roster compact and deterministic.
+- `-preview-work-card=actions` or `-preview-work-card=plain` injects a local
+  work-card message with or without optional PR/Cursor actions. Add
+  `-preview-cursor-available` only to the actions capture; it is a screenshot
+  harness override, not a production capability check.
+- `-preview-expand-activity` opens the activity panel on launch, and
+  `-open-first` opens the selected preview conversation.
+
+The home activity rail is a sibling below the roster scroll view. Its full
+expanded height is reserved even at accessibility XXXL, so enlarged rows stay
+outside the panel and remain reachable by scrolling. Reduce Motion removes the
+spring/rotation transitions while retaining the same content and hit targets.
+
 Verified commands (all passed):
 
 ```sh
 swift test --package-path ios
-cd ios && xcodegen generate
+(cd ios && xcodegen generate)
 xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
   -sdk iphonesimulator -configuration Debug \
   -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
@@ -209,6 +228,13 @@ The Swift gate ran 692 XCTest cases with zero failures and 17 Swift Testing
 cases in four suites. Both simulator builds ended with `** BUILD SUCCEEDED **`.
 The screenshots and the exact interaction steps are recorded in
 `.superpowers/sdd/task-4-report.md`.
+
+Portable evidence is tracked under
+`ios/AppStore/screenshots/task-4-home-activity-2026-08-31/`. The directory
+contains the normal/accessibility Dynamic Type matrix (quiet and active with
+Reduce Motion on and off), needs-approval and initial-connecting halo captures,
+the expanded XXXL activity panel, and work cards with and without optional
+actions. All images are 1206 x 2622 PNGs from the simulator above.
 
 ## Stage 4 — the thing actually working
 

@@ -955,7 +955,20 @@ struct TextBubble: View {
     private var workPresentation: WorkCardPresentation? {
         guard message.role != .user, let work = message.work else { return nil }
         let cursorURL = WorkCardPresentation.validatedCursorURL(work.cursorURL)
-        let cursorAvailable = cursorURL.map { UIApplication.shared.canOpenURL($0) } ?? false
+        let cursorAvailable: Bool
+#if DEBUG
+        // The preview harness cannot install third-party apps in a clean
+        // simulator. This opt-in flag stands in for iOS's canOpenURL result
+        // only for a StorePreview screenshot; production always asks iOS.
+        if ProcessInfo.processInfo.arguments.contains("-store-preview"),
+           ProcessInfo.processInfo.arguments.contains("-preview-cursor-available") {
+            cursorAvailable = cursorURL != nil
+        } else {
+            cursorAvailable = cursorURL.map { UIApplication.shared.canOpenURL($0) } ?? false
+        }
+#else
+        cursorAvailable = cursorURL.map { UIApplication.shared.canOpenURL($0) } ?? false
+#endif
         let presentation = WorkCardPresentation(work: work, canOpenCursor: cursorAvailable)
         return presentation.isRenderable ? presentation : nil
     }

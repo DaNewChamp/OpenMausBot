@@ -111,3 +111,105 @@ generated project is ignored, rerun `git diff --check`, verify the exact
 screenshots above, and independently rerun the Swift and unsigned Debug/Release
 simulator gates. The required documentation commit is
 `docs(ios): record home parity release evidence`.
+
+## Task 4 remediation and visual gate rerun
+
+Date: 2026-08-31 (America/Chicago)
+Starting commit: `25ae27b docs(ios): record home parity release evidence`
+
+The omitted visual states and review findings are now covered without changing
+normal production contracts:
+
+- `Session` keeps StorePreview's requested `.connecting` status, does not start
+  the fake stream while `-store-preview` is active, and applies all other
+  fixture mutations before the view appears.
+- The DEBUG-only `StorePreviewHarness` supports `-preview-connecting`,
+  `-preview-quiet`, `-preview-active`, and
+  `-preview-work-card=actions|plain` (with the explicit
+  `-preview-cursor-available` capture override). The work-card fixture is
+  provider-neutral and includes a diff plus optional PR/Cursor actions only in
+  the actions variant. No release build or production state path consumes
+  these arguments.
+- The activity rail is a sibling below the roster scroll view instead of a
+  safe-area overlay. At accessibility XXXL, its expanded panel reserves its
+  full height and remains a vertical ScrollView; enlarged roster rows stay
+  outside the panel and remain reachable.
+- `ios/TESTING.md` now uses `(cd ios && xcodegen generate)` so the documented
+  command is safe to paste from the repository root, and documents the fixture
+  controls, matrix, and portable evidence directory.
+- Release notes now describe upcoming build 72. `ios/project.yml` and all
+  project build-number settings remain unchanged at 71.
+- Portable simulator evidence is tracked at
+  `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/` (17 PNGs,
+  1206 x 2622): needs-approval, connecting halo, quiet/active `large` and
+  accessibility XXXL with Reduce Motion on/off, expanded active XXXL, and
+  work-card actions/no-actions captures.
+
+### Rerun commands
+
+All commands ran from `/Users/Vincent/Github/.worktrees/vbot-ios-home-activity-0831`.
+
+Focused Swift tests:
+
+```sh
+swift test --package-path ios --filter 'HomeActivityPresentationTests|WorkCardPresentationTests'
+```
+
+Passed: 10 focused tests (four HomeActivity Swift Testing cases and six
+WorkCard XCTest cases).
+
+Full Swift tests:
+
+```sh
+swift test --package-path ios 2>&1 | tee /tmp/vbot-task4-swift-test-final.log
+```
+
+Passed: 692 XCTest cases with zero failures; the trailing Swift Testing run
+reported 17 tests in four suites passed.
+
+Project generation (copy/paste-safe from repository root):
+
+```sh
+(cd ios && xcodegen generate)
+```
+
+Passed: generated `ios/OpenMausCompanion.xcodeproj` from `ios/project.yml`.
+
+Unsigned simulator Debug build:
+
+```sh
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Debug \
+  -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
+  -derivedDataPath /tmp/vbot-task4-debug-derived-final2 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+```
+
+Passed: `** BUILD SUCCEEDED **` (iOS Simulator SDK 26.5).
+
+Unsigned simulator Release build:
+
+```sh
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Release \
+  -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
+  -derivedDataPath /tmp/vbot-task4-release-derived-final2 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+```
+
+Passed: `** BUILD SUCCEEDED **` (iOS Simulator SDK 26.5).
+
+### Evidence inspection
+
+The connecting captures show the profile halo while the roster remains stable;
+Reduce Motion on/off produces the same static frame. Quiet captures show
+`All quiet` / `Nothing needs you`; active captures show `1 active` / `Working
+now` and the working indicator. The XXXL expanded captures show the activity
+panel below the enlarged roster content, with the panel's internal ScrollView
+holding the remaining active or needs-you rows. Work-card captures show the complete diff,
+copy action, and (actions variant only) `View PR` and `Open in Cursor` buttons.
+No Critical or Important clipping/overlap finding remains in the inspected
+captures.
+
+No signing, device archive, TestFlight upload, deploy, merge, or production
+resource change was attempted.

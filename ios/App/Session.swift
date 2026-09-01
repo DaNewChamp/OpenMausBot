@@ -326,8 +326,8 @@ final class Session: ObservableObject {
             }
             modelCatalog = Self.storePreviewProviderCatalog()
             recordHydration(resumed: false)
-            status = .live
-            previouslyLive = true
+            status = StorePreviewHarness.status(arguments: ProcessInfo.processInfo.arguments)
+            previouslyLive = status == .live
             return
         }
 #endif
@@ -703,6 +703,14 @@ final class Session: ObservableObject {
 
     /// Called when the app comes to the front, and once at launch.
     func connect() {
+#if DEBUG
+        // Store preview is a credential-free, deterministic fixture. Do not
+        // let the fake Preview Mac start a real stream and erase a requested
+        // visual state before the screenshot harness can capture it.
+        if StorePreviewHarness.isActive(arguments: ProcessInfo.processInfo.arguments) {
+            return
+        }
+#endif
         // A restore that found the keychain locked left `client` nil on
         // purpose. Coming to the front is the moment worth retrying on: the
         // app is on screen, so the phone is in someone's hand and unlocked.
@@ -3075,13 +3083,27 @@ final class Session: ObservableObject {
 /// preview still loads the real fleet-shaped JSON; these flags only replace
 /// one synthetic bot and/or inject a screen event for deterministic UI QA:
 /// `-preview-computer=starting|watching|unavailable|cloud-viewer|local-vm-idle|local-vm-starting|local-vm-error`
-/// and the optional `-preview-bot=<id>`.
+/// `-preview-work-card=actions|plain`, `-preview-quiet`, `-preview-active`,
+/// `-preview-connecting`, and the optional `-preview-bot=<id>`.
 private enum StorePreviewHarness {
     private static let validScreenPNG = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAEElEQVR4nGNQ0HKBIwacHACAQwappO2xZwAAAABJRU5ErkJggg=="
+
+    static func isActive(arguments: [String]) -> Bool {
+        arguments.contains("-store-preview")
+    }
+
+    static func status(arguments: [String]) -> Session.Status {
+        arguments.contains("-preview-connecting")
+            || arguments.contains("-preview-connection=connecting")
+            ? .connecting
+            : .live
+    }
 
     static func apply(arguments: [String], to state: inout CompanionState) {
         applyConversation(arguments: arguments, to: &state)
         applyRoster(arguments: arguments, to: &state)
+        applyActivity(arguments: arguments, to: &state)
+        applyWorkCard(arguments: arguments, to: &state)
         guard let argument = arguments.first(where: { $0.hasPrefix("-preview-computer=") }) else { return }
         let scenario = String(argument.dropFirst("-preview-computer=".count))
         guard let target = targetBotID(arguments: arguments, state: state),
@@ -3129,6 +3151,70 @@ private enum StorePreviewHarness {
             return
         }
         state.bots[index] = bot
+    }
+
+    private static func applyActivity(arguments: [String], to state: inout CompanionState) {
+        guard arguments.contains("-preview-quiet") || arguments.contains("-preview-active") else { return }
+
+        for index in state.bots.indices {
+            state.bots[index].busy = false
+            state.bots[index].activity = nil
+            state.bots[index].unread = false
+        }
+        for index in state.rooms.indices {
+            state.rooms[index].busyBotId = nil
+            state.rooms[index].unread = false
+        }
+        resolvePendingApprovals(in: &state)
+
+        guard arguments.contains("-preview-active"),
+              let target = targetBotID(arguments: arguments, state: state),
+              let index = state.bots.firstIndex(where: { $0.id == target })
+        else { return }
+        state.bots[index].busy = true
+        state.bots[index].activity = "working"
+    }
+
+    static func applyWorkCard(arguments: [String], to state: inout CompanionState) {
+        guard let argument = arguments.first(where: { $0.hasPrefix("-preview-work-card=") }) else { return }
+        let scenario = String(argument.dropFirst("-preview-work-card=".count))
+        guard ["actions", "with-actions", "plain", "without-actions"].contains(scenario),
+              let target = targetBotID(arguments: arguments, state: state),
+              let index = state.bots.firstIndex(where: { $0.id == target })
+        else { return }
+
+        let threadId = state.bots[index].threadId
+        var transcript = state.messages[threadId] ?? []
+        let parentId = state.bots[index].activeLeafId ?? transcript.last?.id
+        let withActions = scenario == "actions" || scenario == "with-actions"
+        let work = WorkCard(
+            title: "Home activity refactor",
+            status: "Ready for review",
+            branch: "feat/home-activity",
+            prNumber: 72,
+            filesChanged: 3,
+            additions: 18,
+            deletions: 4,
+            prURL: withActions ? "https://github.com/example/vbot/pull/72" : nil,
+            cursorURL: withActions ? "cursor://open?file=%2Ftmp%2Fvbot-preview" : nil
+        )
+        let diff = "```diff\ndiff --git a/ios/App/HomeActivityPill.swift b/ios/App/HomeActivityPill.swift\n@@ -12,2 +12,3 @@\n struct HomeActivityPill: View {\n+    // Preview fixture\n-    var expanded = false\n+    @State private var expanded = false\n```"
+        let message = Message(
+            id: "preview-work-card-\(scenario)",
+            role: .bot,
+            kind: .text,
+            at: 1788103000000,
+            text: diff,
+            parentId: parentId,
+            work: work
+        )
+        transcript.removeAll { $0.id == message.id }
+        transcript.append(message)
+        state.messages[threadId] = transcript
+        state.bots[index].messages = transcript
+        state.bots[index].activeLeafId = message.id
+        state.bots[index].busy = false
+        state.bots[index].activity = nil
     }
 
     static func applyConversation(arguments: [String], to state: inout CompanionState) {
