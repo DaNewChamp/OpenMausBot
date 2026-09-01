@@ -115,6 +115,13 @@ export type HermesCanonicalLookup =
   | { state: "absent" }
   | {
       state: "unknown";
-      code: "state_unavailable" | "malformed_response" | "profile_unavailable";
+      code:
+        | "missing_cli"
+        | "invalid_credentials"
+        | "gateway_unavailable"
+        | "state_unavailable"
+        | "malformed_response"
+        | "timeout"
+        | "profile_unavailable";
       message: string;
     };

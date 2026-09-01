@@ -175,6 +175,59 @@ describe("Hermes Bot Chat loopback transport", () => {
     await engine.close();
   });
 
+  it.each([
+    ["alias-first", "hermes", "default"],
+    ["canonical-first", "default", "hermes"],
+  ])("serializes concurrent default/alias sends ($0) without overwriting the runtime", async (_label, firstProfile, secondProfile) => {
+    const { child } = harness();
+    const engine = new HermesBotAdapter({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const events: RuntimeEvent[] = [];
+    engine.onEvent((event) => events.push(event));
+
+    const first = engine.send({ profile: firstProfile, text: "first", threadId: "t-first", turnId: "turn-first" });
+    const second = engine.send({ profile: secondProfile, text: "second", threadId: "t-second", turnId: "turn-second" });
+    await settle();
+    ready(child);
+    await settle();
+
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(roster.method).toBe("profiles.list");
+    expect(child.stdin.writes).toHaveLength(1);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "default", is_default: true }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(list.method).toBe("session.list");
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", resolved_id: "tip", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(resume.method).toBe("session.resume");
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "ephemeral-runtime" } });
+    await settle();
+    const prompt = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(prompt.method).toBe("prompt.submit");
+    child.frame({ jsonrpc: "2.0", id: prompt.id, result: { accepted: true } });
+
+    await expect(first).resolves.toEqual({ turnId: "turn-first" });
+    await expect(second).rejects.toMatchObject({ code: "upstream_error" });
+    expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).toEqual([
+      "profiles.list", "session.list", "session.resume", "prompt.submit",
+    ]);
+
+    child.frame({ jsonrpc: "2.0", method: "event", params: { type: "message.delta", session_id: "ephemeral-runtime", payload: { text: "still running" } } });
+    await settle();
+    const interrupt = engine.interrupt(secondProfile, "turn-first");
+    await settle();
+    const interruptRequest = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(interruptRequest.method).toBe("session.interrupt");
+    expect(interruptRequest.params).toEqual({ session_id: "ephemeral-runtime" });
+    child.frame({ jsonrpc: "2.0", id: interruptRequest.id, result: { status: "interrupted" } });
+    await expect(interrupt).resolves.toBeUndefined();
+    expect(events.filter((event) => event.type === "content.delta")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "turn.completed")).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: false, stopReason: "interrupted" });
+    await engine.close();
+  });
+
   it("distinguishes absent canonical chats from unknown lookup failures and does not create sessions", async () => {
     const { child } = harness();
     const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
@@ -390,6 +443,32 @@ describe("Hermes Bot Chat loopback transport", () => {
     child.frame({ jsonrpc: "2.0", id: request.id, error: { code: 401, message: "token=/private/provider-secret" } });
     await expect(discovery).resolves.toMatchObject({ state: "unavailable", reason: "invalid_credentials", capabilities: { roster: false } });
     await engine.close();
+  });
+
+  it.each([
+    ["401", "string"],
+    [1.5, "fractional"],
+  ])("fails closed when JSON-RPC error.code is not an integer ($1)", async (code, _label) => {
+    const { child } = harness();
+    const client = new HermesGatewayClient({
+      cli: "hermes",
+      environment: {},
+      spawn: vi.fn(() => child),
+      clock: { now: Date.now, setTimeout, clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) },
+      timeouts: { initializationMs: 500, requestMs: 500, turnMs: 500, reconnectMs: 500 },
+      onEvent: vi.fn(),
+      onState: vi.fn(),
+    });
+    const started = client.start();
+    await settle();
+    ready(child);
+    await started;
+    const request = client.request("profiles.list", {});
+    await settle();
+    const rpc = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: rpc.id, error: { code, message: "/private/provider-secret" } });
+    await expect(request).rejects.toMatchObject({ code: "malformed_response" });
+    await client.close();
   });
 
   it("marks a nonzero child exit unavailable and rejects pending calls", async () => {

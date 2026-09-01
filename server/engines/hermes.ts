@@ -673,8 +673,10 @@ function safeReadyPayload(value: unknown): Record<string, unknown> | undefined {
 
 function isSafeRpcError(value: unknown): boolean {
   if (!isRecord(value)) return false;
-  if (typeof value.code !== "number" && !safeFrameString(value.code, 120)) return false;
-  if (typeof value.code === "number" && !Number.isSafeInteger(value.code)) return false;
+  // JSON-RPC 2.0 requires an integer error code.  String codes are not
+  // accepted even when they look like a known authentication code; treating
+  // them as malformed keeps the protocol boundary deterministic.
+  if (typeof value.code !== "number" || !Number.isSafeInteger(value.code)) return false;
   // The message is deliberately discarded (it may contain paths, prompts,
   // or provider payloads), but its type/size must still be bounded.
   if (hasOwn(value, "message") && (typeof value.message !== "string" || value.message.length > MAX_FRAME_STRING_LENGTH)) return false;
@@ -746,7 +748,7 @@ function classifyRpcError(error: unknown): HermesFailureCode {
   if (!error || typeof error !== "object") return "upstream_error";
   const record = error as Record<string, unknown>;
   const code = record.code;
-  const normalizedCode = typeof code === "number" ? String(code) : typeof code === "string" ? code.toUpperCase() : "";
+  const normalizedCode = typeof code === "number" ? String(code) : "";
   if (["401", "403", "AUTH", "UNAUTHORIZED", "INVALID_CREDENTIALS"].includes(normalizedCode)) {
     return "invalid_credentials";
   }
@@ -760,7 +762,12 @@ function errorForLookup(result: HermesCanonicalLookup): HermesEngineError {
 }
 
 function profileLockKey(profile: string): string {
-  return profile.toLowerCase();
+  const normalized = profile.toLowerCase();
+  // The default Hermes profile is exposed to V Bot through the public
+  // `hermes` handle. Keep both names on one lock/runtime identity so a
+  // concurrent alias/canonical send cannot resume or overwrite the same
+  // Bot Chat twice.
+  return normalized === "hermes" ? "default" : normalized;
 }
 
 function usageValue(value: unknown): number | undefined {
@@ -1004,7 +1011,10 @@ export class HermesBotAdapter implements HermesBotEngine {
 
   private async requireDiscoveredProfile(
     profile: string,
-  ): Promise<{ state: "available"; profile: string } | { state: "unavailable"; code: "state_unavailable" | "profile_unavailable" }> {
+  ): Promise<
+    | { state: "available"; profile: string }
+    | { state: "unavailable"; code: Extract<HermesCanonicalLookup, { state: "unknown" }>["code"] }
+  > {
     let normalized: string;
     try {
       normalized = normalizeProfile(profile);
@@ -1017,7 +1027,12 @@ export class HermesBotAdapter implements HermesBotEngine {
     // default database session.
     const discovery = await this.discover();
     if (discovery.state !== "available" || !this.rosterAvailable) {
-      return { state: "unavailable", code: "state_unavailable" };
+      // `discover()` already reduced all process/RPC details to fixed safe
+      // setup diagnostics. Preserve those codes so callers can distinguish a
+      // missing CLI, invalid credentials, gateway outage, or timeout from an
+      // otherwise readable but unavailable Hermes state.
+      const code = discovery.reason ?? "state_unavailable";
+      return { state: "unavailable", code: canonicalUnknownCode(code) };
     }
 
     const matches = discovery.profiles.filter((row) =>
@@ -1148,9 +1163,16 @@ export class HermesBotAdapter implements HermesBotEngine {
     // profile/handle. The latter is captured at runtime start so an active
     // turn remains interruptible after a roster refresh deletes or ambiguates
     // that handle; no stale identity is guessed or reminted.
+    const requestedProfile = profile.toLowerCase();
     return [...this.runtimes.values()].find((candidate) =>
       candidate.generation === generation
-      && (candidate.profile === profile || candidate.requestedProfile === profile));
+      && (
+        candidate.profile === requestedProfile
+        || candidate.requestedProfile === requestedProfile
+        // `hermes` is an alias for the default profile, but a real named
+        // profile called `hermes` is still valid when no default exists.
+        || (candidate.profile === "default" && (requestedProfile === "hermes" || candidate.requestedProfile === "hermes"))
+      ));
   }
 
   private lockFor(profile: string): AsyncLock {
@@ -1208,8 +1230,21 @@ function childErrorCode(error: unknown): HermesFailureCode {
   return code === "ENOENT" || code === "EACCES" ? "missing_cli" : "gateway_unavailable";
 }
 
-function canonicalUnknownCode(code: HermesFailureCode): "state_unavailable" | "malformed_response" {
-  return code === "malformed_response" ? "malformed_response" : "state_unavailable";
+function canonicalUnknownCode(
+  code: HermesFailureCode,
+): Extract<HermesCanonicalLookup, { state: "unknown" }>["code"] {
+  switch (code) {
+    case "missing_cli":
+    case "invalid_credentials":
+    case "gateway_unavailable":
+    case "state_unavailable":
+    case "malformed_response":
+    case "timeout":
+    case "profile_unavailable":
+      return code;
+    default:
+      return "state_unavailable";
+  }
 }
 
 interface HermesReadiness {
