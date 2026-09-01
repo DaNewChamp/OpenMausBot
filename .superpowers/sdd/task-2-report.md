@@ -128,3 +128,54 @@ xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
 ```
 
 `** BUILD SUCCEEDED **` (iOS simulator SDK 26.5, iOS deployment target 17.0).
+
+---
+
+# Task 2 Hermes transport implementation
+
+## Files changed
+
+- `server/engines/hermes.ts`
+  - Added an injected loopback JSON-RPC client for `hermes --tui` with
+    `gateway.ready` startup detection, numeric request correlation, bounded
+    initialization/request/turn waits, pending-call rejection on close, and
+    explicit reconnect only.
+  - Sanitizes the child environment, keeps stderr and raw protocol diagnostics
+    out of public errors, and exposes only fixed `HermesEngineError` codes.
+  - Added exact `profiles.list` discovery and per-profile `session.list` lookup
+    for the literal hidden `Bot Chat` title, including denied-source,
+    compression-tip, absent/unknown, and stale-roster behavior.
+  - Added `session.resume` on the resolved durable id, in-memory-only runtime
+    ids, JSON-RPC `prompt.submit`, optional deltas, authoritative final
+    projection, idempotent terminal handling, and `session.interrupt`.
+  - Unsupported routines, agent messaging, groups, cross-machine, queueing,
+    steer, and attachment capabilities remain false through Task 1's
+    proof-based projection.
+- `server/engines/hermes-adapter.test.ts`
+  - Added fake-process/clock-seam coverage for startup/argv/env redaction,
+    correlation, interleaved events, exact canonical lookup, absent handling,
+    resume/prompt/final projection, interrupt cleanup, and startup crash.
+
+## Verification
+
+```text
+./node_modules/.bin/vitest run server/engines/hermes-adapter.test.ts
+```
+
+6 tests passed, 0 failures.
+
+```text
+./node_modules/.bin/tsc -p tsconfig.server.json --noEmit
+git diff --check
+```
+
+Both passed. The direct server TypeScript invocation covers the requested
+server typecheck without the workspace package-manager preflight.
+
+## Scope and remaining risk
+
+- No hub/index integration, iOS/public contract changes, routines access,
+  message-agent/groups/cross-machine routes, or dependencies were added.
+- No real Hermes account or live gateway was exercised; the transport is
+  covered with an injected process seam only. Root should independently review
+  the diff and perform any live loopback gate before enabling it.
