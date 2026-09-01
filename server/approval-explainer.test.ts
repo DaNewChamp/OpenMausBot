@@ -1,8 +1,40 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { explainApproval, reviewApproval } from "./approval-explainer.ts";
+import { explainApproval, isReadOnlyShellCommand, reviewApproval } from "./approval-explainer.ts";
+import { approvalPresentation } from "./index.ts";
 
 describe("approval explanations", () => {
+  it("treats OpenMausBot git inspection as read-only with a concrete multi-action summary", () => {
+    const command =
+      "cd ~/Github/OpenMausBot 2>/dev/null && git log -5 --oneline --date=short --format='%h %ad %s' 2>/dev/null; echo '---'; git remote -v 2>/dev/null | head -2; echo '---'; ls -lt ~/Github/OpenMausBot 2>/dev/null | head -5";
+    expect(isReadOnlyShellCommand("terminal", command)).toBe(true);
+    const explanation = explainApproval("terminal", command, "Mac mini");
+    expect(explanation).toMatchObject({
+      executiveSummary: "Inspects recent Git history, configured remotes, and the latest files for the OpenMausBot repository",
+      changeSummary: "Nothing; read-only",
+      resourceSummary: "OpenMausBot repository on Mac mini",
+      riskLevel: "low",
+      confidence: "high",
+      source: "local",
+    });
+    const presentation = approvalPresentation("terminal", command, "local-computer");
+    expect(presentation.actionSummary).toBe("Run a read-only command on Mac mini");
+    expect(presentation.riskLevel).toBe("low");
+    expect(presentation.changeSummary).toBe("Nothing; read-only");
+  });
+
+  it.each([
+    "echo ok > result.txt",
+    "git push origin main",
+    "unknown-tool --do-it",
+    "curl https://example.com",
+    "cat $(whoami).txt",
+    "ls | xargs rm",
+  ])("keeps mutating or ambiguous command %s fail-closed", (command) => {
+    expect(isReadOnlyShellCommand("terminal", command)).toBe(false);
+    expect(explainApproval("terminal", command, "Mac mini").riskLevel).not.toBe("low");
+  });
+
   it("summarizes the staff and routing read without echoing shell noise", () => {
     const explanation = explainApproval(
       "run_on_bridge",

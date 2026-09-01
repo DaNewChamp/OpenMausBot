@@ -130,7 +130,7 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
 import { searchMessages } from "./message-db.ts";
 import { promptWithReply, transcriptText } from "./replies.ts";
-import { explainApproval, reviewApproval } from "./approval-explainer.ts";
+import { explainApproval, isReadOnlyShellCommand, reviewApproval } from "./approval-explainer.ts";
 import {
   approvalReviewerSelection,
   parseApprovalReviewerPatch,
@@ -1016,9 +1016,7 @@ export function approvalPresentation(tool: string, summary: string, scope?: "loc
     : scope === "bridge"
       ? "This action needs permission because it will run through your paired computer. Nothing runs unless you approve."
       : "This action needs permission before the bot can continue. Nothing runs unless you approve.";
-  const readOnlyCommand =
-    /^(?:cat|cut|echo|find|git\s+(?:status|log|diff)|head|ls|pwd|rg|sed|tail|type|which|wc)\b/i.test(summary.trim()) &&
-    !/\b(?:curl|docker\s+(?:rm|stop|kill|exec)|install|mkdir|mv|npm\s+publish|pnpm\s+publish|rm|rmdir|scp|ssh|touch|write)\b/i.test(summary);
+  const readOnlyCommand = isReadOnlyShellCommand(tool, summary);
   const actionSummary = toolLabel === "Terminal"
     ? `${readOnlyCommand ? "Run a read-only command" : "Run a command"} on ${hostLabel}`
     : toolLabel === "Computer"

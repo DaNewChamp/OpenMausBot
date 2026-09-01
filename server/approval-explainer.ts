@@ -128,12 +128,21 @@ export async function reviewApproval(
 
 type CommandClass = "read" | "computer" | "network" | "mutating" | "sensitive" | "unknown";
 
-const READ_PROGRAMS = new Set(["cat", "cut", "echo", "find", "grep", "head", "ls", "pwd", "rg", "sort", "tail", "type", "which", "wc"]);
-const GIT_READ_ACTIONS = new Set(["status", "log", "diff", "show", "branch"]);
+const READ_PROGRAMS = new Set(["cat", "cd", "cut", "echo", "find", "grep", "head", "ls", "pwd", "rg", "sort", "tail", "type", "which", "wc"]);
+const GIT_READ_ACTIONS = new Set(["status", "log", "diff", "show", "branch", "remote"]);
 const COMPUTER_WORDS = /computer|screenshot|click|type[ _-]?text|press[ _-]?key|scroll|open[ _-]?url|trackpad|touch/i;
 const NETWORK_WORDS = /\b(?:curl|wget|ssh|scp|sftp|rsync|nc|netcat|ftp)\b/i;
 const MUTATION_WORDS = /(?:^|[\s;&|])(?:rm|rmdir|mv|cp|mkdir|touch|tee|install|uninstall|kill|shutdown|reboot|chmod|chown|docker\s+(?:run|exec|rm|stop|kill)|npm\s+(?:install|publish)|pnpm\s+(?:install|publish)|git\s+(?:commit|push|reset|checkout|clean)|sed\s+-[^;|]*i\b)/i;
-const REDIRECTION = /(?:^|[^<])>{1,2}|\b(?:tee|xargs)\b/i;
+const COMMAND_SUBSTITUTION = /\$\(|`/;
+
+function stripHarmlessRedirections(input: string): string {
+  return input.replace(/\d*(?:>>?|<)\s*\/dev\/null\b/gi, "");
+}
+
+function hasUnsafeRedirection(command: string): boolean {
+  if (/\b(?:tee|xargs)\b/i.test(command)) return true;
+  return /(?:^|[^<])>{1,2}/.test(stripHarmlessRedirections(command));
+}
 
 function shellSegments(input: string): string[] {
   const result: string[] = [];
@@ -162,6 +171,13 @@ function shellSegments(input: string): string[] {
       const segment = input.slice(start, index).trim();
       if (segment) result.push(segment);
       if (input[index + 1] === character) index += 1;
+      start = index + 1;
+      continue;
+    }
+    if (character === "&" && input[index + 1] === "&") {
+      const segment = input.slice(start, index).trim();
+      if (segment) result.push(segment);
+      index += 1;
       start = index + 1;
     }
   }
@@ -195,6 +211,15 @@ function resourceNames(command: string): string[] {
   return [...names].slice(0, 5);
 }
 
+function gitAction(segment: string): string | undefined {
+  return segment.match(/\bgit\s+([A-Za-z-]+)/i)?.[1]?.toLowerCase();
+}
+
+function repositoryLabel(command: string): string | null {
+  const target = command.match(/\b(?:cd|ls)\s+(?:[^\s;|&]*\/)?([A-Za-z][A-Za-z0-9_.-]+)/)?.[1];
+  return target ? `${target} repository` : null;
+}
+
 function humanList(values: string[]): string {
   if (values.length === 0) return "the current workspace";
   if (values.length === 1) return values[0]!;
@@ -202,16 +227,21 @@ function humanList(values: string[]): string {
   return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
 }
 
+function resourceContext(command: string, resources: string[]): string {
+  return repositoryLabel(command) ?? humanList(resources);
+}
+
 function classify(tool: string, command: string, segments: string[]): CommandClass {
   if (looksSensitive(command)) return "sensitive";
-  if (looksDestructive(command) || MUTATION_WORDS.test(command) || REDIRECTION.test(command)) return "mutating";
+  if (looksDestructive(command) || MUTATION_WORDS.test(command) || hasUnsafeRedirection(command)) return "mutating";
+  if (COMMAND_SUBSTITUTION.test(command)) return "unknown";
   if (COMPUTER_WORDS.test(tool)) return "computer";
   if (NETWORK_WORDS.test(command)) return "network";
   if (!segments.length) return "unknown";
   const allRead = segments.every((segment) => {
     const program = firstProgram(segment);
     if (program === "git") {
-      const action = segment.match(/^git\s+([A-Za-z-]+)/i)?.[1]?.toLowerCase();
+      const action = gitAction(segment);
       return action ? GIT_READ_ACTIONS.has(action) : false;
     }
     if (program === "sed") return /\bsed\s+-[^;|]*\bn\b/i.test(segment) && !/\s-i(?:\s|$)/i.test(segment);
@@ -221,15 +251,61 @@ function classify(tool: string, command: string, segments: string[]): CommandCla
   return allRead ? "read" : "unknown";
 }
 
+function readActionPhrase(action: string): string | undefined {
+  switch (action) {
+    case "status": return "repository status";
+    case "diff": return "uncommitted code changes";
+    case "log": return "recent Git history";
+    case "remote": return "configured remotes";
+    case "show": return "Git object details";
+    case "branch": return "branch names";
+    default: return undefined;
+  }
+}
+
 function readSummary(command: string, resources: string[]): string {
-  const programs = shellSegments(command).map(firstProgram);
+  const segments = shellSegments(command);
+  const programs = segments.map(firstProgram);
+  const readActions = segments
+    .map((segment) => (firstProgram(segment) === "git" ? readActionPhrase(gitAction(segment) ?? "") : undefined))
+    .filter((value): value is string => Boolean(value));
+  if (programs.includes("ls")) readActions.push("the latest files");
+  if (programs.includes("find")) readActions.push(`matching files in ${humanList(resources)}`);
+  if (programs.includes("rg") || programs.includes("grep")) readActions.push(`matching text in ${humanList(resources)}`);
+  if (programs.some((program) => ["cat", "sed"].includes(program)) && resources.length > 0) {
+    readActions.push(humanList(resources));
+  }
+  for (const segment of segments) {
+    const program = firstProgram(segment);
+    if (program !== "head" && program !== "tail") continue;
+    const operand = segment.replace(/^(?:head|tail)\s+(?:-[A-Za-z0-9]+\s+)*/i, "").trim();
+    if (operand && !/^-?\d+$/.test(operand)) readActions.push(humanList([operand.split("/").pop() ?? operand]));
+  }
+  if (programs.includes("pwd")) readActions.push("the current working folder");
+  if (programs.includes("wc")) readActions.push(`line or word counts in ${humanList(resources)}`);
+
+  const uniqueActions = [...new Set(readActions)];
+  const repo = repositoryLabel(command);
+  if (uniqueActions.length >= 2 && repo) {
+    const last = uniqueActions.at(-1)!;
+    const prefix = uniqueActions.slice(0, -1).join(", ");
+    return `Inspects ${prefix}, and ${last} for the ${repo.replace(/ repository$/, "")} repository`;
+  }
+
+  if (uniqueActions.length === 1 && repo && uniqueActions[0] !== repo) {
+    const action = uniqueActions[0]!;
+    if (action.startsWith("matching ") || action.startsWith("line or word")) {
+      return `${action[0]!.toUpperCase()}${action.slice(1)} for the ${repo.replace(/ repository$/, "")} repository`;
+    }
+    return `Inspects ${action} for the ${repo.replace(/ repository$/, "")} repository`;
+  }
+
   if (programs.includes("git")) {
-    const actions = shellSegments(command)
-      .map((segment) => segment.match(/^git\s+([A-Za-z-]+)/i)?.[1]?.toLowerCase())
-      .filter((value): value is string => Boolean(value));
+    const actions = segments.map((segment) => gitAction(segment)).filter((value): value is string => Boolean(value));
     if (actions.includes("status")) return "Checks the repository status";
     if (actions.includes("diff")) return "Reviews uncommitted code changes";
     if (actions.includes("log")) return "Reads recent repository history";
+    if (actions.includes("remote")) return "Reads configured Git remotes";
   }
   if (programs.includes("find")) return `Lists matching files in ${humanList(resources)}`;
   if (programs.includes("rg") || programs.includes("grep")) return `Searches ${humanList(resources)} for matching text`;
@@ -240,6 +316,12 @@ function readSummary(command: string, resources: string[]): string {
   return resources.length ? `Reads ${humanList(resources)}` : "Reads information from the computer";
 }
 
+/** Shared read-only classifier for approval cards and explanations. */
+export function isReadOnlyShellCommand(tool: string, command: string): boolean {
+  const safeCommand = sanitizeLocalVmInvokeText(String(command ?? "").slice(0, 16_000));
+  return classify(String(tool ?? ""), safeCommand, shellSegments(safeCommand)) === "read";
+}
+
 /** Build a bounded, plain-English explanation without running the command. */
 export function explainApproval(tool: string, summary: string, hostLabel?: string): ApprovalExplanation {
   const safeCommand = sanitizeLocalVmInvokeText(String(summary ?? "").slice(0, 16_000));
@@ -247,7 +329,8 @@ export function explainApproval(tool: string, summary: string, hostLabel?: strin
   const kind = classify(String(tool ?? ""), safeCommand, segments);
   const resources = resourceNames(safeCommand);
   const safeHost = String(hostLabel ?? "").replace(/[^A-Za-z0-9 .:_-]/g, "").slice(0, 80);
-  const where = safeHost ? `${humanList(resources)} on ${safeHost}` : humanList(resources);
+  const context = resourceContext(safeCommand, resources);
+  const where = safeHost ? `${context} on ${safeHost}` : context;
 
   switch (kind) {
     case "read":
