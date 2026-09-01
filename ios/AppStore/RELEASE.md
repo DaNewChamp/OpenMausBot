@@ -8,9 +8,9 @@ work; renaming the display name does not require a bundle-ID migration.
 ## Current release state
 
 - Current iOS project version: **74** (`MARKETING_VERSION` `1.0.0`, `CURRENT_PROJECT_VERSION` `74`).
-- Build 73 is recorded as `VALID / IN_BETA_TESTING` in the internal TestFlight lane; external build state is `READY_FOR_BETA_SUBMISSION`.
-- What-to-Test for `en-US` was updated for build 73.
-- Build 74 is the next internal candidate. It includes the home/read-state polish, compact bot settings, approval-summary hardening, and the first-party Hermes Bot Chat adapter.
+- Build 74 is recorded as `VALID` in App Store Connect after a successful archive and upload.
+- What-to-Test for `en-US` was updated for build 74.
+- Build 74 includes the home/read-state polish, compact bot settings, approval-summary hardening, and the first-party Hermes Bot Chat adapter.
 - This file does not claim physical-device QA, production deployment, external beta submission, or desktop publication.
 
 ## One-time Apple setup
