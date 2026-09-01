@@ -263,11 +263,11 @@ function pushApprovalCard(
   const hostLabel = req.tool === "run_on_ssh_target"
     ? `SSH target ${req.sshAlias || "target"}`
     : req.bridgeName || "computer";
-  const readOnly = !looksDestructive(req.command) && !looksSensitive(req.command);
-  const actionSummary = `${readOnly ? "Run a read-only command" : "Run a command"} on ${hostLabel}`;
   const safeCommand = sanitizeLocalVmInvokeText(req.command).slice(0, 16_000);
   const subtitle = safeCommand.length > 200 ? `${safeCommand.slice(0, 200)}…` : safeCommand;
   const explanation = explainApproval(req.tool, safeCommand, hostLabel);
+  const readOnly = explanation.riskLevel === "low" && explanation.changeSummary === "Nothing; read-only";
+  const actionSummary = `${readOnly ? "Run a read-only command" : "Run a command"} on ${hostLabel}`;
   const message = bus.store.appendMessage(bot.threadId, {
     role: "bot",
     kind: "options",

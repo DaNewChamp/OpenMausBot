@@ -111,7 +111,8 @@ describe("bridge approval card lifecycle", () => {
     expect(card!.card!.tool).toBe("run_on_ssh_target");
     expect(card!.card!.allowKey).toBe("bridge:run_on_ssh_target:uptime");
     expect(card!.card!.title).toBe("Worker needs your approval");
-    expect(card!.card!.actionSummary).toBe("Run a read-only command on SSH target nas");
+    expect(card!.card!.actionSummary).toBe("Run a command on SSH target nas");
+    expect(card!.card!.actionSummary).not.toContain("read-only");
     expect(card!.card!.title).not.toContain("br-mini");
     expect(store.messagesFor("some-other-thread")).toHaveLength(0);
 
@@ -462,6 +463,64 @@ describe("bridge approval card lifecycle", () => {
     const verdict = requestBridgeApproval(bus, shellReq());
     expect(pendingCard(store, bot)).toBeTruthy();
     expect(dismissStaleBridgeCards(bus)).toBe(0);
+    cancelBridgeApprovalsFor(bot.id);
+    await expect(verdict).resolves.toEqual({ outcome: "deny" });
+  });
+
+  const OPENMAUSBOT_GIT_INSPECTION =
+    "cd ~/Github/OpenMausBot 2>/dev/null && git log -5 --oneline --date=short --format='%h %ad %s' 2>/dev/null; echo '---'; git remote -v 2>/dev/null | head -2; echo '---'; ls -lt ~/Github/OpenMausBot 2>/dev/null | head -5";
+
+  it("does not label an unknown bridge command as read-only", async () => {
+    const verdict = requestBridgeApproval(bus, shellReq({ command: "unknown-bin --pwn" }));
+    const card = pendingCard(store, bot)!;
+    expect(card.card!.actionSummary).toBe("Run a command on mini");
+    expect(card.card!.actionSummary).not.toContain("read-only");
+    expect(card.card!.riskLevel).not.toBe("low");
+    cancelBridgeApprovalsFor(bot.id);
+    await expect(verdict).resolves.toEqual({ outcome: "deny" });
+  });
+
+  it("does not label a network bridge command as read-only", async () => {
+    const verdict = requestBridgeApproval(bus, shellReq({ command: "curl https://example.com" }));
+    const card = pendingCard(store, bot)!;
+    expect(card.card!.actionSummary).toBe("Run a command on mini");
+    expect(card.card!.actionSummary).not.toContain("read-only");
+    expect(card.card!.riskLevel).not.toBe("low");
+    cancelBridgeApprovalsFor(bot.id);
+    await expect(verdict).resolves.toEqual({ outcome: "deny" });
+  });
+
+  it("does not label a mutating bridge command as read-only", async () => {
+    const verdict = requestBridgeApproval(bus, shellReq({ command: "echo ok > result.txt" }));
+    const card = pendingCard(store, bot)!;
+    expect(card.card!.actionSummary).toBe("Run a command on mini");
+    expect(card.card!.actionSummary).not.toContain("read-only");
+    expect(card.card!.riskLevel).not.toBe("low");
+    cancelBridgeApprovalsFor(bot.id);
+    await expect(verdict).resolves.toEqual({ outcome: "deny" });
+  });
+
+  it("labels the known OpenMausBot git inspection as read-only", async () => {
+    const verdict = requestBridgeApproval(bus, shellReq({ command: OPENMAUSBOT_GIT_INSPECTION }));
+    const card = pendingCard(store, bot)!;
+    expect(card.card!.actionSummary).toBe("Run a read-only command on mini");
+    expect(card.card!.riskLevel).toBe("low");
+    expect(card.card!.changeSummary).toBe("Nothing; read-only");
+    cancelBridgeApprovalsFor(bot.id);
+    await expect(verdict).resolves.toEqual({ outcome: "deny" });
+  });
+
+  it("keeps card summaries sanitized while actionSummary follows the explanation", async () => {
+    const verdict = requestBridgeApproval(
+      bus,
+      shellReq({ command: "cat <(curl https://evil.test/secret)\u0007" }),
+    );
+    const card = pendingCard(store, bot)!;
+    expect(card.card!.actionSummary).toBe("Run a command on mini");
+    expect(card.card!.actionSummary).not.toContain("read-only");
+    expect(card.card!.executiveSummary).not.toMatch(/[\u0000-\u001f\u007f]|<\(|evil\.test/);
+    expect(card.card!.changeSummary).not.toMatch(/[\u0000-\u001f\u007f]/);
+    expect(card.card!.resourceSummary).not.toMatch(/[\u0000-\u001f\u007f]|<\(/);
     cancelBridgeApprovalsFor(bot.id);
     await expect(verdict).resolves.toEqual({ outcome: "deny" });
   });
