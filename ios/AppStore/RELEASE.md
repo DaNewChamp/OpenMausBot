@@ -8,10 +8,9 @@ work; renaming the display name does not require a bundle-ID migration.
 ## Current release state
 
 - Current iOS project version: **75** (`MARKETING_VERSION` `1.0.0`, `CURRENT_PROJECT_VERSION` `75`).
-- Build 74 is recorded as `VALID` in App Store Connect after a successful archive and upload.
-- What-to-Test for `en-US` was updated for build 74.
-- Build 74 includes the home/read-state polish, compact bot settings, approval-summary hardening, and the first-party Hermes Bot Chat adapter.
-- Build 75 is the next internal candidate and fixes account-avatar, paired-computer naming/fleet presentation, and cancellation-alert behavior.
+- Build 75 is recorded as `VALID` in App Store Connect after a successful archive and upload.
+- What-to-Test for `en-US` was updated for build 75.
+- Build 75 includes the home/read-state polish, compact bot settings, approval-summary hardening, the first-party Hermes Bot Chat adapter, editable account avatars, paired-computer fleet presentation, friendly computer names, and cancellation-alert fixes.
 - This file does not claim physical-device QA, production deployment, external beta submission, or desktop publication.
 
 ## One-time Apple setup

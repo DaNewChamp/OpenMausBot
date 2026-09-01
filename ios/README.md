@@ -15,7 +15,7 @@ same harness the desktop app talks to, through the restricted sidecar described 
 
 ## Status
 
-TestFlight build 74 is recorded as `VALID` in App Store Connect. Build 75 is the current candidate
+TestFlight build 75 is recorded as `VALID` in App Store Connect
 (`CURRENT_PROJECT_VERSION: 75` in `project.yml`). The code and focused suites cover QR handoff, Bonjour/manual LAN and Tailscale
 pairing, the roster, paged chat, settled replies, model/provider selection, attachments, the
 computer view, and approval flows. A fresh physical-device install, cellular VM exercise, and
