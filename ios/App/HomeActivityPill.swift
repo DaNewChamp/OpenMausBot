@@ -79,14 +79,21 @@ struct HomeActivityPill: View {
                     .foregroundStyle(tint)
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(presentation.collapsedTitle)
+                    Text(collapsedTitle)
                         .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    Text(presentation.collapsedSubtitle)
+                        .lineLimit(HomeActivityRailLayoutPolicy.collapsedTitleLineLimit(
+                            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+                        ))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(collapsedSubtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(HomeActivityRailLayoutPolicy.collapsedSubtitleLineLimit(
+                            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+                        ))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                .fixedSize(horizontal: false, vertical: true)
 
                 Spacer(minLength: 8)
                 Image(systemName: expanded ? "chevron.down" : "chevron.up")
@@ -96,10 +103,19 @@ struct HomeActivityPill: View {
             }
             .padding(.leading, 14)
             .padding(.trailing, 4)
-            .frame(minHeight: VBotSurface.Hit.minimum)
+            .padding(.vertical, HomeActivityRailLayoutPolicy.collapsedVerticalPadding(
+                isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+            ))
+            .frame(
+                minHeight: HomeActivityRailLayoutPolicy.collapsedMinimumHeight(
+                    isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+                )
+            )
+            .fixedSize(horizontal: false, vertical: true)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .fixedSize(horizontal: false, vertical: true)
         .glassCapsule()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(presentation.accessibilityLabel)
@@ -165,6 +181,34 @@ struct HomeActivityPill: View {
         case .quiet: return .secondary
         case .active: return .accentColor
         case .needsAttention: return .orange
+        }
+    }
+
+    private var collapsedTitle: String {
+        guard HomeActivityRailLayoutPolicy.usesCompactCopy(
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+        ) else { return presentation.collapsedTitle }
+        switch presentation.state {
+        case .quiet:
+            return "Quiet"
+        case .needsAttention:
+            return "\(presentation.needsYou.count) waiting"
+        case .active:
+            return "\(presentation.totalActivityCount) active"
+        }
+    }
+
+    private var collapsedSubtitle: String {
+        guard HomeActivityRailLayoutPolicy.usesCompactCopy(
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+        ) else { return presentation.collapsedSubtitle }
+        switch presentation.state {
+        case .quiet:
+            return "No pending"
+        case .needsAttention:
+            return "Review now"
+        case .active:
+            return "Working now"
         }
     }
 }

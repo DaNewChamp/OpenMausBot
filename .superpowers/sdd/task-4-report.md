@@ -345,3 +345,69 @@ git diff --check
 All commands passed; both simulator builds ended with `** BUILD SUCCEEDED **`
 using iOS Simulator SDK 26.5. No signing, device archive, TestFlight upload,
 deploy, merge, or backend contract change was attempted.
+
+## Final accessibility pill containment fix
+
+Date: 2026-09-01 (America/Chicago)
+Starting commit: `f348faa fix(ios): close final review gaps`
+
+The final Important finding is closed. `HomeActivityPill` now keeps its normal
+44-point premium rail at regular Dynamic Type sizes. At accessibility sizes it
+uses compact single-line visual copy and a 112-point minimum rail height with
+vertical padding, so XXXL text stays inside the capsule and below the roster or
+expanded panel. The full presentation label/value and hint remain on the one
+tappable button for VoiceOver; the rail remains a sibling of the roster.
+
+The sizing contract is isolated in
+`ios/Sources/CompanionCore/HomeActivityRailLayoutPolicy.swift` and covered by
+`ios/Tests/CompanionCoreTests/HomeActivityRailLayoutPolicyTests.swift`.
+TDD evidence: the focused policy test first failed to compile before the policy
+was added (`cannot find 'HomeActivityRailLayoutPolicy' in scope`), then passed
+3 XCTest cases after implementation. The focused presentation/preview filter
+also passed 7 Swift Testing cases.
+
+Final verification (all passed):
+
+```sh
+swift test --package-path ios --filter 'HomeActivityRailLayoutPolicyTests|HomeActivityPresentationTests|HomeActivityPreviewExpansionPolicyTests'
+swift test --package-path ios
+(cd ios && xcodegen generate)
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Debug \
+  -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
+  -derivedDataPath /tmp/vbot-pill-fix-final-debug-0901 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Release \
+  -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
+  -derivedDataPath /tmp/vbot-pill-fix-final-release-0901 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+git diff --check
+```
+
+The full Swift run passed 700 XCTest cases with zero failures and 20 Swift
+Testing cases in five suites (the prior 697 count increased by the three new
+policy tests). Both simulator builds ended with `** BUILD SUCCEEDED **` using
+Simulator SDK 26.5. The final logs are `/tmp/vbot-pill-fix-swift-final-0901.log`,
+`/tmp/vbot-pill-fix-final-debug-0901.log`, and
+`/tmp/vbot-pill-fix-final-release-0901.log`.
+
+On iPhone 17 Pro simulator `334FC58E-19DA-460C-AC2A-1D34D7CAA916` (iOS 26.5,
+dark, accessibility XXXL), the final Debug build was recaptured with Reduce
+Motion on and off. Full-resolution inspection verified the capsule contains
+`Quiet`/`No pending`, `1 active`/`Working now`, and `1 waiting`/`Review now` in
+both collapsed and expanded states; the rail stays below the expanded panel
+and does not cover roster rows. Replaced portable evidence:
+
+```text
+ios/AppStore/screenshots/task-4-home-activity-2026-08-31/09-quiet-xxxl-reduce-motion-off.png
+ios/AppStore/screenshots/task-4-home-activity-2026-08-31/10-quiet-xxxl-reduce-motion-on.png
+ios/AppStore/screenshots/task-4-home-activity-2026-08-31/11-active-xxxl-reduce-motion-off.png
+ios/AppStore/screenshots/task-4-home-activity-2026-08-31/12-active-xxxl-reduce-motion-on.png
+ios/AppStore/screenshots/task-4-home-activity-2026-08-31/13-expanded-active-xxxl-reduce-motion-on.png
+ios/AppStore/screenshots/task-4-home-activity-2026-08-31/18-expanded-needs-xxxl-reduce-motion-on-post-preview-expansion-fix.png
+ios/AppStore/screenshots/task-4-home-activity-2026-08-31/19-expanded-needs-xxxl-reduce-motion-off-post-preview-expansion-fix.png
+ios/AppStore/screenshots/task-4-home-activity-2026-08-31/24-expanded-active-xxxl-reduce-motion-off-post-preview-expansion-fix.png
+```
+
+No signing, upload, deploy, merge, or device release action was attempted.

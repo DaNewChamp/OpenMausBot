@@ -173,7 +173,7 @@ paid account is required to run on your own phone.
 
 ---
 
-## Integrated home-activity release gate (2026-08-31)
+## Integrated home-activity release gate (2026-09-01 final verification)
 
 This is the verified simulator evidence for the home activity and connection
 feedback changes on `feat/vbot-ios-home-activity-0831`. It is evidence for this
@@ -211,28 +211,40 @@ fully readable without covering roster rows; normal launches are unchanged.
 
 The home activity rail is a sibling below the roster scroll view. Its full
 expanded height is reserved even at accessibility XXXL, so enlarged rows stay
-outside the panel and remain reachable by scrolling. Reduce Motion removes the
+outside the panel and remain reachable by scrolling. The collapsed rail keeps
+the normal premium 44-point appearance, while accessibility sizes use compact
+single-line visual copy and a 112-point minimum height so XXXL labels stay
+inside the capsule without crossing the roster or expanded-panel boundary.
+VoiceOver continues to receive the full presentation label/value, and the
+button remains one tappable hit target. Reduce Motion removes the
 spring/rotation transitions while retaining the same content and hit targets.
 
 Verified commands (all passed):
 
 ```sh
+swift test --package-path ios --filter 'HomeActivityRailLayoutPolicyTests|HomeActivityPresentationTests|HomeActivityPreviewExpansionPolicyTests'
 swift test --package-path ios
 (cd ios && xcodegen generate)
 xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
   -sdk iphonesimulator -configuration Debug \
   -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
-  -derivedDataPath /tmp/vbot-task4-debug-derived-0831 \
+  -derivedDataPath /tmp/vbot-pill-fix-final-debug-0901 \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
 xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
   -sdk iphonesimulator -configuration Release \
   -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
-  -derivedDataPath /tmp/vbot-task4-release-derived-0831 \
+  -derivedDataPath /tmp/vbot-pill-fix-final-release-0901 \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+git diff --check
 ```
 
-The Swift gate ran 692 XCTest cases with zero failures and 17 Swift Testing
-cases in four suites. Both simulator builds ended with `** BUILD SUCCEEDED **`.
+The focused rail/presentation gate passed 3 XCTest cases and 7 Swift Testing
+cases. The full Swift gate ran 700 XCTest cases with zero failures and 20 Swift
+Testing cases in five suites. The earlier 697-XCTest gate is superseded because
+this final fix adds three policy tests. Both simulator builds ended with
+`** BUILD SUCCEEDED **`; the derived-data logs are
+`/tmp/vbot-pill-fix-final-debug-0901.log` and
+`/tmp/vbot-pill-fix-final-release-0901.log`.
 The screenshots and the exact interaction steps are recorded in
 `.superpowers/sdd/task-4-report.md`.
 
@@ -244,10 +256,12 @@ halo captures, needs-attention expanded activity at accessibility XXXL with
 Reduce Motion on and off, expanded active activity at accessibility XXXL with
 Reduce Motion on and off, connecting at accessibility XXXL with Reduce Motion
 on and off, and work cards with and without optional actions. Needs/active
-expanded captures `13`, `18`, `19`, and `24` were recaptured from the
-preview-expansion-fix build; connecting captures `20` and `21` retain their
-`post-f891526` suffix. These verify that enlarged roster rows remain outside
-the expanded panel and that detail text remains readable.
+expanded captures `13`, `18`, `19`, and `24`, plus collapsed `09`, `10`, `11`,
+and `12`, were recaptured from the final pill-containment Debug build at
+accessibility XXXL with Reduce Motion both on and off. Connecting captures
+`20` and `21` retain their `post-f891526` suffix. These verify that enlarged
+roster rows remain outside the expanded panel, the collapsed XXXL copy stays
+inside its capsule, and detail text remains readable.
 All images are 1206 x 2622 PNGs from the simulator above.
 
 ## Stage 4 — the thing actually working
