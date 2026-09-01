@@ -107,6 +107,45 @@ describe("Hermes discovery normalization", () => {
     expect(result).toMatchObject({ state: "unknown", code: "state_unavailable", profiles: [] });
   });
 
+  it.each([
+    { ok: "true" },
+    { success: 1 },
+    { failed: null },
+    { available: "yes" },
+    { error: false },
+    { failure: 0 },
+    { status: "pending" },
+    { status: "unknown" },
+    { state: "unknown" },
+    { state: "pending" },
+  ])("fails closed for malformed or non-success envelope markers (%j)", (marker) => {
+    const result = normalizeProfileRowsResult({ profiles: [], ...marker });
+    expect(result).toMatchObject({ state: "unknown", code: "state_unavailable", profiles: [] });
+  });
+
+  it.each([
+    { ok: true },
+    { success: true },
+    { failed: false },
+    { available: true },
+    { error: null },
+    { failure: null },
+    { status: "ok" },
+    { status: "success" },
+    { status: "available" },
+    { status: "ready" },
+    { state: "ok" },
+    { state: "success" },
+    { state: "available" },
+    { state: "ready" },
+  ])("keeps valid profiles available for recognized success markers (%j)", (marker) => {
+    const result = normalizeProfileRowsResult({ profiles: [{ name: "valid" }], ...marker });
+    expect(result).toMatchObject({ state: "available" });
+    if (result.state === "available") {
+      expect(result.profiles).toMatchObject([{ profile: "valid", availability: "available" }]);
+    }
+  });
+
   it("sorts every projected field deterministically across input permutations", () => {
     const rows = [
       { name: "same", display_name: "Same", canonical_session: { id: "z" } },

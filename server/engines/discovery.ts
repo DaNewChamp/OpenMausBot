@@ -67,30 +67,38 @@ function compareCodePoints(left: string, right: string): number {
   return leftPoints.length - rightPoints.length;
 }
 
+const ENVELOPE_SUCCESS_STATES = new Set(["ok", "success", "available", "ready"]);
+
+function envelopeMarkersUnavailable(payload: RecordLike): boolean {
+  for (const key of ["ok", "success", "failed", "available"] as const) {
+    if (!hasOwn(payload, key)) continue;
+    if (typeof payload[key] !== "boolean") return true;
+    const successful = key === "failed" ? payload[key] === false : payload[key] === true;
+    if (!successful) return true;
+  }
+
+  for (const key of ["error", "failure"] as const) {
+    if (!hasOwn(payload, key)) continue;
+    const value = payload[key];
+    if (value === null) continue;
+    if (typeof value === "string" || isRecord(value)) return true;
+    return true;
+  }
+
+  for (const key of ["status", "state"] as const) {
+    if (!hasOwn(payload, key)) continue;
+    if (typeof payload[key] !== "string") return true;
+    if (!ENVELOPE_SUCCESS_STATES.has(payload[key].toLowerCase())) return true;
+  }
+  return false;
+}
+
 function profileRowsPayload(payload: unknown): { rows: unknown[]; malformed: boolean; unavailable: boolean } {
   if (Array.isArray(payload)) return { rows: payload, malformed: false, unavailable: false };
   if (!isRecord(payload)) {
     return { rows: [], malformed: true, unavailable: false };
   }
-
-  const status = typeof payload.status === "string" ? payload.status.toLowerCase() : undefined;
-  const state = typeof payload.state === "string" ? payload.state.toLowerCase() : undefined;
-  const unavailable =
-    hasOwn(payload, "error") ||
-    payload.ok === false ||
-    payload.success === false ||
-    payload.failed === true ||
-    hasOwn(payload, "failure") ||
-    payload.available === false ||
-    status === "error" ||
-    status === "failed" ||
-    status === "failure" ||
-    status === "unavailable" ||
-    state === "error" ||
-    state === "failed" ||
-    state === "failure" ||
-    state === "unavailable";
-  if (unavailable) return { rows: [], malformed: false, unavailable: true };
+  if (envelopeMarkersUnavailable(payload)) return { rows: [], malformed: false, unavailable: true };
   if (!hasOwn(payload, "profiles")) {
     return { rows: [], malformed: true, unavailable: false };
   }

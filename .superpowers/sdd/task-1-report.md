@@ -159,7 +159,7 @@ Focused final verification:
   server/engines/discovery.test.ts server/engines/bindings.test.ts
 ```
 
-28 tests passed, 0 failures.
+29 tests passed, 0 failures.
 
 ```text
 ./node_modules/.bin/tsc -p tsconfig.server.json --noEmit
@@ -167,3 +167,23 @@ git diff --check
 ```
 
 Both passed.
+
+## Envelope marker validation fix
+
+- `normalizeProfileRowsResult` now validates every recognized roster envelope
+  marker (`ok`, `success`, `failed`, `available`, `error`, `failure`, `status`,
+  and `state`) before projecting rows. Wrong-type, contradictory, and unknown
+  non-success domains return typed `state_unavailable` rather than an available
+  empty roster. Only explicit recognized success markers are accepted.
+- Added table coverage for malformed/unknown markers and recognized success
+  markers with valid profiles.
+
+Focused verification:
+
+```text
+./node_modules/.bin/vitest run server/engines/contracts.test.ts \
+  server/engines/discovery.test.ts server/engines/bindings.test.ts
+```
+
+53 tests passed, 0 failures. Server `tsc --noEmit` and `git diff --check`
+also passed.
