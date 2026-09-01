@@ -173,6 +173,43 @@ paid account is required to run on your own phone.
 
 ---
 
+## Integrated home-activity release gate (2026-08-31)
+
+This is the verified simulator evidence for the home activity and connection
+feedback changes on `feat/vbot-ios-home-activity-0831`. It is evidence for this
+branch, not a substitute for the physical-device or signed-release gates below.
+
+Device and fixture:
+
+- iPhone 17 Pro simulator, iOS 26.5, UDID
+  `334FC58E-19DA-460C-AC2A-1D34D7CAA916`, dark appearance.
+- The deterministic DEBUG fixture is launched with `-store-preview`. Normal
+  captures use the `large` content-size category; the accessibility pass uses
+  `accessibility-extra-extra-extra-large`. Reduce Motion was tested both off
+  and on with the simulator Accessibility setting.
+
+Verified commands (all passed):
+
+```sh
+swift test --package-path ios
+cd ios && xcodegen generate
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Debug \
+  -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
+  -derivedDataPath /tmp/vbot-task4-debug-derived-0831 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Release \
+  -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
+  -derivedDataPath /tmp/vbot-task4-release-derived-0831 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+```
+
+The Swift gate ran 692 XCTest cases with zero failures and 17 Swift Testing
+cases in four suites. Both simulator builds ended with `** BUILD SUCCEEDED **`.
+The screenshots and the exact interaction steps are recorded in
+`.superpowers/sdd/task-4-report.md`.
+
 ## Stage 4 — the thing actually working
 
 On the phone, in order:
