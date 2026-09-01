@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { HermesEngineError } from "./engines/contracts.ts";
 import { getOrCreateChannel, mirrorExchange, type CommsBus } from "./comms-visibility.ts";
 import { DATA_DIR } from "./config.ts";
 import { newId } from "./contracts.ts";
@@ -293,7 +294,20 @@ async function processOne(
     sender = currentSender;
     target = current;
   }
-  const channel = getOrCreateChannel(bus.store, sender, target);
+  let channel: GroupRecord;
+  try {
+    channel = getOrCreateChannel(bus.store, sender, target);
+  } catch (error) {
+    if (error instanceof HermesEngineError) {
+      bus.store.appendMessage(sourceThreadId, {
+        role: "bot",
+        kind: "activity",
+        tool: { name: `error: ${error.message}`, ok: false, setup: true },
+      });
+      return;
+    }
+    throw error;
+  }
   mirrorExchange(bus, sender, target, item.message, channel, sourceThreadId);
   const reasonLine = item.reason ? `\n\n[Reason: ${item.reason}]` : "";
   const prefixed = `[Delegated by @${sender.name}, another bot in this OpenMausBot workspace. Do the work and reply directly.]\n\n${item.message}${reasonLine}`;

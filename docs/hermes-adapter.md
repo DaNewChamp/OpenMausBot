@@ -52,7 +52,14 @@ watchdog recovery, deletion/settings cleanup, and adapter cancellation races.
   any unreadable/unknown binding state with a stable setup error. Unbound
   bots keep the existing generic room path. Room interrupt, timeout, stall,
   and delete cleanup surface that same setup failure instead of treating a
-  swallowed generic stop as success.
+  swallowed generic stop as success. Stop targets the busy member only: an
+  idle Hermes-bound roommate does not block interrupting an unbound speaker.
+- Bot-to-bot peer comms use the same gate: `getOrCreateChannel`,
+  `/api/internal/ask-bot`, and delegation drains refuse to mint a DM when
+  either peer is Hermes-bound or binding state cannot be proven unbound.
+- Team import, package import, and project-mode room creation apply the
+  membership gate to every direct `createGroup` path and roll back partial
+  imports instead of leaving half-built rooms behind.
 
 The same rule applies to steer decisions: a bound or unknown-binding bot
 cannot be steered through a generic engine. It must queue or report that the

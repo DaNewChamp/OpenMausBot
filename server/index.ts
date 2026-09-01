@@ -4410,6 +4410,8 @@ const server = createServer(async (req, res) => {
           currentFrom = freshFrom;
           currentTarget = freshTarget;
         }
+        const hermesPeer = hermesGroupMembershipError([currentFrom.id, currentTarget.id]);
+        if (hermesPeer) return json(res, 409, hermesSetupJson(hermesPeer));
         const channel = getOrCreateChannel(store, currentFrom, currentTarget);
         mirrorExchange(commsBus, currentFrom, currentTarget, message, channel, fromThreadId);
         const prefixed = `[Message from @${currentFrom.name}, another bot in this OpenMausBot workspace. Reply to them.]\n\n${message}`;
@@ -5799,6 +5801,8 @@ const server = createServer(async (req, res) => {
         // from package-local keys only, then normalized to fresh bot ids.
         for (const room of pkg?.rooms ?? []) {
           const ids = room.members.map((key) => memberIds.get(key)!);
+          const hermesMembers = hermesGroupMembershipError(ids);
+          if (hermesMembers) throw hermesMembers;
           let created = store.createGroup(room.name, ids, false, packageSection);
           const defaultResponder = room.defaultResponder.kind === "agent"
             ? { kind: "member" as const, botId: memberIds.get(room.defaultResponder.agent)! }
@@ -5833,7 +5837,10 @@ const server = createServer(async (req, res) => {
         // there is no room pointing at them.
         if (!pkg && importMode === "project" && importedBots.length > 0) {
           const roomName = url.searchParams.get("room")?.trim() || manifest!.team.name;
-          group = store.createGroup(roomName, importedBots.map((bot) => bot.id));
+          const projectMemberIds = importedBots.map((bot) => bot.id);
+          const hermesMembers = hermesGroupMembershipError(projectMemberIds);
+          if (hermesMembers) throw hermesMembers;
+          group = store.createGroup(roomName, projectMemberIds);
           if (projectCwd) {
             // `cwd` is the folder the room WANTS; the store pins it on the
             // first turn (pinGroupCwd). Setting the pin here would decide it
@@ -5870,6 +5877,7 @@ const server = createServer(async (req, res) => {
         for (const routineId of createdRoutineIds) routines!.remove(routineId);
         for (const created of createdGroups) store.deleteGroup(created.id);
         for (const bot of importedBots) store.deleteBot(bot.id);
+        if (error instanceof HermesEngineError) return json(res, 409, hermesSetupJson(error));
         throw error;
       }
     }
@@ -6136,16 +6144,14 @@ const server = createServer(async (req, res) => {
       // was busy. Remove only continuations from this generation; a later
       // queued user turn (or a continuation for another run) survives Stop.
       dropPendingRoomResumes(threadId, interruptedRun);
-      const hermesMembers = hermesGroupMembershipError(group.memberIds);
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
       const interruptFailure = busy
         ? await interruptBotTurn(busy.id, threadId).then(() => null).catch((error: unknown) => error)
-        : hermesMembers;
+        : null;
       closeOpenApprovals(threadId);
       if (interruptFailure instanceof HermesEngineError) {
         return json(res, 409, hermesSetupJson(interruptFailure));
       }
-      if (hermesMembers) return json(res, 409, hermesSetupJson(hermesMembers));
       return json(res, 200, { ok: true });
     }
 

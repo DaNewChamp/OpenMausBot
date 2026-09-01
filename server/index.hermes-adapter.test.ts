@@ -345,4 +345,103 @@ describe("Hermes Bot Chat hub integration", () => {
     expect((await api("PATCH", `/api/groups/${allowed.body.group.id}/setup`, { action: "skip" })).status).toBe(200);
     expect((await api("POST", `/api/groups/${allowed.body.group.id}/messages`, { text: "hello unbound" })).status).toBe(202);
   }, 30_000);
+
+  it("aborts team import rooms on unreadable bindings without partial rooms", async () => {
+    const before = await api("GET", "/api/bots");
+    const botsBefore = before.body.bots.length;
+    const groupsBefore = before.body.groups.length;
+    const exported = await api("POST", "/api/teams/export", { name: "Import Team" });
+    expect(exported.status).toBe(200);
+    writeFileSync(join(dataDir, "hermes-bindings.json"), "{not-json", { mode: 0o600 });
+    const rejected = await api("POST", "/api/teams/import?mode=project", exported.body);
+    expect(rejected.status).toBe(409);
+    expect(rejected.body).toMatchObject({ code: "malformed_response", setup: true });
+    const afterProject = await api("GET", "/api/bots");
+    expect(afterProject.body.bots).toHaveLength(botsBefore);
+    expect(afterProject.body.groups).toHaveLength(groupsBefore);
+
+    const packageBody = {
+      format: "openmaus.package",
+      version: 1,
+      package: {
+        id: "hermes-gate-package",
+        release: "1.0.0",
+        name: "Gate Package",
+        tagline: "Package import gate test",
+        summary: "Checks package room import gates.",
+        category: "Test",
+        author: { name: "Fixture" },
+        license: "MIT",
+        outcomes: ["Import cleanly."],
+        setupMinutes: 1,
+        requirements: { apps: [], capabilities: [] },
+        agents: [{
+          key: "lead",
+          name: "Ada",
+          title: "Lead",
+          description: "Only member.",
+          appearance: { color: "purple" },
+        }],
+        chiefOfStaff: "lead",
+        rooms: [{
+          key: "desk",
+          name: "Solo Room",
+          members: ["lead"],
+          bulletin: "Test room.",
+          defaultResponder: { kind: "agent", agent: "lead" },
+        }],
+      },
+    };
+    writeFileSync(join(dataDir, "hermes-bindings.json"), JSON.stringify({ version: 1, bindings: {} }), { mode: 0o600 });
+    const imported = await api("POST", "/api/teams/import", packageBody);
+    expect(imported.status).toBe(201);
+    expect(imported.body.groups).toHaveLength(1);
+    const botsAfterImport = (await api("GET", "/api/bots")).body.bots.length;
+
+    writeFileSync(join(dataDir, "hermes-bindings.json"), "{not-json", { mode: 0o600 });
+    const rejectedPackage = await api("POST", "/api/teams/import", packageBody);
+    expect(rejectedPackage.status).toBe(409);
+    expect(rejectedPackage.body).toMatchObject({ code: "malformed_response", setup: true });
+    const afterPackage = await api("GET", "/api/bots");
+    expect(afterPackage.body.bots).toHaveLength(botsAfterImport);
+    expect(afterPackage.body.groups.filter((group: { name: string }) => group.name === "Solo Room")).toHaveLength(1);
+  }, 30_000);
+
+  it("interrupts a mixed room through the busy unbound member", async () => {
+    writeFileSync(join(dataDir, "hermes-bindings.json"), JSON.stringify({ version: 1, bindings: {} }), { mode: 0o600 });
+    const boundCreated = await api("POST", "/api/bots");
+    const unboundCreated = await api("POST", "/api/bots");
+    const bound = boundCreated.body.bot;
+    const unbound = unboundCreated.body.bot;
+    await api("PATCH", `/api/bots/${unbound.id}`, { name: "Runner" });
+    const room = await api("POST", "/api/groups", { name: "Mixed", memberIds: [bound.id, unbound.id] });
+    expect(room.status).toBe(201);
+    expect((await api("PATCH", `/api/groups/${room.body.group.id}/setup`, { action: "skip" })).status).toBe(200);
+    expect((await api("PATCH", `/api/groups/${room.body.group.id}`, {
+      defaultResponder: { kind: "member", botId: unbound.id },
+    })).status).toBe(200);
+    writeFileSync(join(dataDir, "hermes-bindings.json"), JSON.stringify({
+      version: 1,
+      bindings: {
+        [bound.id]: {
+          adapter: "hermesBot",
+          profile: "default",
+          canonicalTitle: "Bot Chat",
+          bindingVersion: 1,
+        },
+      },
+    }), { mode: 0o600 });
+
+    const started = await api("POST", `/api/groups/${room.body.group.id}/messages`, { text: "keep working" });
+    expect(started.status).toBe(202);
+    await waitFor(async () => {
+      const current = await api("GET", "/api/bots");
+      const found = current.body.groups.find((candidate: { id: string }) => candidate.id === room.body.group.id);
+      return Boolean(found?.busyBotId);
+    }, "the mixed room turn");
+
+    const stopped = await api("POST", `/api/groups/${room.body.group.id}/interrupt`);
+    expect(stopped.status).toBe(200);
+    expect(stopped.body).toEqual({ ok: true });
+  }, 30_000);
 });

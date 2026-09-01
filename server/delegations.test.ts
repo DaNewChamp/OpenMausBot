@@ -4,15 +4,20 @@
 // assert what would have been dispatched to the harness. The harness itself
 // stays out of these — the integration happens in comms.test.ts (the full
 // e2e through the agents proxy + fake ACP CLI).
-import { rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { CommsBus } from "./comms-visibility.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
 import {
+  _loadPending,
+  _resetPending,
+  discardDelegations,
   drainDelegations,
   pendingDelegationSnapshot,
+  pendingThreads,
   queueDelegation,
   _pendingCount,
 } from "./delegations.ts";
@@ -195,6 +200,30 @@ describe("drainDelegations", () => {
     // double-check by counting the module's pending map: tests that didn't
     // resolve should be re-examined if this ever fires.
     void runTargetCalls;
+  });
+
+  it("reports Hermes-bound peer comms as a setup failure without minting a DM", async () => {
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(join(DATA_DIR, "hermes-bindings.json"), JSON.stringify({
+      version: 1,
+      bindings: {
+        [target.id]: {
+          adapter: "hermesBot",
+          profile: "default",
+          canonicalTitle: "Bot Chat",
+          bindingVersion: 1,
+        },
+      },
+    }), { mode: 0o600 });
+    queueDelegation(commsBus, from, { toBotId: target.id, message: "do this", depth: 0 }, 1);
+    drainDelegations(commsBus, approvalBus, from.threadId, (toBotId, message, commsDepth) => {
+      runTargetCalls.push({ toBotId, message, commsDepth });
+    });
+    await waitFor(() =>
+      store.messagesFor(from.threadId).some((m) => m.tool?.ok === false && m.tool.name.includes("does not support groups")),
+    );
+    expect(runTargetCalls).toHaveLength(0);
+    expect(store.groups.filter((group) => group.dm)).toHaveLength(0);
   });
 
   it("runs the target's turn via runTarget and mirrors the exchange", async () => {
@@ -417,10 +446,6 @@ describe("drainDelegations", () => {
     expect(runTargetCalls).toEqual([]);
   });
 });
-
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { _loadPending, _resetPending, discardDelegations, pendingThreads } from "./delegations.ts";
 
 describe("delegations survive a restart", () => {
   let store: Store;

@@ -2,6 +2,7 @@
 // per-thread chips. Extracted from /api/internal/ask-bot so delegations
 // (delegate_bot) and any future peer flow reuse the same UX without a copy.
 
+import { hermesGroupMembershipError } from "./hermes-groups.ts";
 import { sectionKey, type BotRecord, type GroupRecord, type Message, type Store } from "./store.ts";
 
 /** What a peer-exchange helper needs from the outside world:
@@ -25,6 +26,8 @@ export function getOrCreateChannel(store: Store, from: BotRecord, target: BotRec
     }
     return existing;
   }
+  const hermesPeer = hermesGroupMembershipError([from.id, target.id]);
+  if (hermesPeer) throw hermesPeer;
   return store.createGroup(`${from.name} ⇄ ${target.name}`, [from.id, target.id], true, from.section);
 }
 
