@@ -107,4 +107,15 @@ final class WorkCardPresentationTests: XCTestCase {
         )
         XCTAssertFalse(WorkCardPresentation(work: work, canOpenCursor: true).isRenderable)
     }
+
+    func testCursorOnlyMetadataDoesNotCreateAWorkCardWhenCursorCannotOpen() {
+        let work = WorkCard(
+            title: nil, status: nil, branch: nil, prNumber: nil,
+            filesChanged: nil, additions: nil, deletions: nil,
+            prURL: nil, cursorURL: "cursor://open?file=%2Ftmp%2Fproject"
+        )
+
+        XCTAssertFalse(WorkCardPresentation(work: work, canOpenCursor: false).isRenderable)
+        XCTAssertTrue(WorkCardPresentation(work: work, canOpenCursor: true).isRenderable)
+    }
 }

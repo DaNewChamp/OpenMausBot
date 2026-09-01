@@ -80,3 +80,70 @@ xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
 - No physical-device VoiceOver/Dynamic Type/screenshot pass was performed;
   root should inspect the card at large text sizes and with a valid Cursor
   installation.
+
+## Review fixes (2026-08-31)
+
+### Important finding: Cursor query permission
+
+`ios/project.yml` now declares only `LSApplicationQueriesSchemes: [cursor]`.
+The existing `CFBundleURLTypes` handler remains pairing-only (`openmausbot`);
+no `cursor` URL handler was added. There is no tracked config-test seam for
+the XcodeGen spec, so the generated source plist was validated directly after
+`xcodegen generate`:
+
+```text
+plutil -p ios/App/Info.plist
+  "CFBundleURLTypes" => ... "openmausbot"
+  "LSApplicationQueriesSchemes" => [ "cursor" ]
+```
+
+The unsigned simulator product also carries the generated query scheme:
+
+```text
+/usr/libexec/PlistBuddy -c 'Print :LSApplicationQueriesSchemes' ios/App/Info.plist
+Array {
+    cursor
+}
+```
+
+### Important finding: Cursor-only blank card
+
+TDD red first (before the production change):
+
+```text
+swift test --package-path ios --filter WorkCardPresentationTests
+testCursorOnlyMetadataDoesNotCreateAWorkCardWhenCursorCannotOpen: XCTAssertFalse failed
+```
+
+`WorkCardPresentation.isRenderable` now treats a Cursor deep link as
+renderable only when `showsOpenInCursor` is actionable; visible metadata and a
+validated PR URL remain renderable as before. The new test confirms Cursor-only
+metadata is hidden when `canOpenCursor == false` and remains renderable when
+the action is available. Focused green:
+
+```text
+swift test --package-path ios --filter WorkCardPresentationTests
+Executed 6 tests, with 0 failures
+```
+
+Full package verification:
+
+```text
+swift test --package-path ios
+Executed 692 tests, with 0 failures
+```
+
+Project generation and unsigned simulator build:
+
+```text
+xcodegen generate
+Created project at .../ios/OpenMausCompanion.xcodeproj
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Debug \
+  -derivedDataPath /tmp/vbot-task3-fixes-derived-0831-final \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+** BUILD SUCCEEDED **
+```
+
+No backend, dependency, bundle, build-number, signing, or TestFlight files
+were changed.

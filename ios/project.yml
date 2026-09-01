@@ -56,6 +56,11 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.productivity
+        # Query permission for Cursor deep links. This lets
+        # UIApplication.canOpenURL report whether Cursor is installed
+        # without registering the cursor:// scheme as an app URL handler.
+        LSApplicationQueriesSchemes:
+          - cursor
         ITSAppUsesNonExemptEncryption: false
         # The bot's Live Activity — its face and ask in the Dynamic Island
         # and on the lock screen.

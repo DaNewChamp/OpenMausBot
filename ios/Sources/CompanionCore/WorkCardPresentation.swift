@@ -42,7 +42,7 @@ public struct WorkCardPresentation: Hashable, Sendable {
     public var isRenderable: Bool {
         title != nil || status != nil || branch != nil || prNumber != nil ||
             filesChanged != nil || additions != nil || deletions != nil ||
-            pullRequestURL != nil || cursorURL != nil
+            pullRequestURL != nil || showsOpenInCursor
     }
 
     public var showsViewPR: Bool { pullRequestURL != nil }
