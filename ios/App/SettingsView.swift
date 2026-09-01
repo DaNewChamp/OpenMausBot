@@ -66,7 +66,7 @@ struct SettingsView: View {
                     ConnectedComputersView()
                 } label: {
                     ComputerSettingsRow(
-                        name: ConnectionPresentationPolicy.displayName(name: connection.name, host: connection.host),
+                        name: ConnectionPresentationPolicy.displayName(for: connection),
                         status: computerStatusText,
                         connected: session.status == .live
                     )
@@ -604,7 +604,7 @@ struct ConnectedComputersView: View {
                         ConnectionSecurityView()
                     } label: {
                         ComputerSettingsRow(
-                            name: ConnectionPresentationPolicy.displayName(name: active.name, host: active.host),
+                            name: ConnectionPresentationPolicy.displayName(for: active),
                             status: session.status.settingsText(previouslyLive: session.previouslyLive),
                             connected: session.status == .live
                         )
@@ -621,11 +621,11 @@ struct ConnectedComputersView: View {
                         } label: {
                             HStack(spacing: 12) {
                                 ProfileAvatar(
-                                    name: ConnectionPresentationPolicy.displayName(name: computer.name, host: computer.host),
+                                    name: ConnectionPresentationPolicy.displayName(for: computer),
                                     size: 38
                                 )
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(ConnectionPresentationPolicy.displayName(name: computer.name, host: computer.host))
+                                    Text(ConnectionPresentationPolicy.displayName(for: computer))
                                         .foregroundStyle(.primary)
                                         .lineLimit(1)
                                     Text("Tap to switch")
@@ -647,6 +647,38 @@ struct ConnectedComputersView: View {
                 }
             }
 
+            if session.bridgeRosterLoading {
+                Section("Registered bridges") {
+                    HStack {
+                        ProgressView()
+                        Text("Loading bridges…")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else if !session.bridgeRoster.isEmpty {
+                Section("Registered bridges") {
+                    ForEach(session.bridgeRoster) { bridge in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text(bridge.name)
+                                    .font(.body.weight(.medium))
+                                Spacer(minLength: 8)
+                                Circle()
+                                    .fill(bridge.online ? Color.green : Color.secondary)
+                                    .frame(width: 7, height: 7)
+                                Text(BridgePresentationPolicy.onlineStatus(bridge.online))
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(BridgePresentationPolicy.capabilitySummary(bridge.capabilities))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
             Section {
                 Button {
                     Haptics.selection()
@@ -660,8 +692,9 @@ struct ConnectedComputersView: View {
         }
         .navigationTitle("Computers")
         .navigationBarTitleDisplayMode(.inline)
+        .task { await session.refreshBridgeRoster() }
         .confirmationDialog(
-            "Remove \(pendingRemoval.map { ConnectionPresentationPolicy.displayName(name: $0.name, host: $0.host) } ?? "this computer")?",
+            "Remove \(pendingRemoval.map { ConnectionPresentationPolicy.displayName(for: $0) } ?? "this computer")?",
             isPresented: Binding(
                 get: { pendingRemoval != nil },
                 set: { if !$0 { pendingRemoval = nil } }
@@ -685,7 +718,9 @@ struct ConnectionSecurityView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingSignOut = false
     @State private var editingAddress = false
+    @State private var editingName = false
     @State private var addressText = ""
+    @State private var nameText = ""
     @State private var showingFullAddress = false
     @State private var copiedAddress = false
     @State private var refreshing = false
@@ -723,6 +758,16 @@ struct ConnectionSecurityView: View {
         } message: {
             Text("Use the address shown in Phone settings on your computer. Your pairing is kept.")
         }
+        .alert("Rename computer", isPresented: $editingName) {
+            TextField("Friendly name", text: $nameText)
+            Button("Save") {
+                guard let connection = session.connection else { return }
+                session.renameConnection(id: connection.id, alias: nameText)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This name stays on your iPhone and does not change pairing or security.")
+        }
         .confirmationDialog(
             "Remove this connection?",
             isPresented: $confirmingSignOut,
@@ -741,11 +786,11 @@ struct ConnectionSecurityView: View {
     private func identityCard(_ connection: Connection) -> some View {
         HStack(spacing: 14) {
             ProfileAvatar(
-                name: ConnectionPresentationPolicy.displayName(name: connection.name, host: connection.host),
+                name: ConnectionPresentationPolicy.displayName(for: connection),
                 size: 46
             )
             VStack(alignment: .leading, spacing: 4) {
-                Text(ConnectionPresentationPolicy.displayName(name: connection.name, host: connection.host))
+                Text(ConnectionPresentationPolicy.displayName(for: connection))
                     .font(.headline)
                 Label(session.status.settingsText(previouslyLive: session.previouslyLive),
                       systemImage: session.status == .live ? "checkmark.circle.fill" : "circle.dotted")
@@ -800,6 +845,16 @@ struct ConnectionSecurityView: View {
             .padding(.vertical, 8)
 
             VBotHairline().padding(.leading, 16)
+
+            Button("Rename") {
+                if let connection = session.connection {
+                    nameText = ConnectionPresentationPolicy.displayName(for: connection)
+                    editingName = true
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .frame(minHeight: VBotSurface.Hit.row)
 
             Button("Edit address") {
                 addressText = connection.displayAddress
@@ -1001,7 +1056,7 @@ struct AccountSheet: View {
     private var fleetSubtitle: String {
         let summary = ConnectionPresentationPolicy.fleetSummary(count: session.connections.count)
         guard let connection = session.connection else { return summary }
-        let current = ConnectionPresentationPolicy.displayName(name: connection.name, host: connection.host)
+        let current = ConnectionPresentationPolicy.displayName(for: connection)
         return "\(summary) · \(current) active"
     }
 

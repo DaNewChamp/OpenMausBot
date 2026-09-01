@@ -54,6 +54,8 @@ final class Session: ObservableObject {
     /// All computers paired to this phone. The selected connection remains
     /// exposed through `connection` so existing screens keep their behavior.
     @Published private(set) var connections: [Connection] = []
+    @Published private(set) var bridgeRoster: [BridgeRosterEntry] = []
+    @Published private(set) var bridgeRosterLoading = false
     @Published private(set) var status: Status = .unpaired
     /// Roster/settings projection of `status` plus whether this pairing has
     /// already been live. Views should not switch on Status for banner copy.
@@ -446,6 +448,7 @@ final class Session: ObservableObject {
         // of creating a duplicate row. New computers become the active one.
         if let existing = registry.matchingConnection(for: stored) {
             stored.id = existing.id
+            stored.alias = existing.alias
         }
 
         try Keychain.save(paired.token, for: stored.id)
@@ -568,6 +571,33 @@ final class Session: ObservableObject {
         connections = registry.connections
         configureActiveConnection(saved, token: stored)
         connect()
+    }
+
+    func renameConnection(id: String, alias: String) {
+        let trimmed = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard registry.rename(id: id, alias: trimmed.isEmpty ? nil : trimmed) else { return }
+        persistRegistry()
+        connections = registry.connections
+        if connection?.id == id, var updated = connection {
+            updated.alias = registry.connection(id: id)?.alias
+            connection = updated
+            UserDefaults.standard.set(try? JSONEncoder().encode(updated), forKey: Self.connectionKey)
+        }
+    }
+
+    @MainActor
+    func refreshBridgeRoster() async {
+        guard let client else {
+            bridgeRoster = []
+            return
+        }
+        bridgeRosterLoading = true
+        defer { bridgeRosterLoading = false }
+        do {
+            bridgeRoster = try await client.bridgeRoster()
+        } catch {
+            bridgeRoster = []
+        }
     }
 
     func forgetConnection(id: String) {

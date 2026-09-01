@@ -432,6 +432,8 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
     /// Full routes advertised by a newer desktop. Each carries its own scheme
     /// and port so hosted HTTPS can coexist with local HTTP fallbacks.
     public var endpoints: [CompanionEndpoint]?
+    /// A phone-local friendly name. Does not change pairing id or Keychain token.
+    public var alias: String?
     /// The route kinds this pairing explicitly authorized. `nil` is reserved
     /// for connections saved by older app versions and retains their legacy
     /// failover behavior. New pairings always persist a non-nil policy, with
@@ -452,7 +454,8 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
         activeEndpoint: CompanionEndpoint? = nil,
         endpoints: [CompanionEndpoint]? = nil,
         allowedRouteKinds: Set<CompanionEndpointKind>? = nil,
-        allowedLocalRouteURLs: Set<String>? = nil
+        allowedLocalRouteURLs: Set<String>? = nil,
+        alias: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -463,6 +466,7 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
         self.endpoints = endpoints
         self.allowedRouteKinds = allowedRouteKinds
         self.allowedLocalRouteURLs = allowedLocalRouteURLs
+        self.alias = alias
     }
 
     /// The representation `URLComponents.host` accepts for a literal IPv6
@@ -1058,6 +1062,11 @@ public struct CompanionClient: Sendable {
             try makeRequest("GET", "/api/companion/endpoints"),
             as: CompanionConnectionMetadata.self
         )
+    }
+
+    /// Registered home-bridge machines visible to this paired phone.
+    public func bridgeRoster() async throws -> [BridgeRosterEntry] {
+        try await send(try makeRequest("GET", "/api/bridges"), as: BridgeRosterResponse.self).bridges
     }
 
     /// Hydrate. `messages` opts into the paged shape — the newest n per

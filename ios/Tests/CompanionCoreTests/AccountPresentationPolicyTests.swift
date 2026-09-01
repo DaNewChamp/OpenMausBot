@@ -25,6 +25,24 @@ final class AccountPresentationPolicyTests: XCTestCase {
         )
     }
 
+    func testSavedAliasOverridesGenericServerName() {
+        let connection = Connection(
+            id: "home",
+            name: "OpenMausBot",
+            host: "macmini.local",
+            port: 8810,
+            alias: "Home Mac"
+        )
+        XCTAssertEqual(ConnectionPresentationPolicy.displayName(for: connection), "Home Mac")
+    }
+
+    func testOpenMausIsTreatedAsGeneric() {
+        XCTAssertEqual(
+            ConnectionPresentationPolicy.displayName(name: "OpenMaus", host: "studio-mac.local"),
+            "Studio Mac"
+        )
+    }
+
     func testGenericNameDoesNotTurnAnAddressIntoAComputerName() {
         XCTAssertEqual(
             ConnectionPresentationPolicy.displayName(name: "OpenMausBot", host: "192.168.112.112"),

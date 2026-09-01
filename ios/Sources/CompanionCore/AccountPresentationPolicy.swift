@@ -28,8 +28,15 @@ public enum AccountAvatarSymbol: String, CaseIterable, Identifiable, Sendable {
 
 public enum ConnectionPresentationPolicy: Sendable {
     private static let genericNames: Set<String> = [
-        "computer", "desktop", "open maus bot", "openmausbot", "v bot", "vbot"
+        "computer", "desktop", "open maus", "open maus bot", "openmaus", "openmausbot", "v bot", "vbot"
     ]
+
+    public static func displayName(for connection: Connection) -> String {
+        if let alias = connection.alias?.trimmingCharacters(in: .whitespacesAndNewlines), !alias.isEmpty {
+            return alias
+        }
+        return displayName(name: connection.name, host: connection.host)
+    }
 
     public static func displayName(name: String, host: String) -> String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)

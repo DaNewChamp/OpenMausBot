@@ -91,6 +91,29 @@ final class ConnectionRegistryTests: XCTestCase {
         XCTAssertEqual(restored.registry.activeConnection, first)
     }
 
+    func testRenamePersistsAliasWithoutChangingIdentity() {
+        var registry = CompanionConnectionRegistry(connections: [first], activeConnectionID: first.id)
+
+        XCTAssertTrue(registry.rename(id: first.id, alias: "Studio Mac"))
+        XCTAssertEqual(registry.connection(id: first.id)?.alias, "Studio Mac")
+        XCTAssertEqual(registry.connection(id: first.id)?.id, first.id)
+        XCTAssertEqual(registry.connection(id: first.id)?.name, first.name)
+        XCTAssertEqual(registry.connection(id: first.id)?.host, first.host)
+
+        let data = try? JSONEncoder().encode(registry)
+        let roundTrip = try? JSONDecoder().decode(CompanionConnectionRegistry.self, from: data ?? Data())
+        XCTAssertEqual(roundTrip?.connection(id: first.id)?.alias, "Studio Mac")
+    }
+
+    func testRenameTrimsAndClearsWhitespaceOnlyAlias() {
+        var registry = CompanionConnectionRegistry(connections: [first], activeConnectionID: first.id)
+        XCTAssertTrue(registry.rename(id: first.id, alias: "  Office Mac  "))
+        XCTAssertEqual(registry.connection(id: first.id)?.alias, "Office Mac")
+        XCTAssertTrue(registry.rename(id: first.id, alias: "   "))
+        XCTAssertNil(registry.connection(id: first.id)?.alias)
+        XCTAssertFalse(registry.rename(id: "missing", alias: "Nope"))
+    }
+
     func testValidRegistryWinsOverLegacyData() throws {
         let current = CompanionConnectionRegistry(
             connections: [second],

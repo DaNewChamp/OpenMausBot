@@ -73,6 +73,19 @@ public struct CompanionConnectionRegistry: Codable, Equatable, Sendable {
         return removed
     }
 
+    /// Save a phone-local friendly name without changing pairing identity.
+    @discardableResult
+    public mutating func rename(id: String, alias: String?) -> Bool {
+        guard let index = connections.firstIndex(where: { $0.id == id }) else { return false }
+        let trimmed = alias?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            connections[index].alias = nil
+        } else {
+            connections[index].alias = String(trimmed.prefix(80))
+        }
+        return true
+    }
+
     private enum CodingKeys: String, CodingKey {
         case connections, activeConnectionID
     }
