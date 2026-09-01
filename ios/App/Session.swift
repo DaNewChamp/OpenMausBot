@@ -93,10 +93,6 @@ final class Session: ObservableObject {
     /// A notification response that should be pushed by the roster's
     /// NavigationStack after the exact detached task has been activated.
     @Published private(set) var notificationChat: Chat?
-    /// A Hermes setup response that should be opened by the roster after the
-    /// imported bot has been hydrated. Keeping this as a pending destination
-    /// lets the setup sheet dismiss cleanly before the chat is pushed.
-    @Published private(set) var hermesChat: Chat?
     /// A pin request in flight for each conversation. Pinning is server-backed
     /// rather than optimistic, so the roster disables the action until the
     /// acknowledgement arrives and cannot apply an older toggle out of order.
@@ -655,7 +651,6 @@ final class Session: ObservableObject {
         endpointRefreshTask = nil
         restorePending = false
         pendingNotification = nil
-        hermesChat = nil
         pairingInvite = CompanionPairingInvitePolicy.nextInvite(
             current: pairingInvite,
             after: .signedOut
@@ -718,7 +713,6 @@ final class Session: ObservableObject {
         endpointRefreshTask = nil
         restorePending = false
         pendingNotification = nil
-        hermesChat = nil
         endLinger()
         resetStreamCoalescer()
         engineSync = nil
@@ -789,11 +783,11 @@ final class Session: ObservableObject {
                 actionError = "Hermes connected, but the fleet could not be refreshed. Try again."
                 return nil
             }
-            guard let bot = state.bot(result.botId) else {
+            guard !Task.isCancelled else { return nil }
+            guard state.bot(result.botId) != nil else {
                 actionError = "Hermes connected, but its chat is not available yet. Try again."
                 return nil
             }
-            hermesChat = .bot(bot)
             return result
         } catch {
             if error.isCancellation { return nil }
@@ -803,6 +797,11 @@ final class Session: ObservableObject {
             actionError = error.localizedDescription
             return nil
         }
+    }
+
+    func hermesChat(forBotID botID: String) -> Chat? {
+        guard !botID.isEmpty, let bot = state.bot(botID) else { return nil }
+        return .bot(bot)
     }
 
     private func persistRegistry() {
@@ -2993,8 +2992,6 @@ final class Session: ObservableObject {
     }
 
     func consumeNotificationChat() { notificationChat = nil }
-
-    func consumeHermesChat() { hermesChat = nil }
 
     func react(to message: Message, in threadId: String, emoji: String) async {
         guard let client else { return }

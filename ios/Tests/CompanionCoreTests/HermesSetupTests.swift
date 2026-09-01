@@ -156,6 +156,7 @@ final class HermesSetupTests: XCTestCase {
     func testProfileChoiceOnlyAppearsForMultipleAvailableProfiles() {
         let one = HermesSetupStatus(profiles: [profile("default", handle: "hermes")])
         XCTAssertFalse(HermesSetupPresentationPolicy.requiresProfileChoice(one))
+        XCTAssertFalse(HermesSetupPresentationPolicy.shouldShowProfileList(one))
         XCTAssertEqual(HermesSetupPresentationPolicy.defaultProfile(one)?.profile, "default")
 
         let many = HermesSetupStatus(profiles: [
@@ -174,8 +175,29 @@ final class HermesSetupTests: XCTestCase {
             ),
         ])
         XCTAssertTrue(HermesSetupPresentationPolicy.requiresProfileChoice(many))
+        XCTAssertTrue(HermesSetupPresentationPolicy.shouldShowProfileList(many))
         XCTAssertEqual(HermesSetupPresentationPolicy.defaultProfile(many)?.profile, "default")
         XCTAssertEqual(HermesSetupPresentationPolicy.availableProfiles(many).map(\.profile), ["default", "work"])
+    }
+
+    func testConnectedProfileUsesOpenChatActionWithoutSetup() {
+        XCTAssertEqual(
+            HermesSetupPresentationPolicy.profileAction(profile("default", handle: "hermes")),
+            .connect
+        )
+        XCTAssertEqual(
+            HermesSetupPresentationPolicy.profileAction(
+                HermesSetupProfile(
+                    profile: "default",
+                    handle: "hermes",
+                    displayName: "Hermes",
+                    description: "Profile",
+                    availability: .available,
+                    botId: "bot-1"
+                )
+            ),
+            .openChat
+        )
     }
 
     private func profile(_ id: String, handle: String) -> HermesSetupProfile {

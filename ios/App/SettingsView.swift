@@ -18,9 +18,11 @@ struct SettingsView: View {
     @State private var approvalReviewerLoaded = false
     @State private var enablingNotifications = false
     private let onConnect: (() -> Void)?
+    private let onOpenChat: ((Chat) -> Void)?
 
-    init(onConnect: (() -> Void)? = nil) {
+    init(onConnect: (() -> Void)? = nil, onOpenChat: ((Chat) -> Void)? = nil) {
         self.onConnect = onConnect
+        self.onOpenChat = onOpenChat
     }
 
     var body: some View {
@@ -191,7 +193,7 @@ struct SettingsView: View {
                 title: "Hermes",
                 symbol: "sparkles",
                 color: .mint,
-                destination: HermesSetupView()
+                destination: HermesSetupView(onOpenChat: onOpenChat)
             )
         }
     }
@@ -979,6 +981,11 @@ private extension Session.Status {
 struct AccountSheet: View {
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
+    private let onOpenChat: ((Chat) -> Void)?
+
+    init(onOpenChat: ((Chat) -> Void)? = nil) {
+        self.onOpenChat = onOpenChat
+    }
 
     var body: some View {
         NavigationStack {
@@ -1017,7 +1024,7 @@ struct AccountSheet: View {
                         }
                     }
                     NavigationLink {
-                        SettingsView()
+                        SettingsView(onOpenChat: onOpenChat)
                     } label: {
                         rowLabel(
                             title: "Settings",

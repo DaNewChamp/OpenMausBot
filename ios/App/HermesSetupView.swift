@@ -5,12 +5,18 @@ import CompanionCore
 /// engine picker. The screen only renders the safe setup projection returned
 /// by the paired V Bot computer.
 struct HermesSetupView: View {
+    let onOpenChat: ((Chat) -> Void)?
+
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var status: HermesSetupStatus?
     @State private var loading = true
     @State private var connecting = false
+    @State private var connectTask: Task<Void, Never>?
+
+    init(onOpenChat: ((Chat) -> Void)? = nil) {
+        self.onOpenChat = onOpenChat
+    }
 
     private var presentation: HermesSetupPresentation {
         HermesSetupPresentationPolicy.presentation(
@@ -25,7 +31,7 @@ struct HermesSetupView: View {
     }
 
     private var connectedProfiles: [HermesSetupProfile] {
-        status?.profiles.filter { $0.botId != nil } ?? []
+        status?.profiles.filter { $0.botId?.isEmpty == false } ?? []
     }
 
     var body: some View {
@@ -45,6 +51,10 @@ struct HermesSetupView: View {
         .navigationBarTitleDisplayMode(.inline)
         .vbotCanvas()
         .task { await loadStatus() }
+        .onDisappear {
+            connectTask?.cancel()
+            connectTask = nil
+        }
     }
 
     private var stateCard: some View {
@@ -92,20 +102,21 @@ struct HermesSetupView: View {
         if presentation.state == .connected, !connectedProfiles.isEmpty {
             VBotSurfaceGroup(title: "Connected profiles") {
                 ForEach(connectedProfiles) { profile in
-                    profileRow(profile, actionTitle: "Open chat")
+                    profileRow(profile, actionTitle: "Open chat") {
+                        openChat(for: profile)
+                    }
                     if profile.id != connectedProfiles.last?.id {
                         VBotHairline().padding(.leading, 16)
                     }
                 }
             }
-        } else if presentation.state == .ready, !availableProfiles.isEmpty {
-            VBotSurfaceGroup(
-                title: HermesSetupPresentationPolicy.requiresProfileChoice(status ?? HermesSetupStatus())
-                    ? "Choose a profile"
-                    : nil
-            ) {
+        } else if presentation.state == .ready,
+                  HermesSetupPresentationPolicy.shouldShowProfileList(status ?? HermesSetupStatus()) {
+            VBotSurfaceGroup(title: "Choose a profile") {
                 ForEach(availableProfiles) { profile in
-                    profileRow(profile, actionTitle: connectLabel(for: profile))
+                    profileRow(profile, actionTitle: connectLabel(for: profile)) {
+                        connect(profile: profile)
+                    }
                     if profile.id != availableProfiles.last?.id {
                         VBotHairline().padding(.leading, 16)
                     }
@@ -129,9 +140,13 @@ struct HermesSetupView: View {
             .padding(.horizontal, 4)
     }
 
-    private func profileRow(_ profile: HermesSetupProfile, actionTitle: String) -> some View {
+    private func profileRow(
+        _ profile: HermesSetupProfile,
+        actionTitle: String,
+        action: @escaping () -> Void
+    ) -> some View {
         Button {
-            connect(profile: profile)
+            action()
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "person.crop.circle")
@@ -167,7 +182,7 @@ struct HermesSetupView: View {
             connect(profile: nil)
             return
         }
-        if HermesSetupPresentationPolicy.requiresProfileChoice(status) {
+        if HermesSetupPresentationPolicy.shouldShowProfileList(status) {
             return
         }
         connect(profile: HermesSetupPresentationPolicy.defaultProfile(status))
@@ -190,16 +205,43 @@ struct HermesSetupView: View {
         return "Use"
     }
 
+    private func openChat(for profile: HermesSetupProfile) {
+        guard HermesSetupPresentationPolicy.profileAction(profile) == .openChat,
+              let chat = profile.botId.flatMap(session.hermesChat(forBotID:)) else {
+            session.actionError = "This Hermes chat is no longer available. Refresh Hermes and try again."
+            return
+        }
+        if let onOpenChat {
+            onOpenChat(chat)
+        } else {
+            dismiss()
+        }
+    }
+
     private func connect(profile: HermesSetupProfile?) {
+        connectTask?.cancel()
         connecting = true
-        Task { @MainActor in
+        connectTask = Task { @MainActor in
+            defer {
+                if !Task.isCancelled {
+                    connecting = false
+                    connectTask = nil
+                }
+            }
             let result = await session.connectHermes(profile: profile?.profile)
             guard !Task.isCancelled else { return }
-            connecting = false
-            if result != nil {
-                dismiss()
-            } else {
+            guard let result else {
                 await loadStatus()
+                return
+            }
+            guard !Task.isCancelled,
+                  let chat = session.hermesChat(forBotID: result.botId) else {
+                return
+            }
+            if let onOpenChat {
+                onOpenChat(chat)
+            } else {
+                dismiss()
             }
         }
     }

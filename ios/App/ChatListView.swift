@@ -202,19 +202,10 @@ struct ChatListView: View {
                 open(chat)
                 session.consumeNotificationChat()
             }
-            .onChange(of: session.hermesChat) { _, chat in
-                guard let chat else { return }
-                open(chat)
-                session.consumeHermesChat()
-            }
             .task {
                 if let chat = session.notificationChat {
                     open(chat)
                     session.consumeNotificationChat()
-                }
-                if let chat = session.hermesChat {
-                    open(chat)
-                    session.consumeHermesChat()
                 }
             }
 #if DEBUG
@@ -264,7 +255,7 @@ struct ChatListView: View {
                 }
             }
             .sheet(isPresented: $showingAccount) {
-                AccountSheet()
+                AccountSheet(onOpenChat: openHermesChat)
                     .environmentObject(session)
             }
             .navigationDestination(item: $groupProfile) { room in
@@ -450,6 +441,11 @@ struct ChatListView: View {
     private func open(_ chat: Chat) {
         session.beginOpeningFromHome(chat)
         path.append(chat)
+    }
+
+    private func openHermesChat(_ chat: Chat) {
+        showingAccount = false
+        open(chat)
     }
 
     @ViewBuilder

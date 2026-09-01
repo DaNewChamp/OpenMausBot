@@ -81,6 +81,77 @@ xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
   root should inspect the card at large text sizes and with a valid Cursor
   installation.
 
+## Review fixes (2026-09-01)
+
+### Changes
+
+- A single available Hermes profile now uses the one-tap `Connect Hermes`
+  action; the profile list is rendered only when two or more available
+  profiles exist.
+- Connected profile rows use their existing bot id to open the chat directly.
+  They never call the setup/connect route again, and stale imported bots fail
+  with a plain refresh message.
+- Successful setup now hands the hydrated chat directly to the roster root.
+  The root closes the Account/Settings sheet and pushes the chat in one
+  handoff; no Session-level pending Hermes navigation state remains.
+- Setup requests retain their task handle and cancel on view disappearance or
+  replacement. Session checks cancellation after the fleet refresh before
+  publishing success, so backing out cannot open a later chat. The unused
+  reduce-motion environment value was removed from the setup screen.
+
+### TDD evidence
+
+Red first:
+
+```text
+swift test --package-path ios --filter HermesSetupTests
+```
+
+Failed to compile because the new profile-list and connected-profile action
+policy members were not yet present.
+
+Focused green:
+
+```text
+swift test --package-path ios --filter HermesSetupTests
+```
+
+6 tests passed, 0 failures.
+
+Full package verification:
+
+```text
+swift test --package-path ios
+```
+
+753 tests passed, 0 failures.
+
+Unsigned simulator builds:
+
+```text
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Debug \
+  -derivedDataPath /tmp/vbot-task3-fix-debug3 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+```
+
+`** BUILD SUCCEEDED **`
+
+```text
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Release \
+  -derivedDataPath /tmp/vbot-task3-fix-release \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+```
+
+`** BUILD SUCCEEDED **`
+
+```text
+git diff --check
+```
+
+Passed with no whitespace errors.
+
 ## Review fixes (2026-08-31)
 
 ### Important finding: Cursor query permission

@@ -220,6 +220,11 @@ public struct HermesSetupConnectionResponse: Codable, Hashable, Sendable, Equata
     }
 }
 
+public enum HermesSetupProfileAction: String, Sendable, Equatable {
+    case connect
+    case openChat
+}
+
 public enum HermesSetupPresentationState: Equatable, Sendable {
     case checking
     case ready
@@ -318,6 +323,15 @@ public enum HermesSetupPresentationPolicy {
 
     public static func requiresProfileChoice(_ status: HermesSetupStatus) -> Bool {
         availableProfiles(status).count > 1
+    }
+
+    public static func shouldShowProfileList(_ status: HermesSetupStatus) -> Bool {
+        requiresProfileChoice(status)
+    }
+
+    public static func profileAction(_ profile: HermesSetupProfile) -> HermesSetupProfileAction {
+        guard let botId = profile.botId, !botId.isEmpty else { return .connect }
+        return .openChat
     }
 
     public static func defaultProfile(_ status: HermesSetupStatus) -> HermesSetupProfile? {
