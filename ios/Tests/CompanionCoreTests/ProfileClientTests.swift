@@ -146,6 +146,7 @@ final class ProfileClientTests: XCTestCase {
         XCTAssertFalse(APIError.transport("This computer is offline.").isCancellation)
         XCTAssertFalse(APIError.status(code: 409, message: "cancelled").isCancellation)
         XCTAssertTrue(RequestCancellation.matches("cancelled"))
+        XCTAssertTrue(RequestCancellation.matches("The operation couldn’t be completed. (Swift.CancellationError error 1.)"))
     }
 
     func testProfileClientEncodesCharacterColorAndMascotShape() async throws {

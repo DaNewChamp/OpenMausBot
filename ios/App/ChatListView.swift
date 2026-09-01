@@ -302,10 +302,7 @@ struct ChatListView: View {
                         showingAccount = true
                     } label: {
                         ZStack {
-                            ProfileAvatar(
-                                name: session.connection?.name ?? "You",
-                                size: HomeRosterLayoutPolicy.profileDiameter
-                            )
+                            AccountAvatar(size: HomeRosterLayoutPolicy.profileDiameter)
                             if session.connectionBanner.showsConnectingHalo {
                                 ConnectionHalo(reduceMotion: reduceMotion)
                             }

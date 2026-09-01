@@ -60,13 +60,13 @@ struct SettingsView: View {
     }
 
     private var computerSection: some View {
-        VBotSurfaceGroup(title: "Computer") {
+        VBotSurfaceGroup(title: "Computers") {
             if let connection = session.connection {
                 NavigationLink {
                     ConnectedComputersView()
                 } label: {
                     ComputerSettingsRow(
-                        name: connection.name,
+                        name: ConnectionPresentationPolicy.displayName(name: connection.name, host: connection.host),
                         status: computerStatusText,
                         connected: session.status == .live
                     )
@@ -604,7 +604,7 @@ struct ConnectedComputersView: View {
                         ConnectionSecurityView()
                     } label: {
                         ComputerSettingsRow(
-                            name: active.name,
+                            name: ConnectionPresentationPolicy.displayName(name: active.name, host: active.host),
                             status: session.status.settingsText(previouslyLive: session.previouslyLive),
                             connected: session.status == .live
                         )
@@ -620,9 +620,12 @@ struct ConnectedComputersView: View {
                             session.switchComputer(to: computer.id)
                         } label: {
                             HStack(spacing: 12) {
-                                ProfileAvatar(name: computer.name, size: 38)
+                                ProfileAvatar(
+                                    name: ConnectionPresentationPolicy.displayName(name: computer.name, host: computer.host),
+                                    size: 38
+                                )
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(computer.name)
+                                    Text(ConnectionPresentationPolicy.displayName(name: computer.name, host: computer.host))
                                         .foregroundStyle(.primary)
                                         .lineLimit(1)
                                     Text("Tap to switch")
@@ -658,7 +661,7 @@ struct ConnectedComputersView: View {
         .navigationTitle("Computers")
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog(
-            "Remove \(pendingRemoval?.name ?? "this computer")?",
+            "Remove \(pendingRemoval.map { ConnectionPresentationPolicy.displayName(name: $0.name, host: $0.host) } ?? "this computer")?",
             isPresented: Binding(
                 get: { pendingRemoval != nil },
                 set: { if !$0 { pendingRemoval = nil } }
@@ -731,15 +734,18 @@ struct ConnectionSecurityView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes the connection from this iPhone only. It does not revoke this phone on your Mac. To remove Mac-side access, open OpenMausBot → Settings → Phone and remove this device.")
+            Text("This removes the connection from this iPhone only. It does not revoke this phone on your Mac. To remove Mac-side access, open V Bot → Settings → Phone and remove this device.")
         }
     }
 
     private func identityCard(_ connection: Connection) -> some View {
         HStack(spacing: 14) {
-            ProfileAvatar(name: connection.name, size: 46)
+            ProfileAvatar(
+                name: ConnectionPresentationPolicy.displayName(name: connection.name, host: connection.host),
+                size: 46
+            )
             VStack(alignment: .leading, spacing: 4) {
-                Text(connection.name)
+                Text(ConnectionPresentationPolicy.displayName(name: connection.name, host: connection.host))
                     .font(.headline)
                 Label(session.status.settingsText(previouslyLive: session.previouslyLive),
                       systemImage: session.status == .live ? "checkmark.circle.fill" : "circle.dotted")
@@ -852,7 +858,7 @@ struct ConnectionSecurityView: View {
         case .connecting:
             return session.previouslyLive
                 ? "Reconnecting automatically. Cached chats stay available."
-                : "OpenMausBot is trying the saved connection automatically."
+                : "V Bot is trying the saved connection automatically."
         case let .offline(reason):
             return reason
         case .unauthorized:
@@ -909,6 +915,17 @@ struct AccountSheet: View {
             ScrollView {
                 VStack(spacing: VBotSurface.Space.row) {
                     accountRow
+                    if session.connection != nil {
+                        NavigationLink {
+                            ConnectedComputersView()
+                        } label: {
+                            rowLabel(
+                                title: "Computers",
+                                subtitle: fleetSubtitle,
+                                systemImage: "laptopcomputer.and.iphone"
+                            )
+                        }
+                    }
                     NavigationLink {
                         ConnectedAppsView()
                     } label: {
@@ -956,15 +973,15 @@ struct AccountSheet: View {
 
     private var accountRow: some View {
         NavigationLink {
-            SettingsView()
+            AccountProfileView()
         } label: {
             HStack(spacing: 14) {
-                ProfileAvatar(name: session.connection?.name ?? "You", size: 56)
+                AccountAvatar(size: 56)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(session.connection?.name ?? "You")
+                    Text("Your profile")
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(Color.primary)
-                    Text(session.connection?.pairingConsentOrigin ?? "Paired computer")
+                    Text("Choose your avatar icon")
                         .font(.subheadline)
                         .foregroundStyle(Color.secondary)
                         .lineLimit(2)
@@ -979,6 +996,13 @@ struct AccountSheet: View {
             .vbotCard()
         }
         .buttonStyle(.plain)
+    }
+
+    private var fleetSubtitle: String {
+        let summary = ConnectionPresentationPolicy.fleetSummary(count: session.connections.count)
+        guard let connection = session.connection else { return summary }
+        let current = ConnectionPresentationPolicy.displayName(name: connection.name, host: connection.host)
+        return "\(summary) · \(current) active"
     }
 
     private func rowLabel(title: String, subtitle: String, systemImage: String) -> some View {
@@ -1005,6 +1029,64 @@ struct AccountSheet: View {
         .padding(16)
         .frame(minHeight: VBotSurface.Hit.row)
         .vbotCard()
+    }
+}
+
+struct AccountProfileView: View {
+    @AppStorage(PrefKey.accountAvatarSymbol) private var storedSymbol = AccountAvatarSymbol.person.rawValue
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 28) {
+                AccountAvatar(size: 88)
+                    .padding(.top, 12)
+
+                VStack(spacing: 6) {
+                    Text("Your avatar")
+                        .font(.title2.weight(.semibold))
+                    Text("This stays on your iPhone and represents you across V Bot.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(AccountAvatarSymbol.allCases) { option in
+                        Button {
+                            Haptics.selection()
+                            storedSymbol = option.rawValue
+                        } label: {
+                            VStack(spacing: 9) {
+                                Image(systemName: option.rawValue)
+                                    .font(.system(size: 22, weight: .semibold))
+                                    .frame(width: 46, height: 46)
+                                    .foregroundStyle(option.rawValue == storedSymbol ? .white : Color.primary)
+                                    .background(
+                                        option.rawValue == storedSymbol
+                                            ? MausPalette.color("green")
+                                            : Color.secondary.opacity(0.12),
+                                        in: Circle()
+                                    )
+                                Text(option.label)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .vbotCard()
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Use \(option.label) avatar")
+                        .accessibilityAddTraits(option.rawValue == storedSymbol ? .isSelected : [])
+                    }
+                }
+            }
+            .padding(VBotSurface.Space.page)
+        }
+        .navigationTitle("Profile")
+        .navigationBarTitleDisplayMode(.inline)
+        .vbotCanvas()
     }
 }
 

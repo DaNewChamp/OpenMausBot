@@ -789,6 +789,7 @@ public enum RequestCancellation: Sendable {
             || normalized == "canceled"
             || normalized == "the operation was cancelled"
             || normalized == "the operation was canceled"
+            || normalized.contains("swift.cancellationerror")
     }
 }
 

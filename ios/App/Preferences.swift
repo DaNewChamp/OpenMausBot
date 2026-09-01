@@ -9,6 +9,7 @@ import SwiftUI
 import CompanionCore
 
 enum PrefKey {
+    static let accountAvatarSymbol = "companion.prefs.accountAvatarSymbol"
     static let islandIntro = "companion.prefs.islandIntro"
     static let islandSeen = "companion.prefs.islandSeen"
     static let activityDetail = "companion.prefs.activityDetail"
