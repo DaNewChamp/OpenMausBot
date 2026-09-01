@@ -81,7 +81,10 @@ shows it fully, so no content is inaccessible. Text intentionally ellipsizes
 within the existing one- or two-line limits. The Reduce Motion captures show a
 static transition rather than the spring/rotation path.
 
-## States not produced
+## States not produced in the initial pass
+
+The following states were not produced by the initial pre-remediation capture
+pass. The post-`f891526` closure below supplies the missing portable evidence.
 
 - **Initial connecting halo:** the StorePreview initializer hydrates its
   fixture and sets `Session.status = .live`; no existing launch argument keeps
@@ -140,10 +143,12 @@ normal production contracts:
 - Release notes now describe upcoming build 72. `ios/project.yml` and all
   project build-number settings remain unchanged at 71.
 - Portable simulator evidence is tracked at
-  `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/` (17 PNGs,
+  `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/` (21 PNGs,
   1206 x 2622): needs-approval, connecting halo, quiet/active `large` and
   accessibility XXXL with Reduce Motion on/off, expanded active XXXL, and
-  work-card actions/no-actions captures.
+  work-card actions/no-actions captures. Four files suffixed `post-f891526`
+  were added after the layout remediation to close the needs-attention and
+  connecting accessibility matrix.
 
 ### Rerun commands
 
@@ -213,3 +218,33 @@ captures.
 
 No signing, device archive, TestFlight upload, deploy, merge, or production
 resource change was attempted.
+
+## Post-f891526 portable evidence closure
+
+Date: 2026-08-31 (America/Chicago)
+Starting commit: `f891526 fix(ios): close home activity visual gate`
+
+The post-remediation Debug simulator build was installed on the same iPhone 17
+Pro simulator (iOS 26.5, UDID
+`334FC58E-19DA-460C-AC2A-1D34D7CAA916`) and recaptured at
+`accessibility-extra-extra-extra-large`. Reduce Motion was set explicitly for
+each launch. This build-only step was needed to exercise the current layout;
+no full test suite or signed build was rerun.
+
+| State | Fixture and setting | Portable capture |
+| --- | --- | --- |
+| Needs-attention expanded activity | `-store-preview -preview-expand-activity`; accessibility XXXL, Reduce Motion on | `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/18-expanded-needs-xxxl-reduce-motion-on-post-f891526.png` |
+| Needs-attention expanded activity | `-store-preview -preview-expand-activity`; accessibility XXXL, Reduce Motion off | `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/19-expanded-needs-xxxl-reduce-motion-off-post-f891526.png` |
+| Initial connecting | `-store-preview -preview-connecting`; accessibility XXXL, Reduce Motion on | `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/20-connecting-xxxl-reduce-motion-on-post-f891526.png` |
+| Initial connecting | `-store-preview -preview-connecting`; accessibility XXXL, Reduce Motion off | `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/21-connecting-xxxl-reduce-motion-off-post-f891526.png` |
+
+Visual inspection found no Critical or Important overlap, clipping, or spacing
+finding. In both expanded needs-attention captures, the enlarged roster rows
+end above the activity panel; the panel is a sibling below the roster and its
+details remain vertically scrollable. The connecting captures show the halo
+around the profile while the enlarged roster remains stable. Reduce Motion on
+and off produce the same static content frame as expected.
+
+The four PNGs are 1206 x 2622 and are now part of the portable evidence set;
+the exact files and matrix are also listed in `ios/TESTING.md` and
+`ios/AppStore/screenshots/README.md`.

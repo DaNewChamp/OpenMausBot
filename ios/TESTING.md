@@ -233,8 +233,12 @@ Portable evidence is tracked under
 `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/`. The directory
 contains the normal/accessibility Dynamic Type matrix (quiet and active with
 Reduce Motion on and off), needs-approval and initial-connecting halo captures,
-the expanded XXXL activity panel, and work cards with and without optional
-actions. All images are 1206 x 2622 PNGs from the simulator above.
+needs-attention expanded activity at accessibility XXXL with Reduce Motion on
+and off, connecting at accessibility XXXL with Reduce Motion on and off, the
+expanded XXXL activity panel, and work cards with and without optional actions.
+The four files suffixed `post-f891526` were captured from the post-remediation
+build; they verify that enlarged roster rows remain outside the expanded panel.
+All images are 1206 x 2622 PNGs from the simulator above.
 
 ## Stage 4 — the thing actually working
 
