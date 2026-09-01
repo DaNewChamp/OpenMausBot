@@ -15,9 +15,8 @@ same harness the desktop app talks to, through the restricted sidecar described 
 
 ## Status
 
-Internal TestFlight is build 72. The project is prepared for build 73
-(`CURRENT_PROJECT_VERSION: 73` in `project.yml`); build 73 is the next internal candidate and is
-not uploaded yet. The code and focused suites cover QR handoff, Bonjour/manual LAN and Tailscale
+Internal TestFlight is build 73 (`CURRENT_PROJECT_VERSION: 73` in `project.yml`), recorded as
+`VALID / IN_BETA_TESTING` in App Store Connect. The code and focused suites cover QR handoff, Bonjour/manual LAN and Tailscale
 pairing, the roster, paged chat, settled replies, model/provider selection, attachments, the
 computer view, and approval flows. A fresh physical-device install, cellular VM exercise, and
 deployed-HEAD parity are release gates and are not claimed by this README.
