@@ -94,9 +94,27 @@ describe("Hermes setup projection", () => {
       bindings: { state: "available", value: new Map([["bot-1", binding]]) },
       botExists: (id) => id === "bot-1",
     });
-    expect(status).toMatchObject({ state: "connected", capabilities: { canonicalChat: true } });
-    expect(status.profiles).toEqual([expect.objectContaining({ profile: "default", botId: "bot-1", canonicalChat: "present" })]);
+    expect(status).toMatchObject({ state: "connected", capabilities: { canonicalChat: false } });
+    expect(status.profiles).toEqual([expect.objectContaining({ profile: "default", botId: "bot-1", canonicalChat: "absent" })]);
     expect(JSON.stringify(status)).not.toMatch(/root|resolved|session/i);
+  });
+
+  it("does not infer canonical support from a binding when discovery has no canonical proof", () => {
+    const binding: HermesBotBinding = {
+      adapter: "hermesBot",
+      profile: "default",
+      canonicalTitle: "Bot Chat",
+      bindingVersion: 1,
+    };
+    const status = projectHermesSetupStatus({
+      enabled: true,
+      description: description({ capabilities: { ...capabilities, canonicalChat: true } }),
+      bindings: { state: "available", value: new Map([["bot-1", binding]]) },
+      botExists: (id) => id === "bot-1",
+    });
+    expect(status.state).toBe("connected");
+    expect(status.capabilities.canonicalChat).toBe(false);
+    expect(status.profiles[0]).toMatchObject({ botId: "bot-1", canonicalChat: "absent" });
   });
 
   it("fails closed on a stale binding instead of minting another bot", () => {

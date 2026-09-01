@@ -1,6 +1,9 @@
 import { EventEmitter } from "node:events";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import {
   HermesBotAdapter,
@@ -330,6 +333,92 @@ describe("Hermes Bot Chat loopback transport", () => {
     });
     await expect(ensure).resolves.toMatchObject({ profile: "coder", title: "Bot Chat", resolvedSessionId: "tip-new" });
     await engine.close();
+  });
+
+  it("persists a profile-only pending marker when post-create lookup is absent and never mints again", async () => {
+    const pendingDir = mkdtempSync(join(tmpdir(), "hermes-pending-"));
+    const pendingPath = join(pendingDir, "pending.json");
+    const { child } = harness();
+    const engine = new HermesBotAdapter({
+      spawn: vi.fn(() => child),
+      pendingPath,
+      timeouts: { requestMs: 100 },
+    });
+    try {
+      const ensure = engine.ensureCanonical("coder");
+      await settle();
+      ready(child);
+      await settle();
+      const roster = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+      await settle();
+      const firstList = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: firstList.id, result: { sessions: [] } });
+      await settle();
+      const create = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: create.id, result: { session_id: "durable-created" } });
+      await settle();
+      const refreshedRoster = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: refreshedRoster.id, result: { profiles: [{ name: "coder" }] } });
+      await settle();
+      const secondList = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: secondList.id, result: { sessions: [] } });
+      await expect(ensure).rejects.toMatchObject({ code: "malformed_response" });
+
+      expect(JSON.parse(readFileSync(pendingPath, "utf8"))).toEqual({ version: 1, profiles: ["coder"] });
+      const retry = engine.ensureCanonical("coder");
+      await settle();
+      const retryRoster = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: retryRoster.id, result: { profiles: [{ name: "coder" }] } });
+      await settle();
+      const retryList = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: retryList.id, result: { sessions: [] } });
+      await expect(retry).rejects.toMatchObject({ code: "state_unavailable" });
+      expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).toEqual([
+        "profiles.list", "session.list", "session.create", "profiles.list", "session.list",
+        "profiles.list", "session.list",
+      ]);
+      expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).not.toContain("session.delete");
+      expect(readFileSync(pendingPath, "utf8")).not.toContain("durable-created");
+    } finally {
+      await engine.close();
+      rmSync(pendingDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [{ id: "id-only" }, "id-only field"],
+    [{ session_id: " durable-id " }, "whitespace-padded id"],
+    [{ session_id: "" }, "empty id"],
+  ])("requires the exact strict durable session_id shape ($1)", async (created, _label) => {
+    const pendingDir = mkdtempSync(join(tmpdir(), "hermes-pending-"));
+    const { child } = harness();
+    const engine = new HermesBotAdapter({
+      spawn: vi.fn(() => child),
+      pendingPath: join(pendingDir, "pending.json"),
+      timeouts: { requestMs: 100 },
+    });
+    try {
+      const ensure = engine.ensureCanonical("coder");
+      await settle();
+      ready(child);
+      await settle();
+      const roster = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+      await settle();
+      const list = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [] } });
+      await settle();
+      const create = JSON.parse(child.stdin.writes.at(-1)!);
+      child.frame({ jsonrpc: "2.0", id: create.id, result: created });
+      await expect(ensure).rejects.toMatchObject({ code: "malformed_response" });
+      expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).toEqual([
+        "profiles.list", "session.list", "session.create",
+      ]);
+    } finally {
+      await engine.close();
+      rmSync(pendingDir, { recursive: true, force: true });
+    }
   });
 
   it("fails closed when session.create does not return a durable id", async () => {

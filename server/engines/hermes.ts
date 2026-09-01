@@ -9,6 +9,11 @@ import {
   projectHermesCapabilities,
 } from "./discovery.ts";
 import {
+  clearHermesPendingProfile,
+  loadHermesPendingProfiles,
+  markHermesPendingProfile,
+} from "./bindings.ts";
+import {
   HermesEngineError,
   type HermesCanonicalChat,
   type HermesCanonicalLookup,
@@ -130,6 +135,8 @@ export interface HermesBotEngineOptions {
   spawn?: HermesSpawn;
   clock?: HermesClock;
   timeouts?: Partial<HermesTimeouts>;
+  /** Optional test/runtime override for the adapter-owned pending marker. */
+  pendingPath?: string;
 }
 
 export interface HermesBotEngine {
@@ -627,6 +634,12 @@ function normalizeProfile(profile: string): string {
   if (value.length === 0 || value.length > PROFILE_MAX_LENGTH || value.trim() !== value || !PROFILE_PATTERN.test(value)) {
     throw new HermesEngineError("profile_unavailable");
   }
+  if (/^session(?:[-_]|$)/i.test(value) || /^(?:root|resolved)[-_]?session/i.test(value)) {
+    throw new HermesEngineError("profile_unavailable");
+  }
+  if (/^[0-9a-f]{16,}$/i.test(value) || /^[0-9a-f]{8}-[0-9a-f-]{8,}$/i.test(value)) {
+    throw new HermesEngineError("profile_unavailable");
+  }
   return value.toLowerCase();
 }
 
@@ -814,6 +827,7 @@ export class HermesBotAdapter implements HermesBotEngine {
   private readonly clock: Required<HermesClock>;
   private readonly timeouts: HermesTimeouts;
   private readonly client: HermesGatewayClient;
+  private readonly pendingPath?: string;
   private readonly locks = new Map<string, AsyncLock>();
   private readonly runtimes = new Map<string, RuntimeRecord>();
   private readonly listeners = new Set<(event: RuntimeEvent) => void>();
@@ -823,6 +837,7 @@ export class HermesBotAdapter implements HermesBotEngine {
   private closed = false;
 
   constructor(options: HermesBotEngineOptions = {}) {
+    this.pendingPath = options.pendingPath;
     this.clock = normalizeClock(options.clock);
     this.timeouts = normalizeTimeouts(options.timeouts);
     const environment = sanitizeHermesChildEnv(options.environment ?? options.env ?? {});
@@ -883,11 +898,34 @@ export class HermesBotAdapter implements HermesBotEngine {
     const normalizedProfile = normalizeProfile(profile);
     return await this.lockFor(normalizedProfile).run(async () => {
       if (this.closed) throw new HermesEngineError("gateway_unavailable");
+      const pending = loadHermesPendingProfiles(this.pendingPath);
+      if (pending.state === "unavailable") throw new HermesEngineError(pending.code);
+      const hasPending = pending.value.has(normalizedProfile);
       let canonical = await this.lookupCanonicalOutsideLock(normalizedProfile);
-      if (canonical.state === "present") return canonical.chat;
+      if (canonical.state === "present") {
+        if (hasPending) {
+          const cleared = clearHermesPendingProfile(normalizedProfile, this.pendingPath);
+          if (cleared.state === "unavailable") throw new HermesEngineError(cleared.code);
+        }
+        return canonical.chat;
+      }
       if (canonical.state === "unknown") throw errorForLookup(canonical);
+      if (hasPending) {
+        this.demoteCapabilities();
+        // A previous create may have succeeded even when its response or
+        // re-lookup was lost. Without a provider-supported delete RPC, keep
+        // this durable profile marker and refuse to mint another title.
+        throw new HermesEngineError("state_unavailable");
+      }
 
       await this.client.start();
+      const marked = markHermesPendingProfile(normalizedProfile, this.pendingPath);
+      if (marked.state === "unavailable") throw new HermesEngineError(marked.code);
+      if (!marked.value) {
+        this.demoteCapabilities();
+        throw new HermesEngineError("state_unavailable");
+      }
+
       try {
         const created = await this.client.request("session.create", {
           profile: normalizedProfile,
@@ -908,8 +946,17 @@ export class HermesBotAdapter implements HermesBotEngine {
       if (canonical.state !== "present") {
         this.demoteCapabilities();
         // A create response is not canonical identity. If the exact title
-        // cannot be re-resolved, stop without another create attempt.
-        throw new HermesEngineError("malformed_response");
+        // cannot be re-resolved, stop without another create attempt. The
+        // durable marker above makes retries fail closed until this title is
+        // visible again (or an operator removes the marker deliberately).
+        throw canonical.state === "unknown"
+          ? errorForLookup(canonical)
+          : new HermesEngineError("malformed_response");
+      }
+      const cleared = clearHermesPendingProfile(normalizedProfile, this.pendingPath);
+      if (cleared.state === "unavailable") {
+        this.demoteCapabilities();
+        throw new HermesEngineError(cleared.code);
       }
       this.readiness.canonicalChat = true;
       return canonical.chat;
@@ -1300,23 +1347,10 @@ function canonicalHiddenState(payload: unknown, rootSessionId: string): boolean 
 }
 
 function createdSessionId(value: unknown): string | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  const nested = record.session && typeof record.session === "object" && !Array.isArray(record.session)
-    ? record.session as Record<string, unknown>
-    : undefined;
-  for (const candidate of [record.id, record.session_id, record.sessionId, nested?.id, nested?.session_id]) {
-    if (
-      typeof candidate === "string" &&
-      candidate.length > 0 &&
-      candidate.length <= 256 &&
-      candidate.trim() === candidate &&
-      !/[\u0000-\u001f\u007f\u0080-\u009f\s]/.test(candidate)
-    ) {
-      return candidate;
-    }
-  }
-  return undefined;
+  const record = asRecord(value);
+  if (!record || !Object.prototype.hasOwnProperty.call(record, "session_id")) return undefined;
+  const candidate = record.session_id;
+  return safeOpaqueId(candidate, 256) ? candidate : undefined;
 }
 
 function runtimeErrorMessage(reason: string): string {

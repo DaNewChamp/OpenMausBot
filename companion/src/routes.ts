@@ -47,6 +47,14 @@ export const HERMES_SETUP_CONNECT_ROUTE = {
 
 const HERMES_PROFILE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
+function isSafeHermesProfile(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 64) return false;
+  if (value.trim() !== value || !HERMES_PROFILE_PATTERN.test(value)) return false;
+  if (/^session(?:[-_]|$)/i.test(value) || /^(?:root|resolved)[-_]?session/i.test(value)) return false;
+  if (/^[0-9a-f]{16,}$/i.test(value) || /^[0-9a-f]{8}-[0-9a-f-]{8,}$/i.test(value)) return false;
+  return true;
+}
+
 export function isHermesSetupStatus(method: string, path: string): boolean {
   return method === HERMES_SETUP_STATUS_ROUTE.method && HERMES_SETUP_STATUS_ROUTE.path.test(path);
 }
@@ -68,7 +76,7 @@ export function validateHermesSetupBody(
   const extra = Object.keys(values).find((key) => key !== "profile");
   if (extra) return { denial: { status: 400, error: `unsupported Hermes setup field: ${extra}` } };
   if (values.profile === undefined) return {};
-  if (typeof values.profile !== "string" || values.profile.length === 0 || values.profile.trim() !== values.profile || !HERMES_PROFILE_PATTERN.test(values.profile)) {
+  if (!isSafeHermesProfile(values.profile)) {
     return { denial: { status: 400, error: "profile must be a Hermes profile name" } };
   }
   return { profile: values.profile.toLowerCase() };

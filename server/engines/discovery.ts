@@ -47,6 +47,8 @@ function exactText(value: unknown, maxLength: number): string | undefined {
 function validProfileSlug(value: unknown): string | undefined {
   const text = exactText(value, HERMES_PROFILE_MAX_LENGTH);
   if (!text || !PROFILE_PATTERN.test(text)) return undefined;
+  if (/^session(?:[-_]|$)/i.test(text) || /^(?:root|resolved)[-_]?session/i.test(text)) return undefined;
+  if (/^[0-9a-f]{16,}$/i.test(text) || /^[0-9a-f]{8}-[0-9a-f-]{8,}$/i.test(text)) return undefined;
   return text.toLowerCase();
 }
 

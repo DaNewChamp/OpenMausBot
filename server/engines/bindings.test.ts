@@ -17,7 +17,10 @@ import { vi } from "vitest";
 import * as atomic from "../atomic.ts";
 
 import {
+  clearHermesPendingProfile,
   loadHermesBindings,
+  loadHermesPendingProfiles,
+  markHermesPendingProfile,
   removeHermesBinding,
   setHermesBinding,
 } from "./bindings.ts";
@@ -130,5 +133,27 @@ describe("Hermes binding sidecar", () => {
     expect(result).toMatchObject({ state: "available" });
     if (result.state === "available") expect([...result.value.keys()]).toEqual(["alpha", "beta"]);
     expect(existsSync(`${file}.lock`)).toBe(false);
+  });
+
+  it("stores only a profile-only pending marker and clears it after adoption", () => {
+    const pending = join(dir, "nested", "hermes-pending.json");
+    expect(markHermesPendingProfile("Coder", pending)).toEqual({ state: "available", value: true });
+    expect(markHermesPendingProfile("coder", pending)).toEqual({ state: "available", value: false });
+    expect(statSync(pending).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(pending, "utf8"))).toEqual({ version: 1, profiles: ["coder"] });
+    expect(readFileSync(pending, "utf8")).not.toMatch(/session|runtime|secret|token/i);
+    expect(loadHermesPendingProfiles(pending)).toMatchObject({ state: "available" });
+    expect(clearHermesPendingProfile("coder", pending)).toEqual({ state: "available", value: undefined });
+    expect(existsSync(pending)).toBe(false);
+  });
+
+  it("rejects reserved and UUID-shaped pending profiles without changing prior bytes", () => {
+    const pending = join(dir, "nested", "hermes-pending.json");
+    expect(markHermesPendingProfile("coder", pending)).toMatchObject({ state: "available" });
+    const before = readFileSync(pending);
+    for (const profile of ["session-root", "root-session", "resolved_session", "0123456789abcdef", "01234567-89ab-cdef-0123-456789abcdef"]) {
+      expect(markHermesPendingProfile(profile, pending)).toMatchObject({ state: "unavailable" });
+    }
+    expect(readFileSync(pending)).toEqual(before);
   });
 });

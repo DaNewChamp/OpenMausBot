@@ -3,7 +3,7 @@
 // except `busy`, which never does (no turn survives one either).
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
@@ -67,6 +67,24 @@ describe("Store", () => {
     const store = new Store(selection);
     const bot = store.createBot({ name: "Imported" }, { seedMessages: false });
     expect(store.messagesFor(bot.threadId)).toHaveLength(0);
+  });
+
+  it("rolls back in-memory and durable bot state when the bot save fails", () => {
+    const botsFile = join(DATA_DIR, "bots.json");
+    const store = new Store(selection);
+    writeFileSync(botsFile, "[]\n");
+    const saveBots = vi.spyOn(store as unknown as { saveBots: () => void }, "saveBots");
+    saveBots.mockImplementation(() => {
+      // Model a post-publication failure: the file contains the candidate,
+      // then the writer reports an error to the caller.
+      writeFileSync(botsFile, JSON.stringify(store.bots));
+      throw new Error("injected bot save failure");
+    });
+
+    expect(() => store.createBot({ name: "No orphan" }, { seedMessages: false })).toThrow("injected bot save failure");
+    expect(store.bots).toEqual([]);
+    expect(readFileSync(botsFile, "utf8")).toBe("[]\n");
+    expect(new Store(selection).bots).toEqual([]);
   });
 
   it("addTaskUsage accumulates settled-turn totals per task and survives a restart", () => {

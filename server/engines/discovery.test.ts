@@ -65,6 +65,8 @@ describe("Hermes discovery normalization", () => {
       profiles: [
         { name: " coder ", display_name: "trim me" },
         { name: "x".repeat(65), display_name: "too long" },
+        { name: "session-root", display_name: "reserved" },
+        { name: "0123456789abcdef", display_name: "uuid-shaped" },
         { name: "valid", display_name: "Valid" },
       ],
     });
@@ -74,6 +76,16 @@ describe("Hermes discovery normalization", () => {
       availability: "unavailable",
     });
     expect(rows.find((row) => row.displayName === "too long")).toMatchObject({
+      profile: "",
+      handle: "",
+      availability: "unavailable",
+    });
+    expect(rows.find((row) => row.displayName === "reserved")).toMatchObject({
+      profile: "",
+      handle: "",
+      availability: "unavailable",
+    });
+    expect(rows.find((row) => row.displayName === "uuid-shaped")).toMatchObject({
       profile: "",
       handle: "",
       availability: "unavailable",

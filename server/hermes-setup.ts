@@ -305,14 +305,19 @@ export function projectHermesSetupStatus(options: ProjectHermesSetupStatusOption
 
   const safeProfiles = profiles.filter((row): row is HermesSetupProfile => row !== null);
   const connected = safeProfiles.some((profile) => profile.botId !== undefined);
+  // A binding proves only the V Bot↔Hermes profile association. It does not
+  // prove that the current discovery still sees this profile's canonical
+  // `Bot Chat`; only a live `present` row may advertise that capability.
+  const canonicalChatProven = description.capabilities.canonicalChat
+    && safeProfiles.some((profile) => profile.canonicalChat === "present");
   return {
     state: connected ? "connected" : "ready",
     profiles: safeProfiles.map((profile) => profile.botId
-      ? { ...profile, canonicalChat: "present" as const }
+      ? { ...profile, ...(canonicalChatProven && profile.canonicalChat === "present" ? { canonicalChat: "present" as const } : {}) }
       : profile),
     capabilities: {
       ...description.capabilities,
-      ...(connected ? { canonicalChat: true } : {}),
+      canonicalChat: canonicalChatProven,
     },
   };
 }

@@ -171,6 +171,9 @@ describe("what it may not", () => {
     expect(validateHermesSetupBody("POST", "/api/hermes/setup", { profile: "Default" })).toEqual({ profile: "default" });
     expect(validateHermesSetupBody("POST", "/api/hermes/setup", { token: "secret" })).toMatchObject({ denial: { status: 400 } });
     expect(validateHermesSetupBody("POST", "/api/hermes/setup", { profile: "../etc" })).toMatchObject({ denial: { status: 400 } });
+    for (const profile of ["session-root", "root-session", "resolved_session", "0123456789abcdef", "01234567-89ab-cdef-0123-456789abcdef"]) {
+      expect(validateHermesSetupBody("POST", "/api/hermes/setup", { profile }), profile).toMatchObject({ denial: { status: 400 } });
+    }
     expect(validateHermesSetupBody("GET", "/api/hermes/setup", { token: "ignored" })).toEqual({});
   });
 

@@ -2,7 +2,7 @@
 // thread→instance binding and per-instance resume cursors — upstream's
 // ProviderSessionDirectory, recipe step 6: persist the binding from day
 // one). messages-<threadId>.json holds the folded transcript.
-import { existsSync, readFileSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
@@ -984,8 +984,42 @@ export class Store {
     if (section) bot.section = section;
     if (profile.reportsToBotId) bot.reportsToBotId = profile.reportsToBotId;
     bot.tasks = [{ threadId: bot.threadId, title: UNTITLED_TASK, createdAt: bot.createdAt, resumeCursors: {} }];
+    const previousBots = this.bots.slice();
+    let previousBytes: Buffer | undefined;
+    let previousMode: number | undefined;
+    let previousPathMissing = true;
+    try {
+      const stat = lstatSync(BOTS_FILE);
+      previousPathMissing = false;
+      if (stat.isFile() && !stat.isSymbolicLink()) {
+        previousBytes = readFileSync(BOTS_FILE);
+        previousMode = stat.mode & 0o777;
+      }
+    } catch (error) {
+      previousPathMissing = (error as NodeJS.ErrnoException).code === "ENOENT";
+      // A missing/undecodable prior file is equivalent to no snapshot; the
+      // atomic writer leaves it absent when its first publication fails.
+    }
     this.bots.unshift(bot);
-    this.saveBots();
+    try {
+      this.saveBots();
+    } catch (error) {
+      // `saveBots()` publishes after this in-memory mutation. Restore both
+      // planes before surfacing the failure so a rejected Hermes import
+      // cannot leave a bot that is visible now but absent after restart.
+      this.bots = previousBots;
+      try {
+        if (previousBytes !== undefined) {
+          writeFileAtomic(BOTS_FILE, previousBytes.toString("utf8"), { mode: previousMode });
+        } else if (previousPathMissing) {
+          unlinkSync(BOTS_FILE);
+        }
+      } catch {
+        // The original write failure remains the caller-visible outcome. A
+        // normal atomic failure has not replaced the prior durable bytes.
+      }
+      throw error;
+    }
     // Announce the owner before its onboarding transcript. SSE clients need
     // the bot/thread mapping before they can place either message.
     this.emit({ type: "bot", botId: bot.id });

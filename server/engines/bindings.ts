@@ -16,6 +16,7 @@ import {
 } from "./contracts.ts";
 
 const DEFAULT_BINDINGS_FILE = "hermes-bindings.json";
+const DEFAULT_PENDING_FILE = "hermes-pending.json";
 const PROFILE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const MAX_PROFILE_LENGTH = 64;
 const MAX_BOT_ID_LENGTH = 256;
@@ -35,6 +36,11 @@ export type BindingStoreResult<T> =
 interface BindingSidecar {
   version: 1;
   bindings: Record<string, HermesBotBinding>;
+}
+
+interface PendingSidecar {
+  version: 1;
+  profiles: string[];
 }
 
 type FileSnapshot =
@@ -57,6 +63,12 @@ function failure(
 
 function targetPath(path?: string): string | undefined {
   if (path === undefined) return resolve(DATA_DIR, DEFAULT_BINDINGS_FILE);
+  if (typeof path !== "string" || path.length === 0 || !isAbsolute(path)) return undefined;
+  return resolve(path);
+}
+
+function pendingTargetPath(path?: string): string | undefined {
+  if (path === undefined) return resolve(DATA_DIR, DEFAULT_PENDING_FILE);
   if (typeof path !== "string" || path.length === 0 || !isAbsolute(path)) return undefined;
   return resolve(path);
 }
@@ -86,6 +98,10 @@ function validProfile(value: unknown): value is string {
   if (/^session(?:[-_]|$)/i.test(value) || /^(?:root|resolved)[-_]?session/i.test(value)) return false;
   if (/^[0-9a-f]{16,}$/i.test(value) || /^[0-9a-f]{8}-[0-9a-f-]{8,}$/i.test(value)) return false;
   return true;
+}
+
+function normalizeProfile(value: unknown): string | undefined {
+  return validProfile(value) ? value.toLowerCase() : undefined;
 }
 
 function validBinding(value: unknown): value is HermesBotBinding {
@@ -126,6 +142,21 @@ function parseSidecar(raw: unknown): Map<string, HermesBotBinding> | undefined {
     bindings.set(botId, canonicalBinding(binding));
   }
   return bindings;
+}
+
+function parsePendingSidecar(raw: unknown): Set<string> | undefined {
+  if (!isRecord(raw)) return undefined;
+  const keys = Object.keys(raw).sort();
+  if (keys.length !== 2 || keys.join("\u0000") !== "profiles\u0000version") return undefined;
+  if (raw.version !== 1 || !Array.isArray(raw.profiles)) return undefined;
+
+  const profiles = new Set<string>();
+  for (const profile of raw.profiles) {
+    const normalized = normalizeProfile(profile);
+    if (!normalized || profiles.has(normalized)) return undefined;
+    profiles.add(normalized);
+  }
+  return profiles;
 }
 
 function ensureParent(parent: string, create: boolean): boolean {
@@ -340,6 +371,77 @@ function mutateBindings<T>(path: string, mutate: (current: ReadonlyMap<string, H
   }
 }
 
+function loadPendingFromPath(path: string): BindingStoreResult<ReadonlySet<string>> {
+  const parent = dirname(path);
+  if (!ensureParent(parent, false)) {
+    try {
+      if (lstatSync(parent).isDirectory()) return failure("state_unavailable");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return failure("state_unavailable");
+      return { state: "available", value: new Set() };
+    }
+    return failure("state_unavailable");
+  }
+
+  const state = ensureExistingFile(path);
+  if (state === "missing") return { state: "available", value: new Set() };
+  if (state !== "ok") return failure("state_unavailable");
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return failure("malformed_response");
+  }
+  const profiles = parsePendingSidecar(parsed);
+  return profiles ? { state: "available", value: profiles } : failure("malformed_response");
+}
+
+function writePending(
+  path: string,
+  profiles: ReadonlySet<string>,
+  expected: FileSnapshot,
+): BindingStoreResult<void> {
+  if (!ensureParent(dirname(path), true)) return failure("state_unavailable");
+  const existing = snapshotFile(path);
+  if (existing.kind === "unavailable" || !sameSnapshot(existing, expected)) return failure("state_unavailable");
+
+  const serializedProfiles = [...profiles].sort(compareCodePoints);
+  const sidecar: PendingSidecar = { version: 1, profiles: serializedProfiles };
+  const serialized = `${JSON.stringify(sidecar, null, 2)}\n`;
+  try {
+    writeFileAtomic(path, serialized, { mode: 0o600 });
+    const published = snapshotFile(path);
+    if (
+      published.kind !== "ok" ||
+      (POSIX && published.mode !== 0o600) ||
+      published.bytes.toString("utf8") !== serialized
+    ) {
+      restoreSnapshot(path, existing);
+      return failure("state_unavailable");
+    }
+  } catch {
+    restoreSnapshot(path, existing);
+    return failure("state_unavailable");
+  }
+  return { state: "available", value: undefined };
+}
+
+function mutatePending<T>(path: string, mutate: (current: ReadonlySet<string>, snapshot: FileSnapshot) => BindingStoreResult<T>): BindingStoreResult<T> {
+  if (!ensureParent(dirname(path), true)) return failure("state_unavailable");
+  const lock = acquireLock(path);
+  if (!lock) return failure("state_unavailable");
+  try {
+    const loaded = loadPendingFromPath(path);
+    if (loaded.state === "unavailable") return loaded as BindingStoreResult<T>;
+    const snapshot = snapshotFile(path);
+    if (snapshot.kind === "unavailable") return failure("state_unavailable");
+    return mutate(loaded.value, snapshot);
+  } finally {
+    releaseLock(lock);
+  }
+}
+
 export function loadHermesBindings(path?: string): BindingStoreResult<ReadonlyMap<string, HermesBotBinding>> {
   const resolved = targetPath(path);
   return resolved ? loadFromPath(resolved) : failure("state_unavailable");
@@ -367,5 +469,45 @@ export function removeHermesBinding(botId: string, path?: string): BindingStoreR
     const next = new Map(current);
     next.delete(botId);
     return writeBindings(resolved, next, snapshot);
+  });
+}
+
+/** Load adapter-owned canonical-creation markers. Markers contain only safe
+ * profile slugs; a durable/session/runtime id is deliberately never stored. */
+export function loadHermesPendingProfiles(path?: string): BindingStoreResult<ReadonlySet<string>> {
+  const resolved = pendingTargetPath(path);
+  return resolved ? loadPendingFromPath(resolved) : failure("state_unavailable");
+}
+
+export function markHermesPendingProfile(profile: string, path?: string): BindingStoreResult<boolean> {
+  const resolved = pendingTargetPath(path);
+  const normalized = normalizeProfile(profile);
+  if (!resolved || !normalized) return failure("malformed_response");
+  return mutatePending(resolved, (current, snapshot) => {
+    if (current.has(normalized)) return { state: "available", value: false };
+    const next = new Set(current);
+    next.add(normalized);
+    const written = writePending(resolved, next, snapshot);
+    return written.state === "available" ? { state: "available", value: true } : written;
+  });
+}
+
+export function clearHermesPendingProfile(profile: string, path?: string): BindingStoreResult<void> {
+  const resolved = pendingTargetPath(path);
+  const normalized = normalizeProfile(profile);
+  if (!resolved || !normalized) return failure("malformed_response");
+  return mutatePending(resolved, (current, snapshot) => {
+    if (!current.has(normalized)) return { state: "available", value: undefined };
+    const next = new Set(current);
+    next.delete(normalized);
+    if (next.size === 0 && snapshot.kind === "ok") {
+      try {
+        unlinkSync(resolved);
+        return { state: "available", value: undefined };
+      } catch {
+        return failure("state_unavailable");
+      }
+    }
+    return writePending(resolved, next, snapshot);
   });
 }

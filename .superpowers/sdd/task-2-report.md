@@ -111,3 +111,74 @@ rather than `pnpm` in this worktree.
   and both typechecks, and confirm the final commit contains only Task 2 files
   plus this report. No deployment, iOS UI, remote Hermes bridge, dependency,
   signing, or TestFlight work was performed.
+
+## Review-fix pass (2026-09-01)
+
+The review fixes close the two important state-transaction gaps and the
+validator/status minor findings without adding a provider RPC:
+
+- `Store.createBot` now snapshots the prior in-memory bot list and durable
+  `bots.json` bytes/mode, and restores both when `saveBots()` throws, including
+  a simulated post-publication failure. A rejected create therefore cannot
+  leave a bot visible in memory but absent after restart.
+- Hermes canonical creation now uses an adapter-owned `hermes-pending.json`
+  marker. The marker contains only normalized profile slugs (no secret,
+  durable session id, or runtime id), is written with the existing locked
+  atomic-sidecar discipline, and is retained whenever `session.create`
+  succeeds but exact re-lookup is absent/unknown/malformed or otherwise
+  unverified. Retries re-check the exact title and fail closed while the marker
+  remains; they cannot mint a second hidden `Bot Chat`. A present row adopts
+  and clears the marker. The pinned gateway method table exposes no
+  `session.delete`/cleanup method, so no unsupported RPC was invented.
+- Created-session responses require the exact top-level `session_id` field
+  with strict opaque-id validation; aliases, nested ids, empty values, and
+  whitespace-padded values are rejected.
+- Hub discovery, setup, bindings, and the companion request validator reject
+  the same reserved `session`/`root-session`/`resolved-session` forms and
+  UUID/hex-shaped profile slugs.
+- Setup status no longer infers `canonicalChat` from a V Bot binding alone;
+  the affirmative capability and profile state require a current discovered
+  canonical row. The connect path may still affirm it only after the adapter's
+  exact live post-create/adoption proof.
+
+### Review-fix verification (exact)
+
+```text
+./node_modules/.bin/vitest run server/hermes-setup.test.ts server/engines/hermes-adapter.test.ts server/index.hermes-adapter.test.ts companion/test/routes.test.ts companion/test/proxy.test.ts
+```
+
+Passed: 5 test files, 180 tests, 0 failures (17:02:19, 5.11s).
+
+Additional focused regressions:
+
+```text
+./node_modules/.bin/vitest run server/store.test.ts server/engines/bindings.test.ts server/engines/discovery.test.ts server/engines/hermes-adapter.test.ts
+```
+
+Passed: 4 test files, 164 tests, 0 failures (17:02:30, 2.16s).
+
+```text
+./node_modules/.bin/tsc -p tsconfig.server.json --noEmit
+./node_modules/.bin/tsc -p tsconfig.companion.build.json --noEmit
+git diff --check
+```
+
+All passed (17:02:34). No dependency, deployment, remote bridge, iOS, or
+credential operation was performed.
+
+### Security rationale and residual concerns
+
+- The pending sidecar is profile-only, mode `0600`, parent `0700`, protected
+  by the same owner/symlink/lock/atomic checks as the existing binding sidecar.
+  It intentionally never stores provider ids, runtime handles, prompts, or
+  credentials. Operators must clear a marker only after confirming the
+  provider row is absent; automatic clearing is limited to an exact current
+  canonical match.
+- Because the pinned gateway has no proven delete method, a lost create
+  response can leave an unseen provider row. The durable marker prevents
+  duplicate creation and forces an explicit operator/provider reconciliation;
+  this is safer than retry minting or guessing an RPC.
+- No real Hermes account or gateway was exercised; injected loopback fixtures
+  cover the create/lookup failure matrix. The pre-existing dirty
+  `pnpm-workspace.yaml` remains outside this change and must not be included
+  when the root orchestrator reconciles commits.
