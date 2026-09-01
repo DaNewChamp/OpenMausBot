@@ -821,6 +821,19 @@ public enum ConversationPinResult<Value: Sendable>: Sendable {
     }
 }
 
+private struct HermesSetupConnectBody: Encodable, Sendable {
+    let profile: String?
+
+    private enum CodingKeys: String, CodingKey { case profile }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let profile {
+            try container.encode(profile, forKey: .profile)
+        }
+    }
+}
+
 public struct CompanionClient: Sendable {
     public let connection: Connection
     private let token: String?
@@ -1067,6 +1080,30 @@ public struct CompanionClient: Sendable {
     /// Registered home-bridge machines visible to this paired phone.
     public func bridgeRoster() async throws -> [BridgeRosterEntry] {
         try await send(try makeRequest("GET", "/api/bridges"), as: BridgeRosterResponse.self).bridges
+    }
+
+    /// Read the safe, display-only Hermes setup projection from the paired
+    /// computer. The response contains profile labels and capabilities only;
+    /// credentials, paths, and runtime diagnostics remain hub-local.
+    public func hermesSetupStatus() async throws -> HermesSetupStatus {
+        try await send(
+            try makeRequest("GET", "/api/hermes/setup/status"),
+            as: HermesSetupStatus.self
+        )
+    }
+
+    /// Connect one Hermes profile and import its canonical V Bot chat. An
+    /// omitted profile deliberately means "the server's default profile" and
+    /// is encoded as an empty object rather than a JSON null.
+    public func connectHermes(profile: String? = nil) async throws -> HermesSetupConnectionResponse {
+        try await send(
+            try makeRequest(
+                "POST",
+                "/api/hermes/setup",
+                encodedBody: HermesSetupConnectBody(profile: profile)
+            ),
+            as: HermesSetupConnectionResponse.self
+        )
     }
 
     /// Hydrate. `messages` opts into the paged shape — the newest n per
