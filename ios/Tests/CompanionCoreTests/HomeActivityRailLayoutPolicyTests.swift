@@ -8,9 +8,13 @@ final class HomeActivityRailLayoutPolicyTests: XCTestCase {
         XCTAssertTrue(HomeActivityRailLayoutPolicy.showsRail(for: .needsAttention))
     }
 
-    func testCollapsedRailHugsCopyAndExpandedRailMayWiden() {
-        XCTAssertTrue(HomeActivityRailLayoutPolicy.usesContentHugging(isExpanded: false))
-        XCTAssertFalse(HomeActivityRailLayoutPolicy.usesContentHugging(isExpanded: true))
+    func testCollapsedPillKeepsContentWidthWhenExpanded() {
+        XCTAssertTrue(HomeActivityRailLayoutPolicy.collapsedUsesContentHugging(isExpanded: false))
+        XCTAssertTrue(HomeActivityRailLayoutPolicy.collapsedUsesContentHugging(isExpanded: true))
+    }
+
+    func testExpandedPanelMayUsePremiumMaxWidth() {
+        XCTAssertEqual(HomeActivityRailLayoutPolicy.expandedPanelMaxWidth, 430)
     }
 
     func testRegularCollapsedRailRetainsCompactPremiumMetrics() {

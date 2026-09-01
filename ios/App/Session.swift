@@ -1813,6 +1813,27 @@ final class Session: ObservableObject {
         }
     }
 
+    func beginOpeningFromHome(_ chat: Chat) {
+        let live = resolvedChat(chat)
+        HomeConversationOpenPolicy.applyImmediateRead(
+            state: &state,
+            stableID: live.stableID,
+            threadId: live.threadId
+        )
+        persistReadReceipts()
+        NotificationCoordinator.shared.setBadge(state.unreadCount)
+        setForegroundThread(live.threadId)
+    }
+
+    private func resolvedChat(_ chat: Chat) -> Chat {
+        switch chat {
+        case let .bot(bot):
+            return state.bot(bot.id).map(Chat.bot) ?? chat
+        case let .room(room):
+            return state.rooms.first { $0.id == room.id }.map(Chat.room) ?? chat
+        }
+    }
+
     func markUnread(_ chat: Chat) async {
         guard let client else { return }
         do {

@@ -11,11 +11,14 @@ public enum HomeActivityRailLayoutPolicy: Sendable {
         state != .quiet
     }
 
-    /// A collapsed rail should wrap its copy; the expanded panel opts into a
-    /// wider presentation so its detail rows have room to breathe.
-    public static func usesContentHugging(isExpanded: Bool) -> Bool {
-        !isExpanded
+    /// The compact base pill always hugs its copy. Expansion fans upward only;
+    /// widening is reserved for the detail panel above the pill.
+    public static func collapsedUsesContentHugging(isExpanded: Bool) -> Bool {
+        true
     }
+
+    /// Premium width budget for the expanded detail panel above the base pill.
+    public static let expandedPanelMaxWidth: CGFloat = 430
 
     public static func collapsedTitleLineLimit(isAccessibilitySize: Bool) -> Int {
         1

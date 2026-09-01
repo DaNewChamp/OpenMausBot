@@ -77,7 +77,7 @@ struct ChatListView: View {
                                     Task {
                                         if let chat = await session.open(hit) {
                                             Haptics.selection()
-                                            path.append(chat)
+                                            open(chat)
                                         }
                                     }
                                 } label: {
@@ -100,7 +100,10 @@ struct ChatListView: View {
                                 )
                             }
                             .buttonStyle(.plain)
-                            .simultaneousGesture(TapGesture().onEnded { Haptics.selection() })
+                            .simultaneousGesture(TapGesture().onEnded {
+                                Haptics.selection()
+                                session.beginOpeningFromHome(summary.chat)
+                            })
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 PinActionButton(
                                     chat: summary.chat,
@@ -187,7 +190,7 @@ struct ChatListView: View {
                 isExpanded: $needsYouIslandExpanded
             ) { chat in
                 Haptics.selection()
-                path.append(chat)
+                open(chat)
             }
             }
             }
@@ -196,12 +199,12 @@ struct ChatListView: View {
             .navigationDestination(for: Chat.self) { ChatView(chat: $0) }
             .onChange(of: session.notificationChat) { _, chat in
                 guard let chat else { return }
-                path.append(chat)
+                open(chat)
                 session.consumeNotificationChat()
             }
             .task {
                 if let chat = session.notificationChat {
-                    path.append(chat)
+                    open(chat)
                     session.consumeNotificationChat()
                 }
             }
@@ -219,19 +222,19 @@ struct ChatListView: View {
                     if let spec = arguments.first(where: { $0.hasPrefix("-preview-bot=") }) {
                         let id = String(spec.dropFirst("-preview-bot=".count))
                         if let match = all.first(where: { $0.chat.id == id }) {
-                            path.append(match.chat)
+                            open(match.chat)
                             return
                         }
                     }
                     if let spec = arguments.first(where: { $0.hasPrefix("-open-group=") }) {
                         let id = String(spec.dropFirst("-open-group=".count))
                         if let room = session.state.rooms.first(where: { $0.id == id }) {
-                            path.append(Chat.room(room))
+                            open(Chat.room(room))
                             return
                         }
                     }
                     if let first = chats.first {
-                        path.append(first.chat)
+                        open(first.chat)
                     }
                 }
             }
@@ -240,7 +243,7 @@ struct ChatListView: View {
                 UpdatesSheet(
                     open: { chat in
                         showingUpdates = false
-                        path.append(chat)
+                        open(chat)
                     },
                     queuedReceipts: session.queueReceipts
                 )
@@ -439,6 +442,7 @@ struct ChatListView: View {
     }
 
     private func open(_ chat: Chat) {
+        session.beginOpeningFromHome(chat)
         path.append(chat)
     }
 
@@ -448,7 +452,7 @@ struct ChatListView: View {
         // reserve bottom space in a safe-area inset and move the roster.
         if HomeActivityRailLayoutPolicy.showsRail(for: homeActivityPresentation.state) {
             HomeActivityPill(
-                open: { chat in path.append(chat) },
+                open: { chat in open(chat) },
                 expanded: $activityExpanded,
                 queuedReceipts: session.queueReceipts
             )

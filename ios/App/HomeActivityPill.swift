@@ -32,13 +32,7 @@ struct HomeActivityPill: View {
                     }
                     collapsedButton
                 }
-                // Collapsed rails hug their copy; only the expanded detail
-                // surface gets the wider premium presentation.
-                .frame(maxWidth: expanded ? 430 : nil)
-                .fixedSize(
-                    horizontal: HomeActivityRailLayoutPolicy.usesContentHugging(isExpanded: expanded),
-                    vertical: false
-                )
+                .frame(maxWidth: .infinity)
             }
         }
         .frame(maxWidth: .infinity, alignment: .center)
@@ -128,8 +122,10 @@ struct HomeActivityPill: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: expanded ? .infinity : nil)
+        .fixedSize(
+            horizontal: HomeActivityRailLayoutPolicy.collapsedUsesContentHugging(isExpanded: expanded),
+            vertical: true
+        )
         .glassCapsule()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(presentation.accessibilityLabel)
@@ -176,6 +172,7 @@ struct HomeActivityPill: View {
             sectionCount: presentation.sections.filter { !$0.items.isEmpty }.count,
             hasNeedsYou: !presentation.needsYou.isEmpty
         ))
+        .frame(maxWidth: HomeActivityRailLayoutPolicy.expandedPanelMaxWidth)
         .glassSheet(cornerRadius: VBotSurface.Radius.sheet)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Activity details")
