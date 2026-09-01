@@ -27,6 +27,46 @@ const DEFAULT_TIMEOUTS = {
 const PROFILE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const PROFILE_MAX_LENGTH = 64;
 const MAX_READY_VERSION_LENGTH = 120;
+const MAX_FRAME_STRING_LENGTH = 200_000;
+const MAX_FRAME_LENGTH = 2_000_000;
+
+/**
+ * Hermes is responsible for its own provider credentials.  The child gets a
+ * deliberately small, positive environment allowlist rather than a copied
+ * process environment with a few names removed.  In particular, provider,
+ * workspace, and V Bot variables are never inherited by accident.
+ */
+const HERMES_CHILD_ENV_KEYS = new Set([
+  "HOME",
+  "USERPROFILE",
+  "PATH",
+  "HERMES_HOME",
+  "LANG",
+  "LANGUAGE",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LC_COLLATE",
+  "LC_MESSAGES",
+  "LC_MONETARY",
+  "LC_NUMERIC",
+  "LC_TIME",
+  "LC_ADDRESS",
+  "LC_IDENTIFICATION",
+  "LC_MEASUREMENT",
+  "LC_NAME",
+  "LC_PAPER",
+  "LC_TELEPHONE",
+  "LC_XMUSIC",
+  "TERM",
+  "TERM_PROGRAM",
+  "COLORTERM",
+  "NO_COLOR",
+  "FORCE_COLOR",
+  "CLICOLOR",
+  "CLICOLOR_FORCE",
+  "COLUMNS",
+  "LINES",
+]);
 
 /** The small part of a ChildProcess used by the injected transport seam. */
 export interface HermesProcess {
@@ -123,6 +163,7 @@ interface GatewayStateChange {
   kind: "ready" | "closed";
   intentional: boolean;
   payload?: Record<string, unknown>;
+  reason?: HermesFailureCode;
 }
 
 export interface HermesGatewayClientOptions {
@@ -143,14 +184,17 @@ interface GatewayGeneration {
   settled: boolean;
   intentionalClose: boolean;
   readyTimer: unknown;
+  readyResolve?: () => void;
+  readyReject?: (error: HermesEngineError) => void;
 }
 
 /**
  * A deliberately small JSON-RPC-over-stdio client for `hermes --tui`.
  *
  * The gateway emits terminal/Ink output nowhere on stdout; stdout is treated
- * as newline-delimited JSON only. Unknown and malformed frames are ignored,
- * while a missing ready frame is a bounded startup failure. A child is never
+ * as newline-delimited JSON only. Every frame is validated as a JSON-RPC 2.0
+ * envelope; malformed protocol or event data fails the generation closed.
+ * A missing ready frame is a bounded startup failure, and a child is never
  * restarted implicitly after it exits.
  */
 export class HermesGatewayClient extends EventEmitter {
@@ -203,7 +247,31 @@ export class HermesGatewayClient extends EventEmitter {
     await this.stopGeneration(true);
     this.unavailable = null;
     this.readyPayload = undefined;
-    await this.start();
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const timer = this.options.clock.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        // Stop the generation so no late child can become the active gateway.
+        void this.stopGeneration(true);
+        this.unavailable = "timeout";
+        reject(new HermesEngineError("timeout"));
+      }, this.options.timeouts.reconnectMs);
+      this.start().then(
+        () => {
+          if (settled) return;
+          settled = true;
+          this.options.clock.clearTimeout(timer);
+          resolve();
+        },
+        (error) => {
+          if (settled) return;
+          settled = true;
+          this.options.clock.clearTimeout(timer);
+          reject(asHermesError(error));
+        },
+      );
+    });
   }
 
   async request(method: string, params: unknown, timeoutMs = this.options.timeouts.requestMs): Promise<unknown> {
@@ -262,49 +330,29 @@ export class HermesGatewayClient extends EventEmitter {
     };
     this.generation = generation;
     this.readyPayload = undefined;
-    this.attachChild(generation);
 
-    await new Promise<void>((resolve, reject) => {
-      generation.readyTimer = this.options.clock.setTimeout(() => {
-        if (generation.ready || generation.settled) return;
-        generation.intentionalClose = true;
-        this.finishGeneration(generation, "timeout");
-        try {
-          generation.child.kill?.("SIGTERM");
-        } catch {
-          /* best effort */
-        }
-        reject(new HermesEngineError("timeout"));
-      }, this.options.timeouts.initializationMs);
-
-      const onReady = () => {
-        if (generation.ready || generation.settled) return;
-        generation.ready = true;
-        this.options.clock.clearTimeout(generation.readyTimer);
-        this.unavailable = null;
-        this.options.onState({
-          generation: generation.id,
-          kind: "ready",
-          intentional: false,
-          payload: this.readyPayload,
-        });
-        resolve();
-      };
-      const onClosed = () => {
-        if (generation.ready) return;
-        const reason = this.unavailable ?? "gateway_unavailable";
-        if (!generation.settled) this.finishGeneration(generation, reason);
-        reject(new HermesEngineError(reason));
-      };
-      this.once(`ready:${generation.id}`, onReady);
-      this.once(`closed-before-ready:${generation.id}`, onClosed);
-      // A test seam (or an unusually fast executable) may emit its first
-      // frame while the child listeners are being attached, before the
-      // startup listeners above are registered. Reconcile that state here so
-      // the initialization promise cannot wait until its timeout forever.
-      if (generation.ready) resolve();
-      else if (generation.settled) onClosed();
+    // Install the startup promise before attaching child listeners.  A test
+    // process (and a very fast real process) can synchronously emit
+    // gateway.ready from the first listener registration; storing the
+    // resolver on the generation makes that event observable instead of
+    // losing it between attachChild() and once().
+    const ready = new Promise<void>((resolve, reject) => {
+      generation.readyResolve = resolve;
+      generation.readyReject = reject;
     });
+    generation.readyTimer = this.options.clock.setTimeout(() => {
+      if (generation.ready || generation.settled) return;
+      generation.intentionalClose = true;
+      this.finishGeneration(generation, "timeout");
+      try {
+        generation.child.kill?.("SIGTERM");
+      } catch {
+        /* best effort */
+      }
+    }, this.options.timeouts.initializationMs);
+
+    this.attachChild(generation);
+    await ready;
   }
 
   private attachChild(generation: GatewayGeneration): void {
@@ -321,6 +369,10 @@ export class HermesGatewayClient extends EventEmitter {
       if (typeof chunk === "string") buffer += chunk;
       else if (chunk instanceof Uint8Array) buffer += decoder.decode(chunk, { stream: true });
       else buffer += String(chunk ?? "");
+      if (buffer.length > MAX_FRAME_LENGTH) {
+        this.protocolFailure(generation);
+        return;
+      }
       for (;;) {
         const newline = buffer.indexOf("\n");
         if (newline < 0) break;
@@ -331,13 +383,12 @@ export class HermesGatewayClient extends EventEmitter {
         try {
           frame = JSON.parse(line);
         } catch {
-          continue;
+          this.protocolFailure(generation);
+          return;
         }
-        this.handleFrame(generation, frame);
+        if (!this.handleFrame(generation, frame)) return;
       }
     };
-    stdout?.on("data", onData);
-
     // stderr is intentionally not retained, parsed, or put in errors. It can
     // contain provider payloads, paths, prompts, and credentials.
     generation.child.stderr?.on("data", () => {});
@@ -345,43 +396,104 @@ export class HermesGatewayClient extends EventEmitter {
     generation.child.stdin?.on?.("error", () => {});
 
     generation.child.on("error", () => {
-      this.finishGeneration(generation, generation.ready ? "gateway_unavailable" : "missing_cli");
+      // A spawn throw is classified as missing_cli.  Once a ChildProcess has
+      // been returned, an error/exit is a gateway failure regardless of when
+      // it occurs; do not expose Node's path or stderr text.
+      this.finishGeneration(generation, "gateway_unavailable");
     });
     generation.child.on("close", () => {
-      this.finishGeneration(generation, generation.intentionalClose ? "gateway_unavailable" : "gateway_unavailable");
+      // A trailing partial line is not a valid JSON-RPC frame.  Treat it as a
+      // protocol failure before the ordinary process-close path.
+      if (buffer.trim()) {
+        this.protocolFailure(generation);
+        return;
+      }
+      this.finishGeneration(generation, "gateway_unavailable");
     });
+
+    // Register lifecycle listeners before stdout so a synchronous test seam
+    // (or immediately-exiting child) cannot lose its close/error transition.
+    stdout?.on("data", onData);
   }
 
-  private handleFrame(generation: GatewayGeneration, frame: unknown): void {
-    if (this.generation !== generation || generation.settled || !frame || typeof frame !== "object" || Array.isArray(frame)) {
-      return;
+  private handleFrame(generation: GatewayGeneration, frame: unknown): boolean {
+    if (this.generation !== generation || generation.settled) return true;
+    if (!isRecord(frame) || frame.jsonrpc !== "2.0") {
+      this.protocolFailure(generation);
+      return false;
     }
-    const message = frame as Record<string, unknown>;
+    const message = frame;
     if (message.method === "event") {
-      const params = message.params;
-      if (!params || typeof params !== "object" || Array.isArray(params)) return;
-      const typed = params as Record<string, unknown>;
-      if (typed.type === "gateway.ready") {
-        this.readyPayload = safeReadyPayload(typed.payload);
-        this.emit(`ready:${generation.id}`);
+      if (hasOwn(message, "id") || hasOwn(message, "result") || hasOwn(message, "error")) {
+        this.protocolFailure(generation);
+        return false;
       }
-      this.options.onEvent({ generation: generation.id, params: typed });
-      return;
+      const params = sanitizeGatewayEvent(message.params);
+      if (!params) {
+        this.protocolFailure(generation);
+        return false;
+      }
+      if (params.type === "gateway.ready") this.markReady(generation, params.payload as Record<string, unknown> | undefined);
+      if (!generation.settled) this.options.onEvent({ generation: generation.id, params });
+      return !generation.settled;
     }
-    if (typeof message.id !== "number" || !Number.isSafeInteger(message.id)) return;
+    if (hasOwn(message, "method") || hasOwn(message, "params") || !hasOwn(message, "id")) {
+      this.protocolFailure(generation);
+      return false;
+    }
+    if (typeof message.id !== "number" || !Number.isSafeInteger(message.id) || message.id < 1) {
+      this.protocolFailure(generation);
+      return false;
+    }
+    const hasResult = hasOwn(message, "result");
+    const hasError = hasOwn(message, "error");
+    if (hasResult === hasError || (hasError && !isSafeRpcError(message.error))) {
+      this.protocolFailure(generation);
+      return false;
+    }
     const pending = this.pending.get(message.id);
-    if (!pending) return;
+    // A well-formed response for an old/unknown id is harmless (for example,
+    // a late response racing an explicit reconnect).  It must not affect a
+    // request with a different id.
+    if (!pending) return true;
     this.pending.delete(message.id);
     this.options.clock.clearTimeout(pending.timer);
-    if (Object.prototype.hasOwnProperty.call(message, "error")) {
+    if (hasError) {
       pending.reject(new HermesEngineError(classifyRpcError(message.error)));
-      return;
-    }
-    if (!Object.prototype.hasOwnProperty.call(message, "result")) {
-      pending.reject(new HermesEngineError("malformed_response"));
-      return;
+      return true;
     }
     pending.resolve(message.result);
+    return true;
+  }
+
+  private markReady(generation: GatewayGeneration, payload: Record<string, unknown> | undefined): void {
+    if (this.generation !== generation || generation.settled || generation.ready) return;
+    generation.ready = true;
+    this.readyPayload = payload;
+    this.options.clock.clearTimeout(generation.readyTimer);
+    this.unavailable = null;
+    // State is updated before callbacks so a synchronous ready frame cannot
+    // be observed as "not ready" by the adapter's state listener.
+    this.options.onState({
+      generation: generation.id,
+      kind: "ready",
+      intentional: false,
+      payload,
+    });
+    generation.readyResolve?.();
+    generation.readyResolve = undefined;
+    generation.readyReject = undefined;
+  }
+
+  private protocolFailure(generation: GatewayGeneration): void {
+    if (generation.settled) return;
+    generation.intentionalClose = false;
+    this.finishGeneration(generation, "malformed_response");
+    try {
+      generation.child.kill?.("SIGTERM");
+    } catch {
+      /* best effort */
+    }
   }
 
   private finishGeneration(generation: GatewayGeneration, reason: HermesFailureCode): void {
@@ -397,11 +509,16 @@ export class HermesGatewayClient extends EventEmitter {
       this.generation = null;
       this.unavailable = reason;
     }
-    if (!generation.ready) this.emit(`closed-before-ready:${generation.id}`);
+    if (!generation.ready) {
+      generation.readyReject?.(new HermesEngineError(reason));
+      generation.readyResolve = undefined;
+      generation.readyReject = undefined;
+    }
     this.options.onState({
       generation: generation.id,
       kind: "closed",
       intentional: generation.intentionalClose,
+      reason,
     });
   }
 
@@ -473,12 +590,14 @@ function normalizeClock(clock: HermesClock | undefined): Required<HermesClock> {
   };
 }
 
-function isVBotCredential(name: string): boolean {
-  return /^(?:VBOT|V_BOT|OPENMAUSBOT|OPENMAUS_BOT|OPENMAUSBOT|OPENMAUS_).*?(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH)/i.test(name)
-    || /^(?:VBOT|V_BOT|OPENMAUSBOT|OPENMAUS_BOT|OPENMAUSBOT)_/i.test(name);
+function isAllowedHermesEnvName(name: string): boolean {
+  if (HERMES_CHILD_ENV_KEYS.has(name)) return true;
+  // Locale variables are conventionally LC_<CATEGORY>.  Keep the prefix and
+  // value namespace narrow; arbitrary environment names remain denied.
+  return /^LC_[A-Z0-9_]+$/.test(name);
 }
 
-/** Build the child environment without passing V Bot credentials downstream. */
+/** Build the child environment from the positive Hermes-only allowlist. */
 export function sanitizeHermesChildEnv(
   environment: Record<string, string | undefined> = {},
   base: NodeJS.ProcessEnv = process.env,
@@ -486,7 +605,7 @@ export function sanitizeHermesChildEnv(
   const merged = { ...base, ...environment };
   const output: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(merged)) {
-    if (!name || isVBotCredential(name) || value === undefined) continue;
+    if (!name || !isAllowedHermesEnvName(name) || value === undefined) continue;
     output[name] = value;
   }
   return output;
@@ -501,13 +620,124 @@ function normalizeProfile(profile: string): string {
   return value.toLowerCase();
 }
 
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function safeFrameString(value: unknown, maxLength = MAX_FRAME_STRING_LENGTH): value is string {
+  return typeof value === "string"
+    && value.length <= maxLength
+    && value.trim() === value
+    && !/[\u0000-\u001f\u007f\u0080-\u009f]/.test(value);
+}
+
+function safeMessageText(value: unknown, maxLength = MAX_FRAME_STRING_LENGTH): value is string {
+  return typeof value === "string"
+    && value.length <= maxLength
+    // Newlines/tabs are valid assistant text; reject the remaining control
+    // and C1 ranges that could be interpreted as terminal escape material.
+    && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u0080-\u009f]/.test(value);
+}
+
+function safeOpaqueId(value: unknown, maxLength = 256): value is string {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= maxLength
+    && value.trim() === value
+    && !/[\s\u0000-\u001f\u007f\u0080-\u009f]/.test(value);
+}
+
 function safeReadyPayload(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const version = (value as Record<string, unknown>).version;
-  return typeof version === "string" && version.length > 0 && version.length <= MAX_READY_VERSION_LENGTH
-    && version.trim() === version && !/[\u0000-\u001f\u007f\u0080-\u009f]/.test(version)
-    ? { version }
-    : undefined;
+  if (!isRecord(value)) return undefined;
+  const output: Record<string, unknown> = {};
+  if (hasOwn(value, "version")) {
+    if (!safeFrameString(value.version, MAX_READY_VERSION_LENGTH) || value.version.length === 0) return undefined;
+    output.version = value.version;
+  }
+  // The pinned gateway sends a nested skin object here.  Validate its shape
+  // at the boundary but intentionally drop it (and any path-like metadata).
+  if (hasOwn(value, "skin") && value.skin !== undefined && !isRecord(value.skin) && !safeFrameString(value.skin, MAX_READY_VERSION_LENGTH)) {
+    return undefined;
+  }
+  if (hasOwn(value, "path") && value.path !== undefined && !safeFrameString(value.path, MAX_FRAME_STRING_LENGTH)) {
+    return undefined;
+  }
+  return output;
+}
+
+function isSafeRpcError(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (typeof value.code !== "number" && !safeFrameString(value.code, 120)) return false;
+  if (typeof value.code === "number" && !Number.isSafeInteger(value.code)) return false;
+  // The message is deliberately discarded (it may contain paths, prompts,
+  // or provider payloads), but its type/size must still be bounded.
+  if (hasOwn(value, "message") && (typeof value.message !== "string" || value.message.length > MAX_FRAME_STRING_LENGTH)) return false;
+  return true;
+}
+
+/**
+ * Validate and copy only the event fields consumed by the adapter.  Hermes
+ * emits many UI/status events; unknown payloads are deliberately dropped so
+ * provider data, paths, and prompts cannot cross the transport boundary.
+ */
+function sanitizeGatewayEvent(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value) || !safeFrameString(value.type, 120) || value.type.length === 0) return undefined;
+  const type = value.type;
+  const output: Record<string, unknown> = { type };
+  const sessionId = value.session_id;
+  if (sessionId !== undefined) {
+    if (!safeOpaqueId(sessionId)) return undefined;
+    output.session_id = sessionId;
+  }
+
+  if (type === "gateway.ready") {
+    if (!hasOwn(value, "payload")) return undefined;
+    const payload = safeReadyPayload(value.payload);
+    if (!payload) return undefined;
+    output.payload = payload;
+    return output;
+  }
+
+  if (type === "message.start" || type === "message.delta" || type === "message.complete") {
+    if (!safeOpaqueId(sessionId)) return undefined;
+    if (type === "message.start") {
+      if (hasOwn(value, "payload") && value.payload !== undefined && !isRecord(value.payload)) return undefined;
+      return output;
+    }
+    if (!hasOwn(value, "payload") || !isRecord(value.payload)) return undefined;
+    const payload = value.payload;
+
+    if (!hasOwn(payload, "text") || !safeMessageText(payload.text)) return undefined;
+    const cleanPayload: Record<string, unknown> = { text: payload.text };
+    if (type === "message.complete") {
+      if (!hasOwn(payload, "status") || !safeFrameString(payload.status, 80) || payload.status.length === 0) return undefined;
+      cleanPayload.status = payload.status;
+      if (hasOwn(payload, "usage") && payload.usage !== undefined && payload.usage !== null) {
+        if (!isRecord(payload.usage)) return undefined;
+        const cleanUsage: Record<string, unknown> = {};
+        for (const key of ["input", "output", "input_tokens", "output_tokens", "prompt_tokens", "completion_tokens"] as const) {
+          if (hasOwn(payload.usage, key)) {
+            const numeric = usageValue(payload.usage[key]);
+            if (numeric === undefined) return undefined;
+            cleanUsage[key] = numeric;
+          }
+        }
+        if (Object.keys(cleanUsage).length === 0) return undefined;
+        cleanPayload.usage = cleanUsage;
+      }
+    }
+    output.payload = cleanPayload;
+    return output;
+  }
+
+  if (hasOwn(value, "payload") && value.payload !== undefined && !isRecord(value.payload)) return undefined;
+  // For status/unknown event kinds, retain only the bounded type/session
+  // fields.  Their payload is intentionally not forwarded to the adapter.
+  return output;
 }
 
 function classifyRpcError(error: unknown): HermesFailureCode {
@@ -565,6 +795,7 @@ export class HermesBotAdapter implements HermesBotEngine {
   private readonly listeners = new Set<(event: RuntimeEvent) => void>();
   private readonly readiness: HermesReadiness = {};
   private lastProfiles: HermesDiscovery["profiles"] = [];
+  private rosterAvailable = false;
   private closed = false;
 
   constructor(options: HermesBotEngineOptions = {}) {
@@ -591,11 +822,14 @@ export class HermesBotAdapter implements HermesBotEngine {
       const payload = await this.client.request("profiles.list", { include_sessions: true });
       const normalized = normalizeProfileRowsResult(payload);
       if (normalized.state === "unknown") {
+        this.demoteCapabilities();
+        this.rosterAvailable = false;
         return this.discoveryUnavailable(normalized.code);
       }
       this.readiness.roster = true;
       this.readiness.events = true;
       this.lastProfiles = normalized.profiles;
+      this.rosterAvailable = true;
       return {
         state: "available",
         authenticated: true,
@@ -605,6 +839,8 @@ export class HermesBotAdapter implements HermesBotEngine {
       };
     } catch (error) {
       const safe = asHermesError(error);
+      this.demoteCapabilities();
+      this.rosterAvailable = false;
       return this.discoveryUnavailable(safe.code);
     }
   }
@@ -617,22 +853,14 @@ export class HermesBotAdapter implements HermesBotEngine {
 
   /** Internal state-preserving lookup useful to the roster and test seams. */
   async lookupCanonical(profile: string): Promise<HermesCanonicalLookup> {
-    const normalizedProfile = normalizeProfile(profile);
-    return await this.lockFor(normalizedProfile).run(async () => {
-      try {
-        await this.client.start();
-        const payload = await this.client.request(
-          "session.list",
-          { profile: normalizedProfile, title: "Bot Chat", include_hidden: true, limit: 200 },
-        );
-      const normalized = normalizeCanonicalLookup(payload, normalizedProfile);
-      if (normalized.state !== "unknown") this.readiness.canonicalChat = true;
-      return normalized;
-      } catch (error) {
-        const safe = asHermesError(error);
-        return { state: "unknown", code: canonicalUnknownCode(safe.code), message: safe.message };
-      }
-    });
+    let normalizedProfile: string;
+    try {
+      normalizedProfile = normalizeProfile(profile);
+    } catch (error) {
+      const safe = asHermesError(error);
+      return { state: "unknown", code: "profile_unavailable", message: safe.message };
+    }
+    return await this.lockFor(normalizedProfile).run(async () => this.lookupCanonicalOutsideLock(normalizedProfile));
   }
 
   async send(input: {
@@ -654,18 +882,24 @@ export class HermesBotAdapter implements HermesBotEngine {
       if (existing) throw new HermesEngineError("upstream_error");
       const canonical = await this.lookupCanonicalOutsideLock(profile);
       if (canonical.state !== "present") throw errorForLookup(canonical);
+      const resolvedProfile = canonical.chat.profile;
+      if (this.runtimeFor(resolvedProfile)) throw new HermesEngineError("upstream_error");
       await this.client.start();
       let resume: unknown;
       try {
-        resume = await this.client.request("session.resume", { profile, session_id: canonical.chat.resolvedSessionId });
+        resume = await this.client.request("session.resume", { profile: resolvedProfile, session_id: canonical.chat.resolvedSessionId });
       } catch (error) {
+        this.demoteCapabilities();
         throw asHermesError(error);
       }
       const runtimeId = runtimeSessionId(resume);
-      if (!runtimeId) throw new HermesEngineError("malformed_response");
+      if (!runtimeId) {
+        this.demoteCapabilities();
+        throw new HermesEngineError("malformed_response");
+      }
       const generation = this.client.generationId;
       const runtime: RuntimeRecord = {
-        profile,
+        profile: resolvedProfile,
         generation,
         runtimeId,
         threadId: input.threadId,
@@ -674,10 +908,11 @@ export class HermesBotAdapter implements HermesBotEngine {
         started: false,
         timer: undefined,
       };
-      this.runtimes.set(this.runtimeKey(profile, generation), runtime);
+      this.runtimes.set(this.runtimeKey(resolvedProfile, generation), runtime);
       runtime.started = true;
       this.emitRuntime(runtime, { type: "turn.started" });
       runtime.timer = this.clock.setTimeout(() => {
+        this.demoteCapabilities();
         this.terminateRuntime(runtime, false, "timeout");
       }, this.timeouts.turnMs);
       try {
@@ -685,6 +920,7 @@ export class HermesBotAdapter implements HermesBotEngine {
         this.readiness.send = true;
       } catch (error) {
         const safe = asHermesError(error);
+        this.demoteCapabilities();
         this.terminateRuntime(runtime, false, safe.code);
         throw safe;
       }
@@ -703,6 +939,7 @@ export class HermesBotAdapter implements HermesBotEngine {
         this.readiness.stop = true;
       } catch (error) {
         failure = asHermesError(error);
+        this.demoteCapabilities();
       } finally {
         this.terminateRuntime(runtime, false, failure ? failure.code : "interrupted");
       }
@@ -736,18 +973,62 @@ export class HermesBotAdapter implements HermesBotEngine {
   }
 
   private async lookupCanonicalOutsideLock(profile: string): Promise<HermesCanonicalLookup> {
+    const discovered = await this.requireDiscoveredProfile(profile);
+    if (discovered.state !== "available") {
+      const code = discovered.code;
+      const error = new HermesEngineError(code);
+      return { state: "unknown", code, message: error.message };
+    }
+    const resolvedProfile = discovered.profile;
     try {
       await this.client.start();
       const payload = await this.client.request(
         "session.list",
-        { profile, title: "Bot Chat", include_hidden: true, limit: 200 },
+        { profile: resolvedProfile, title: "Bot Chat", include_hidden: true, limit: 200 },
       );
-      const normalized = normalizeCanonicalLookup(payload, profile);
-      if (normalized.state !== "unknown") this.readiness.canonicalChat = true;
+      const normalized = normalizeCanonicalLookup(payload, resolvedProfile);
+      if (normalized.state !== "unknown") {
+        this.readiness.canonicalChat = true;
+      } else {
+        this.demoteCapabilities();
+      }
       return normalized;
     } catch (error) {
       const safe = asHermesError(error);
+      this.demoteCapabilities();
       return { state: "unknown", code: canonicalUnknownCode(safe.code), message: safe.message };
+    }
+  }
+
+  private async requireDiscoveredProfile(
+    profile: string,
+  ): Promise<{ state: "available"; profile: string } | { state: "unavailable"; code: "state_unavailable" | "profile_unavailable" }> {
+    let normalized: string;
+    try {
+      normalized = normalizeProfile(profile);
+    } catch {
+      return { state: "unavailable", code: "profile_unavailable" };
+    }
+
+    // Refresh the roster for every lookup/send.  A binding can outlive a
+    // profile deletion or rename; stale rows are never used to guess a
+    // default database session.
+    const discovery = await this.discover();
+    if (discovery.state !== "available" || !this.rosterAvailable) {
+      return { state: "unavailable", code: "state_unavailable" };
+    }
+
+    const matches = discovery.profiles.filter((row) =>
+      row.availability === "available" && (row.profile === normalized || row.handle === normalized));
+    if (matches.length !== 1 || !matches[0]?.profile) {
+      return { state: "unavailable", code: "profile_unavailable" };
+    }
+    return { state: "available", profile: matches[0].profile };
+  }
+
+  private demoteCapabilities(): void {
+    for (const key of Object.keys(this.readiness) as Array<keyof HermesReadiness>) {
+      delete this.readiness[key];
     }
   }
 
@@ -756,12 +1037,14 @@ export class HermesBotAdapter implements HermesBotEngine {
       this.readiness.events = true;
       return;
     }
+    this.rosterAvailable = false;
     for (const key of Object.keys(this.readiness) as Array<keyof HermesReadiness>) {
       delete this.readiness[key];
     }
+    const reason = change.reason ?? "gateway_unavailable";
     for (const runtime of [...this.runtimes.values()]) {
       if (runtime.generation !== change.generation) continue;
-      this.terminateRuntime(runtime, change.intentional, "gateway_unavailable");
+      this.terminateRuntime(runtime, change.intentional, reason);
     }
   }
 
@@ -787,6 +1070,13 @@ export class HermesBotAdapter implements HermesBotEngine {
       if (delta) this.emitRuntime(runtime, { type: "content.delta", streamKind: "assistant_text", delta });
       return;
     }
+    if (type === "error") {
+      // Hermes error events can carry provider diagnostics in their payload.
+      // Drop that text and terminate with a fixed safe reason.
+      this.demoteCapabilities();
+      this.terminateRuntime(runtime, false, "upstream_error");
+      return;
+    }
     if (type !== "message.complete") return;
     const payload = asRecord(params.payload);
     const text = eventText(payload?.text);
@@ -794,14 +1084,18 @@ export class HermesBotAdapter implements HermesBotEngine {
     const usageProvided = payload?.usage !== undefined && payload?.usage !== null;
     const usage = normalizeUsage(payload?.usage);
     if (!text || !["complete", "success", "error", "interrupted", "cancelled", "canceled"].includes(status) || (usageProvided && !usage)) {
+      this.demoteCapabilities();
       this.terminateRuntime(runtime, false, "malformed_response");
       return;
     }
-    this.readiness.finalResponse = true;
+    const successful = status === "complete" || status === "success";
+    this.readiness.finalResponse = successful;
     this.terminateRuntime(runtime, false, statusStopReason(status) ?? "complete", {
-      assistantText: text,
+      // Error/cancellation payload text is provider diagnostics, not an
+      // assistant answer; do not project it into V Bot transcripts.
+      ...(successful ? { assistantText: text } : {}),
       usage,
-      ok: status === "complete" || status === "success",
+      ok: successful,
     });
   }
 
@@ -848,7 +1142,14 @@ export class HermesBotAdapter implements HermesBotEngine {
 
   private runtimeFor(profile: string): RuntimeRecord | undefined {
     const generation = this.client.generationId;
-    return this.runtimes.get(this.runtimeKey(profile, generation));
+    const exact = this.runtimes.get(this.runtimeKey(profile, generation));
+    if (exact) return exact;
+    // The default profile is exposed under the `hermes` handle.  Keep runtime
+    // identity canonical while allowing interrupt/duplicate checks through
+    // that safe, currently discovered alias.
+    const alias = this.lastProfiles.find((row) =>
+      row.availability === "available" && row.handle === profile)?.profile;
+    return alias ? this.runtimes.get(this.runtimeKey(alias, generation)) : undefined;
   }
 
   private lockFor(profile: string): AsyncLock {
@@ -868,11 +1169,16 @@ export class HermesBotAdapter implements HermesBotEngine {
 
   private discoveryUnavailable(code: HermesFailureCode, profiles = this.lastProfiles): HermesDiscovery {
     const reason = code === "upstream_error" || code === "profile_unavailable" ? "state_unavailable" : code;
+    const staleProfiles = profiles.map((profile) => ({
+      ...profile,
+      canonicalChat: "unknown" as const,
+      availability: "unavailable" as const,
+    }));
     return {
       state: "unavailable",
       reason,
       capabilities: projectHermesCapabilities(this.readiness),
-      profiles,
+      profiles: staleProfiles,
     };
   }
 }
@@ -880,11 +1186,10 @@ export class HermesBotAdapter implements HermesBotEngine {
 function runtimeSessionId(value: unknown): string | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
-  for (const key of ["session_id", "session_key"] as const) {
-    const id = record[key];
-    if (typeof id === "string" && id.length > 0 && id.length <= 256 && id.trim() === id && !/[\u0000-\u001f\u007f]/.test(id)) return id;
-  }
-  return undefined;
+  const id = record.session_id;
+  // session_key is a durable DB lineage identifier.  It is never a substitute
+  // for the ephemeral runtime id returned by session.resume.
+  return safeOpaqueId(id) ? id : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

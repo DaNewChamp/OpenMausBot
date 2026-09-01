@@ -113,4 +113,8 @@ export class HermesEngineError extends Error {
 export type HermesCanonicalLookup =
   | { state: "present"; chat: HermesCanonicalChat }
   | { state: "absent" }
-  | { state: "unknown"; code: "state_unavailable" | "malformed_response"; message: string };
+  | {
+      state: "unknown";
+      code: "state_unavailable" | "malformed_response" | "profile_unavailable";
+      message: string;
+    };

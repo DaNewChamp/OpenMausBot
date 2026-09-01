@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   HermesBotAdapter,
+  HermesGatewayClient,
   createHermesBotEngine,
   sanitizeHermesChildEnv,
   type HermesProcess,
@@ -126,13 +127,14 @@ describe("Hermes Bot Chat loopback transport", () => {
     await settle();
     ready(child);
     await settle();
-    for (const raw of child.stdin.writes) {
-      const req = JSON.parse(raw);
-      if (req.method === "session.list") {
-        expect(req.params).toEqual({ profile: "coder", title: "Bot Chat", include_hidden: true, limit: 200 });
-        child.frame({ jsonrpc: "2.0", id: req.id, result: { sessions: [{ id: "root", resolved_id: "tip", title: "Bot Chat", hidden: true, source: "tui", message_count: 4 }] } });
-      }
-    }
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(roster.method).toBe("profiles.list");
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(list.method).toBe("session.list");
+    expect(list.params).toEqual({ profile: "coder", title: "Bot Chat", include_hidden: true, limit: 200 });
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", resolved_id: "tip", title: "Bot Chat", hidden: true, source: "tui", message_count: 4 }] } });
     await settle();
     const resume = JSON.parse(child.stdin.writes.at(-1)!);
     expect(resume.method).toBe("session.resume");
@@ -166,14 +168,21 @@ describe("Hermes Bot Chat loopback transport", () => {
     await settle();
     ready(child);
     await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
     const request = JSON.parse(child.stdin.writes.at(-1)!);
     child.frame({ jsonrpc: "2.0", id: request.id, result: { sessions: [] } });
     await expect(absent).resolves.toEqual({ state: "absent" });
     const send = engine.send({ profile: "coder", text: "never", threadId: "t", turnId: "u" });
     await settle();
     const retryLookup = JSON.parse(child.stdin.writes.at(-1)!);
-    expect(retryLookup.method).toBe("session.list");
-    child.frame({ jsonrpc: "2.0", id: retryLookup.id, result: { sessions: [] } });
+    expect(retryLookup.method).toBe("profiles.list");
+    child.frame({ jsonrpc: "2.0", id: retryLookup.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const retrySessionLookup = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(retrySessionLookup.method).toBe("session.list");
+    child.frame({ jsonrpc: "2.0", id: retrySessionLookup.id, result: { sessions: [] } });
     await expect(send).rejects.toMatchObject({ code: "profile_unavailable" });
     expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).not.toContain("session.create");
     await engine.close();
@@ -187,6 +196,9 @@ describe("Hermes Bot Chat loopback transport", () => {
     const send = engine.send({ profile: "coder", text: "wait", threadId: "t", turnId: "turn" });
     await settle();
     ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
     await settle();
     const list = JSON.parse(child.stdin.writes.at(-1)!);
     child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", title: "Bot Chat", source: "tui" }] } });
@@ -208,15 +220,310 @@ describe("Hermes Bot Chat loopback transport", () => {
     await expect(engine.interrupt("coder", "turn")).resolves.toBeUndefined();
     await engine.close();
   });
+
+  it("requires a fresh, unique discovered profile before canonical lookup", async () => {
+    const { child } = harness();
+    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const lookup = engine.lookupCanonical("deleted");
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "other" }] } });
+    await expect(lookup).resolves.toMatchObject({ state: "unknown", code: "profile_unavailable" });
+    expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).not.toContain("session.list");
+    await engine.close();
+  });
+
+  it("refuses ambiguous handles and retains no guessed default session", async () => {
+    const { child } = harness();
+    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const send = engine.send({ profile: "hermes", text: "do not guess", threadId: "t", turnId: "u" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({
+      jsonrpc: "2.0",
+      id: roster.id,
+      result: { profiles: [{ name: "default", is_default: true }, { name: "hermes" }] },
+    });
+    await expect(send).rejects.toMatchObject({ code: "profile_unavailable" });
+    expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).not.toContain("session.list");
+    await engine.close();
+  });
+
+  it("requires the ephemeral session_id and never falls back to session_key", async () => {
+    const { child } = harness();
+    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const send = engine.send({ profile: "coder", text: "hello", threadId: "t", turnId: "u" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_key: "durable-only" } });
+    await expect(send).rejects.toMatchObject({ code: "malformed_response" });
+    expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).not.toContain("prompt.submit");
+    await engine.close();
+  });
+
+  it("maps an empty final text to a safe malformed terminal without guessed content", async () => {
+    const { child } = harness();
+    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const events: RuntimeEvent[] = [];
+    engine.onEvent((event) => events.push(event));
+    const send = engine.send({ profile: "coder", text: "prompt with /private path", threadId: "t", turnId: "u" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "runtime" } });
+    await settle();
+    const prompt = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: prompt.id, result: { accepted: true } });
+    await send;
+    child.frame({ jsonrpc: "2.0", method: "event", params: { type: "message.complete", session_id: "runtime", payload: { text: "", status: "complete" } } });
+    await settle();
+    expect(events.filter((event) => event.type === "item.completed")).toHaveLength(0);
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: false, stopReason: "malformed_response" });
+    expect(JSON.stringify(events)).not.toContain("/private");
+    await engine.close();
+  });
+
+  it("classifies authentication errors without exposing their message", async () => {
+    const { child } = harness();
+    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const discovery = engine.discover();
+    await settle();
+    ready(child);
+    await settle();
+    const request = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: request.id, error: { code: 401, message: "token=/private/provider-secret" } });
+    await expect(discovery).resolves.toMatchObject({ state: "unavailable", reason: "invalid_credentials", capabilities: { roster: false } });
+    await engine.close();
+  });
+
+  it("marks a nonzero child exit unavailable and rejects pending calls", async () => {
+    const { child } = harness();
+    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 500 } });
+    const discovery = engine.discover();
+    await settle();
+    ready(child);
+    await settle();
+    const request = JSON.parse(child.stdin.writes.at(-1)!);
+    child.close(17);
+    await expect(discovery).resolves.toMatchObject({ state: "unavailable", reason: "gateway_unavailable" });
+    expect(request.method).toBe("profiles.list");
+    await engine.close();
+  });
+
+  it("reconnects explicitly and repeats exact roster/session lookup on the new generation", async () => {
+    const firstChild = new FakeProcess();
+    const secondChild = new FakeProcess();
+    const spawn = vi.fn<HermesSpawn>()
+      .mockReturnValueOnce(firstChild)
+      .mockReturnValueOnce(secondChild);
+    const engine = createHermesBotEngine({ spawn, timeouts: { requestMs: 100, turnMs: 500, reconnectMs: 500 } });
+
+    const first = engine.discover();
+    await settle();
+    ready(firstChild);
+    await settle();
+    const firstRoster = JSON.parse(firstChild.stdin.writes.at(-1)!);
+    firstChild.frame({ jsonrpc: "2.0", id: firstRoster.id, result: { profiles: [{ name: "coder" }] } });
+    await first;
+    firstChild.close(9);
+    await settle();
+
+    const reconnect = engine.reconnect();
+    await settle();
+    ready(secondChild);
+    await expect(reconnect).resolves.toBeUndefined();
+
+    const send = engine.send({ profile: "coder", text: "again", threadId: "t", turnId: "u" });
+    await settle();
+    const secondRoster = JSON.parse(secondChild.stdin.writes.at(-1)!);
+    expect(secondRoster.method).toBe("profiles.list");
+    secondChild.frame({ jsonrpc: "2.0", id: secondRoster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(secondChild.stdin.writes.at(-1)!);
+    expect(list.method).toBe("session.list");
+    secondChild.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", resolved_id: "tip", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(secondChild.stdin.writes.at(-1)!);
+    secondChild.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "runtime-new" } });
+    await settle();
+    const prompt = JSON.parse(secondChild.stdin.writes.at(-1)!);
+    secondChild.frame({ jsonrpc: "2.0", id: prompt.id, result: { accepted: true } });
+    await send;
+    secondChild.frame({ jsonrpc: "2.0", method: "event", params: { type: "message.complete", session_id: "runtime-new", payload: { text: "ok", status: "complete" } } });
+    await settle();
+    expect(secondChild.stdin.writes.map((raw) => JSON.parse(raw).method)).toEqual([
+      "profiles.list", "session.list", "session.resume", "prompt.submit",
+    ]);
+    await engine.close();
+  });
+
+  it("demotes capabilities and marks a previous roster stale on a roster RPC error", async () => {
+    const { child } = harness();
+    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const first = engine.discover();
+    await settle();
+    ready(child);
+    await settle();
+    const firstRequest = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: firstRequest.id, result: { profiles: [{ name: "coder" }] } });
+    await expect(first).resolves.toMatchObject({ state: "available", profiles: [{ availability: "available" }] });
+    expect(engine.capabilities.roster).toBe(true);
+
+    const second = engine.discover();
+    await settle();
+    const secondRequest = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: secondRequest.id, error: { code: 5006, message: "/private/state.db?prompt=secret" } });
+    await expect(second).resolves.toMatchObject({ state: "unavailable", profiles: [{ availability: "unavailable" }] });
+    expect(engine.capabilities).toMatchObject({ roster: false, canonicalChat: false, send: false, finalResponse: false, events: false, stop: false });
+    await engine.close();
+  });
+
+  it("fails closed for malformed JSON-RPC envelopes and events", async () => {
+    const malformedFrames = [
+      { jsonrpc: "1.0", method: "event", params: { type: "gateway.ready", payload: {} } },
+      { jsonrpc: "2.0", method: "event", id: 1, params: { type: "gateway.ready", payload: {} } },
+      { jsonrpc: "2.0", method: "event", params: { type: "message.delta", session_id: "s", payload: "not-an-object" } },
+      { jsonrpc: "2.0", id: 1, result: {}, error: { code: 1 } },
+      { jsonrpc: "2.0", id: "one", result: {} },
+    ];
+    for (const frame of malformedFrames) {
+      const { child } = harness();
+      const client = new HermesGatewayClient({
+        cli: "hermes",
+        environment: {},
+        spawn: vi.fn(() => child),
+        clock: { now: Date.now, setTimeout, clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) },
+        timeouts: { initializationMs: 500, requestMs: 500, turnMs: 500, reconnectMs: 500 },
+        onEvent: vi.fn(),
+        onState: vi.fn(),
+      });
+      const started = client.start();
+      await settle();
+      child.frame(frame);
+      await expect(started).rejects.toMatchObject({ code: "malformed_response" });
+      await client.close();
+    }
+  });
+});
+
+describe("Hermes gateway protocol ordering and timeouts", () => {
+  function directClient(child: FakeProcess, initializationMs = 500): HermesGatewayClient {
+    return new HermesGatewayClient({
+      cli: "hermes",
+      environment: {},
+      spawn: vi.fn(() => child),
+      clock: { now: Date.now, setTimeout, clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) },
+      timeouts: { initializationMs, requestMs: 500, turnMs: 500, reconnectMs: 500 },
+      onEvent: vi.fn(),
+      onState: vi.fn(),
+    });
+  }
+
+  it("correlates out-of-order responses without crossing pending calls", async () => {
+    const { child } = harness();
+    const client = directClient(child);
+    const first = client.request("profiles.list", {});
+    const second = client.request("session.list", {});
+    await settle();
+    ready(child);
+    await settle();
+    const requests = child.stdin.writes.map((raw) => JSON.parse(raw));
+    expect(requests.map((request) => request.method)).toEqual(["profiles.list", "session.list"]);
+    child.frame({ jsonrpc: "2.0", id: requests[1].id, result: { second: true } });
+    child.frame({ jsonrpc: "2.0", id: requests[0].id, result: { first: true } });
+    await expect(first).resolves.toEqual({ first: true });
+    await expect(second).resolves.toEqual({ second: true });
+    await client.close();
+  });
+
+  it("resolves synchronous gateway.ready emitted while listeners attach", async () => {
+    const { child } = harness();
+    const originalOn = child.stdout.on.bind(child.stdout);
+    child.stdout.on = ((event: string, listener: (...args: any[]) => void) => {
+      const result = originalOn(event, listener);
+      if (event === "data") ready(child);
+      return result;
+    }) as typeof child.stdout.on;
+    const client = directClient(child, 100);
+    await expect(client.start()).resolves.toBeUndefined();
+    expect(client.isReady).toBe(true);
+    await client.close();
+  });
+
+  it("accepts the pinned gateway's nested skin ready payload without forwarding it", async () => {
+    const { child } = harness();
+    const client = directClient(child);
+    const started = client.start();
+    await settle();
+    child.frame({
+      jsonrpc: "2.0",
+      method: "event",
+      params: { type: "gateway.ready", payload: { skin: { name: "dark", colors: { red: "#fff" } }, path: "/secret" } },
+    });
+    await started;
+    expect(client.payload).toEqual({});
+    await client.close();
+  });
+
+  it("times out a pending request and rejects all pending calls on close", async () => {
+    vi.useRealTimers();
+    const { child } = harness();
+    const client = directClient(child);
+    const started = client.start();
+    await settle();
+    ready(child);
+    await started;
+    const timeout = client.request("profiles.list", {}, 10);
+    await expect(timeout).rejects.toMatchObject({ code: "timeout" });
+
+    const pending = client.request("profiles.list", {}, 500);
+    await Promise.resolve();
+    child.close(7);
+    await expect(pending).rejects.toMatchObject({ code: "gateway_unavailable" });
+    await client.close();
+  });
 });
 
 describe("Hermes child environment", () => {
-  it("retains ordinary Hermes variables but strips all V Bot secret-shaped names", () => {
+  it("retains only the positive Hermes runtime allowlist", () => {
     expect(sanitizeHermesChildEnv({
       VBOT_API_KEY: "x",
       OPENMAUSBOT_TOKEN: "y",
       HERMES_HOME: "/tmp/hermes",
       OPENROUTER_API_KEY: "z",
-    }, {})).toEqual({ HERMES_HOME: "/tmp/hermes", OPENROUTER_API_KEY: "z" });
+      OPENAI_API_KEY: "z",
+      ANTHROPIC_API_KEY: "z",
+      XAI_API_KEY: "z",
+      AWS_ACCESS_KEY_ID: "z",
+      WORKSPACE_TOKEN: "z",
+      PROVIDER_KEY: "z",
+      PATH: "/bin",
+      LANG: "en_US.UTF-8",
+      TERM: "xterm",
+    }, {})).toEqual({
+      HERMES_HOME: "/tmp/hermes",
+      PATH: "/bin",
+      LANG: "en_US.UTF-8",
+      TERM: "xterm",
+    });
   });
 });

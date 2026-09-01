@@ -375,17 +375,19 @@ on terminal event, interrupt, timeout, child close, and adapter close.
 
 ### Exact Hermes calls
 
-- Initialize once, then call `profiles.list` with `include_sessions: true` only
-  for safe profile metadata. Do not project the returned `path`, `ui_meta`, or
-  raw error strings.
+- Wait for the real `gateway.ready` event as the handshake, then call
+  `profiles.list` with `include_sessions: true` only for safe profile
+  metadata. Hermes `v2026.8.31` has no `initialize` method; do not invent or
+  send one. Do not project the returned `path`, `ui_meta`, or raw error
+  strings.
 - For every canonical send, call `session.list` with
   `{profile, title: "Bot Chat", include_hidden: true, limit: 200}`. Treat a
   successful empty list as `absent`; an RPC/DB/protocol failure as `unknown`.
   Do not call `session.create` or pass `--create-if-missing` in Wave 1.
 - For a present row, call `session.resume` with `profile` and the durable
-  `resolved_id` (falling back to `id`), retaining the returned runtime
-  `session_id`/`session_key` only in memory. Never pass a Hermes durable id as
-  `ProviderAdapter.resumeCursor`.
+  `resolved_id` (falling back to `id`), retaining only the returned ephemeral
+  `session_id` in memory. A durable `session_key` is never a runtime fallback
+  and is never passed as `ProviderAdapter.resumeCursor`.
 - Call `prompt.submit` with the runtime id and prompt text in JSON-RPC params.
   Parse `message.start`, optional `message.delta`, and authoritative
   `message.complete` (`payload.text`, status, usage). Emit normalized
@@ -583,8 +585,9 @@ extension is required; no iOS/companion Swift or route changes.
 ### Fixture
 
 `server/testing/fake-hermes-tui-gateway.ts` is a child process implementing only
-the tag-pinned line protocol needed by Wave 1. It emits `gateway.ready`, accepts
-`initialize`, `profiles.list`, exact `session.list`, `session.resume`,
+the tag-pinned line protocol needed by Wave 1. It emits `gateway.ready` as the
+handshake (the pinned `v2026.8.31` gateway has no `initialize` method), accepts
+`profiles.list`, exact `session.list`, `session.resume`,
 `prompt.submit`, and `session.interrupt`, and can be configured by test-only
 flags for interleaved deltas, compression tips, missing/renamed profile,
 malformed final, timeout, and crash. It must use deterministic profile/session

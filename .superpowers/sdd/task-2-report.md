@@ -179,3 +179,54 @@ server typecheck without the workspace package-manager preflight.
 - No real Hermes account or live gateway was exercised; the transport is
   covered with an injected process seam only. Root should independently review
   the diff and perform any live loopback gate before enabling it.
+
+---
+
+# Task 2 review fixes
+
+## Security and protocol corrections
+
+- Child processes now receive a positive Hermes-only environment allowlist
+  (`HOME`/`USERPROFILE`, `PATH`, `HERMES_HOME`, locale, and harmless terminal
+  flags). Provider, workspace, V Bot, and unrelated credential variables are
+  denied rather than stripped by pattern.
+- Every incoming frame must be a JSON-RPC 2.0 response or notification with a
+  safe shape. Malformed JSON, envelopes, responses, or event payloads fail the
+  current generation closed; pending requests are rejected with fixed typed
+  diagnostics and raw stderr/error text is discarded.
+- `gateway.ready` is the handshake for the pinned Hermes `v2026.8.31` gateway;
+  no `initialize` RPC is sent. Startup listeners/state are installed before
+  child attachment so synchronous ready events cannot be lost.
+- Canonical send/lookup refreshes the safe roster and accepts only one exact
+  currently discovered profile or handle. Deleted, unknown, duplicate, and
+  ambiguous profiles never fall through to a default DB session. Failed
+  discovery keeps only a stale safe roster marked unavailable and demotes all
+  proven capability flags.
+- `session.resume` requires an actual ephemeral `session_id`; a durable
+  `session_key` is never used as a fallback. Runtime ids remain in memory only.
+
+## Review-fix verification
+
+```text
+./node_modules/.bin/vitest run server/engines
+```
+
+72 tests passed, 0 failures (including expanded gateway ordering, timeout,
+strict envelope, profile deletion/ambiguity, stale roster, allowlist, and
+ephemeral-id coverage).
+
+```text
+./node_modules/.bin/tsc -p tsconfig.server.json --noEmit
+git diff --check
+```
+
+Both passed. The direct server TypeScript invocation covers the requested
+server typecheck without changing the workspace dependency setup.
+
+## Scope and remaining risk
+
+- No hub/index, iOS, companion, public wire contract, Hermes source checkout,
+  or Task 4 fixture implementation was changed. The Task 4 plan expectation
+  now names `gateway.ready` and omits the nonexistent `initialize` method.
+- No real Hermes account or live gateway was exercised in this review wave;
+  root should perform the final live loopback gate before enabling the adapter.
