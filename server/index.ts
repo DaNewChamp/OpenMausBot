@@ -155,6 +155,11 @@ import {
   hermesSetupJson,
 } from "./hermes-groups.ts";
 import {
+  connectHermesProfile,
+  normalizeHermesSetupProfile,
+  readHermesSetupStatus,
+} from "./hermes-setup.ts";
+import {
   abortSignalFromHttp,
   cancelBridgeApprovalsFor,
   cancelBridgeApprovalsForThread,
@@ -4241,6 +4246,25 @@ function readBody(req: IncomingMessage): Promise<any> {
   });
 }
 
+/** The setup action accepts only an optional profile slug. Keep this parser
+ * local to the hub so direct loopback callers and the companion sidecar share
+ * the same strict, non-secret request shape without forwarding arbitrary JSON
+ * into the provider or Store. */
+function parseHermesSetupBody(body: unknown):
+  | { ok: true; profile?: string }
+  | { ok: false; error: string } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, error: "Hermes setup requires a JSON object" };
+  }
+  const values = body as Record<string, unknown>;
+  if (Object.keys(values).some((key) => key !== "profile")) {
+    return { ok: false, error: "Hermes setup accepts only profile" };
+  }
+  if (values.profile === undefined) return { ok: true };
+  const profile = normalizeHermesSetupProfile(values.profile);
+  return profile ? { ok: true, profile } : { ok: false, error: "profile must be a Hermes profile name" };
+}
+
 // Loopback-only enforcement: the harness runs on 127.0.0.1 but accepts
 // requests from any loopback connection and any web page that DNS-rebinds
 // onto it. Reject non-loopback Hosts outright (defeats rebinding) and
@@ -7506,6 +7530,78 @@ const server = createServer(async (req, res) => {
           instances,
           providerCatalog: sanitizeMobileProviderCatalog(instances),
         });
+      } finally {
+        providerConfigBusy = false;
+      }
+    }
+
+    // ── same-host Hermes Bot Chat setup ────────────────────────────────
+    // Setup is the only route that turns on the opt-in internal adapter and
+    // imports a Hermes profile. It never accepts provider credentials or
+    // arbitrary config, and the response is the small safe projection used
+    // by the companion. A direct loopback caller and the authenticated
+    // companion sidecar therefore share exactly the same transaction.
+    const hermesSetupStatusPath = path === "/api/hermes/setup" || path === "/api/hermes/setup/status";
+    const hermesSetupConnectPath = path === "/api/hermes/setup" || path === "/api/hermes/setup/connect" || path === "/api/hermes/connect";
+    if (method === "GET" && hermesSetupStatusPath) {
+      const status = await readHermesSetupStatus(hermesRegistry, {
+        botExists: (id) => Boolean(store.bot(id)),
+      });
+      return json(res, 200, status);
+    }
+    if (method === "POST" && hermesSetupConnectPath) {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "Hermes setup requires application/json" });
+      }
+      let body: unknown;
+      try {
+        body = await readBody(req);
+      } catch (error) {
+        return json(res, (error as { status?: number }).status ?? 400, {
+          error: error instanceof Error ? error.message : "invalid JSON body",
+        });
+      }
+      const parsed = parseHermesSetupBody(body);
+      if (!parsed.ok) return json(res, 400, { error: parsed.error });
+      if (providerConfigBusy) return json(res, 409, { error: "provider settings are already being updated" });
+      providerConfigBusy = true;
+      try {
+        const instanceId = hermesBotInstanceId(cfg);
+        const explicitInstances = Boolean(cfg.instances && Object.keys(cfg.instances).length > 0);
+        const configured = explicitInstances ? cfg.instances?.[instanceId] : undefined;
+        // A custom fleet is authoritative. Never replace a non-Hermes entry
+        // or invent a shadow provider that could route a setup request to a
+        // generic engine. The default fleet already includes `hermes`.
+        if (explicitInstances && (!configured || configured.driver !== "hermesAgent")) {
+          return json(res, 409, hermesSetupJson(new HermesEngineError("state_unavailable")));
+        }
+        const needsEnable = cfg.vbot?.hermes?.enabled !== true || configured?.enabled === false;
+        if (needsEnable) {
+          const patch: Parameters<typeof saveConfig>[0] = {
+            vbot: { hermes: { enabled: true, instanceId } },
+          };
+          if (configured?.enabled === false) {
+            patch.instances = { [instanceId]: { ...configured, enabled: true } };
+          }
+          saveConfig(patch);
+          Object.assign(cfg, loadConfig());
+          await reloadProviders();
+        }
+        const result = await connectHermesProfile({
+          registry: hermesRegistry,
+          profile: parsed.profile,
+          bot: (id) => store.bot(id),
+          createBot: (profile, opts) => store.createBot(profile, opts),
+          deleteBot: (id) => store.deleteBot(id),
+        });
+        return json(res, result.created ? 201 : 200, {
+          botId: result.botId,
+          profile: result.profile,
+          status: result.status,
+          created: result.created,
+        });
+      } catch (error) {
+        return json(res, 409, hermesSetupJson(hermesFailure(error)));
       } finally {
         providerConfigBusy = false;
       }

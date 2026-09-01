@@ -37,6 +37,8 @@ import {
   isConnectorCardStatus,
   isGroupSetup,
   isGroupUnread,
+  isHermesSetupConnect,
+  isHermesSetupStatus,
   isLocalVmAction,
   isLocalVmScreenshot,
   isLocalVmJoin,
@@ -54,6 +56,7 @@ import {
   validateConnectorCardBody,
   validateConnectorCardThreadId,
   validateGroupSetupBody,
+  validateHermesSetupBody,
   validateLocalVmActionBody,
   botModelBotId,
   botUnreadBotId,
@@ -384,6 +387,26 @@ export function createProxyHandler(options: ProxyOptions) {
     // default-deny checks above and never send it to the harness.
     if (method === "GET" && path === "/api/companion/endpoints") {
       return sendJson(res, 200, endpointSnapshot(options));
+    }
+
+    if (isHermesSetupConnect(method, path)) {
+      const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+      if (!contentType.startsWith("application/json")) {
+        return sendJson(res, 415, { error: "Hermes setup requires application/json" });
+      }
+      readJson(req, 64 * 1024, true).then(
+        (body) => {
+          const parsed = validateHermesSetupBody(method, path, body);
+          if ("denial" in parsed) return sendJson(res, parsed.denial.status, { error: parsed.denial.error });
+          forward(Buffer.from(JSON.stringify(parsed), "utf8"));
+        },
+        (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
+      return;
+    }
+    if (isHermesSetupStatus(method, path)) {
+      forward();
+      return;
     }
 
     // Permission policy is intentionally a tiny, device-safe config surface.

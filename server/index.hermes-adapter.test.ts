@@ -135,6 +135,50 @@ afterAll(async () => {
 });
 
 describe("Hermes Bot Chat hub integration", () => {
+  it("reports safe setup state and imports one profile idempotently", async () => {
+    const ready = await api("GET", "/api/hermes/setup/status");
+    expect(ready.status).toBe(200);
+    expect(ready.body).toMatchObject({ state: "ready", profiles: [{ profile: "default", canonicalChat: "absent" }] });
+    expect(JSON.stringify(ready.body)).not.toMatch(/session|runtime|root-session|resolved-session/i);
+
+    const imported = await api("POST", "/api/hermes/setup", {});
+    expect(imported.status).toBe(201);
+    expect(imported.body).toMatchObject({
+      created: true,
+      profile: { profile: "default", botId: expect.any(String), canonicalChat: "present" },
+      status: { state: "connected", capabilities: { canonicalChat: true } },
+    });
+    expect(JSON.stringify(imported.body)).not.toMatch(/session|runtime|root-session|resolved-session/i);
+
+    const repeated = await api("POST", "/api/hermes/setup/connect", { profile: "DEFAULT" });
+    expect(repeated.status).toBe(200);
+    expect(repeated.body).toMatchObject({ created: false, botId: imported.body.botId });
+    expect(JSON.stringify(repeated.body)).not.toMatch(/session|runtime|root-session|resolved-session/i);
+
+    const sidecar = JSON.parse(readFileSync(join(dataDir, "hermes-bindings.json"), "utf8")) as {
+      version: number;
+      bindings: Record<string, Record<string, unknown>>;
+    };
+    expect(sidecar).toEqual({
+      version: 1,
+      bindings: {
+        [imported.body.botId]: {
+          adapter: "hermesBot",
+          profile: "default",
+          canonicalTitle: "Bot Chat",
+          bindingVersion: 1,
+        },
+      },
+    });
+
+    const disabled = await api("PATCH", "/api/config", { vbot: { hermes: { enabled: false } } });
+    expect(disabled.status).toBe(200);
+    expect((await api("GET", "/api/hermes/setup")).body).toMatchObject({ state: "disabled", profiles: [] });
+    const reenabled = await api("POST", "/api/hermes/setup", { profile: "default" });
+    expect(reenabled.status).toBe(200);
+    expect(reenabled.body).toMatchObject({ created: false, botId: imported.body.botId, status: { state: "connected" } });
+  }, 30_000);
+
   it("dispatches a bound bot once, projects safe capabilities, and interrupts without a fallback", async () => {
     const instances = await api("GET", "/api/instances");
     expect(instances.status).toBe(200);

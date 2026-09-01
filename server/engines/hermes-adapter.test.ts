@@ -297,6 +297,63 @@ describe("Hermes Bot Chat loopback transport", () => {
     await engine.close();
   });
 
+  it("adopts before minting a missing Bot Chat and confirms the created row", async () => {
+    const { child } = harness();
+    const engine = new HermesBotAdapter({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const ensure = engine.ensureCanonical("coder");
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(roster.method).toBe("profiles.list");
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const firstList = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(firstList.method).toBe("session.list");
+    child.frame({ jsonrpc: "2.0", id: firstList.id, result: { sessions: [] } });
+    await settle();
+    const create = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(create.method).toBe("session.create");
+    expect(create.params).toEqual({ profile: "coder", title: "Bot Chat", hidden: true, source: "tui" });
+    child.frame({ jsonrpc: "2.0", id: create.id, result: { session_id: "new-runtime" } });
+    await settle();
+    const refreshedRoster = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(refreshedRoster.method).toBe("profiles.list");
+    child.frame({ jsonrpc: "2.0", id: refreshedRoster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const secondList = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(secondList.method).toBe("session.list");
+    child.frame({
+      jsonrpc: "2.0",
+      id: secondList.id,
+      result: { sessions: [{ id: "root-new", resolved_id: "tip-new", title: "Bot Chat", hidden: true, source: "tui" }] },
+    });
+    await expect(ensure).resolves.toMatchObject({ profile: "coder", title: "Bot Chat", resolvedSessionId: "tip-new" });
+    await engine.close();
+  });
+
+  it("fails closed when session.create does not return a durable id", async () => {
+    const { child } = harness();
+    const engine = new HermesBotAdapter({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const ensure = engine.ensureCanonical("coder");
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [] } });
+    await settle();
+    const create = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: create.id, result: {} });
+    await expect(ensure).rejects.toMatchObject({ code: "malformed_response" });
+    expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).toEqual([
+      "profiles.list", "session.list", "session.create",
+    ]);
+    await engine.close();
+  });
+
   it("maps interrupt to one cancellation terminal and clears the runtime", async () => {
     const { child } = harness();
     const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });

@@ -32,6 +32,48 @@ export interface RouteRequest {
   authenticated: boolean;
 }
 
+/** Read-only Hermes setup state and the one authenticated profile import
+ * action. The aliases keep clients from having to distinguish a resource
+ * route from an action route while remaining exact and default-deny. */
+export const HERMES_SETUP_STATUS_ROUTE = {
+  method: "GET",
+  path: /^\/api\/hermes\/setup(?:\/status)?$/,
+} as const;
+
+export const HERMES_SETUP_CONNECT_ROUTE = {
+  method: "POST",
+  path: /^\/api\/hermes\/(?:setup(?:\/connect)?|connect)$/,
+} as const;
+
+const HERMES_PROFILE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+
+export function isHermesSetupStatus(method: string, path: string): boolean {
+  return method === HERMES_SETUP_STATUS_ROUTE.method && HERMES_SETUP_STATUS_ROUTE.path.test(path);
+}
+
+export function isHermesSetupConnect(method: string, path: string): boolean {
+  return method === HERMES_SETUP_CONNECT_ROUTE.method && HERMES_SETUP_CONNECT_ROUTE.path.test(path);
+}
+
+export function validateHermesSetupBody(
+  method: string,
+  path: string,
+  body: unknown,
+): { denial: Denial } | { profile?: string } {
+  if (!isHermesSetupConnect(method, path)) return {};
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { denial: { status: 400, error: "Hermes setup requires a JSON object" } };
+  }
+  const values = body as Record<string, unknown>;
+  const extra = Object.keys(values).find((key) => key !== "profile");
+  if (extra) return { denial: { status: 400, error: `unsupported Hermes setup field: ${extra}` } };
+  if (values.profile === undefined) return {};
+  if (typeof values.profile !== "string" || values.profile.length === 0 || values.profile.trim() !== values.profile || !HERMES_PROFILE_PATTERN.test(values.profile)) {
+    return { denial: { status: 400, error: "profile must be a Hermes profile name" } };
+  }
+  return { profile: values.profile.toLowerCase() };
+}
+
 /** The one companion route that crosses into full interactive desktop
  * control. Both the allowlist and capability gate consume this classifier so
  * their security decisions cannot drift apart. */
@@ -583,6 +625,8 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   APPROVAL_REVIEWER_ROUTE,
   { method: "GET", path: /^\/api\/events$/ },
   { method: "GET", path: /^\/api\/instances$/ },
+  HERMES_SETUP_STATUS_ROUTE,
+  HERMES_SETUP_CONNECT_ROUTE,
   { method: "GET", path: /^\/api\/vbot\/engine-sync$/ },
   { method: "PATCH", path: /^\/api\/vbot\/primary-engine$/ },
   { method: "GET", path: /^\/api\/vbot\/bots$/ },

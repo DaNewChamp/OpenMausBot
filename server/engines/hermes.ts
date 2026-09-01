@@ -135,6 +135,10 @@ export interface HermesBotEngineOptions {
 export interface HermesBotEngine {
   discover(): Promise<HermesDiscovery>;
   resolveCanonical(profile: string): Promise<HermesCanonicalChat>;
+  /** Adopt the exact canonical Bot Chat, minting it only after a successful
+   * empty title lookup. Optional so existing injected engines remain source
+   * compatible while setup-capable adapters opt in. */
+  ensureCanonical?(profile: string): Promise<HermesCanonicalChat>;
   send(input: {
     profile: string;
     text: string;
@@ -870,6 +874,48 @@ export class HermesBotAdapter implements HermesBotEngine {
     return result.chat;
   }
 
+  /** Resolve the canonical Bot Chat, adopting an existing row or creating it
+   * only after an authoritative empty exact-title lookup. Creation is kept
+   * under the same profile lock as lookup/send so concurrent setup requests
+   * cannot mint duplicate titles. A successful create is never trusted as
+   * identity: the row is looked up again and only that result is returned. */
+  async ensureCanonical(profile: string): Promise<HermesCanonicalChat> {
+    const normalizedProfile = normalizeProfile(profile);
+    return await this.lockFor(normalizedProfile).run(async () => {
+      if (this.closed) throw new HermesEngineError("gateway_unavailable");
+      let canonical = await this.lookupCanonicalOutsideLock(normalizedProfile);
+      if (canonical.state === "present") return canonical.chat;
+      if (canonical.state === "unknown") throw errorForLookup(canonical);
+
+      await this.client.start();
+      try {
+        const created = await this.client.request("session.create", {
+          profile: normalizedProfile,
+          title: "Bot Chat",
+          hidden: true,
+          source: "tui",
+        });
+        if (!createdSessionId(created)) {
+          this.demoteCapabilities();
+          throw new HermesEngineError("malformed_response");
+        }
+      } catch (error) {
+        this.demoteCapabilities();
+        throw asHermesError(error);
+      }
+
+      canonical = await this.lookupCanonicalOutsideLock(normalizedProfile);
+      if (canonical.state !== "present") {
+        this.demoteCapabilities();
+        // A create response is not canonical identity. If the exact title
+        // cannot be re-resolved, stop without another create attempt.
+        throw new HermesEngineError("malformed_response");
+      }
+      this.readiness.canonicalChat = true;
+      return canonical.chat;
+    });
+  }
+
   /** Internal state-preserving lookup useful to the roster and test seams. */
   async lookupCanonical(profile: string): Promise<HermesCanonicalLookup> {
     let normalizedProfile: string;
@@ -1015,6 +1061,16 @@ export class HermesBotAdapter implements HermesBotEngine {
       const normalized = normalizeCanonicalLookup(payload, resolvedProfile);
       if (normalized.state !== "unknown") {
         this.readiness.canonicalChat = true;
+        if (
+          normalized.state === "present" &&
+          canonicalHiddenState(payload, normalized.chat.rootSessionId) === false
+        ) {
+          await this.client.request("session.set_hidden", {
+            profile: resolvedProfile,
+            session_id: normalized.chat.rootSessionId,
+            hidden: true,
+          });
+        }
       } else {
         this.demoteCapabilities();
       }
@@ -1228,6 +1284,39 @@ export class HermesBotAdapter implements HermesBotEngine {
       profiles: staleProfiles,
     };
   }
+}
+
+function canonicalHiddenState(payload: unknown, rootSessionId: string): boolean | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const sessions = (payload as Record<string, unknown>).sessions;
+  if (!Array.isArray(sessions)) return undefined;
+  for (const session of sessions) {
+    if (!session || typeof session !== "object" || Array.isArray(session)) continue;
+    const row = session as Record<string, unknown>;
+    if (row.id !== rootSessionId) continue;
+    return typeof row.hidden === "boolean" ? row.hidden : undefined;
+  }
+  return undefined;
+}
+
+function createdSessionId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const nested = record.session && typeof record.session === "object" && !Array.isArray(record.session)
+    ? record.session as Record<string, unknown>
+    : undefined;
+  for (const candidate of [record.id, record.session_id, record.sessionId, nested?.id, nested?.session_id]) {
+    if (
+      typeof candidate === "string" &&
+      candidate.length > 0 &&
+      candidate.length <= 256 &&
+      candidate.trim() === candidate &&
+      !/[\u0000-\u001f\u007f\u0080-\u009f\s]/.test(candidate)
+    ) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 function runtimeErrorMessage(reason: string): string {

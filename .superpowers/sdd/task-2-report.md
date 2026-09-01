@@ -1,232 +1,113 @@
 # Task 2 implementation report
 
-Commit: `33ff1ea` (`feat(ios): add premium home activity pill`)
+Date: 2026-09-01 (America/Chicago)
+Branch: `feat/vbot-hermes-adapter-0901`
+Executing lane: Luna max (`gpt-5.6-luna`)
+
+## Status
+
+Implemented the safe same-host Hermes setup API. The authenticated companion
+sidecar now exposes exact status and connect/import routes. The hub enables the
+existing opt-in Hermes registry, reloads the provider fleet when enabling it,
+rediscovers one validated profile, adopts or creates the exact hidden
+`Bot Chat`, creates or reuses one V Bot bot, and persists only the existing
+minimal binding. Calls are serialized per registry/profile path and repeat
+calls reuse the same bot.
 
 ## Files changed
 
-- `ios/Sources/CompanionCore/HomeActivityPresentation.swift`
-  - Added provider-neutral `quiet`, `active`, and `needsAttention` projection.
-  - Added ordered `Needs you`, `Active`, `Queued`, and `Recently finished` sections.
-  - Approval precedence suppresses duplicate active/queued rows for the same thread; unread idle threads remain reviewable.
-  - Queue rows accept only explicit phone-observed `HomeActivityQueueReceipt` values. Unknown/stale/hidden threads are omitted; no global queue truth is inferred.
-  - Added calm collapsed copy, activity counts, and VoiceOver copy.
-- `ios/Tests/CompanionCoreTests/HomeActivityPresentationTests.swift`
-  - Added reducer, precedence/order, queue-boundary, and provider-neutral copy tests.
-- `ios/App/HomeActivityPill.swift`
-  - Added bottom-safe-area inset pill with in-place upward expansion, existing chat navigation, ordered sections, 44pt targets, Dynamic Type-friendly system fonts, Reduce Motion opacity-only transition, and VoiceOver state/count labels.
-- `ios/App/Updates.swift`
-  - Added the app-layer adapter from the core projection to existing `ChatUpdate` and documented the queue trust boundary.
-- `ios/App/UpdatesSheet.swift`
-  - Reused the core projection and rendered all four ordered groups while retaining the existing updates sheet route.
-- `ios/App/ChatListView.swift`
-  - Installed the pill as a `.safeAreaInset(edge: .bottom)` so roster rows are reserved rather than covered.
+- `server/hermes-setup.ts`
+  - Added safe setup status projection and idempotent profile connect/import
+    transaction.
+  - Validates profile slugs, binding shape, discovered profile identity,
+    existing bot ownership, and stale/duplicate sidecars.
+  - Uses the existing `loadHermesBindings`/`setHermesBinding`/
+    `removeHermesBinding` store and rolls back a newly-created bot on every
+    failed publication/verification path.
+  - Returns only state, bounded profile display fields, V Bot bot id, and
+    capability flags.
+- `server/hermes-setup.test.ts`
+  - Added disabled/unavailable projection, binding validation, idempotency,
+    concurrent-connect serialization, and binding-write rollback coverage.
+- `server/engines/hermes.ts`
+  - Added setup-only `ensureCanonical` adopt-before-mint behavior under the
+    existing profile lock.
+  - Uses exact `session.list` semantics, creates only with
+    `{ profile, title: "Bot Chat", hidden: true, source: "tui" }`, requires a
+    durable create id, re-resolves after creation, and never retries a second
+    title. Existing canonical rows are hidden when needed with `session.set_hidden`.
+- `server/engines/hermes-adapter.test.ts`
+  - Added adopt-before-mint, durable-id fail-closed, and exact-RPC assertions.
+- `server/index.ts`
+  - Added direct loopback `GET /api/hermes/setup` and
+    `GET /api/hermes/setup/status`, plus `POST /api/hermes/setup`,
+    `POST /api/hermes/setup/connect`, and `POST /api/hermes/connect`.
+  - Enables/reloads only the configured Hermes instance; custom fleets that do
+    not name a Hermes instance fail closed instead of creating a shadow or
+    falling through to generic ACP.
+- `server/index.hermes-adapter.test.ts`
+  - Added live hub fixture coverage for safe status, import/repeat,
+    sidecar-minimality, disable/re-enable, and response redaction.
+- `companion/src/routes.ts`, `companion/src/proxy.ts`
+  - Added default-deny, bearer-authenticated setup route classifiers and
+    profile-only JSON validation before forwarding.
+- `companion/test/routes.test.ts`, `companion/test/proxy.test.ts`
+  - Added exact route/auth/body/content-type and redaction coverage.
 
-## TDD evidence
+## TDD and verification
 
-Red first (before production implementation):
-
-```text
-swift test --package-path ios --filter HomeActivityPresentationTests
-```
-
-Failed at compile time as expected because `HomeActivityPresentation` and `HomeActivityQueueReceipt` did not yet exist.
-
-Focused green:
-
-```text
-swift test --package-path ios --filter HomeActivityPresentationTests
-```
-
-3 tests passed, 0 failures.
-
-## Full verification
-
-```text
-swift test --package-path ios
-```
-
-683 tests passed, 0 failures.
-
-Unsigned simulator build (after `xcodegen generate` to include the new app source):
+Focused tests:
 
 ```text
-xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
-  -sdk iphonesimulator -configuration Debug \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+./node_modules/.bin/vitest run server/hermes-setup.test.ts server/engines/hermes-adapter.test.ts server/index.hermes-adapter.test.ts companion/test/routes.test.ts companion/test/proxy.test.ts
 ```
 
-`** BUILD SUCCEEDED **` (iOS simulator SDK 26.5, iOS deployment target 17.0).
+Passed: 5 test files, 175 tests, 0 failures.
 
-## Accessibility / motion self-review
+Typechecks and whitespace:
 
-- Collapsed and expanded controls use minimum 44pt frames; item rows reserve at least 44pt.
-- System `subheadline`/`caption` fonts and multiline limits preserve Dynamic Type growth without fixed-height clipping.
-- Reduce Motion selects opacity-only insertion/removal and disables the spring transaction.
-- VoiceOver reads the provider-neutral state/count on the collapsed control and the chat/group/subtitle on each item.
-- The pill is a bottom safe-area inset, so expanding it shifts scrollable roster content instead of obscuring rows. The existing top needs-you island remains unchanged; the pill has no separate approval action button.
+```text
+./node_modules/.bin/tsc -p tsconfig.server.json --noEmit
+./node_modules/.bin/tsc -p tsconfig.companion.build.json --noEmit
+git diff --check
+```
+
+All passed.
+
+The workspace `pnpm-workspace.yaml` contains unrelated pre-existing
+`core-js`/`workerd` `allowBuilds` edits from another task. It was preserved and
+is intentionally excluded from this commit; no dependency or workspace setup
+was changed here. The Wave 2 plan also requires direct `node_modules` binaries
+rather than `pnpm` in this worktree.
+
+## Security self-review
+
+- Companion setup routes are default-deny and require the existing paired
+  bearer authentication; the hub remains loopback/origin gated.
+- Request bodies accept only an optional bounded profile slug. Credentials,
+  paths, environment values, prompts, runtime/session ids, JSON-RPC frames, and
+  raw stderr are neither accepted nor returned.
+- Responses are a fixed safe projection. Binding persistence remains exactly
+  `{ adapter, profile, canonicalTitle, bindingVersion }`.
+- Custom instance maps are authoritative. Missing/non-Hermes selected entries
+  return a typed setup failure; no generic provider or shadow Hermes instance
+  is substituted.
+- Canonical creation is adopt-before-mint under the per-profile lock, requires
+  a durable id, verifies by exact post-create lookup, and never creates a
+  second chat after an unknown/malformed relookup.
+- Newly created V Bot bots are deleted and any partial binding is removed when
+  binding publication or verification fails. Existing bindings must point to a
+  real bot and duplicate/stale profiles fail closed.
+- Enable/reload mutates only the opt-in Hermes metadata and configured Hermes
+  instance flag; no provider credentials or secrets are written.
 
 ## Concerns and root verification
 
-- Queue receipts remain a caller-provided, in-memory boundary because the paired hub does not expose a global queue snapshot and the existing receipt state is chat-scoped. The pill therefore shows no queued rows until a real observed receipt is supplied; it never fabricates queue state.
-- No physical-device VoiceOver/Reduce Motion pass or screenshot review was performed. Root should inspect the home on a simulator/device at normal and large Dynamic Type, especially the expanded panel's visual balance with the top needs-you island.
-- No backend, dependency, bundle identity, build number, signing, deployment, or TestFlight state changed.
-
-## Review-fix implementation
-
-- Added `HomeActivityQueueReceiptStore` in `CompanionCore` as the app-owned,
-  in-memory receipt lifecycle. It records only successful queued acknowledgements,
-  uses the request thread as a safe fallback when an older hub omits `threadId`,
-  and retires receipts when their server queue id lands in the transcript or a
-  full hydrate no longer represents them.
-- `Session` now publishes the locally observed receipts to both the home pill
-  and updates sheet, reconciles them from stream/transcript/hydrate changes,
-  and clears them when the active pairing changes. `ChatView` no longer owns a
-  private queue dictionary.
-- `HomeActivityQueueReceipt.init(receipt:)` now rejects failed acknowledgements
-  (`ok == false`) before considering queue metadata. No Hub-global queue state
-  is inferred or persisted.
-
-## Review-fix TDD evidence
-
-Red before implementation:
-
-```text
-swift test --package-path ios --filter 'HomeActivityPresentationTests|HomeActivityQueueReceiptStoreTests'
-```
-
-Failed to compile because `HomeActivityQueueReceiptStore` did not yet exist.
-
-Focused green:
-
-```text
-swift test --package-path ios --filter HomeActivityPresentationTests
-```
-
-4 tests passed, 0 failures.
-
-```text
-swift test --package-path ios --filter HomeActivityQueueReceiptStoreTests
-```
-
-3 tests passed, 0 failures.
-
-Full Swift package gate:
-
-```text
-swift test --package-path ios
-```
-
-686 tests passed, 0 failures.
-
-Unsigned simulator build:
-
-```text
-xcodegen generate
-xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
-  -sdk iphonesimulator -configuration Debug \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
-```
-
-`** BUILD SUCCEEDED **` (iOS simulator SDK 26.5, iOS deployment target 17.0).
-
----
-
-# Task 2 Hermes transport implementation
-
-## Files changed
-
-- `server/engines/hermes.ts`
-  - Added an injected loopback JSON-RPC client for `hermes --tui` with
-    `gateway.ready` startup detection, numeric request correlation, bounded
-    initialization/request/turn waits, pending-call rejection on close, and
-    explicit reconnect only.
-  - Sanitizes the child environment, keeps stderr and raw protocol diagnostics
-    out of public errors, and exposes only fixed `HermesEngineError` codes.
-  - Added exact `profiles.list` discovery and per-profile `session.list` lookup
-    for the literal hidden `Bot Chat` title, including denied-source,
-    compression-tip, absent/unknown, and stale-roster behavior.
-  - Added `session.resume` on the resolved durable id, in-memory-only runtime
-    ids, JSON-RPC `prompt.submit`, optional deltas, authoritative final
-    projection, idempotent terminal handling, and `session.interrupt`.
-  - Unsupported routines, agent messaging, groups, cross-machine, queueing,
-    steer, and attachment capabilities remain false through Task 1's
-    proof-based projection.
-- `server/engines/hermes-adapter.test.ts`
-  - Added fake-process/clock-seam coverage for startup/argv/env redaction,
-    correlation, interleaved events, exact canonical lookup, absent handling,
-    resume/prompt/final projection, interrupt cleanup, and startup crash.
-
-## Verification
-
-```text
-./node_modules/.bin/vitest run server/engines/hermes-adapter.test.ts
-```
-
-6 tests passed, 0 failures.
-
-```text
-./node_modules/.bin/tsc -p tsconfig.server.json --noEmit
-git diff --check
-```
-
-Both passed. The direct server TypeScript invocation covers the requested
-server typecheck without the workspace package-manager preflight.
-
-## Scope and remaining risk
-
-- No hub/index integration, iOS/public contract changes, routines access,
-  message-agent/groups/cross-machine routes, or dependencies were added.
-- No real Hermes account or live gateway was exercised; the transport is
-  covered with an injected process seam only. Root should independently review
-  the diff and perform any live loopback gate before enabling it.
-
----
-
-# Task 2 review fixes
-
-## Security and protocol corrections
-
-- Child processes now receive a positive Hermes-only environment allowlist
-  (`HOME`/`USERPROFILE`, `PATH`, `HERMES_HOME`, locale, and harmless terminal
-  flags). Provider, workspace, V Bot, and unrelated credential variables are
-  denied rather than stripped by pattern.
-- Every incoming frame must be a JSON-RPC 2.0 response or notification with a
-  safe shape. Malformed JSON, envelopes, responses, or event payloads fail the
-  current generation closed; pending requests are rejected with fixed typed
-  diagnostics and raw stderr/error text is discarded.
-- `gateway.ready` is the handshake for the pinned Hermes `v2026.8.31` gateway;
-  no `initialize` RPC is sent. Startup listeners/state are installed before
-  child attachment so synchronous ready events cannot be lost.
-- Canonical send/lookup refreshes the safe roster and accepts only one exact
-  currently discovered profile or handle. Deleted, unknown, duplicate, and
-  ambiguous profiles never fall through to a default DB session. Failed
-  discovery keeps only a stale safe roster marked unavailable and demotes all
-  proven capability flags.
-- `session.resume` requires an actual ephemeral `session_id`; a durable
-  `session_key` is never used as a fallback. Runtime ids remain in memory only.
-
-## Review-fix verification
-
-```text
-./node_modules/.bin/vitest run server/engines
-```
-
-72 tests passed, 0 failures (including expanded gateway ordering, timeout,
-strict envelope, profile deletion/ambiguity, stale roster, allowlist, and
-ephemeral-id coverage).
-
-```text
-./node_modules/.bin/tsc -p tsconfig.server.json --noEmit
-git diff --check
-```
-
-Both passed. The direct server TypeScript invocation covers the requested
-server typecheck without changing the workspace dependency setup.
-
-## Scope and remaining risk
-
-- No hub/index, iOS, companion, public wire contract, Hermes source checkout,
-  or Task 4 fixture implementation was changed. The Task 4 plan expectation
-  now names `gateway.ready` and omits the nonexistent `initialize` method.
-- No real Hermes account or live gateway was exercised in this review wave;
-  root should perform the final live loopback gate before enabling the adapter.
+- No real Hermes account, credential store, or live gateway was exercised;
+  gateway behavior is covered by injected/fake loopback fixtures.
+- The unrelated dirty `pnpm-workspace.yaml` must remain out of the Task 2
+  commit and be reconciled by root with the other task owner.
+- Root should independently inspect the staged diff, rerun the focused tests
+  and both typechecks, and confirm the final commit contains only Task 2 files
+  plus this report. No deployment, iOS UI, remote Hermes bridge, dependency,
+  signing, or TestFlight work was performed.

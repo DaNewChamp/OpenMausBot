@@ -17,6 +17,7 @@ import {
   validatePermissionPolicyBody,
   validateBotPermissionModeBody,
   validateApprovalReviewerBody,
+  validateHermesSetupBody,
 } from "../src/routes.ts";
 
 const ask = (method: string, path: string, authenticated = true) =>
@@ -79,6 +80,10 @@ describe("what the app may do", () => {
     ["PUT", "/api/approval-reviewer"],
     ["GET", "/api/events"],
     ["GET", "/api/instances"],
+    ["GET", "/api/hermes/setup"],
+    ["GET", "/api/hermes/setup/status"],
+    ["POST", "/api/hermes/setup"],
+    ["POST", "/api/hermes/setup/connect"],
     ["GET", "/api/vbot/engine-sync"],
     ["PATCH", "/api/vbot/primary-engine"],
     ["GET", "/api/vbot/bots"],
@@ -156,6 +161,19 @@ describe("what the app may do", () => {
 });
 
 describe("what it may not", () => {
+  it("keeps Hermes setup authenticated, exact, and profile-only", () => {
+    expect(ask("GET", "/api/hermes/setup", false)?.status).toBe(401);
+    expect(ask("POST", "/api/hermes/setup", false)?.status).toBe(401);
+    expect(ask("GET", "/api/hermes/setup/status/extra")?.status).toBe(404);
+    expect(ask("POST", "/api/hermes/setup/connect/extra")?.status).toBe(404);
+    expect(ask("POST", "/api/hermes/setup", true)).toBeNull();
+    expect(validateHermesSetupBody("POST", "/api/hermes/setup", {})).toEqual({});
+    expect(validateHermesSetupBody("POST", "/api/hermes/setup", { profile: "Default" })).toEqual({ profile: "default" });
+    expect(validateHermesSetupBody("POST", "/api/hermes/setup", { token: "secret" })).toMatchObject({ denial: { status: 400 } });
+    expect(validateHermesSetupBody("POST", "/api/hermes/setup", { profile: "../etc" })).toMatchObject({ denial: { status: 400 } });
+    expect(validateHermesSetupBody("GET", "/api/hermes/setup", { token: "ignored" })).toEqual({});
+  });
+
   it("refuses host configuration, and says where it happens", () => {
     for (const [method, path] of [
       ["PUT", "/api/config"],

@@ -324,6 +324,29 @@ describe("the sidecar in front of an unmodified harness", () => {
     expect(modelSwitch.status, "paired model switch never reached the harness").not.toBe(404);
   });
 
+  it("forwards only the safe Hermes setup projection and profile action", async () => {
+    const status = await device("GET", "/api/hermes/setup/status");
+    expect(status.status).toBe(200);
+    expect(status.body).toMatchObject({ state: "disabled", profiles: [] });
+    expect(JSON.stringify(status.body)).not.toMatch(/path|session|runtime|token|secret/i);
+
+    expect((await device("POST", "/api/hermes/setup", {
+      body: { token: "must-not-forward" },
+    })).status).toBe(400);
+    expect((await device("POST", "/api/hermes/setup", {
+      body: { profile: "default" },
+      headers: { "content-type": "text/plain" },
+    })).status).toBe(415);
+
+    // The sidecar accepts the strict profile shape and the disabled harness
+    // returns its fixed setup diagnostic; neither side returns provider
+    // paths, credentials, runtime ids, or raw stderr.
+    const unavailable = await device("POST", "/api/hermes/setup", { body: { profile: "DEFAULT" } });
+    expect(unavailable.status).toBe(409);
+    expect(unavailable.body).toMatchObject({ setup: true, code: "state_unavailable" });
+    expect(JSON.stringify(unavailable.body)).not.toMatch(/path|session|runtime|token|secret/i);
+  });
+
   it("lets a device answer an approval, and manage its own chats", async () => {
     // The approval path is the product: a card raised on the computer,
     // answered on the phone, and the bot carries on. What is checked here is
