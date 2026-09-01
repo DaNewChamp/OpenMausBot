@@ -10,8 +10,19 @@ final class ConnectionResiliencePolicyTests: XCTestCase {
 
         XCTAssertTrue(banner.showsConnectingHalo)
         XCTAssertFalse(banner.showsRosterText)
-        XCTAssertFalse(banner.isVisible)
+        XCTAssertTrue(banner.isVisible)
         XCTAssertEqual(banner.accessibilityLabel, ConnectionResiliencePolicy.connectingAccessibility)
+    }
+
+    func testOnlyHiddenBannersAreNotVisibleToLegacyCallers() {
+        let hidden = ConnectionResiliencePolicy.banner(
+            live: true,
+            previouslyLive: false
+        )
+
+        XCTAssertEqual(hidden.kind, ConnectionResiliencePolicy.BannerKind.hidden)
+        XCTAssertFalse(hidden.isVisible)
+        XCTAssertFalse(hidden.showsRosterText)
     }
 
     func testReconnectOfflineAndUnauthorizedRemainActionableRosterBanners() {

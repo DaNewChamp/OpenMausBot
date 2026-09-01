@@ -164,12 +164,20 @@ public struct CompanionState: Sendable {
         messages.removeAll()
         hasMore.removeAll()
         for bot in fleet.bots {
-            messages[bot.threadId] = bot.messages ?? []
-            hasMore[bot.threadId] = bot.hasMore ?? false
+            if let transcript = bot.messages {
+                messages[bot.threadId] = transcript
+            }
+            if let more = bot.hasMore {
+                hasMore[bot.threadId] = more
+            }
         }
         for room in fleet.groups {
-            messages[room.threadId] = room.messages ?? []
-            hasMore[room.threadId] = room.hasMore ?? false
+            if let transcript = room.messages {
+                messages[room.threadId] = transcript
+            }
+            if let more = room.hasMore {
+                hasMore[room.threadId] = more
+            }
         }
         // Hydration is the authoritative transcript. Any in-flight tail from a
         // previous connection is either already in those messages or gone.
@@ -195,7 +203,11 @@ public struct CompanionState: Sendable {
         let existing = messages[threadId] ?? []
         let known = Set(existing.map(\.id))
         messages[threadId] = page.messages.filter { !known.contains($0.id) } + existing
-        hasMore[threadId] = page.hasMore ?? false
+        if let more = page.hasMore {
+            hasMore[threadId] = more
+        } else {
+            hasMore.removeValue(forKey: threadId)
+        }
     }
 
     /// Merge a search landing window into the pages already held.
@@ -288,7 +300,11 @@ public struct CompanionState: Sendable {
                 let previous = bots[index]
                 if let replacement = bot.messages {
                     messages[bot.threadId] = replacement
-                    hasMore[bot.threadId] = bot.hasMore ?? false
+                    if let more = bot.hasMore {
+                        hasMore[bot.threadId] = more
+                    } else {
+                        hasMore.removeValue(forKey: bot.threadId)
+                    }
                     merged.messages = replacement
                     clearStream(previous.threadId)
                     if previous.threadId != bot.threadId { clearStream(bot.threadId) }
@@ -302,8 +318,11 @@ public struct CompanionState: Sendable {
                 var merged = bot
                 if merged.pinned == nil { merged.pinned = pinnedOverrides.value(for: stableID) }
                 bots.append(applyingAppearanceOverride(to: merged, stableID: stableID))
-                if messages[merged.threadId] == nil {
-                    messages[merged.threadId] = merged.messages ?? []
+                if let transcript = merged.messages {
+                    messages[merged.threadId] = transcript
+                }
+                if let more = merged.hasMore {
+                    hasMore[merged.threadId] = more
                 }
             }
 
@@ -334,15 +353,27 @@ public struct CompanionState: Sendable {
             pinnedOverrides.reconcile(serverPinned: room.pinned, for: stableID)
             if let index = rooms.firstIndex(where: { $0.id == room.id }) {
                 var merged = room
-                merged.messages = rooms[index].messages
+                if let replacement = room.messages {
+                    messages[room.threadId] = replacement
+                    if let more = room.hasMore {
+                        hasMore[room.threadId] = more
+                    } else {
+                        hasMore.removeValue(forKey: room.threadId)
+                    }
+                } else {
+                    merged.messages = rooms[index].messages
+                }
                 if merged.pinned == nil { merged.pinned = pinnedOverrides.value(for: stableID) }
                 rooms[index] = merged
             } else {
                 var merged = room
                 if merged.pinned == nil { merged.pinned = pinnedOverrides.value(for: stableID) }
                 rooms.append(merged)
-                if messages[merged.threadId] == nil {
-                    messages[merged.threadId] = merged.messages ?? []
+                if let transcript = merged.messages {
+                    messages[merged.threadId] = transcript
+                }
+                if let more = merged.hasMore {
+                    hasMore[merged.threadId] = more
                 }
             }
 

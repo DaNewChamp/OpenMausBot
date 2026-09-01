@@ -141,8 +141,9 @@ normal production contracts:
 - `ios/TESTING.md` now uses `(cd ios && xcodegen generate)` so the documented
   command is safe to paste from the repository root, and documents the fixture
   controls, matrix, and portable evidence directory.
-- Release notes now describe upcoming build 72. `ios/project.yml` and all
-  project build-number settings remain unchanged at 71.
+- Release notes and every generated target now use build 72. `ios/project.yml`
+  is the build-number source of truth (`CURRENT_PROJECT_VERSION: "72"` for the
+  app, widget, and share targets).
 - Portable simulator evidence is tracked at
   `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/` (22 PNGs,
   1206 x 2622): needs-approval, connecting halo, quiet/active `large` and
@@ -284,3 +285,63 @@ and the complete “Upload build 1 to TestFlight for internal testing?” detail
 The active captures visibly include `ACTIVE`, Forge, and `Working now`. The
 expanded rail is laid out as a sibling below the roster, with no panel-over-row
 overlay in either Reduce Motion setting.
+
+## Final review fixes
+
+Date: 2026-08-31 (America/Chicago)
+Starting commit: `5832545 chore(ios): prepare TestFlight build 72`
+
+The final review findings are closed on this branch:
+
+- Queue receipts are retired as absent only when a hydrate has both a transcript
+  and explicit `hasMore: false`. Paged (`hasMore: true`) and unknown/partial
+  transcripts retain local receipts; matching queue IDs still retire normally
+  as messages arrive.
+- `ConnectionResiliencePolicy.Banner.isVisible` again follows its legacy
+  contract (`kind != .hidden`). The new roster layout continues to use
+  `showsRosterText` so the connecting halo does not reserve banner text space.
+- `UpdatesSheet` activity and permission detail use Dynamic Type text styles,
+  multiline sizing, and uncapped lines at accessibility sizes. No projection
+  logic changed, so the existing core presentation tests remain the focused
+  coverage; source inspection confirmed there are no fixed-size or one-line
+  activity labels in the row.
+- `ios/project.yml` is the build-number source of truth and sets
+  `CURRENT_PROJECT_VERSION: "72"` for the app, widget, and share targets.
+
+Focused verification:
+
+```sh
+swift test --package-path ios --filter 'HomeActivityQueueReceiptStoreTests|ConnectionResiliencePolicyTests'
+```
+
+Passed: 10 focused XCTest cases with zero failures.
+
+Full Swift verification:
+
+```sh
+swift test --package-path ios
+```
+
+Passed: 697 XCTest cases with zero failures; the trailing Swift Testing run
+reported 20 tests in five suites passed.
+
+Project generation and unsigned simulator release gates also passed:
+
+```sh
+(cd ios && xcodegen generate)
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Debug \
+  -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
+  -derivedDataPath /tmp/vbot-final-review-debug-0831 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Release \
+  -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
+  -derivedDataPath /tmp/vbot-final-review-release-0831 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+git diff --check
+```
+
+All commands passed; both simulator builds ended with `** BUILD SUCCEEDED **`
+using iOS Simulator SDK 26.5. No signing, device archive, TestFlight upload,
+deploy, merge, or backend contract change was attempted.

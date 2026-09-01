@@ -1360,18 +1360,21 @@ final class Session: ObservableObject {
         return true
     }
 
-    /// Retire local queue acknowledgements after a transcript update. A full
-    /// hydrate is the only operation allowed to discard receipts absent from
-    /// the returned transcript; resumed streams retain the local unknowns.
+    /// Retire local queue acknowledgements after a transcript update. Only a
+    /// complete hydrate may discard receipts absent from the returned
+    /// transcript; resumed streams and partial pages retain local unknowns.
     func reconcileQueueReceipts(
         forThread threadId: String,
         transcript: [Message],
         authoritativeRefresh: Bool = false
     ) {
+        let completeTranscript = authoritativeRefresh
+            && state.messages[threadId] != nil
+            && state.hasMore[threadId] == false
         queueReceiptStore.reconcile(
             threadId: threadId,
             transcript: transcript,
-            authoritativeRefresh: authoritativeRefresh
+            authoritativeRefresh: completeTranscript
         )
         publishQueueReceipts()
     }

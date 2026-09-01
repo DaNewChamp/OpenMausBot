@@ -81,6 +81,7 @@ private struct HomeActivityUpdateRow: View {
     let chat: Chat
     let open: () -> Void
     @EnvironmentObject private var session: Session
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         Button(action: open) {
@@ -89,19 +90,21 @@ private struct HomeActivityUpdateRow: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(chat.name)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.headline.weight(.semibold))
                         .foregroundStyle(Color.primary)
                     Text(item.subtitle.isEmpty ? fallback : item.subtitle)
-                        .font(.system(size: 14))
+                        .font(.subheadline)
                         .foregroundStyle(Color.secondary)
-                        .lineLimit(item.group == .needsYou ? 3 : 1)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : (item.group == .needsYou ? 3 : 2))
                         .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     if let card = item.card, card.isPending, card.isPermission {
                         Text(card.actionSummary.map(OptionCard.sanitizedPresentation) ?? OptionCard.sanitizedPresentation(card.title.replacingOccurrences(of: "?", with: "")))
-                            .font(.system(size: 13))
+                            .font(.footnote)
                             .foregroundStyle(Color.secondary)
-                            .lineLimit(2)
+                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                            .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, 2)
                     }
                 }

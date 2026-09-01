@@ -25,7 +25,10 @@ public enum ConnectionResiliencePolicy: Sendable {
         public var systemImage: String
         public var accessibilityLabel: String
 
-        public var isVisible: Bool { showsRosterText }
+        /// Legacy callers treat every non-hidden banner as visible, including
+        /// the initial connecting halo. New roster layout uses
+        /// `showsRosterText` when it needs to reserve text space.
+        public var isVisible: Bool { kind != .hidden }
         /// Initial connection is represented by the avatar halo, not a
         /// persistent text banner that pushes the roster down.
         public var showsConnectingHalo: Bool { kind == .connecting }

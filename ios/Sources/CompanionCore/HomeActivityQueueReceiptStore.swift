@@ -76,9 +76,10 @@ public struct HomeActivityQueueReceiptStore: Equatable, Sendable {
 
     /// Reconcile every locally observed receipt against the current state.
     /// Normal stream updates only retire receipts with an explicit queue id;
-    /// a full hydrate may also retire receipts absent from that authoritative
-    /// transcript. Unknown threads remain during normal updates because they
-    /// are not evidence that the Hub has no queue for them.
+    /// a complete hydrate may also retire receipts absent from that
+    /// authoritative transcript. Missing transcript or pagination metadata is
+    /// treated as unknown, not as evidence that the Hub has no queue for the
+    /// thread.
     public mutating func reconcile(
         state: CompanionState,
         authoritativeRefresh: Bool = false
@@ -86,15 +87,13 @@ public struct HomeActivityQueueReceiptStore: Equatable, Sendable {
         let threadIDs = Set(byQueueID.values.map(\.threadId))
         for threadId in threadIDs {
             guard state.messages[threadId] != nil else {
-                if authoritativeRefresh {
-                    byQueueID = byQueueID.filter { $0.value.threadId != threadId }
-                }
                 continue
             }
+            let completeTranscript = authoritativeRefresh && state.hasMore[threadId] == false
             reconcile(
                 threadId: threadId,
                 transcript: state.visibleTranscript(forThread: threadId),
-                authoritativeRefresh: authoritativeRefresh
+                authoritativeRefresh: completeTranscript
             )
         }
     }
