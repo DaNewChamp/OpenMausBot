@@ -7,9 +7,10 @@ work; renaming the display name does not require a bundle-ID migration.
 
 ## Current release state
 
-- Current iOS project version: **73** (`MARKETING_VERSION` `1.0.0`, `CURRENT_PROJECT_VERSION` `73`).
+- Current iOS project version: **74** (`MARKETING_VERSION` `1.0.0`, `CURRENT_PROJECT_VERSION` `74`).
 - Build 73 is recorded as `VALID / IN_BETA_TESTING` in the internal TestFlight lane; external build state is `READY_FOR_BETA_SUBMISSION`.
 - What-to-Test for `en-US` was updated for build 73.
+- Build 74 is the next internal candidate. It includes the home/read-state polish, compact bot settings, approval-summary hardening, and the first-party Hermes Bot Chat adapter.
 - This file does not claim physical-device QA, production deployment, external beta submission, or desktop publication.
 
 ## One-time Apple setup
@@ -25,7 +26,7 @@ work; renaming the display name does not require a bundle-ID migration.
 1. Run `swift test` from `ios/` and the repository test suite.
 2. Generate the Xcode project with `xcodegen generate` from `ios/`.
 3. Set `DEVELOPMENT_TEAM` for the Release configuration in Xcode or on the archive command line.
-4. Set `CURRENT_PROJECT_VERSION` to the next unused build number (74 after build 73). Update `MARKETING_VERSION` only for a new App Store version.
+4. Set `CURRENT_PROJECT_VERSION` to the next unused build number (75 after build 74). Update `MARKETING_VERSION` only for a new App Store version.
 5. Archive a generic iOS device build and validate it in Xcode Organizer.
 6. Upload to App Store Connect and distribute to internal TestFlight testers first.
 7. Complete a real-iPhone pass for pairing, Bonjour permission, Keychain restore, Tailscale, optional hosted HTTPS, approvals, background/foreground reconciliation, sign-out/revocation, transcript sharing, attachments, and Local VM/watch paths.

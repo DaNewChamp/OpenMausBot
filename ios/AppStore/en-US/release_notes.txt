@@ -1,4 +1,4 @@
-V Bot build 73: cleaner home activity and reliable read receipts.
+V Bot build 74: cleaner activity and unread behavior, simpler bot settings, clearer approvals, and first-party Hermes Bot Chat support through your paired hub.
 
 Home activity
 
