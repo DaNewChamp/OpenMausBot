@@ -257,6 +257,135 @@ public struct MessageDeliveryReceipt: Codable, Equatable, Sendable {
 
 public typealias MessageDeliveryDisposition = MessageDeliveryReceipt.Disposition
 
+/// Optional, provider-neutral metadata attached to a settled work message.
+///
+/// The hub may add this object before the phone has been updated. Every field
+/// is therefore optional and malformed values are ignored rather than making
+/// an otherwise ordinary transcript message undecodable. URL strings stay as
+/// wire values; `WorkCardPresentation` is the only place that turns them into
+/// actionable URLs.
+public struct WorkCard: Codable, Hashable, Sendable {
+    public var title: String?
+    public var status: String?
+    public var branch: String?
+    public var prNumber: Int?
+    public var filesChanged: Int?
+    public var additions: Int?
+    public var deletions: Int?
+    public var prURL: String?
+    public var cursorURL: String?
+
+    public init(
+        title: String? = nil,
+        status: String? = nil,
+        branch: String? = nil,
+        prNumber: Int? = nil,
+        filesChanged: Int? = nil,
+        additions: Int? = nil,
+        deletions: Int? = nil,
+        prURL: String? = nil,
+        cursorURL: String? = nil
+    ) {
+        self.title = title
+        self.status = status
+        self.branch = branch
+        self.prNumber = prNumber
+        self.filesChanged = filesChanged
+        self.additions = additions
+        self.deletions = deletions
+        self.prURL = prURL
+        self.cursorURL = cursorURL
+    }
+
+    /// Labels matching the server's lower-camel wire shape. The uppercase
+    /// aliases are accepted for fixtures produced by Swift clients too.
+    private enum CodingKeys: String, CodingKey {
+        case title, status, branch, prNumber, filesChanged, additions, deletions
+        case prUrl, prURL, pullRequestUrl, pullRequestURL
+        case cursorUrl, cursorURL, cursorLink, cursorDeepLink
+    }
+
+    public init(from decoder: Decoder) throws {
+        // A scalar in place of the object is an invalid optional extension,
+        // not a reason to reject the containing Message. Message's decoder
+        // uses `try?` around this initializer, while a keyed object itself is
+        // decoded field-by-field so one bad field cannot hide the rest.
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            title: Self.firstString(in: container, keys: [.title]),
+            status: Self.firstString(in: container, keys: [.status]),
+            branch: Self.firstString(in: container, keys: [.branch]),
+            prNumber: Self.firstInt(in: container, keys: [.prNumber]),
+            filesChanged: Self.firstInt(in: container, keys: [.filesChanged]),
+            additions: Self.firstInt(in: container, keys: [.additions]),
+            deletions: Self.firstInt(in: container, keys: [.deletions]),
+            prURL: Self.firstString(in: container, keys: [.prUrl, .prURL, .pullRequestUrl, .pullRequestURL]),
+            cursorURL: Self.firstString(in: container, keys: [.cursorUrl, .cursorURL, .cursorLink, .cursorDeepLink])
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(title, forKey: .title)
+        try container.encodeIfPresent(status, forKey: .status)
+        try container.encodeIfPresent(branch, forKey: .branch)
+        try container.encodeIfPresent(prNumber, forKey: .prNumber)
+        try container.encodeIfPresent(filesChanged, forKey: .filesChanged)
+        try container.encodeIfPresent(additions, forKey: .additions)
+        try container.encodeIfPresent(deletions, forKey: .deletions)
+        try container.encodeIfPresent(prURL, forKey: .prUrl)
+        try container.encodeIfPresent(cursorURL, forKey: .cursorUrl)
+    }
+
+    public var prUrl: String? {
+        get { prURL }
+        set { prURL = newValue }
+    }
+
+    public var pullRequestURL: String? {
+        get { prURL }
+        set { prURL = newValue }
+    }
+
+    public var pullRequestUrl: String? {
+        get { prURL }
+        set { prURL = newValue }
+    }
+
+    public var cursorUrl: String? {
+        get { cursorURL }
+        set { cursorURL = newValue }
+    }
+
+    public var cursorDeepLink: String? {
+        get { cursorURL }
+        set { cursorURL = newValue }
+    }
+
+    private static func firstString(
+        in container: KeyedDecodingContainer<CodingKeys>,
+        keys: [CodingKeys]
+    ) -> String? {
+        for key in keys {
+            if let value = try? container.decode(String.self, forKey: key) { return value }
+        }
+        return nil
+    }
+
+    private static func firstInt(
+        in container: KeyedDecodingContainer<CodingKeys>,
+        keys: [CodingKeys]
+    ) -> Int? {
+        for key in keys {
+            if let value = try? container.decode(Int.self, forKey: key) { return value }
+        }
+        return nil
+    }
+}
+
+public typealias WorkMetadata = WorkCard
+public typealias WorkCardData = WorkCard
+
 public struct Message: Codable, Hashable, Identifiable, Sendable {
     public enum Kind: String, Codable, Sendable {
         case text, options, activity, screen, connector
@@ -318,8 +447,112 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     /// Screen messages in the full shape: base64 pixels, inline.
     public var png: String?
     public var mime: String?
+    /// Optional work/PR metadata. Older messages omit it and remain ordinary
+    /// text, diff, or card messages.
+    public var work: WorkCard?
+
+    /// Compatibility spelling for callers that describe the wire extension as
+    /// a work card rather than a work object. Both access the same field.
+    public var workCard: WorkCard? {
+        get { work }
+        set { work = newValue }
+    }
+
+    public var workMetadata: WorkCard? {
+        get { work }
+        set { work = newValue }
+    }
+
+    public init(
+        id: String,
+        role: Role,
+        kind: Kind,
+        at: Double,
+        text: String? = nil,
+        card: OptionCard? = nil,
+        connector: ConnectorMessageData? = nil,
+        tool: ToolActivity? = nil,
+        parentId: String? = nil,
+        from: Sender? = nil,
+        reactions: [Reaction]? = nil,
+        comm: CommChip? = nil,
+        queueId: String? = nil,
+        hasImage: Bool? = nil,
+        png: String? = nil,
+        mime: String? = nil,
+        work: WorkCard? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.kind = kind
+        self.at = at
+        self.text = text
+        self.card = card
+        self.connector = connector
+        self.tool = tool
+        self.parentId = parentId
+        self.from = from
+        self.reactions = reactions
+        self.comm = comm
+        self.queueId = queueId
+        self.hasImage = hasImage
+        self.png = png
+        self.mime = mime
+        self.work = work
+    }
 
     public var date: Date { Date(timeIntervalSince1970: at / 1000) }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, role, kind, at, text, card, connector, tool, parentId, from,
+             reactions, comm, queueId, hasImage, png, mime, work, workCard, workMetadata
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        role = try container.decode(Role.self, forKey: .role)
+        kind = try container.decode(Kind.self, forKey: .kind)
+        at = try container.decode(Double.self, forKey: .at)
+        text = try container.decodeIfPresent(String.self, forKey: .text)
+        card = try container.decodeIfPresent(OptionCard.self, forKey: .card)
+        connector = try container.decodeIfPresent(ConnectorMessageData.self, forKey: .connector)
+        tool = try container.decodeIfPresent(ToolActivity.self, forKey: .tool)
+        parentId = try container.decodeIfPresent(String.self, forKey: .parentId)
+        from = try container.decodeIfPresent(Sender.self, forKey: .from)
+        reactions = try container.decodeIfPresent([Reaction].self, forKey: .reactions)
+        comm = try container.decodeIfPresent(CommChip.self, forKey: .comm)
+        queueId = try container.decodeIfPresent(String.self, forKey: .queueId)
+        hasImage = try container.decodeIfPresent(Bool.self, forKey: .hasImage)
+        png = try container.decodeIfPresent(String.self, forKey: .png)
+        mime = try container.decodeIfPresent(String.self, forKey: .mime)
+        // This is an optional extension. A scalar or future shape must not
+        // make the entire transcript disappear.
+        work = (try? container.decode(WorkCard.self, forKey: .work))
+            ?? (try? container.decode(WorkCard.self, forKey: .workCard))
+            ?? (try? container.decode(WorkCard.self, forKey: .workMetadata))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(role, forKey: .role)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(at, forKey: .at)
+        try container.encodeIfPresent(text, forKey: .text)
+        try container.encodeIfPresent(card, forKey: .card)
+        try container.encodeIfPresent(connector, forKey: .connector)
+        try container.encodeIfPresent(tool, forKey: .tool)
+        try container.encodeIfPresent(parentId, forKey: .parentId)
+        try container.encodeIfPresent(from, forKey: .from)
+        try container.encodeIfPresent(reactions, forKey: .reactions)
+        try container.encodeIfPresent(comm, forKey: .comm)
+        try container.encodeIfPresent(queueId, forKey: .queueId)
+        try container.encodeIfPresent(hasImage, forKey: .hasImage)
+        try container.encodeIfPresent(png, forKey: .png)
+        try container.encodeIfPresent(mime, forKey: .mime)
+        try container.encodeIfPresent(work, forKey: .work)
+    }
 }
 
 // MARK: - Bots and rooms

@@ -1,11 +1,13 @@
 import SwiftUI
 import UIKit
+import CompanionCore
 
 public struct GitPRDiffCardView: View {
     public let filename: String
     public let diffText: String
     public let additions: Int
     public let deletions: Int
+    public let work: WorkCardPresentation?
     
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.conversationTypography) private var typography
@@ -21,12 +23,17 @@ public struct GitPRDiffCardView: View {
         filename: String = "Changes",
         diffText: String,
         additions: Int = 0,
-        deletions: Int = 0
+        deletions: Int = 0,
+        work: WorkCardPresentation? = nil
     ) {
         self.filename = filename
         self.diffText = diffText
+        self.work = work?.isRenderable == true ? work : nil
         
-        if additions == 0 && deletions == 0 {
+        if let workAdditions = work?.additions, let workDeletions = work?.deletions {
+            self.additions = workAdditions
+            self.deletions = workDeletions
+        } else if additions == 0 && deletions == 0 {
             let lines = diffText.components(separatedBy: "\n")
             self.additions = lines.filter { $0.hasPrefix("+") && !$0.hasPrefix("+++") }.count
             self.deletions = lines.filter { $0.hasPrefix("-") && !$0.hasPrefix("---") }.count
@@ -46,10 +53,10 @@ public struct GitPRDiffCardView: View {
                     .font(.system(size: 12, weight: .bold))
                     .foregroundColor(Color(hex: "#22C55E"))
                 
-                Text(filename)
+                Text(work?.title ?? filename)
                     .font(typography.font(size: 12, relativeTo: .caption1, weight: .bold))
                     .foregroundColor(isDark ? Color(hex: "#F8FAFC") : Color(hex: "#0F172A"))
-                    .lineLimit(1)
+                    .lineLimit(2)
                 
                 Spacer()
                 
@@ -66,6 +73,10 @@ public struct GitPRDiffCardView: View {
                 .padding(.vertical, 2.5)
                 .background(isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.04))
                 .clipShape(Capsule())
+            }
+
+            if let work {
+                workMetadataView(work, isDark: isDark)
             }
             
             // Diff Content
@@ -88,6 +99,8 @@ public struct GitPRDiffCardView: View {
                         .padding(.vertical, 2)
                     }
                     .buttonStyle(.plain)
+                    .frame(minHeight: 44)
+                    .accessibilityLabel(showDiff ? "Hide diff" : "View diff")
                     
                     if showDiff {
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -109,6 +122,8 @@ public struct GitPRDiffCardView: View {
                             }
                             .font(typography.font(size: 11, relativeTo: .caption2, weight: .semibold))
                             .buttonStyle(.plain)
+                            .frame(minHeight: 44)
+                            .accessibilityLabel(showAllLines ? "Show first 80 lines" : "Show all diff lines")
                             .accessibilityHint("The copied diff always includes every line")
                         }
                     }
@@ -119,17 +134,45 @@ public struct GitPRDiffCardView: View {
             
             // Footer Actions
             HStack(spacing: 8) {
-                Button {
-                    PlatformBridge.copyToPasteboard(diffText)
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "doc.on.doc")
-                        Text("Copy Diff")
+                if !diffText.isEmpty {
+                    Button {
+                        PlatformBridge.copyToPasteboard(diffText)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "doc.on.doc")
+                            Text("Copy Diff")
+                        }
+                        .font(typography.font(size: 11, relativeTo: .caption2, weight: .medium))
+                        .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
                     }
-                    .font(typography.font(size: 11, relativeTo: .caption2, weight: .medium))
-                    .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
+                    .buttonStyle(.plain)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityLabel("Copy diff")
                 }
-                .buttonStyle(.plain)
+
+                if let work, work.showsViewPR, let url = work.pullRequestURL {
+                    Button {
+                        UIApplication.shared.open(url)
+                    } label: {
+                        Label("View PR", systemImage: "arrow.up.right.square")
+                            .font(typography.font(size: 11, relativeTo: .caption2, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityLabel("View pull request")
+                }
+
+                if let work, work.showsOpenInCursor, let url = work.openInCursorURL {
+                    Button {
+                        UIApplication.shared.open(url)
+                    } label: {
+                        Label("Open in Cursor", systemImage: "arrow.up.forward.app")
+                            .font(typography.font(size: 11, relativeTo: .caption2, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityLabel("Open in Cursor")
+                }
                 
                 Spacer()
             }
@@ -155,6 +198,36 @@ public struct GitPRDiffCardView: View {
                 .stroke(isDark ? Color.white.opacity(0.12) : Color.black.opacity(0.08), lineWidth: 0.75)
         )
         .shadow(color: Color.black.opacity(isDark ? 0.20 : 0.04), radius: 4, y: 1.5)
+    }
+
+    @ViewBuilder
+    private func workMetadataView(_ work: WorkCardPresentation, isDark: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                if let status = work.status {
+                    Text(status)
+                        .font(typography.font(size: 11, relativeTo: .caption2, weight: .semibold))
+                        .foregroundStyle(isDark ? Color(hex: "#CBD5E1") : Color(hex: "#475569"))
+                }
+                if let branch = work.branch {
+                    Label(branch, systemImage: "arrow.branch")
+                        .font(typography.font(size: 10.5, relativeTo: .caption2, weight: .medium, design: .monospaced))
+                        .foregroundStyle(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
+                        .lineLimit(1)
+                }
+                if let number = work.prNumber {
+                    Text("PR #\(number)")
+                        .font(typography.font(size: 10.5, relativeTo: .caption2, weight: .medium, design: .monospaced))
+                        .foregroundStyle(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
+                }
+            }
+
+            if let files = work.filesChanged {
+                Text(files == 1 ? "1 file changed" : "\(files) files changed")
+                    .font(typography.font(size: 10.5, relativeTo: .caption2, weight: .medium))
+                    .foregroundStyle(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
+            }
+        }
     }
     
     @ViewBuilder

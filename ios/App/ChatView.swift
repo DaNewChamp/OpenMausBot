@@ -921,7 +921,7 @@ struct TextBubble: View {
     }
     private var shrinkWrapsHorizontally: Bool {
         ConversationLayoutPolicy.bubbleShrinkWrapsHorizontally(
-            isCustomCard: parsedDiff != nil || parsedTable != nil,
+            isCustomCard: parsedDiff != nil || parsedTable != nil || workPresentation != nil,
             hasAttachmentGallery: parsedAttachments != nil
         )
     }
@@ -948,6 +948,16 @@ struct TextBubble: View {
         let filename = firstLine.split(separator: " ").last.map(String.init)?
             .replacingOccurrences(of: "b/", with: "") ?? "Git patch"
         return (filename, diff)
+    }
+
+    /// Work metadata is an optional decoration on a text message. Cursor is
+    /// advertised only after URL validation and the runtime `canOpenURL` gate.
+    private var workPresentation: WorkCardPresentation? {
+        guard message.role != .user, let work = message.work else { return nil }
+        let cursorURL = WorkCardPresentation.validatedCursorURL(work.cursorURL)
+        let cursorAvailable = cursorURL.map { UIApplication.shared.canOpenURL($0) } ?? false
+        let presentation = WorkCardPresentation(work: work, canOpenCursor: cursorAvailable)
+        return presentation.isRenderable ? presentation : nil
     }
 
     private var parsedTable: (headers: [String], rows: [[String]])? {
@@ -1006,7 +1016,7 @@ struct TextBubble: View {
 
     var body: some View {
         let mine = message.role == .user
-        let customCard = parsedDiff != nil || parsedTable != nil
+        let customCard = parsedDiff != nil || parsedTable != nil || workPresentation != nil
         let speaker = message.from
         HStack(alignment: .bottom, spacing: 0) {
             if mine { Spacer(minLength: edgeReserve) }
@@ -1040,7 +1050,21 @@ struct TextBubble: View {
                 }
             }
             if let diff = parsedDiff {
-                GitPRDiffCardView(filename: diff.filename, diffText: diff.diff)
+                GitPRDiffCardView(filename: diff.filename, diffText: diff.diff, work: workPresentation)
+            } else if let work = workPresentation {
+                GitPRDiffCardView(
+                    filename: work.title ?? "Work",
+                    diffText: "",
+                    additions: work.additions ?? 0,
+                    deletions: work.deletions ?? 0,
+                    work: work
+                )
+                if let text = message.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    MarkdownText(source: text)
+                        .foregroundStyle(Color.primary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             } else if let table = parsedTable {
                 SQLResultTableView(columns: table.headers, rows: table.rows)
             } else if mine {
