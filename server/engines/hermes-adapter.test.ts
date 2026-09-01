@@ -175,6 +175,46 @@ describe("Hermes Bot Chat loopback transport", () => {
     await engine.close();
   });
 
+  it("accepts empty session ids on global watcher events without ending an active runtime", async () => {
+    const { child } = harness();
+    const engine = new HermesBotAdapter({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const events: RuntimeEvent[] = [];
+    engine.onEvent((event) => events.push(event));
+
+    const send = engine.send({ profile: "coder", text: "hello", threadId: "thread-global", turnId: "turn-global" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder", is_default: false }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "runtime-global" } });
+    await settle();
+    const prompt = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: prompt.id, result: { accepted: true } });
+    await send;
+
+    for (const type of ["skin.changed", "status.update", "session.info", "sessions.changed"]) {
+      child.frame({ jsonrpc: "2.0", method: "event", params: { type, session_id: "", payload: {} } });
+    }
+    await settle();
+    expect(events.filter((event) => event.type === "turn.completed")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
+
+    child.frame({
+      jsonrpc: "2.0",
+      method: "event",
+      params: { type: "message.complete", session_id: "runtime-global", payload: { text: "done", status: "complete" } },
+    });
+    await settle();
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+    await engine.close();
+  });
+
   it.each([
     ["alias-first", "hermes", "default"],
     ["canonical-first", "default", "hermes"],
@@ -432,6 +472,38 @@ describe("Hermes Bot Chat loopback transport", () => {
     await engine.close();
   });
 
+  it("emits one safe runtime error before one terminal event for an upstream prompt failure", async () => {
+    const { child } = harness();
+    const engine = new HermesBotAdapter({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const events: RuntimeEvent[] = [];
+    engine.onEvent((event) => events.push(event));
+    const send = engine.send({ profile: "coder", text: "hello", threadId: "t", turnId: "u" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "runtime-error" } });
+    await settle();
+    const prompt = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: prompt.id, error: { code: 5000, message: "/private/provider secret" } });
+    await expect(send).rejects.toMatchObject({ code: "upstream_error" });
+    await settle();
+    const runtimeErrors = events.filter((event) => event.type === "runtime.error");
+    const completed = events.filter((event) => event.type === "turn.completed");
+    expect(runtimeErrors).toHaveLength(1);
+    expect(runtimeErrors[0]).toMatchObject({ message: "Hermes request failed" });
+    expect(completed).toHaveLength(1);
+    expect(completed[0]).toMatchObject({ ok: false, stopReason: "upstream_error" });
+    expect(JSON.stringify(events)).not.toContain("private");
+    await engine.close();
+  });
+
   it("classifies authentication errors without exposing their message", async () => {
     const { child } = harness();
     const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
@@ -557,6 +629,7 @@ describe("Hermes Bot Chat loopback transport", () => {
     const malformedFrames = [
       { jsonrpc: "1.0", method: "event", params: { type: "gateway.ready", payload: {} } },
       { jsonrpc: "2.0", method: "event", id: 1, params: { type: "gateway.ready", payload: {} } },
+      { jsonrpc: "2.0", method: "event", params: { type: "message.start", session_id: "" } },
       { jsonrpc: "2.0", method: "event", params: { type: "message.delta", session_id: "s", payload: "not-an-object" } },
       { jsonrpc: "2.0", id: 1, result: {}, error: { code: 1 } },
       { jsonrpc: "2.0", id: "one", result: {} },
@@ -675,11 +748,17 @@ describe("Hermes child environment", () => {
       PATH: "/bin",
       LANG: "en_US.UTF-8",
       TERM: "xterm",
+      LC_SECRET: "must-not-cross",
+      LC_API_KEY: "must-not-cross",
     }, {})).toEqual({
       HERMES_HOME: "/tmp/hermes",
       PATH: "/bin",
       LANG: "en_US.UTF-8",
       TERM: "xterm",
     });
+  });
+
+  it("keeps arbitrary LC_* secrets out of the child environment", () => {
+    expect(sanitizeHermesChildEnv({ LC_SECRET: "x", LC_API_KEY: "y", LC_CTYPE: "C" }, {})).toEqual({ LC_CTYPE: "C" });
   });
 });

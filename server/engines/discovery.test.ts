@@ -183,6 +183,26 @@ describe("Hermes discovery normalization", () => {
     expect(rows.find((row) => row.profile === "valid")).toMatchObject({ availability: "available" });
   });
 
+  it("fails closed when the default identity marker disagrees with the profile name", () => {
+    const coderDefault = normalizeProfileRowsResult({ profiles: [{ name: "coder", is_default: true }] });
+    expect(coderDefault).toMatchObject({
+      state: "available",
+      profiles: [{ profile: "coder", handle: "", availability: "unavailable" }],
+    });
+
+    const defaultNamed = normalizeProfileRowsResult({ profiles: [{ name: "default", is_default: false }] });
+    expect(defaultNamed).toMatchObject({
+      state: "available",
+      profiles: [{ profile: "default", handle: "", availability: "unavailable" }],
+    });
+
+    const validDefault = normalizeProfileRowsResult({ profiles: [{ name: "default", is_default: true }] });
+    expect(validDefault).toMatchObject({
+      state: "available",
+      profiles: [{ profile: "default", handle: "hermes", availability: "available" }],
+    });
+  });
+
   it("fails closed for malformed profile payloads", () => {
     expect(normalizeProfileRows({ nope: true })).toMatchObject([{ availability: "unavailable" }]);
     expect(normalizeProfileRows({ profiles: [{ name: "valid", display_name: 4 }] })[0]).toMatchObject({

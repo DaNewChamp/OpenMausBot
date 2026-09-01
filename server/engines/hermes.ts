@@ -29,6 +29,7 @@ const PROFILE_MAX_LENGTH = 64;
 const MAX_READY_VERSION_LENGTH = 120;
 const MAX_FRAME_STRING_LENGTH = 200_000;
 const MAX_FRAME_LENGTH = 2_000_000;
+const SESSION_SCOPED_EVENT_TYPES = new Set(["message.start", "message.delta", "message.complete"]);
 
 /**
  * Hermes is responsible for its own provider credentials.  The child gets a
@@ -593,10 +594,7 @@ function normalizeClock(clock: HermesClock | undefined): Required<HermesClock> {
 }
 
 function isAllowedHermesEnvName(name: string): boolean {
-  if (HERMES_CHILD_ENV_KEYS.has(name)) return true;
-  // Locale variables are conventionally LC_<CATEGORY>.  Keep the prefix and
-  // value namespace narrow; arbitrary environment names remain denied.
-  return /^LC_[A-Z0-9_]+$/.test(name);
+  return HERMES_CHILD_ENV_KEYS.has(name);
 }
 
 /** Build the child environment from the positive Hermes-only allowlist. */
@@ -694,7 +692,14 @@ function sanitizeGatewayEvent(value: unknown): Record<string, unknown> | undefin
   const output: Record<string, unknown> = { type };
   const sessionId = value.session_id;
   if (sessionId !== undefined) {
-    if (!safeOpaqueId(sessionId)) return undefined;
+    // Hermes emits global watcher/status events with an explicit empty
+    // session_id.  They are valid and intentionally ignored by the adapter;
+    // message events remain session-scoped and require a strict opaque id.
+    if (sessionId === "") {
+      if (SESSION_SCOPED_EVENT_TYPES.has(type)) return undefined;
+    } else if (!safeOpaqueId(sessionId)) {
+      return undefined;
+    }
     output.session_id = sessionId;
   }
 
@@ -706,7 +711,7 @@ function sanitizeGatewayEvent(value: unknown): Record<string, unknown> | undefin
     return output;
   }
 
-  if (type === "message.start" || type === "message.delta" || type === "message.complete") {
+  if (SESSION_SCOPED_EVENT_TYPES.has(type)) {
     if (!safeOpaqueId(sessionId)) return undefined;
     if (type === "message.start") {
       if (hasOwn(value, "payload") && value.payload !== undefined && !isRecord(value.payload)) return undefined;
@@ -1129,10 +1134,14 @@ export class HermesBotAdapter implements HermesBotEngine {
     if (silent) return;
     if (result?.assistantText) {
       this.emitRuntime(runtime, { type: "item.completed", itemType: "assistant_text", text: result.assistantText });
-    } else if (reason === "malformed_response") {
-      this.emitRuntime(runtime, { type: "runtime.error", message: new HermesEngineError("malformed_response").message });
     }
     const isOk = result?.ok === true;
+    if (!isOk && reason !== "interrupted") {
+      this.emitRuntime(runtime, {
+        type: "runtime.error",
+        message: runtimeErrorMessage(reason),
+      });
+    }
     this.emitRuntime(runtime, {
       type: "turn.completed",
       ok: isOk,
@@ -1203,6 +1212,24 @@ export class HermesBotAdapter implements HermesBotEngine {
       capabilities: projectHermesCapabilities(this.readiness),
       profiles: staleProfiles,
     };
+  }
+}
+
+function runtimeErrorMessage(reason: string): string {
+  switch (reason) {
+    case "missing_cli":
+    case "invalid_credentials":
+    case "gateway_unavailable":
+    case "state_unavailable":
+    case "malformed_response":
+    case "timeout":
+    case "profile_unavailable":
+    case "upstream_error":
+      return new HermesEngineError(reason).message;
+    default:
+      // Runtime reasons are internal values. Unknown values still fail
+      // closed to a fixed message rather than crossing the event boundary.
+      return new HermesEngineError("upstream_error").message;
   }
 }
 

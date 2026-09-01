@@ -155,8 +155,13 @@ function normalizeProfileRow(value: unknown): HermesRosterRow {
   if (!isRecord(value)) return unavailableProfileRow();
 
   const profile = validProfileSlug(value.name);
-  const isDefault = value.is_default === true || profile === "default";
-  const handle = profile && isDefault ? "hermes" : profile ?? "";
+  // The built-in profile is the only profile that may claim the default
+  // marker, and the marker is required for that name.  Never let a malformed
+  // row mint the public `hermes` alias (or route a caller through it).
+  const identityValid = profile !== undefined
+    && (profile === "default" ? value.is_default === true : value.is_default !== true);
+  const isDefault = identityValid && profile === "default";
+  const handle = profile && identityValid ? (isDefault ? "hermes" : profile) : "";
   const displayName = boundedText(value.display_name, HERMES_DISPLAY_NAME_MAX_LENGTH)
     ?? (isDefault ? "Hermes" : profile || "Unavailable profile");
   const description = boundedText(value.description, HERMES_DESCRIPTION_MAX_LENGTH) ?? "";
