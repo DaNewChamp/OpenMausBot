@@ -67,12 +67,36 @@ function compareCodePoints(left: string, right: string): number {
   return leftPoints.length - rightPoints.length;
 }
 
-function profileRowsPayload(payload: unknown): { rows: unknown[]; malformed: boolean } {
-  if (Array.isArray(payload)) return { rows: payload, malformed: false };
-  if (!isRecord(payload) || !hasOwn(payload, "profiles")) {
-    return { rows: [], malformed: true };
+function profileRowsPayload(payload: unknown): { rows: unknown[]; malformed: boolean; unavailable: boolean } {
+  if (Array.isArray(payload)) return { rows: payload, malformed: false, unavailable: false };
+  if (!isRecord(payload)) {
+    return { rows: [], malformed: true, unavailable: false };
   }
-  return Array.isArray(payload.profiles) ? { rows: payload.profiles, malformed: false } : { rows: [], malformed: true };
+
+  const status = typeof payload.status === "string" ? payload.status.toLowerCase() : undefined;
+  const state = typeof payload.state === "string" ? payload.state.toLowerCase() : undefined;
+  const unavailable =
+    hasOwn(payload, "error") ||
+    payload.ok === false ||
+    payload.success === false ||
+    payload.failed === true ||
+    hasOwn(payload, "failure") ||
+    payload.available === false ||
+    status === "error" ||
+    status === "failed" ||
+    status === "failure" ||
+    status === "unavailable" ||
+    state === "error" ||
+    state === "failed" ||
+    state === "failure" ||
+    state === "unavailable";
+  if (unavailable) return { rows: [], malformed: false, unavailable: true };
+  if (!hasOwn(payload, "profiles")) {
+    return { rows: [], malformed: true, unavailable: false };
+  }
+  return Array.isArray(payload.profiles)
+    ? { rows: payload.profiles, malformed: false, unavailable: false }
+    : { rows: [], malformed: true, unavailable: false };
 }
 
 function canonicalState(raw: RecordLike): HermesRosterRow["canonicalChat"] {
@@ -150,30 +174,35 @@ function normalizeProfileRow(value: unknown): HermesRosterRow {
 
 function sortProfileRows(rows: HermesRosterRow[]): HermesRosterRow[] {
   return rows
-    .map((row, index) => ({ row, index }))
+    .slice()
     .sort((left, right) => {
       for (const [leftValue, rightValue] of [
-        [left.row.profile, right.row.profile],
-        [left.row.handle, right.row.handle],
-        [left.row.displayName, right.row.displayName],
-        [left.row.description, right.row.description],
-        [left.row.model ?? "", right.row.model ?? ""],
-        [left.row.provider ?? "", right.row.provider ?? ""],
+        [left.profile, right.profile],
+        [left.handle, right.handle],
+        [left.displayName, right.displayName],
+        [left.description, right.description],
+        [left.model ?? "", right.model ?? ""],
+        [left.provider ?? "", right.provider ?? ""],
+        [left.canonicalChat, right.canonicalChat],
+        [left.availability, right.availability],
       ] as const) {
         const comparison = compareCodePoints(leftValue, rightValue);
         if (comparison !== 0) return comparison;
       }
-      return left.index - right.index;
-    })
-    .map(({ row }) => row);
+      return 0;
+    });
 }
 
 export type HermesProfileRowsResult =
   | { state: "available"; profiles: HermesRosterRow[] }
-  | { state: "unknown"; code: "malformed_response"; message: string; profiles: HermesRosterRow[] };
+  | { state: "unknown"; code: "state_unavailable" | "malformed_response"; message: string; profiles: HermesRosterRow[] };
 
 export function normalizeProfileRowsResult(payload: unknown): HermesProfileRowsResult {
-  const { rows, malformed } = profileRowsPayload(payload);
+  const { rows, malformed, unavailable } = profileRowsPayload(payload);
+  if (unavailable) {
+    const error = new HermesEngineError("state_unavailable");
+    return { state: "unknown", code: "state_unavailable", message: error.message, profiles: [] };
+  }
   if (malformed) {
     const error = new HermesEngineError("malformed_response");
     return { state: "unknown", code: "malformed_response", message: error.message, profiles: [] };

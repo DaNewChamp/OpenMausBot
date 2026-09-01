@@ -139,4 +139,31 @@ git diff --check
 ```
 
 Both passed. No transport, HTTP, iOS, public contract, or deployment files
-were changed.
+  were changed.
+
+## Final review fixes
+
+- `normalizeProfileRowsResult` now returns a typed `state_unavailable` result
+  for explicit roster failure markers (`error`, `ok: false`, `success: false`,
+  failure/status/state markers), including responses that also contain
+  `profiles: []`; an unmarked `{profiles: []}` remains an available empty
+  roster.
+- Profile sorting now compares every projected roster field, including
+  `canonicalChat` and `availability`, without using input position as a
+  tiebreaker. Permutation regression coverage guards deterministic output.
+
+Focused final verification:
+
+```text
+./node_modules/.bin/vitest run server/engines/contracts.test.ts \
+  server/engines/discovery.test.ts server/engines/bindings.test.ts
+```
+
+28 tests passed, 0 failures.
+
+```text
+./node_modules/.bin/tsc -p tsconfig.server.json --noEmit
+git diff --check
+```
+
+Both passed.

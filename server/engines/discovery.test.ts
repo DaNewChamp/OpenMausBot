@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeCanonicalLookup,
   normalizeProfileRows,
+  normalizeProfileRowsResult,
   projectHermesCapabilities,
 } from "./discovery.ts";
 
@@ -92,6 +93,38 @@ describe("Hermes discovery normalization", () => {
     const validEmpty = normalizeProfileRows({ profiles: [] });
     expect(validEmpty).toEqual([]);
     expect((validEmpty as typeof validEmpty & { state?: string }).state).toBe("available");
+  });
+
+  it.each([
+    { error: "profile store unavailable" },
+    { ok: false },
+    { success: false },
+    { failed: true },
+    { failure: "profile store unavailable" },
+    { status: "error" },
+  ])("does not turn an explicit roster failure into an available empty roster (%j)", (marker) => {
+    const result = normalizeProfileRowsResult({ profiles: [], ...marker });
+    expect(result).toMatchObject({ state: "unknown", code: "state_unavailable", profiles: [] });
+  });
+
+  it("sorts every projected field deterministically across input permutations", () => {
+    const rows = [
+      { name: "same", display_name: "Same", canonical_session: { id: "z" } },
+      { name: "same", display_name: "Same", canonical_session: { id: " invalid id " } },
+      { name: "other", display_name: "Same", available: false },
+    ];
+    const permutations = [
+      rows,
+      [rows[2], rows[0], rows[1]],
+      [rows[1], rows[2], rows[0]],
+    ];
+    const normalized = permutations.map((profiles) => normalizeProfileRowsResult({ profiles }));
+    expect(normalized[1]).toEqual(normalized[0]);
+    expect(normalized[2]).toEqual(normalized[0]);
+    expect(normalized[0].state).toBe("available");
+    if (normalized[0].state === "available") {
+      expect(normalized[0].profiles.map((row) => row.canonicalChat)).toEqual(["absent", "present", "unknown"]);
+    }
   });
 
   it("fails closed on malformed profile boolean and field types", () => {
