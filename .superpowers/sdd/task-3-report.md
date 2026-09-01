@@ -147,3 +147,105 @@ xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
 
 No backend, dependency, bundle, build-number, signing, or TestFlight files
 were changed.
+
+## Wave 1 Task 3 — Native iOS Hermes connect (2026-09-01)
+
+### Status
+
+Implemented and committed on `feat/vbot-hermes-adapter-0901`.
+
+### Commits
+
+- `4af16e6` — `feat(ios): add Hermes setup client contract`
+- `8bfedb9` — `feat(ios): add first-party Hermes connect screen`
+
+### Implemented
+
+- Added safe Codable Hermes setup state, profile, capability, and connection
+  response models with unknown-value tolerance and no secret-bearing fields.
+- Added authenticated `GET /api/hermes/setup/status` and
+  `POST /api/hermes/setup` client routes. Default connect sends `{}`; an
+  explicit profile sends only the validated profile slug.
+- Added plain-language presentation policy for checking, ready, connected,
+  needs-install/login, and unavailable states. Profile selection is rendered
+  only when more than one available profile exists.
+- Added a first-party Hermes row under a separate Settings Integrations group,
+  outside the reconstructed Desktop engine picker. The flow explains same-
+  computer and paired-other-machine placement, refreshes the fleet after a
+  successful connect, and queues the imported bot for smooth roster
+  navigation.
+- Preserved existing pairing, stream, engine-picker, and model-list behavior.
+
+### TDD evidence
+
+Red first (before production implementation):
+
+```text
+cd ios && swift test --filter HermesSetupTests
+```
+
+Failed to compile because `HermesSetupStatus`, `HermesSetupProfile`,
+`CompanionClient.hermesSetupStatus`, `CompanionClient.connectHermes`, and
+`HermesSetupPresentationPolicy` did not yet exist.
+
+Focused green:
+
+```text
+cd ios && swift test --filter HermesSetupTests
+```
+
+5 tests passed, 0 failures.
+
+### Verification
+
+```text
+cd ios && swift test
+```
+
+752 tests passed, 0 failures.
+
+```text
+cd ios && xcodegen generate
+cd ios && xcodebuild -project OpenMausCompanion.xcodeproj \
+  -scheme OpenMausCompanion -sdk iphonesimulator \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
+  CODE_SIGNING_ALLOWED=NO build
+```
+
+Debug simulator build: `** BUILD SUCCEEDED **`.
+
+```text
+cd ios && xcodebuild -project OpenMausCompanion.xcodeproj \
+  -scheme OpenMausCompanion -sdk iphonesimulator \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
+  CODE_SIGNING_ALLOWED=NO -configuration Release build
+```
+
+Release simulator build: `** BUILD SUCCEEDED **`.
+
+```text
+git diff --check HEAD~2..HEAD
+```
+
+Passed with no whitespace errors.
+
+### Security and compatibility review
+
+- iOS decodes only the server's safe Hermes projection; no credentials, local
+  paths, runtime/session ids, stderr, or provider payloads are accepted or
+  displayed.
+- Profile choice is sourced from the server roster and the phone sends only an
+  optional profile slug; no free-form command/config input exists.
+- Existing device pairing identity and Keychain token handling are untouched.
+- Existing iOS contracts and the reconstructed engine picker remain unchanged;
+  Hermes is a separate first-party integration row.
+- No dependencies, deployment, signing, TestFlight upload, production
+  resources, or remote Hermes bridge were changed.
+
+### Remaining Wave 2 dependencies / residuals
+
+- No remote Hermes-over-bridge transport is implemented; Task 4 documents this
+  boundary and the next transport work.
+- A physical-device UX pass and authenticated Hermes end-to-end run remain
+  release validation steps; this task only verified client contracts, policy,
+  and unsigned simulator builds.
