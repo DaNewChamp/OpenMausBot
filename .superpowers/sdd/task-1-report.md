@@ -97,3 +97,46 @@ failure above prevented the wrapper command from reaching `tsc`.
   contract, deployment, or live runtime behavior was changed in this task.
 - Root should independently inspect the branch diff and rerun the focused
   tests/typecheck before integrating Task 2.
+
+## Review-fix implementation
+
+- Profile slugs and durable canonical session ids are now validated from their
+  original values before any display bounding. Leading/trailing/internal
+  whitespace, controls, and overlength values fail closed; eligible ids are
+  retained byte-for-byte and profile/sidecar ordering uses deterministic
+  Unicode code-point comparison.
+- `HermesEngineError` now selects its message exclusively from the stable
+  failure-code table. Any caller-supplied diagnostic argument is ignored, so
+  paths (including relative paths), argv, stderr, provider payloads, and query
+  text cannot reach public error strings.
+- Binding mutations now hold a process-safe directory lock and perform an
+  inode/mode/byte snapshot check before publication. Atomic publication is
+  verified at mode `0600`, failed/post-publication mutations restore the exact
+  prior bytes, and lock identity is checked before release. Concurrent
+  read-modify-write operations retain every update.
+- Canonical source/type validation is strict, malformed profile booleans and
+  field types remain unavailable, and roster normalization exposes a typed
+  `normalizeProfileRowsResult` plus a non-enumerable state marker/safe
+  unavailable row so malformed payloads cannot look like a valid empty roster.
+  Missing binding storage remains an available empty set.
+
+## Review-fix TDD evidence
+
+Red assertions were added for raw validation, fixed diagnostics, malformed
+roster state, source/type denial, publication rollback, and a two-process
+lost-update race. Focused verification is green:
+
+```text
+./node_modules/.bin/vitest run server/engines/contracts.test.ts \
+  server/engines/discovery.test.ts server/engines/bindings.test.ts
+```
+
+22 tests passed, 0 failures.
+
+```text
+./node_modules/.bin/tsc -p tsconfig.server.json --noEmit
+git diff --check
+```
+
+Both passed. No transport, HTTP, iOS, public contract, or deployment files
+were changed.

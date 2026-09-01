@@ -59,8 +59,60 @@ describe("Hermes discovery normalization", () => {
     expect(JSON.stringify(rows)).not.toContain("do not copy");
   });
 
+  it("rejects whitespace and overlength profile slugs before display bounding", () => {
+    const rows = normalizeProfileRows({
+      profiles: [
+        { name: " coder ", display_name: "trim me" },
+        { name: "x".repeat(65), display_name: "too long" },
+        { name: "valid", display_name: "Valid" },
+      ],
+    });
+    expect(rows.find((row) => row.displayName === "trim me")).toMatchObject({
+      profile: "",
+      handle: "",
+      availability: "unavailable",
+    });
+    expect(rows.find((row) => row.displayName === "too long")).toMatchObject({
+      profile: "",
+      handle: "",
+      availability: "unavailable",
+    });
+    expect(rows.find((row) => row.displayName === "Valid")).toMatchObject({
+      profile: "valid",
+      handle: "valid",
+      availability: "available",
+    });
+  });
+
+  it("marks malformed roster payloads as unknown rather than a valid empty roster", () => {
+    const malformed = normalizeProfileRows({ profiles: "not-an-array" });
+    expect(malformed).toHaveLength(1);
+    expect(malformed[0]).toMatchObject({ availability: "unavailable", canonicalChat: "unknown" });
+    expect((malformed as typeof malformed & { state?: string }).state).toBe("unknown");
+    const validEmpty = normalizeProfileRows({ profiles: [] });
+    expect(validEmpty).toEqual([]);
+    expect((validEmpty as typeof validEmpty & { state?: string }).state).toBe("available");
+  });
+
+  it("fails closed on malformed profile boolean and field types", () => {
+    const rows = normalizeProfileRows({
+      profiles: [
+        { name: "bool-default", is_default: "true" },
+        { name: "bool-available", available: "yes" },
+        { name: "undefined-available", available: undefined },
+        { name: "model-type", model: { name: "not text" } },
+        { name: "valid" },
+      ],
+    });
+    expect(rows.find((row) => row.profile === "bool-default")).toMatchObject({ availability: "unavailable" });
+    expect(rows.find((row) => row.profile === "bool-available")).toMatchObject({ availability: "unavailable" });
+    expect(rows.find((row) => row.profile === "undefined-available")).toMatchObject({ availability: "unavailable" });
+    expect(rows.find((row) => row.profile === "model-type")).toMatchObject({ availability: "unavailable" });
+    expect(rows.find((row) => row.profile === "valid")).toMatchObject({ availability: "available" });
+  });
+
   it("fails closed for malformed profile payloads", () => {
-    expect(normalizeProfileRows({ nope: true })).toEqual([]);
+    expect(normalizeProfileRows({ nope: true })).toMatchObject([{ availability: "unavailable" }]);
     expect(normalizeProfileRows({ profiles: [{ name: "valid", display_name: 4 }] })[0]).toMatchObject({
       profile: "valid",
       availability: "unavailable",
@@ -98,6 +150,32 @@ describe("Hermes discovery normalization", () => {
     }
   });
 
+  it("rejects trimmed and overlength durable ids instead of silently changing them", () => {
+    expect(
+      normalizeCanonicalLookup(
+        { sessions: [{ id: " root ", resolved_id: "tip", title: "Bot Chat", source: "tui" }] },
+        "default",
+      ),
+    ).toMatchObject({ state: "unknown" });
+    expect(
+      normalizeCanonicalLookup(
+        {
+          sessions: [{ id: "r".repeat(257), resolved_id: "tip", title: "Bot Chat", source: "tui" }],
+        },
+        "default",
+      ),
+    ).toMatchObject({ state: "unknown" });
+    const exact = normalizeCanonicalLookup(
+      { sessions: [{ id: "Root-ID/with?exact", resolved_id: "Tip-ID/with?exact", title: "Bot Chat", source: "tui" }] },
+      "default",
+    );
+    expect(exact).toMatchObject({ state: "present" });
+    if (exact.state === "present") {
+      expect(exact.chat.rootSessionId).toBe("Root-ID/with?exact");
+      expect(exact.chat.resolvedSessionId).toBe("Tip-ID/with?exact");
+    }
+  });
+
   it("distinguishes absent, denied, and malformed canonical rows", () => {
     expect(normalizeCanonicalLookup({ sessions: [] }, "default")).toMatchObject({ state: "absent" });
     expect(
@@ -119,6 +197,28 @@ describe("Hermes discovery normalization", () => {
       state: "unknown",
     });
     expect(normalizeCanonicalLookup({ sessions: "not-an-array" }, "default")).toMatchObject({ state: "unknown" });
+  });
+
+  it("denies malformed or whitespace-padded canonical sources", () => {
+    expect(
+      normalizeCanonicalLookup(
+        { sessions: [{ id: "s", resolved_id: "s", title: "Bot Chat", source: " tool " }] },
+        "default",
+      ),
+    ).toMatchObject({ state: "unknown" });
+    expect(
+      normalizeCanonicalLookup(
+        { sessions: [{ id: "s", resolved_id: "s", title: "Bot Chat", source: { name: "tui" } }] },
+        "default",
+      ),
+    ).toMatchObject({ state: "unknown" });
+    expect(normalizeCanonicalLookup({ sessions: [{ id: "s", resolved_id: "s", title: "Bot Chat" }] }, "default"))
+      .toMatchObject({ state: "unknown" });
+  });
+
+  it("sorts with codepoint order instead of locale-dependent collation", () => {
+    const rows = normalizeProfileRows({ profiles: [{ name: "z" }, { name: "b" }, { name: "a" }, { name: "c" }] });
+    expect(rows.map((row) => row.profile)).toEqual(["a", "b", "c", "z"]);
   });
 
   it("keeps only transport-proven supported capabilities", () => {

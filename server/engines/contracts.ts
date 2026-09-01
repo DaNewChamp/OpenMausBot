@@ -85,7 +85,7 @@ export type HermesFailureCode =
   | "profile_unavailable"
   | "upstream_error";
 
-const DEFAULT_FAILURE_MESSAGES: Record<HermesFailureCode, string> = {
+const DEFAULT_FAILURE_MESSAGES = {
   missing_cli: "Hermes is not installed",
   invalid_credentials: "Hermes credentials are unavailable",
   gateway_unavailable: "Hermes gateway is unavailable",
@@ -94,26 +94,16 @@ const DEFAULT_FAILURE_MESSAGES: Record<HermesFailureCode, string> = {
   timeout: "Hermes request timed out",
   profile_unavailable: "Hermes profile is unavailable",
   upstream_error: "Hermes request failed",
-};
-
-function safeFailureMessage(code: HermesFailureCode, message: unknown): string {
-  if (typeof message !== "string") return DEFAULT_FAILURE_MESSAGES[code];
-  const normalized = message.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
-  if (
-    normalized.length === 0 ||
-    normalized.length > 160 ||
-    /[/\\]|HERMES_HOME|state(?:\.db)?|argv|stderr|provider|token|secret|password|prompt|query/i.test(normalized)
-  ) {
-    return DEFAULT_FAILURE_MESSAGES[code];
-  }
-  return normalized;
-}
+} as const satisfies Record<HermesFailureCode, string>;
 
 export class HermesEngineError extends Error {
   readonly code: HermesFailureCode;
 
-  constructor(code: HermesFailureCode, message?: string) {
-    super(safeFailureMessage(code, message));
+  constructor(code: HermesFailureCode, _ignored?: unknown) {
+    // Public diagnostics are deliberately selected only from this fixed map.
+    // Callers receive no escape hatch for paths, argv, stderr, provider
+    // payloads, or query text to reach the error message.
+    super(DEFAULT_FAILURE_MESSAGES[code]);
     Object.defineProperty(this, "name", { value: "HermesEngineError", enumerable: false });
     this.code = code;
     Object.defineProperty(this, "code", { value: code, enumerable: true, writable: false, configurable: false });

@@ -14,12 +14,18 @@ export const HERMES_MODEL_MAX_LENGTH = 200;
 export const HERMES_PROVIDER_MAX_LENGTH = 120;
 export const HERMES_PREVIEW_MAX_LENGTH = 500;
 export const HERMES_SESSION_ID_MAX_LENGTH = 256;
+export const HERMES_SESSION_LIST_LIMIT = 200;
 
 const PROFILE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f\u0080-\u009f]/g;
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f\u0080-\u009f]/;
+const WHITESPACE = /\s/;
 
 interface RecordLike {
   [key: string]: unknown;
+}
+
+function hasOwn(record: RecordLike, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
 }
 
 function isRecord(value: unknown): value is RecordLike {
@@ -28,29 +34,51 @@ function isRecord(value: unknown): value is RecordLike {
 
 function boundedText(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string") return undefined;
-  const text = value.replace(CONTROL_CHARACTERS, " ").trim();
+  const text = value.replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, " ").trim();
   return text.length > 0 ? text.slice(0, maxLength) : undefined;
 }
 
+function exactText(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxLength) return undefined;
+  if (value.trim() !== value || CONTROL_CHARACTERS.test(value) || WHITESPACE.test(value)) return undefined;
+  return value;
+}
+
 function validProfileSlug(value: unknown): string | undefined {
-  const text = boundedText(value, HERMES_PROFILE_MAX_LENGTH);
-  if (!text || text.length > HERMES_PROFILE_MAX_LENGTH || !PROFILE_PATTERN.test(text)) return undefined;
+  const text = exactText(value, HERMES_PROFILE_MAX_LENGTH);
+  if (!text || !PROFILE_PATTERN.test(text)) return undefined;
   return text.toLowerCase();
 }
 
 function validSessionId(value: unknown): string | undefined {
-  const text = boundedText(value, HERMES_SESSION_ID_MAX_LENGTH);
-  if (!text || text.length > HERMES_SESSION_ID_MAX_LENGTH) return undefined;
-  return text;
+  return exactText(value, HERMES_SESSION_ID_MAX_LENGTH);
 }
 
-function profileRowsPayload(payload: unknown): unknown[] | undefined {
-  if (Array.isArray(payload)) return payload;
-  if (isRecord(payload) && Array.isArray(payload.profiles)) return payload.profiles;
-  return undefined;
+function compareCodePoints(left: string, right: string): number {
+  if (left === right) return 0;
+  const leftPoints = [...left];
+  const rightPoints = [...right];
+  const length = Math.min(leftPoints.length, rightPoints.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPoint = leftPoints[index]?.codePointAt(0) ?? 0;
+    const rightPoint = rightPoints[index]?.codePointAt(0) ?? 0;
+    if (leftPoint !== rightPoint) return leftPoint - rightPoint;
+  }
+  return leftPoints.length - rightPoints.length;
+}
+
+function profileRowsPayload(payload: unknown): { rows: unknown[]; malformed: boolean } {
+  if (Array.isArray(payload)) return { rows: payload, malformed: false };
+  if (!isRecord(payload) || !hasOwn(payload, "profiles")) {
+    return { rows: [], malformed: true };
+  }
+  return Array.isArray(payload.profiles) ? { rows: payload.profiles, malformed: false } : { rows: [], malformed: true };
 }
 
 function canonicalState(raw: RecordLike): HermesRosterRow["canonicalChat"] {
+  if (hasOwn(raw, "canonical_session") && hasOwn(raw, "canonical_chat")) {
+    return "unknown";
+  }
   const value = raw.canonical_session ?? raw.canonical_chat;
   if (value === undefined || value === null || value === false) return "absent";
   if (typeof value === "string") return value === "present" ? "present" : "unknown";
@@ -62,56 +90,96 @@ function canonicalState(raw: RecordLike): HermesRosterRow["canonicalChat"] {
 }
 
 function isMalformedProfileRow(raw: RecordLike): boolean {
-  if (raw.name !== undefined && typeof raw.name !== "string") return true;
-  if (raw.display_name !== undefined && typeof raw.display_name !== "string") return true;
-  if (raw.description !== undefined && typeof raw.description !== "string") return true;
-  if (raw.model !== undefined && raw.model !== null && typeof raw.model !== "string") return true;
-  if (raw.provider !== undefined && raw.provider !== null && typeof raw.provider !== "string") return true;
+  for (const key of ["name", "display_name", "description"] as const) {
+    if (hasOwn(raw, key) && typeof raw[key] !== "string") return true;
+  }
+  for (const key of ["model", "provider"] as const) {
+    if (hasOwn(raw, key) && raw[key] !== null && typeof raw[key] !== "string") return true;
+  }
+  for (const key of ["is_default", "available"] as const) {
+    if (hasOwn(raw, key) && typeof raw[key] !== "boolean") return true;
+  }
+  if (hasOwn(raw, "error") && raw.error !== null && typeof raw.error !== "string") return true;
+  for (const key of ["canonical_session", "canonical_chat"] as const) {
+    const value = raw[key];
+    if (hasOwn(raw, key) && value !== null && value !== false && typeof value !== "string" && !isRecord(value)) {
+      return true;
+    }
+  }
   return false;
 }
 
-export function normalizeProfileRows(payload: unknown): HermesRosterRow[] {
-  const rows = profileRowsPayload(payload);
-  if (!rows) return [];
+function unavailableProfileRow(): HermesRosterRow {
+  return {
+    profile: "",
+    handle: "",
+    displayName: "Unavailable profile",
+    description: "",
+    canonicalChat: "unknown",
+    availability: "unavailable",
+  };
+}
 
-  const normalized = rows.map((value): HermesRosterRow => {
-    if (!isRecord(value)) {
-      return {
-        profile: "",
-        handle: "",
-        displayName: "Unavailable profile",
-        description: "",
-        canonicalChat: "unknown",
-        availability: "unavailable",
-      };
-    }
+function normalizeProfileRow(value: unknown): HermesRosterRow {
+  if (!isRecord(value)) return unavailableProfileRow();
 
-    const originalName = boundedText(value.name, HERMES_PROFILE_MAX_LENGTH);
-    const profile = validProfileSlug(value.name);
-    const isDefault = value.is_default === true || originalName?.toLowerCase() === "default";
-    const handle = profile && isDefault ? "hermes" : profile ?? "";
-    const displayName =
-      boundedText(value.display_name, HERMES_DISPLAY_NAME_MAX_LENGTH) ??
-      (isDefault ? "Hermes" : profile || "Unavailable profile");
-    const description = boundedText(value.description, HERMES_DESCRIPTION_MAX_LENGTH) ?? "";
-    const model = boundedText(value.model, HERMES_MODEL_MAX_LENGTH);
-    const provider = boundedText(value.provider, HERMES_PROVIDER_MAX_LENGTH);
+  const profile = validProfileSlug(value.name);
+  const isDefault = value.is_default === true || profile === "default";
+  const handle = profile && isDefault ? "hermes" : profile ?? "";
+  const displayName = boundedText(value.display_name, HERMES_DISPLAY_NAME_MAX_LENGTH)
+    ?? (isDefault ? "Hermes" : profile || "Unavailable profile");
+  const description = boundedText(value.description, HERMES_DESCRIPTION_MAX_LENGTH) ?? "";
+  const model = boundedText(value.model, HERMES_MODEL_MAX_LENGTH);
+  const provider = boundedText(value.provider, HERMES_PROVIDER_MAX_LENGTH);
+  const malformed = isMalformedProfileRow(value);
 
-    return {
-      profile: profile ?? "",
-      handle,
-      displayName,
-      description,
-      ...(model ? { model } : {}),
-      ...(provider ? { provider } : {}),
-      canonicalChat: canonicalState(value),
-      availability:
-        profile && handle && !isMalformedProfileRow(value) && value.error === undefined && value.available !== false
-          ? "available"
-          : "unavailable",
-    };
-  });
+  return {
+    profile: profile ?? "",
+    handle,
+    displayName,
+    description,
+    ...(model ? { model } : {}),
+    ...(provider ? { provider } : {}),
+    canonicalChat: canonicalState(value),
+    availability:
+      profile && handle && !malformed && !hasOwn(value, "error") && value.available !== false
+        ? "available"
+        : "unavailable",
+  };
+}
 
+function sortProfileRows(rows: HermesRosterRow[]): HermesRosterRow[] {
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((left, right) => {
+      for (const [leftValue, rightValue] of [
+        [left.row.profile, right.row.profile],
+        [left.row.handle, right.row.handle],
+        [left.row.displayName, right.row.displayName],
+        [left.row.description, right.row.description],
+        [left.row.model ?? "", right.row.model ?? ""],
+        [left.row.provider ?? "", right.row.provider ?? ""],
+      ] as const) {
+        const comparison = compareCodePoints(leftValue, rightValue);
+        if (comparison !== 0) return comparison;
+      }
+      return left.index - right.index;
+    })
+    .map(({ row }) => row);
+}
+
+export type HermesProfileRowsResult =
+  | { state: "available"; profiles: HermesRosterRow[] }
+  | { state: "unknown"; code: "malformed_response"; message: string; profiles: HermesRosterRow[] };
+
+export function normalizeProfileRowsResult(payload: unknown): HermesProfileRowsResult {
+  const { rows, malformed } = profileRowsPayload(payload);
+  if (malformed) {
+    const error = new HermesEngineError("malformed_response");
+    return { state: "unknown", code: "malformed_response", message: error.message, profiles: [] };
+  }
+
+  const normalized = rows.map(normalizeProfileRow);
   const duplicateProfiles = new Set<string>();
   const duplicateHandles = new Set<string>();
   for (const field of ["profile", "handle"] as const) {
@@ -132,17 +200,24 @@ export function normalizeProfileRows(payload: unknown): HermesRosterRow[] {
     }
   }
 
-  return normalized
-    .map((row, index) => ({ row, index }))
-    .sort((left, right) => {
-      const byProfile = left.row.profile.localeCompare(right.row.profile);
-      if (byProfile !== 0) return byProfile;
-      const byHandle = left.row.handle.localeCompare(right.row.handle);
-      if (byHandle !== 0) return byHandle;
-      const byDisplay = left.row.displayName.localeCompare(right.row.displayName);
-      return byDisplay !== 0 ? byDisplay : left.index - right.index;
-    })
-    .map(({ row }) => row);
+  return { state: "available", profiles: sortProfileRows(normalized) };
+}
+
+/**
+ * Keep the original array-shaped helper for callers that only need rows while
+ * attaching a non-enumerable state marker so malformed and valid-empty input
+ * cannot be confused. New callers should prefer normalizeProfileRowsResult.
+ */
+export function normalizeProfileRows(payload: unknown): HermesRosterRow[] {
+  const result = normalizeProfileRowsResult(payload);
+  const rows = result.state === "available" ? result.profiles : [unavailableProfileRow()];
+  Object.defineProperty(rows, "state", { value: result.state, enumerable: false });
+  Object.defineProperty(rows, "profiles", { value: result.profiles, enumerable: false });
+  if (result.state === "unknown") {
+    Object.defineProperty(rows, "code", { value: result.code, enumerable: false });
+    Object.defineProperty(rows, "message", { value: result.message, enumerable: false });
+  }
+  return rows;
 }
 
 function unknownCanonical(code: "state_unavailable" | "malformed_response"): HermesCanonicalLookup {
@@ -180,21 +255,49 @@ function canonicalSession(value: RecordLike, profile: string): HermesCanonicalCh
   };
 }
 
+function canonicalSource(value: unknown): "kanban" | "tool" | "other" | "malformed" {
+  if (value === undefined) return "malformed";
+  if (typeof value !== "string" || value.length === 0 || value.trim() !== value || CONTROL_CHARACTERS.test(value) || WHITESPACE.test(value)) {
+    return "malformed";
+  }
+  const source = value.toLowerCase();
+  if (source === "kanban") return "kanban";
+  if (source === "tool") return "tool";
+  return "other";
+}
+
+function canonicalRowTypesValid(value: RecordLike): boolean {
+  for (const key of ["hidden", "archived", "recoverable", "can_resume"] as const) {
+    if (value[key] !== undefined && typeof value[key] !== "boolean") return false;
+  }
+  if (value.status !== undefined && (typeof value.status !== "string" || value.status.trim() !== value.status || CONTROL_CHARACTERS.test(value.status))) {
+    return false;
+  }
+  return true;
+}
+
 export function normalizeCanonicalLookup(payload: unknown, profile: string): HermesCanonicalLookup {
   const normalizedProfile = validProfileSlug(profile);
   if (!normalizedProfile || !isRecord(payload)) return unknownCanonical("malformed_response");
+  if (payload.ok !== undefined && typeof payload.ok !== "boolean") return unknownCanonical("malformed_response");
   if (Object.prototype.hasOwnProperty.call(payload, "error") || payload.ok === false) {
     return unknownCanonical("state_unavailable");
   }
-  if (!Array.isArray(payload.sessions)) return unknownCanonical("malformed_response");
+  if (payload.limit !== undefined && payload.limit !== HERMES_SESSION_LIST_LIMIT) return unknownCanonical("malformed_response");
+  if (payload.include_hidden !== undefined && payload.include_hidden !== true) return unknownCanonical("malformed_response");
+  if (!Array.isArray(payload.sessions) || payload.sessions.length > HERMES_SESSION_LIST_LIMIT) {
+    return unknownCanonical("malformed_response");
+  }
 
   const eligible: HermesCanonicalChat[] = [];
   for (const value of payload.sessions) {
-    if (!isRecord(value)) return unknownCanonical("malformed_response");
-    if (typeof value.title !== "string") return unknownCanonical("malformed_response");
+    if (!isRecord(value) || typeof value.title !== "string") {
+      return unknownCanonical("malformed_response");
+    }
     if (value.title !== "Bot Chat") continue;
-
-    const source = typeof value.source === "string" ? value.source.toLowerCase() : "";
+    if (!canonicalRowTypesValid(value)) return unknownCanonical("malformed_response");
+    const source = canonicalSource(value.source);
+    if (source === "malformed") return unknownCanonical("malformed_response");
     if (source === "kanban" || source === "tool") continue;
 
     const archived = value.archived === true || value.status === "archived";

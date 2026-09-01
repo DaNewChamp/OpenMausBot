@@ -61,11 +61,30 @@ describe("Hermes internal contracts", () => {
 
   it("exposes only a stable failure code and safe human message", () => {
     const code: HermesFailureCode = "state_unavailable";
-    const error = new HermesEngineError(code, "Hermes state is unavailable");
+    const error = new HermesEngineError(code);
     expect(error).toBeInstanceOf(Error);
     expect(error.code).toBe(code);
     expect(error.message).toBe("Hermes state is unavailable");
     expect(Object.keys(error)).toEqual(["code"]);
     expect(`${error}`).not.toContain("/private");
+  });
+
+  it("never exposes caller-controlled diagnostics in its public message", () => {
+    const payloads = [
+      "/private/hermes/state.db",
+      "../relative/hermes --query secret",
+      "argv: hermes --profile coder",
+      "stderr: provider token leaked",
+      "query text with a secret",
+      { path: "/private/hermes" },
+    ];
+    for (const payload of payloads) {
+      const error = new HermesEngineError("malformed_response", payload as never);
+      expect(error.message).toBe("Hermes returned an invalid response");
+      expect(`${error}`).not.toContain("private");
+      expect(`${error}`).not.toContain("relative");
+      expect(`${error}`).not.toContain("secret");
+      expect(`${error}`).not.toContain("provider");
+    }
   });
 });

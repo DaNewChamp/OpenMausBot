@@ -1,8 +1,20 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { vi } from "vitest";
+
+import * as atomic from "../atomic.ts";
 
 import {
   loadHermesBindings,
@@ -79,5 +91,44 @@ describe("Hermes binding sidecar", () => {
     expect(setHermesBinding("bot-2", binding, badTarget)).toMatchObject({ state: "unavailable" });
     expect(readFileSync(file)).toEqual(before);
     expect(existsSync(join(dir, "nested", "replacement-target"))).toBe(true);
+  });
+
+  it("preserves old bytes when atomic publication fails after rename", () => {
+    setHermesBinding("bot-1", binding, file);
+    const before = readFileSync(file);
+    const original = atomic.writeFileAtomic;
+    const publication = vi.spyOn(atomic, "writeFileAtomic").mockImplementationOnce((path, data, options) => {
+      original(path, data, options);
+      throw new Error("rename failed after publication");
+    });
+    expect(setHermesBinding("bot-2", binding, file)).toMatchObject({ state: "unavailable" });
+    publication.mockRestore();
+    expect(readFileSync(file)).toEqual(before);
+  });
+
+  it("serializes concurrent read-modify-write mutations without lost updates", async () => {
+    const { execFile } = await import("node:child_process");
+    const script = `
+      import("./server/engines/bindings.ts").then(({ setHermesBinding }) => {
+        const file = process.argv[1];
+        const botId = process.argv[2];
+        const result = setHermesBinding(botId, { adapter: "hermesBot", profile: botId, canonicalTitle: "Bot Chat", bindingVersion: 1 }, file);
+        if (result.state !== "available") process.exitCode = 1;
+      });
+    `;
+    const run = (botId: string) =>
+      new Promise<number>((resolve) => {
+        const proc = execFile(process.execPath, ["--experimental-strip-types", "-e", script, file, botId], {
+          cwd: process.cwd(),
+          env: process.env,
+        });
+        proc.on("exit", (code) => resolve(code ?? 1));
+      });
+    const codes = await Promise.all([run("alpha"), run("beta")]);
+    expect(codes).toEqual([0, 0]);
+    const result = loadHermesBindings(file);
+    expect(result).toMatchObject({ state: "available" });
+    if (result.state === "available") expect([...result.value.keys()]).toEqual(["alpha", "beta"]);
+    expect(existsSync(`${file}.lock`)).toBe(false);
   });
 });
