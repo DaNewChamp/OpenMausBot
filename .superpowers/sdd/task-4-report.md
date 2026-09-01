@@ -6,10 +6,11 @@ Starting commit: `5f05fed fix(ios): gate cursor-only work cards`
 
 ## Status
 
-The simulator and core release gates passed. Home activity states that the
-existing StorePreview fixture can represent were captured and inspected. No
-product code was changed during this gate. TestFlight upload, signed export,
-and physical-device verification remain intentionally out of scope here.
+The initial simulator and core release gates passed. Home activity states that
+the existing StorePreview fixture can represent were captured and inspected;
+the preview expansion race and accessibility layout were corrected in the
+final section below. TestFlight upload, signed export, and physical-device
+verification remain intentionally out of scope here.
 
 ## Commands and results
 
@@ -143,12 +144,12 @@ normal production contracts:
 - Release notes now describe upcoming build 72. `ios/project.yml` and all
   project build-number settings remain unchanged at 71.
 - Portable simulator evidence is tracked at
-  `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/` (21 PNGs,
+  `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/` (22 PNGs,
   1206 x 2622): needs-approval, connecting halo, quiet/active `large` and
   accessibility XXXL with Reduce Motion on/off, expanded active XXXL, and
-  work-card actions/no-actions captures. Four files suffixed `post-f891526`
-  were added after the layout remediation to close the needs-attention and
-  connecting accessibility matrix.
+  work-card actions/no-actions captures. Connecting captures `20` and `21`
+  retain their `post-f891526` suffix; expanded activity captures were
+  recaptured after the preview-expansion fix to close the accessibility matrix.
 
 ### Rerun commands
 
@@ -233,18 +234,53 @@ no full test suite or signed build was rerun.
 
 | State | Fixture and setting | Portable capture |
 | --- | --- | --- |
-| Needs-attention expanded activity | `-store-preview -preview-expand-activity`; accessibility XXXL, Reduce Motion on | `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/18-expanded-needs-xxxl-reduce-motion-on-post-f891526.png` |
-| Needs-attention expanded activity | `-store-preview -preview-expand-activity`; accessibility XXXL, Reduce Motion off | `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/19-expanded-needs-xxxl-reduce-motion-off-post-f891526.png` |
+| Needs-attention expanded activity | `-store-preview -preview-expand-activity`; accessibility XXXL, Reduce Motion on | `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/18-expanded-needs-xxxl-reduce-motion-on-post-preview-expansion-fix.png` |
+| Needs-attention expanded activity | `-store-preview -preview-expand-activity`; accessibility XXXL, Reduce Motion off | `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/19-expanded-needs-xxxl-reduce-motion-off-post-preview-expansion-fix.png` |
 | Initial connecting | `-store-preview -preview-connecting`; accessibility XXXL, Reduce Motion on | `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/20-connecting-xxxl-reduce-motion-on-post-f891526.png` |
 | Initial connecting | `-store-preview -preview-connecting`; accessibility XXXL, Reduce Motion off | `ios/AppStore/screenshots/task-4-home-activity-2026-08-31/21-connecting-xxxl-reduce-motion-off-post-f891526.png` |
 
-Visual inspection found no Critical or Important overlap, clipping, or spacing
-finding. In both expanded needs-attention captures, the enlarged roster rows
-end above the activity panel; the panel is a sibling below the roster and its
-details remain vertically scrollable. The connecting captures show the halo
-around the profile while the enlarged roster remains stable. Reduce Motion on
-and off produce the same static content frame as expected.
+The connecting captures show the halo around the profile while the enlarged
+roster remains stable. The original expanded needs-attention captures from
+this pass were later found to be collapsed when the first frame raced fixture
+hydration; they are superseded by the preview-expansion-fix recaptures below.
 
-The four PNGs are 1206 x 2622 and are now part of the portable evidence set;
-the exact files and matrix are also listed in `ios/TESTING.md` and
-`ios/AppStore/screenshots/README.md`.
+The connecting PNGs are 1206 x 2622 and remain part of the portable evidence
+set; the needs-attention files above were superseded by the preview-expansion
+fix capture below.
+
+## Preview expansion race and accessibility evidence repair
+
+Date: 2026-08-31 (America/Chicago)
+
+The DEBUG-only activity expansion now observes `presentation.items` and retries
+after StorePreview hydration, so `-preview-expand-activity` no longer races an
+empty first projection. Normal production launches do not auto-expand. At
+accessibility XXXL the expanded panel reserves 400 points, renders the complete
+needs-you detail, and shows a vertical scroll indicator; the panel remains a
+sibling below the roster scroll view.
+
+Focused verification:
+
+```sh
+swift test --package-path ios --filter HomeActivityPreviewExpansionPolicyTests
+```
+
+Passed: three focused Swift Testing cases. Unsigned Debug simulator build
+passed with `** BUILD SUCCEEDED **` using iOS Simulator SDK 26.5 (derived data
+`/tmp/vbot-task4-debug-derived-final400fixed0831`). No full suite, signing,
+archive, upload, or device release gate was run for this correction.
+
+Portable recaptures (iPhone 17 Pro, iOS 26.5, 1206 x 2622, dark appearance):
+
+| State | Fixture and setting | Capture |
+| --- | --- | --- |
+| Needs-attention expanded activity | `-store-preview -preview-expand-activity`; XXXL, Reduce Motion on | `18-expanded-needs-xxxl-reduce-motion-on-post-preview-expansion-fix.png` |
+| Needs-attention expanded activity | `-store-preview -preview-expand-activity`; XXXL, Reduce Motion off | `19-expanded-needs-xxxl-reduce-motion-off-post-preview-expansion-fix.png` |
+| Active expanded activity | `-store-preview -preview-active -preview-bot=preview-forge -preview-expand-activity`; XXXL, Reduce Motion on | `13-expanded-active-xxxl-reduce-motion-on.png` |
+| Active expanded activity | `-store-preview -preview-active -preview-bot=preview-forge -preview-expand-activity`; XXXL, Reduce Motion off | `24-expanded-active-xxxl-reduce-motion-off-post-preview-expansion-fix.png` |
+
+The needs-attention captures visibly include the `NEEDS YOU` section, Scout,
+and the complete “Upload build 1 to TestFlight for internal testing?” detail.
+The active captures visibly include `ACTIVE`, Forge, and `Working now`. The
+expanded rail is laid out as a sibling below the roster, with no panel-over-row
+overlay in either Reduce Motion setting.

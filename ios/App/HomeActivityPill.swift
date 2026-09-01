@@ -12,6 +12,7 @@ struct HomeActivityPill: View {
 
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var expanded = false
 
     private var presentation: HomeActivityPresentation {
@@ -41,16 +42,29 @@ struct HomeActivityPill: View {
         .onAppear {
             // Keep expanded-state captures deterministic without adding any
             // production state or changing the normal collapsed launch.
-            if ProcessInfo.processInfo.arguments.contains("-preview-expand-activity"),
-               !presentation.items.isEmpty {
-                expanded = true
-            }
+            autoExpandPreviewIfNeeded()
+        }
+        .onChange(of: presentation.items) { _, _ in
+            // StorePreview may hydrate after the first appearance. Retry on
+            // the published projection instead of racing the initial render.
+            autoExpandPreviewIfNeeded()
         }
 #endif
         .onChange(of: presentation.state) { _, state in
             if state == .quiet, expanded { expanded = false }
         }
     }
+
+#if DEBUG
+    private func autoExpandPreviewIfNeeded() {
+        guard HomeActivityPreviewExpansionPolicy.shouldAutoExpand(
+            arguments: ProcessInfo.processInfo.arguments,
+            presentation: presentation,
+            isExpanded: expanded
+        ) else { return }
+        expanded = true
+    }
+#endif
 
     private var collapsedButton: some View {
         Button {
@@ -98,7 +112,7 @@ struct HomeActivityPill: View {
     }
 
     private var expandedPanel: some View {
-        ScrollView(.vertical, showsIndicators: false) {
+        ScrollView(.vertical, showsIndicators: dynamicTypeSize.isAccessibilitySize) {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(presentation.sections) { section in
                     let rows = section.items.compactMap { item -> (HomeActivityPresentation.Item, Chat)? in
@@ -126,7 +140,13 @@ struct HomeActivityPill: View {
             }
             .padding(.bottom, 8)
         }
-        .frame(maxHeight: 320)
+        .frame(
+            minHeight: HomeActivityPreviewExpansionPolicy.expandedPanelMinHeight(
+                isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+                isExpanded: expanded
+            ),
+            maxHeight: dynamicTypeSize.isAccessibilitySize ? 400 : 320
+        )
         .glassSheet(cornerRadius: VBotSurface.Radius.sheet)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Activity details")
@@ -154,6 +174,7 @@ private struct HomeActivityRow: View {
     let chat: Chat
     let open: () -> Void
     @EnvironmentObject private var session: Session
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         Button(action: open) {
@@ -168,7 +189,11 @@ private struct HomeActivityRow: View {
                     Text(item.subtitle.isEmpty ? fallbackSubtitle : item.subtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        // Accessibility captures need the complete approval
+                        // detail; the expanded panel scrolls when this grows
+                        // beyond its reserved height.
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 4)
                 trailing
