@@ -252,6 +252,7 @@ import {
 import { RepeatDetector, callKey } from "./repeat-detector.ts";
 import * as vps from "./vps-computer.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
+import { dispatchHermesInterrupt, type HermesInterruptRunOn } from "./hermes-interrupt.ts";
 import { fetchBotDirectory, matchDirectoryBots, type MatchedDirectoryBot } from "./bot-directory.ts";
 import { scoutProject, suggestTeam } from "./project-scout.ts";
 import { fetchGithubTeam, fetchLibraryTeam, fetchTeamCatalog } from "./team-library.ts";
@@ -797,6 +798,30 @@ const botActivityOwners = new Map<
 // callback can safely cancel a generation even during early initialization.
 const roomTurnCancellation = new RoomTurnCancellation();
 
+/** One stop boundary for every hub path. A bound Hermes bot never reaches the
+ * selected generic ProviderAdapter; an unreadable sidecar is likewise a hard
+ * failure rather than proof that the bot is unbound. */
+async function interruptBotTurn(
+  botId: string,
+  threadId: string,
+  runOn: HermesInterruptRunOn = "maus",
+): Promise<void> {
+  await dispatchHermesInterrupt(
+    { botId, threadId, runOn },
+    {
+      loadBindings: loadHermesBindings,
+      hermesRegistry,
+      resolveProvider: ({ botId: targetBotId, runOn: targetRunOn }) => {
+        const bot = store.bot(targetBotId);
+        if (targetRunOn === "cloud") {
+          return registry.instances().find((candidate) => candidate.driverKind === "boxAgent") ?? null;
+        }
+        return bot ? registry.get(bot.modelSelection.instanceId) : null;
+      },
+    },
+  );
+}
+
 function roomTurnActivityKey(threadId: string, turnId: string): string {
   return `${threadId}\u0000${turnId}`;
 }
@@ -876,7 +901,6 @@ const watchdog = new TurnWatchdog({
   onStall: (turn) => {
     repeats.settle(turn.threadId);
     const bot = store.bot(turn.botId);
-    const instance = bot ? registry.get(bot.modelSelection.instanceId) : null;
     const group = store.groupByThread(turn.threadId);
     const speaker = groupSpeakers.get(turn.threadId);
     const owner = botActivityOwners.get(turn.botId);
@@ -898,7 +922,7 @@ const watchdog = new TurnWatchdog({
     // active room generation now; the member-turn cleanup below releases the
     // room queue while the adapter interrupt remains best-effort.
     roomTurnCancellation.interrupt(turn.threadId);
-    void instance?.adapter.interruptTurn(turn.threadId).catch(() => {});
+    void interruptBotTurn(turn.botId, turn.threadId).catch(() => {});
     const minutes = Math.round(TURN_STALL_MS / 60_000);
     // The durable target can disappear while an adapter is still stalled.
     // Store.appendMessage() lazily creates a transcript for unknown threads,
@@ -2594,13 +2618,7 @@ routines = new RoutineManager({
   startTurn: (botId, threadId, prompt, runOn, triggerSource, onDispatchError) =>
     startTurn(botId, prompt, { threadId, runOn, automationSource: triggerSource, onDispatchError }),
   interruptTurn: async (botId, threadId, runOn) => {
-    const bot = store.bot(botId);
-    const instance = runOn === "cloud"
-      ? registry.instances().find((candidate) => candidate.driverKind === "boxAgent") ?? null
-      : bot
-        ? registry.get(bot.modelSelection.instanceId)
-        : null;
-    await instance?.adapter.interruptTurn(threadId);
+    await interruptBotTurn(botId, threadId, runOn);
   },
   onRunFailed: (run) => {
     const bot = store.bot(run.botId);
@@ -2986,7 +3004,7 @@ async function runGroupMemberTurn(
       // lets the room queue make progress when an adapter never emits its
       // terminal event, while late callbacks remain generation-scoped.
       roomTurnCancellation.interrupt(group.threadId);
-      void instance.adapter.interruptTurn(group.threadId).catch(() => {});
+      void interruptBotTurn(bot.id, group.threadId).catch(() => {});
       if (canReportTimeout) {
         store.appendMessage(group.threadId, {
           role: "bot",
@@ -3060,7 +3078,7 @@ async function runGroupMemberTurn(
           roomTurnCancellation,
           roomRun,
           dispatch,
-          () => instance.adapter.interruptTurn(group.threadId),
+          () => interruptBotTurn(bot.id, group.threadId),
         )
       : dispatch().then((value) => ({ value, cancelled: false, started: true }));
     dispatched
@@ -5930,7 +5948,6 @@ const server = createServer(async (req, res) => {
       if (!group) return json(res, 404, { error: "no such room" });
       const threadId = group.threadId;
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
-      const instance = busy ? registry.get(busy.modelSelection.instanceId) : undefined;
       const speaker = groupSpeakers.get(threadId);
       const ownerBotId = group.busyBotId ?? speaker?.botId;
       const owner = ownerBotId ? botActivityOwners.get(ownerBotId) : undefined;
@@ -5962,7 +5979,7 @@ const server = createServer(async (req, res) => {
       groupQueues.delete(threadId);
       groupQueuePending.delete(threadId);
       forgetRoomCardRuns(threadId);
-      await instance?.adapter.interruptTurn(threadId).catch(() => {});
+      if (busy) await interruptBotTurn(busy.id, threadId).catch(() => {});
       closeOpenApprovals(threadId);
       lastReply.delete(group.threadId);
       store.deleteGroup(group.id);
@@ -5985,7 +6002,14 @@ const server = createServer(async (req, res) => {
       const roomBusy = Boolean(group.busyBotId) || (groupQueuePending.get(group.threadId) ?? 0) > 0;
       const busyBot = group.busyBotId ? store.bot(group.busyBotId) : undefined;
       const busyInstance = busyBot ? registry.get(busyBot.modelSelection.instanceId) : undefined;
-      const canSteer = Boolean(busyInstance?.adapter.capabilities.queueing && busyInstance.adapter.steer);
+      // A room member bound to Hermes owns the active turn even when its
+      // stored model selection points at another provider. An unreadable
+      // binding sidecar cannot prove the member is unbound, so steer is
+      // disabled rather than crossing into a generic provider.
+      const hermesBindingResult = loadHermesBindings();
+      const hermesBound = hermesBindingResult.state === "unavailable"
+        || Boolean(busyBot && hermesBindingResult.value.has(busyBot.id));
+      const canSteer = !hermesBound && Boolean(busyInstance?.adapter.capabilities.queueing && busyInstance.adapter.steer);
       // Rooms historically serialize every user turn through groupQueues. Keep
       // that default for omitted/auto delivery; only an explicit `steer` may
       // bypass the room queue and write into the active member's turn.
@@ -6033,8 +6057,7 @@ const server = createServer(async (req, res) => {
       // queued user turn (or a continuation for another run) survives Stop.
       dropPendingRoomResumes(threadId, interruptedRun);
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
-      const instance = busy ? registry.get(busy.modelSelection.instanceId) : undefined;
-      await instance?.adapter.interruptTurn(threadId).catch(() => {});
+      if (busy) await interruptBotTurn(busy.id, threadId).catch(() => {});
       closeOpenApprovals(threadId);
       return json(res, 200, { ok: true });
     }
@@ -6337,10 +6360,7 @@ const server = createServer(async (req, res) => {
         patch.alwaysAllow = [...new Set(body.alwaysAllow as string[])].slice(0, 200);
       }
       if (existingBot?.computer === "local" && body.computer !== undefined && body.computer !== "local") {
-        await registry
-          .get(existingBot.modelSelection.instanceId)
-          ?.adapter.interruptTurn(existingBot.threadId)
-          .catch(() => {});
+        await interruptBotTurn(existingBot.id, existingBot.threadId).catch(() => {});
       }
       const chiefMovedSections =
         Boolean(existingBot?.chiefOfStaff) &&
@@ -6364,10 +6384,7 @@ const server = createServer(async (req, res) => {
       await Promise.allSettled(
         store.bots
           .filter((bot) => bot.computer === "local")
-          .map((bot) =>
-            registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId),
-          )
-          .filter((turn): turn is Promise<void> => Boolean(turn)),
+          .map((bot) => interruptBotTurn(bot.id, bot.threadId)),
       );
       return json(res, 200, { ok: true });
     }
@@ -6391,7 +6408,7 @@ const server = createServer(async (req, res) => {
         }
       }
       // a running turn dies with its bot
-      await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => {});
+      await interruptBotTurn(bot.id, bot.threadId).catch(() => {});
       stopScreenPoller(bot.id);
       activeVpsThreads.delete(bot.id);
       botActivityOwners.delete(bot.id);
@@ -6798,40 +6815,26 @@ const server = createServer(async (req, res) => {
         await routines!.cancelRun(routineRun.id);
         return json(res, 200, { ok: true });
       }
-      const instance = registry.get(bot.modelSelection.instanceId);
-      // Read binding state before touching any generic provider.  A persisted
-      // Hermes binding (or an unreadable sidecar that prevents proving the
-      // bot is unbound) owns the interrupt boundary even when Hermes is
-      // disabled/unavailable.
-      const bindingResult = loadHermesBindings();
-      const binding = bindingResult.state === "available" ? bindingResult.value.get(bot.id) : undefined;
-      const hermesBindingError = bindingResult.state === "unavailable" ? bindingResult : null;
-      const hermesDispatch = Boolean(binding || hermesBindingError);
-      const hermes = binding ? hermesRegistry.forBinding(binding) : null;
       // a bot busy in a ROOM is running on the room's thread — stopping it
       // from its own chat must reach that turn, not just the 1:1 thread
       const busyGroup = store.groups.find((g) => g.busyBotId === bot.id);
+      const interruptThread = busyGroup?.threadId ?? bot.threadId;
       if (busyGroup) {
         const interruptedRun = roomTurnCancellation.currentOrHeld(busyGroup.threadId);
         roomTurnCancellation.interrupt(busyGroup.threadId);
         // Drop only continuations owned by this room generation. A later
         // queued user message remains durable and will get a fresh run.
         dropPendingRoomResumes(busyGroup.threadId, interruptedRun);
-        if (!hermesDispatch) await instance?.adapter.interruptTurn(busyGroup.threadId).catch(() => {});
         closeOpenApprovals(busyGroup.threadId);
       }
-      if (binding && hermes) {
-        await hermes.interrupt(binding.profile).catch(() => {});
-      } else if (hermesDispatch) {
-        // Keep the API response typed for a bound bot whose adapter is
-        // disabled/unavailable (or whose binding store cannot be read), and
-        // never fall through to the generic selected adapter.
-        const safe = new HermesEngineError(hermesBindingError?.code ?? "state_unavailable");
+      const interruptFailure = await interruptBotTurn(bot.id, interruptThread).then(() => null).catch((error: unknown) => error);
+      if (interruptFailure instanceof HermesEngineError) {
         closeOpenApprovals(bot.threadId);
-        return json(res, 409, { error: safe.message, code: safe.code, setup: true });
-      } else if (!busyGroup) {
-        // Existing provider interrupt behavior is unchanged for unbound bots.
-        await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
+        return json(res, 409, {
+          error: interruptFailure.message,
+          code: interruptFailure.code,
+          setup: true,
+        });
       }
       closeOpenApprovals(bot.threadId);
       return json(res, 200, { ok: true });
