@@ -156,7 +156,11 @@ struct ChatView: View {
                 if newAfterMessageId == nil, wasUnread {
                     newAfterMessageId = messages.last(where: { $0.role == .user })?.id
                 }
-                if wasUnread { await session.markRead(openedChat) }
+                // Mark-read is idempotent. Always issue it when opening so a
+                // prior optimistic attempt that failed offline is retried;
+                // gating on the locally projected unread bit would otherwise
+                // make that failure permanent after the receipt is hydrated.
+                await session.markRead(openedChat)
 #if DEBUG
                 // Profile parity screenshots without automating a tap through the
                 // animated island/header transition.

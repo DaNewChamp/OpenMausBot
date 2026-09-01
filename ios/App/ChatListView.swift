@@ -32,6 +32,10 @@ struct ChatListView: View {
         session.state.updates.first { $0.kind == .needsYou }
     }
 
+    private var homeActivityPresentation: HomeActivityPresentation {
+        session.state.homeActivityPresentation(queuedReceipts: session.queueReceipts)
+    }
+
     private var homeActivityArbitration: HomeActivityArbitrationPolicy.State {
         HomeActivityArbitrationPolicy.State(
             activityExpanded: activityExpanded,
@@ -141,6 +145,9 @@ struct ChatListView: View {
                     }
                 }
             }
+            .onChange(of: homeActivityPresentation.state) { _, state in
+                if state == .quiet { activityExpanded = false }
+            }
             // top-aligned: the roster fills downward from the header
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             // The dismissal surface belongs to the parent, but the activity
@@ -157,14 +164,20 @@ struct ChatListView: View {
             // Keep the activity rail out of the overlay stack. safeAreaInset
             // reserves its full expanded height without geometry offsets.
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                HomeActivityPill(
-                    open: { chat in path.append(chat) },
-                    expanded: $activityExpanded,
-                    queuedReceipts: session.queueReceipts
-                )
-                .environmentObject(session)
-                .padding(.bottom, max(8, geo.safeAreaInsets.bottom))
-                .zIndex(1)
+                // Do not put even an empty/padded view in the inset when the
+                // projection is quiet. SwiftUI reserves the inset content's
+                // layout height before rendering it, so an internally hidden
+                // pill would still steal the bottom safe-area space.
+                if HomeActivityRailLayoutPolicy.showsRail(for: homeActivityPresentation.state) {
+                    HomeActivityPill(
+                        open: { chat in path.append(chat) },
+                        expanded: $activityExpanded,
+                        queuedReceipts: session.queueReceipts
+                    )
+                    .environmentObject(session)
+                    .padding(.bottom, max(8, geo.safeAreaInsets.bottom))
+                    .zIndex(1)
+                }
             }
             .accessibilityAction(named: "Show updates") {
                 showingUpdates = true

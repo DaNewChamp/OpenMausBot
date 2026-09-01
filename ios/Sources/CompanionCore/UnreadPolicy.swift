@@ -77,13 +77,17 @@ public enum UnreadPolicy: Sendable {
         lastReadMessageId: String?
     ) -> Bool {
         if visibleThreadId == threadId { return false }
+        // A server unread bit is authoritative. A local receipt may be from
+        // an optimistic mark-read attempt that never reached the hub; letting
+        // it override this bit would hide attention forever after a hydrate.
+        if serverUnread { return true }
         if let latestRevision {
             if let lastReadMessageId {
                 return lastReadMessageId != latestRevision
             }
-            return serverUnread
+            return false
         }
-        return serverUnread
+        return false
     }
 
     /// After a full hydrate, align local receipts with the server's unread

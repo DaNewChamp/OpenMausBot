@@ -101,6 +101,17 @@ final class UnreadPolicyTests: XCTestCase {
         XCTAssertTrue(state.bots[0].unread)
     }
 
+    func testServerUnreadCannotBeMaskedByMatchingLocalReceipt() {
+        var state = CompanionState()
+        state.bots = [bot(unread: true)]
+        state.messages["thread-1"] = [message("assistant-1")]
+        state.readReceipts.markRead(stableID: "bot:bot-1", messageId: "assistant-1")
+
+        state.reconcileUnreadIndicators(visibleThreadId: nil)
+
+        XCTAssertTrue(state.bots[0].unread)
+    }
+
     func testHydrateReconcileAdvancesReceiptWhenServerRead() {
         var state = CompanionState()
         state.bots = [bot(unread: false)]
