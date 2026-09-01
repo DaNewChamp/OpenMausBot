@@ -253,4 +253,96 @@ describe("Hermes Bot Chat hub integration", () => {
     expect(requests.filter((request) => request.method === "prompt.submit")).toHaveLength(2);
     expect(requests.some((request) => request.method === "session.interrupt")).toBe(true);
   }, 30_000);
+
+  it("rejects Hermes-bound membership and room send without generic ACP fallback", async () => {
+    const created = await api("POST", "/api/bots");
+    expect(created.status).toBe(201);
+    const bound = created.body.bot;
+    const unboundCreated = await api("POST", "/api/bots");
+    expect(unboundCreated.status).toBe(201);
+    const unbound = unboundCreated.body.bot;
+    writeFileSync(join(dataDir, "config.json"), JSON.stringify({
+      vbot: { hermes: { enabled: true } },
+      instances: { hermes: { driver: "hermesAgent", config: { cli: fakeHermes } } },
+    }));
+    const enabled = await api("PATCH", "/api/config", { vbot: { hermes: { enabled: true } } });
+    expect(enabled.status).toBe(200);
+    writeFileSync(join(dataDir, "hermes-bindings.json"), JSON.stringify({
+      version: 1,
+      bindings: {
+        [bound.id]: {
+          adapter: "hermesBot",
+          profile: "default",
+          canonicalTitle: "Bot Chat",
+          bindingVersion: 1,
+        },
+      },
+    }), { mode: 0o600 });
+
+    const rejectedCreate = await api("POST", "/api/groups", { name: "Hermes room", memberIds: [bound.id] });
+    expect(rejectedCreate.status).toBe(409);
+    expect(rejectedCreate.body).toMatchObject({
+      error: "Hermes does not support groups",
+      code: "groups_unavailable",
+      setup: true,
+    });
+
+    const room = await api("POST", "/api/groups", { name: "Generic room", memberIds: [unbound.id] });
+    expect(room.status).toBe(201);
+    expect((await api("PATCH", `/api/groups/${room.body.group.id}/setup`, { action: "skip" })).status).toBe(200);
+    const rejectedPatch = await api("PATCH", `/api/groups/${room.body.group.id}`, { memberIds: [unbound.id, bound.id] });
+    expect(rejectedPatch.status).toBe(409);
+    expect(rejectedPatch.body).toMatchObject({ code: "groups_unavailable", setup: true });
+
+    const before = existsSync(hermesLog) ? readFileSync(hermesLog, "utf8") : "";
+    const allowedUnboundSend = await api("POST", `/api/groups/${room.body.group.id}/messages`, { text: "hello unbound room" });
+    expect(allowedUnboundSend.status).toBe(202);
+    await waitFor(async () => {
+      const current = await api("GET", "/api/bots");
+      const found = current.body.groups.find((candidate: { id: string }) => candidate.id === room.body.group.id);
+      return found?.messages?.some((message: { role: string; text?: string }) => message.role === "user" && message.text === "hello unbound room");
+    }, "the unbound room user message");
+    const afterUnbound = existsSync(hermesLog) ? readFileSync(hermesLog, "utf8") : "";
+    expect(afterUnbound).toBe(before);
+
+    const disabled = await api("PATCH", "/api/config", { vbot: { hermes: { enabled: false } } });
+    expect(disabled.status).toBe(200);
+    writeFileSync(join(dataDir, "hermes-bindings.json"), JSON.stringify({
+      version: 1,
+      bindings: {
+        [bound.id]: {
+          adapter: "hermesBot",
+          profile: "default",
+          canonicalTitle: "Bot Chat",
+          bindingVersion: 1,
+        },
+      },
+    }), { mode: 0o600 });
+    const disabledCreate = await api("POST", "/api/groups", { name: "Disabled bound room", memberIds: [bound.id] });
+    expect(disabledCreate.status).toBe(409);
+    expect(disabledCreate.body).toMatchObject({ code: "groups_unavailable", setup: true });
+
+    writeFileSync(join(dataDir, "hermes-bindings.json"), "{not-json", { mode: 0o600 });
+    const malformedCreate = await api("POST", "/api/groups", { name: "Unknown binding room", memberIds: [unbound.id] });
+    expect(malformedCreate.status).toBe(409);
+    expect(malformedCreate.body).toMatchObject({
+      error: "Hermes returned an invalid response",
+      code: "malformed_response",
+      setup: true,
+    });
+    const malformedSend = await api("POST", `/api/groups/${room.body.group.id}/messages`, { text: "must not fallback" });
+    expect(malformedSend.status).toBe(409);
+    expect(malformedSend.body).toMatchObject({ code: "malformed_response", setup: true });
+    const malformedInterrupt = await api("POST", `/api/groups/${room.body.group.id}/interrupt`);
+    expect(malformedInterrupt.status).toBe(409);
+    expect(malformedInterrupt.body).toMatchObject({ code: "malformed_response", setup: true });
+
+    writeFileSync(join(dataDir, "hermes-bindings.json"), JSON.stringify({ version: 1, bindings: {} }), { mode: 0o600 });
+    const restored = await api("PATCH", "/api/config", { vbot: { hermes: { enabled: true } } });
+    expect(restored.status).toBe(200);
+    const allowed = await api("POST", "/api/groups", { name: "Unbound room", memberIds: [unbound.id] });
+    expect(allowed.status).toBe(201);
+    expect((await api("PATCH", `/api/groups/${allowed.body.group.id}/setup`, { action: "skip" })).status).toBe(200);
+    expect((await api("POST", `/api/groups/${allowed.body.group.id}/messages`, { text: "hello unbound" })).status).toBe(202);
+  }, 30_000);
 });

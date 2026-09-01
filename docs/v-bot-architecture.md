@@ -42,7 +42,9 @@ Hermes Wave 1 currently supports roster/discovery, the canonical Bot Chat,
 send, final responses, streaming events, and stop. Hermes does not advertise
 or emulate routines, agent messaging, groups, cross-machine work, queueing,
 steer, attachments, or computer integrations until each has a real adapter
-contract.
+contract. While `groups` is false, a Hermes-bound bot cannot join or send in
+a V Bot room; unreadable binding state is likewise rejected rather than
+falling through to generic ProviderAdapter membership or send.
 
 Every capability is explicit. Unsupported or unstable reconstructed behavior is disabled with a human-readable reason; the bridge must never invent or guess an undocumented route.
 
@@ -83,7 +85,8 @@ The Hermes Wave 1 harness can discover a local gateway, resolve the canonical
 Bot Chat, send and stream a bound profile, and stop it through the same event
 bus. A valid Hermes binding remains authoritative when the adapter is disabled;
 an unavailable or unreadable binding store produces a fixed setup failure and
-never selects the bot's stored generic provider. Unbound bots retain the
-existing ProviderAdapter behavior, including generic Hermes ACP.
+never selects the bot's stored generic provider. Room create/PATCH membership
+and room send use the same fail-closed membership/send boundary. Unbound bots
+retain the existing ProviderAdapter behavior, including generic Hermes ACP.
 
 Queueing, attachments, MCP, computer-use, reconstructed `/events`, and merged transcripts remain out of scope. Companion still does not proxy reconstructed loopback URLs, tokens, or host paths.

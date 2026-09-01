@@ -1207,7 +1207,9 @@ export class HermesBotAdapter implements HermesBotEngine {
   }
 
   private discoveryUnavailable(code: HermesFailureCode, profiles = this.lastProfiles): HermesDiscovery {
-    const reason = code === "upstream_error" || code === "profile_unavailable" ? "state_unavailable" : code;
+    const reason = code === "upstream_error" || code === "profile_unavailable" || code === "groups_unavailable"
+      ? "state_unavailable"
+      : code;
     const staleProfiles = profiles.map((profile) => ({
       ...profile,
       canonicalChat: "unknown" as const,
@@ -1231,6 +1233,7 @@ function runtimeErrorMessage(reason: string): string {
     case "malformed_response":
     case "timeout":
     case "profile_unavailable":
+    case "groups_unavailable":
     case "upstream_error":
       return new HermesEngineError(reason).message;
     default:
@@ -1256,6 +1259,7 @@ function hermesRuntimeErrorIsSetup(reason: string): boolean {
     case "state_unavailable":
     case "malformed_response":
     case "profile_unavailable":
+    case "groups_unavailable":
       return true;
     default:
       return true;

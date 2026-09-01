@@ -46,6 +46,13 @@ watchdog recovery, deletion/settings cleanup, and adapter cancellation races.
 - Only a readable store that proves a bot is unbound may use the normal
   ProviderAdapter, including generic Hermes ACP.
 - A Hermes interrupt failure is not retried through another provider.
+- Room/group membership and send are fail-closed while `groups` is false.
+  Creating a room, PATCHing members, or dispatching `runGroupMemberTurn`
+  (including connector/secret resumes) rejects a valid Hermes-bound bot and
+  any unreadable/unknown binding state with a stable setup error. Unbound
+  bots keep the existing generic room path. Room interrupt, timeout, stall,
+  and delete cleanup surface that same setup failure instead of treating a
+  swallowed generic stop as success.
 
 The same rule applies to steer decisions: a bound or unknown-binding bot
 cannot be steered through a generic engine. It must queue or report that the

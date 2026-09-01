@@ -83,6 +83,7 @@ export type HermesFailureCode =
   | "malformed_response"
   | "timeout"
   | "profile_unavailable"
+  | "groups_unavailable"
   | "upstream_error";
 
 const DEFAULT_FAILURE_MESSAGES = {
@@ -93,6 +94,7 @@ const DEFAULT_FAILURE_MESSAGES = {
   malformed_response: "Hermes returned an invalid response",
   timeout: "Hermes request timed out",
   profile_unavailable: "Hermes profile is unavailable",
+  groups_unavailable: "Hermes does not support groups",
   upstream_error: "Hermes request failed",
 } as const satisfies Record<HermesFailureCode, string>;
 

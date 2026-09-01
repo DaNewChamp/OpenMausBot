@@ -67,6 +67,9 @@ describe("Hermes internal contracts", () => {
     expect(error.message).toBe("Hermes state is unavailable");
     expect(Object.keys(error)).toEqual(["code"]);
     expect(`${error}`).not.toContain("/private");
+    const groups = new HermesEngineError("groups_unavailable");
+    expect(groups.message).toBe("Hermes does not support groups");
+    expect(groups.code).toBe("groups_unavailable");
   });
 
   it("never exposes caller-controlled diagnostics in its public message", () => {

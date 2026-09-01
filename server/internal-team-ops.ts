@@ -1,5 +1,6 @@
 import type { RoutineManager } from "./routines.ts";
 import type { Store } from "./store.ts";
+import { hermesGroupMembershipError } from "./hermes-groups.ts";
 
 const sectionKey = (section?: string): string => section?.trim() || "";
 
@@ -28,6 +29,8 @@ export function createRoomForChief(
   if (!chief?.chiefOfStaff) throw new Error("only a section's Chief of Staff can create rooms");
   const memberIds = [...new Set(input.memberIds.filter((id) => Boolean(store.bot(id))))];
   if (!memberIds.length) throw new Error("a room needs at least one bot");
+  const hermesMembers = hermesGroupMembershipError(memberIds);
+  if (hermesMembers) throw hermesMembers;
   const section = input.section?.trim() || chief.section;
   if (sectionKey(section) !== sectionKey(chief.section)) {
     throw new Error("rooms must stay in your section");
@@ -68,6 +71,8 @@ export function updateRoomForChief(
   if (patch.memberIds !== undefined) {
     const memberIds = [...new Set(patch.memberIds.filter((id) => Boolean(store.bot(id))))];
     if (!memberIds.length) throw new Error("a room needs at least one bot");
+    const hermesMembers = hermesGroupMembershipError(memberIds);
+    if (hermesMembers) throw hermesMembers;
     for (const id of memberIds) {
       const member = store.bot(id);
       if (!member || sectionKey(member.section) !== sectionKey(chief.section)) {

@@ -150,6 +150,11 @@ import { createHermesEngineRegistry, type HermesEngineRegistry } from "./engines
 import { loadHermesBindings } from "./engines/bindings.ts";
 import { HermesEngineError } from "./engines/contracts.ts";
 import {
+  hermesGroupDispatchError,
+  hermesGroupMembershipError,
+  hermesSetupJson,
+} from "./hermes-groups.ts";
+import {
   abortSignalFromHttp,
   cancelBridgeApprovalsFor,
   cancelBridgeApprovalsForThread,
@@ -922,7 +927,14 @@ const watchdog = new TurnWatchdog({
     // active room generation now; the member-turn cleanup below releases the
     // room queue while the adapter interrupt remains best-effort.
     roomTurnCancellation.interrupt(turn.threadId);
-    void interruptBotTurn(turn.botId, turn.threadId).catch(() => {});
+    void interruptBotTurn(turn.botId, turn.threadId).catch((error: unknown) => {
+      if (!(error instanceof HermesEngineError) || !(ownsRoom || ownsTask)) return;
+      store.appendMessage(turn.threadId, {
+        role: "bot",
+        kind: "activity",
+        tool: { name: `error: ${error.message}`, ok: false, setup: hermesSetupCode(error.code) },
+      });
+    });
     const minutes = Math.round(TURN_STALL_MS / 60_000);
     // The durable target can disappear while an adapter is still stalled.
     // Store.appendMessage() lazily creates a transcript for unknown threads,
@@ -2844,6 +2856,20 @@ async function runGroupMemberTurn(
   if (!group || !bot) return false;
   if (roomRun && roomTurnCancellation.isCancelled(group.threadId, roomRun)) return false;
   spoken.add(botId);
+  const hermesRoomError = hermesGroupDispatchError(bot.id);
+  if (hermesRoomError) {
+    const message = hermesRoomError.message;
+    if (roomRunCanWrite(group.id, group.threadId, roomRun)) {
+      store.appendMessage(group.threadId, {
+        role: "bot",
+        kind: "activity",
+        from: { botId: bot.id, name: bot.name, color: bot.color },
+        tool: { name: `error: ${message}`, ok: false, setup: hermesSetupCode(hermesRoomError.code) },
+      });
+    }
+    onDispatchError?.(message);
+    return true;
+  }
   const instance = registry.get(bot.modelSelection.instanceId);
   const userName = cfg.profile?.name?.trim() || "User";
   if (!instance) {
@@ -3004,7 +3030,15 @@ async function runGroupMemberTurn(
       // lets the room queue make progress when an adapter never emits its
       // terminal event, while late callbacks remain generation-scoped.
       roomTurnCancellation.interrupt(group.threadId);
-      void interruptBotTurn(bot.id, group.threadId).catch(() => {});
+      void interruptBotTurn(bot.id, group.threadId).catch((error: unknown) => {
+        if (!(error instanceof HermesEngineError) || !canReportTimeout) return;
+        store.appendMessage(group.threadId, {
+          role: "bot",
+          kind: "activity",
+          from: { botId: bot.id, name: bot.name, color: bot.color },
+          tool: { name: `error: ${error.message}`, ok: false, setup: hermesSetupCode(error.code) },
+        });
+      });
       if (canReportTimeout) {
         store.appendMessage(group.threadId, {
           role: "bot",
@@ -3249,6 +3283,14 @@ function startGroupTurn(
       .find((msg) => msg.kind === "text" && msg.from)?.from?.botId;
     const last = availableMembers.find((b) => b.id === lastSpeakerId) ?? availableMembers[0];
     responders = last ? [last] : [];
+  }
+
+  // Fail closed before the user message is stored. A bound or unreadable
+  // Hermes member must never enter the generic room queue/send path.
+  const hermesTargets = responders.length ? responders : availableMembers;
+  for (const member of hermesTargets) {
+    const hermesRoomError = hermesGroupDispatchError(member.id);
+    if (hermesRoomError) throw hermesRoomError;
   }
 
   const queueId = responders.length > 0 && busyAtEnqueue ? options.queueId ?? randomUUID() : undefined;
@@ -3545,6 +3587,11 @@ function dispatchConnectorResume(entry: { botId: string; threadId: string; resum
           pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, scopedEntry);
           return;
         }
+        const hermesRoomError = hermesGroupDispatchError(entry.botId);
+        if (hermesRoomError) {
+          markConnectorResumeFailed(entry.threadId, entry.resumeKey, hermesRoomError.message, scopedEntry.roomRun);
+          return;
+        }
         const roomRun = roomTurnCancellation.begin(threadId);
         try {
           await runGroupMemberTurn(current.group.id, entry.botId, 0, new Set(), prompt, undefined, roomRun);
@@ -3688,6 +3735,11 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
         }
         if (current.bot.busy) {
           pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, scopedEntry);
+          return;
+        }
+        const hermesRoomError = hermesGroupDispatchError(entry.botId);
+        if (hermesRoomError) {
+          markSecretResumeFailed(entry.threadId, entry.messageId, hermesRoomError.message, scopedEntry.roomRun);
           return;
         }
         const roomRun = roomTurnCancellation.begin(threadId);
@@ -4010,6 +4062,7 @@ function hermesSetupCode(code: HermesEngineError["code"]): boolean {
     "malformed_response",
     "timeout",
     "profile_unavailable",
+    "groups_unavailable",
   ].includes(code);
 }
 
@@ -4021,6 +4074,7 @@ const HERMES_SETUP_MESSAGES = new Set([
   "Hermes returned an invalid response",
   "Hermes request timed out",
   "Hermes profile is unavailable",
+  "Hermes does not support groups",
 ]);
 
 /** Preserve setup-vs-transient semantics for adapter runtime errors. The
@@ -4986,9 +5040,12 @@ const server = createServer(async (req, res) => {
           return json(res, 403, { error: "source thread does not belong to sender" });
         }
         try {
+          const memberIds = Array.isArray(body.memberIds) ? body.memberIds.map(String) : [];
+          const hermesMembers = hermesGroupMembershipError(memberIds);
+          if (hermesMembers) return json(res, 409, hermesSetupJson(hermesMembers));
           const group = createRoomForChief(store, fromBotId, {
             name: body.name == null ? undefined : String(body.name),
-            memberIds: Array.isArray(body.memberIds) ? body.memberIds.map(String) : [],
+            memberIds,
             bulletin: body.bulletin == null ? undefined : String(body.bulletin),
             section: body.section == null ? undefined : String(body.section),
           });
@@ -5015,10 +5072,15 @@ const server = createServer(async (req, res) => {
             return json(res, 403, { error: "source thread does not belong to sender" });
           }
           try {
+            const memberIds = body.memberIds == null ? undefined : Array.isArray(body.memberIds) ? body.memberIds.map(String) : undefined;
+            if (memberIds) {
+              const hermesMembers = hermesGroupMembershipError(memberIds);
+              if (hermesMembers) return json(res, 409, hermesSetupJson(hermesMembers));
+            }
             const group = updateRoomForChief(store, fromBotId, roomMatch[1], {
               name: body.name == null ? undefined : String(body.name),
               bulletin: body.bulletin == null ? undefined : String(body.bulletin),
-              memberIds: body.memberIds == null ? undefined : Array.isArray(body.memberIds) ? body.memberIds.map(String) : undefined,
+              memberIds,
             });
             return json(res, 200, {
               id: group.id,
@@ -5496,6 +5558,8 @@ const server = createServer(async (req, res) => {
         ),
       ];
       if (memberIds.length === 0) return json(res, 400, { error: "a channel needs at least one bot" });
+      const hermesMembers = hermesGroupMembershipError(memberIds);
+      if (hermesMembers) return json(res, 409, hermesSetupJson(hermesMembers));
       if (body.name !== undefined && typeof body.name !== "string") {
         return json(res, 400, { error: "channel name must be a string" });
       }
@@ -5878,12 +5942,13 @@ const server = createServer(async (req, res) => {
       if (Array.isArray(body.memberIds)) {
         // A DM is the pair it was opened for; only real rooms have a roster.
         if (existing.dm) return json(res, 400, { error: "direct-message channels cannot change members" });
-        const ids = [
-          ...new Set(
-            body.memberIds.filter((id: unknown): id is string => typeof id === "string" && Boolean(store.bot(id))),
-          ),
-        ];
+        const ids: string[] = [];
+        for (const id of body.memberIds) {
+          if (typeof id === "string" && store.bot(id) && !ids.includes(id)) ids.push(id);
+        }
         if (!ids.length) return json(res, 400, { error: "a room needs at least one bot" });
+        const hermesMembers = hermesGroupMembershipError(ids);
+        if (hermesMembers) return json(res, 409, hermesSetupJson(hermesMembers));
         patch.memberIds = ids;
       }
       if (body.defaultResponder !== undefined) {
@@ -5979,7 +6044,17 @@ const server = createServer(async (req, res) => {
       groupQueues.delete(threadId);
       groupQueuePending.delete(threadId);
       forgetRoomCardRuns(threadId);
-      if (busy) await interruptBotTurn(busy.id, threadId).catch(() => {});
+      if (busy) {
+        const interruptFailure = await interruptBotTurn(busy.id, threadId).then(() => null).catch((error: unknown) => error);
+        if (interruptFailure instanceof HermesEngineError && store.bot(busy.id)) {
+          store.appendMessage(busy.threadId, {
+            role: "bot",
+            kind: "activity",
+            tool: { name: `error: ${interruptFailure.message}`, ok: false, setup: hermesSetupCode(interruptFailure.code) },
+          });
+          store.setActivity(busy.id, "dead");
+        }
+      }
       closeOpenApprovals(threadId);
       lastReply.delete(group.threadId);
       store.deleteGroup(group.id);
@@ -6042,8 +6117,13 @@ const server = createServer(async (req, res) => {
         });
         return json(res, 202, { ...deliveryReceipt("steered"), steered: true });
       }
-      const receipt = startGroupTurn(group.id, text, replyTo);
-      return json(res, 202, receipt.disposition === "queued" ? { ...receipt, queued: true } : receipt);
+      try {
+        const receipt = startGroupTurn(group.id, text, replyTo);
+        return json(res, 202, receipt.disposition === "queued" ? { ...receipt, queued: true } : receipt);
+      } catch (error) {
+        if (error instanceof HermesEngineError) return json(res, 409, hermesSetupJson(error));
+        throw error;
+      }
     }
     m = path.match(/^\/api\/groups\/([\w-]+)\/interrupt$/);
     if (m && method === "POST") {
@@ -6056,9 +6136,16 @@ const server = createServer(async (req, res) => {
       // was busy. Remove only continuations from this generation; a later
       // queued user turn (or a continuation for another run) survives Stop.
       dropPendingRoomResumes(threadId, interruptedRun);
+      const hermesMembers = hermesGroupMembershipError(group.memberIds);
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
-      if (busy) await interruptBotTurn(busy.id, threadId).catch(() => {});
+      const interruptFailure = busy
+        ? await interruptBotTurn(busy.id, threadId).then(() => null).catch((error: unknown) => error)
+        : hermesMembers;
       closeOpenApprovals(threadId);
+      if (interruptFailure instanceof HermesEngineError) {
+        return json(res, 409, hermesSetupJson(interruptFailure));
+      }
+      if (hermesMembers) return json(res, 409, hermesSetupJson(hermesMembers));
       return json(res, 200, { ok: true });
     }
 
@@ -6830,11 +6917,7 @@ const server = createServer(async (req, res) => {
       const interruptFailure = await interruptBotTurn(bot.id, interruptThread).then(() => null).catch((error: unknown) => error);
       if (interruptFailure instanceof HermesEngineError) {
         closeOpenApprovals(bot.threadId);
-        return json(res, 409, {
-          error: interruptFailure.message,
-          code: interruptFailure.code,
-          setup: true,
-        });
+        return json(res, 409, hermesSetupJson(interruptFailure));
       }
       closeOpenApprovals(bot.threadId);
       return json(res, 200, { ok: true });
