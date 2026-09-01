@@ -2,6 +2,17 @@ import XCTest
 @testable import CompanionCore
 
 final class HomeActivityRailLayoutPolicyTests: XCTestCase {
+    func testQuietStateDoesNotReserveOrRenderTheRail() {
+        XCTAssertFalse(HomeActivityRailLayoutPolicy.showsRail(for: .quiet))
+        XCTAssertTrue(HomeActivityRailLayoutPolicy.showsRail(for: .active))
+        XCTAssertTrue(HomeActivityRailLayoutPolicy.showsRail(for: .needsAttention))
+    }
+
+    func testCollapsedRailHugsCopyAndExpandedRailMayWiden() {
+        XCTAssertTrue(HomeActivityRailLayoutPolicy.usesContentHugging(isExpanded: false))
+        XCTAssertFalse(HomeActivityRailLayoutPolicy.usesContentHugging(isExpanded: true))
+    }
+
     func testRegularCollapsedRailRetainsCompactPremiumMetrics() {
         XCTAssertEqual(
             HomeActivityRailLayoutPolicy.collapsedTitleLineLimit(isAccessibilitySize: false),

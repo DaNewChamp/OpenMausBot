@@ -145,11 +145,18 @@ struct ChatView: View {
     private var chatLifecycle: some View {
         chatNavigation
             .task(id: threadId) {
+                // Capture the unread bit before setting the foreground thread.
+                // `setForegroundThread` reconciles the local projection and
+                // intentionally hides the dot while this conversation is
+                // visible; checking `current.unread` after that call would
+                // therefore skip the server mark-read request entirely.
+                let openedChat = current
+                let wasUnread = openedChat.unread
                 session.setForegroundThread(threadId)
-                if newAfterMessageId == nil, current.unread {
+                if newAfterMessageId == nil, wasUnread {
                     newAfterMessageId = messages.last(where: { $0.role == .user })?.id
                 }
-                if current.unread { await session.markRead(current) }
+                if wasUnread { await session.markRead(openedChat) }
 #if DEBUG
                 // Profile parity screenshots without automating a tap through the
                 // animated island/header transition.

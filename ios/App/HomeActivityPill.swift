@@ -20,14 +20,28 @@ struct HomeActivityPill: View {
     }
 
     var body: some View {
-        VStack(spacing: 8) {
-            if expanded {
-                expandedPanel
-                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
+        Group {
+            // Quiet is the absence of work, not another status to keep on
+            // screen. Removing the rail entirely also gives the roster back
+            // the bottom safe-area space instead of leaving a dead capsule.
+            if HomeActivityRailLayoutPolicy.showsRail(for: presentation.state) {
+                VStack(spacing: 8) {
+                    if expanded {
+                        expandedPanel
+                            .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
+                    }
+                    collapsedButton
+                }
+                // Collapsed rails hug their copy; only the expanded detail
+                // surface gets the wider premium presentation.
+                .frame(maxWidth: expanded ? 430 : nil)
+                .fixedSize(
+                    horizontal: HomeActivityRailLayoutPolicy.usesContentHugging(isExpanded: expanded),
+                    vertical: false
+                )
             }
-            collapsedButton
         }
-        .frame(maxWidth: 430)
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 14)
         .padding(.top, expanded ? 8 : 0)
         .padding(.bottom, 8)
@@ -95,7 +109,6 @@ struct HomeActivityPill: View {
                 }
                 .fixedSize(horizontal: false, vertical: true)
 
-                Spacer(minLength: 8)
                 Image(systemName: expanded ? "chevron.down" : "chevron.up")
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(.secondary)
@@ -116,6 +129,7 @@ struct HomeActivityPill: View {
         }
         .buttonStyle(.plain)
         .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: expanded ? .infinity : nil)
         .glassCapsule()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(presentation.accessibilityLabel)
