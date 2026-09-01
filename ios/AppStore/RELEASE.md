@@ -7,7 +7,6 @@ work; renaming the display name does not require a bundle-ID migration.
 
 ## Current release state
 
-- Repository HEAD: `51e65aa`.
 - Next iOS project version: **73** (`MARKETING_VERSION` `1.0.0`).
 - Build 72 is recorded as `VALID / IN_BETA_TESTING` in the internal TestFlight lane.
 - Build 73 is the next internal TestFlight candidate; it is not uploaded yet.
