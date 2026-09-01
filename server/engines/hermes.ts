@@ -231,7 +231,13 @@ export class HermesGatewayClient extends EventEmitter {
     if (this.disposed) throw new HermesEngineError("gateway_unavailable");
     if (this.generation?.ready) return;
     if (this.startPromise) return this.startPromise;
-    if (this.unavailable) throw new HermesEngineError(this.unavailable);
+    if (this.unavailable) {
+      if (!this.generation || this.generation.settled) {
+        this.unavailable = null;
+      } else {
+        throw new HermesEngineError(this.unavailable);
+      }
+    }
 
     const promise = this.startGeneration();
     this.startPromise = promise;

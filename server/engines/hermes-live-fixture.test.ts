@@ -30,6 +30,7 @@ const WEBHOOK_PORT = PORT + 1;
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const PROFILE = "default";
+const NAMED_PROFILE = "work";
 const SESSION_ROOT = "session-root";
 const SESSION_TIP = "session-tip";
 const FIXTURE_REPLY = "fixture Hermes wave1 reply";
@@ -70,13 +71,42 @@ child.on("exit", (code, signal) => {
   return launcher;
 }
 
-function fixtureEnv(home: string, hermesHome: string): Record<string, string> {
+function fixtureEnv(home: string, hermesHome: string, extra: Record<string, string> = {}): Record<string, string> {
   return {
     ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
     HOME: home,
     USERPROFILE: home,
     HERMES_HOME: hermesHome,
+    ...extra,
   };
+}
+
+function readGatewayPid(hermesHome: string): number {
+  const dump = JSON.parse(readFileSync(join(hermesHome, "spawn-dump.json"), "utf8"));
+  return dump.pid as number;
+}
+
+async function waitForLiveGatewayPid(hermesHome: string, rpcLog: string, previousPid?: number): Promise<number> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const calls = readRpcLog(rpcLog);
+    const latestCallPid = calls.at(-1)?.pid as number | undefined;
+    if (latestCallPid && latestCallPid !== previousPid) return latestCallPid;
+    if (existsSync(join(hermesHome, "spawn-dump.json"))) {
+      const pid = readGatewayPid(hermesHome);
+      if (pid && pid !== previousPid) {
+        try {
+          process.kill(pid, 0);
+          return pid;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "ESRCH") throw error;
+        }
+      }
+    }
+    await settle(50);
+  }
+  throw new Error("timed out waiting for live gateway pid");
 }
 
 function setFixtureMode(hermesHome: string, mode: string): void {
@@ -99,7 +129,7 @@ async function settle(ms = 30): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-function readRpcLog(path: string): Array<{ method: string; params: Record<string, unknown> }> {
+function readRpcLog(path: string): Array<{ method: string; params: Record<string, unknown>; pid?: number }> {
   if (!existsSync(path)) return [];
   return readFileSync(path, "utf8")
     .trim()
@@ -111,6 +141,33 @@ function readRpcLog(path: string): Array<{ method: string; params: Record<string
 function assertNoSecrets(payload: string, extras: string[] = []): void {
   for (const marker of [...SECRET_MARKERS, ...extras]) {
     expect(payload).not.toContain(marker);
+  }
+}
+
+const HERMES_SAFE_MESSAGES = new Set([
+  "Hermes is not installed",
+  "Hermes credentials are unavailable",
+  "Hermes gateway is unavailable",
+  "Hermes state is unavailable",
+  "Hermes returned an invalid response",
+  "Hermes request timed out",
+  "Hermes profile is unavailable",
+]);
+
+function assertSafeHermesMessage(message: string): void {
+  expect(HERMES_SAFE_MESSAGES.has(message)).toBe(true);
+}
+
+function assertSafeHermesDiagnostics(events: unknown[]): void {
+  for (const event of events) {
+    const record = event as { type?: string; message?: string; stopReason?: string };
+    if (record.type === "runtime.error" && typeof record.message === "string") {
+      assertSafeHermesMessage(record.message);
+    }
+    if (record.type === "turn.completed" && record.stopReason && record.stopReason !== "interrupted") {
+      expect(typeof record.stopReason).toBe("string");
+      expect(record.stopReason).not.toMatch(/state\.db|session-root|session-tip|runtime-gen|must-not-leak|fixture\/secret/i);
+    }
   }
 }
 
@@ -256,6 +313,40 @@ describe("Hermes live loopback fixture", () => {
       assertNoSecrets(JSON.stringify(events), ["hold"]);
     });
 
+    it("reconnects after SIGKILL mid-turn with one terminal event and fresh title lookup", async () => {
+      setFixtureMode(hermesHome, "hang");
+      engine = createHermesBotEngine({
+        cli: launcher,
+        environment: fixtureEnv(home, hermesHome),
+        timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
+      }) as HermesBotAdapter;
+      const events: unknown[] = [];
+      engine.onEvent((event) => events.push(event));
+      await engine.discover();
+      void engine.send({ profile: PROFILE, text: "mid kill", threadId: "thread-kill", turnId: "turn-kill" });
+      await settle(120);
+      process.kill(readGatewayPid(hermesHome), "SIGKILL");
+      await settle(250);
+      const completed = events.filter((event) => (event as { type?: string }).type === "turn.completed");
+      expect(completed).toHaveLength(1);
+      expect(completed[0]).toMatchObject({ ok: false, stopReason: "gateway_unavailable" });
+      assertSafeHermesDiagnostics(events);
+      assertNoSecrets(JSON.stringify(events), ["mid kill"]);
+
+      writeFileSync(rpcLog, "");
+      clearFixtureControls(hermesHome);
+      setFixtureMode(hermesHome, "happy");
+      await engine.send({ profile: PROFILE, text: "after kill", threadId: "thread-after-kill", turnId: "turn-after-kill" });
+      await settle(250);
+      const afterKill = readRpcLog(rpcLog);
+      expect(afterKill.filter((entry) => entry.method === "session.list")).toHaveLength(1);
+      expect(afterKill.find((entry) => entry.method === "session.resume")?.params).toMatchObject({
+        session_id: SESSION_TIP,
+      });
+      expect(events.filter((event) => (event as { type?: string }).type === "turn.completed")).toHaveLength(2);
+      assertNoSecrets(JSON.stringify(events), ["after kill"]);
+    });
+
     it("reconnects with a fresh title lookup and resumes the compression tip", async () => {
       engine = createHermesBotEngine({
         cli: launcher,
@@ -289,28 +380,32 @@ describe("Hermes live loopback fixture", () => {
     });
 
     it.each([
-      ["malformed-final", "malformed_response"],
-      ["auth-fail", "invalid_credentials"],
-      ["rpc-timeout", "timeout"],
-      ["missing-profile", "profile_unavailable"],
-    ])("maps fixture mode %s to typed unavailable behavior", async (fixtureMode, code) => {
+      ["malformed-final", "malformed_response", "turn"],
+      ["auth-fail", "invalid_credentials", "discover"],
+      ["rpc-timeout", "timeout", "discover"],
+      ["missing-profile", "profile_unavailable", "send"],
+      ["protocol-fail", "malformed_response", "discover"],
+      ["malformed-envelope", "malformed_response", "discover"],
+      ["crash", "gateway_unavailable", "discover"],
+    ])("maps fixture mode %s to typed unavailable behavior (%s)", async (fixtureMode, code, phase) => {
       setFixtureMode(hermesHome, fixtureMode);
       engine = createHermesBotEngine({
         cli: launcher,
         environment: fixtureEnv(home, hermesHome),
         timeouts: { initializationMs: 500, requestMs: 500, turnMs: 500, reconnectMs: 500 },
       }) as HermesBotAdapter;
-      if (fixtureMode === "malformed-final") {
+      if (phase === "turn") {
         await engine.discover();
         const events: unknown[] = [];
         engine.onEvent((event) => events.push(event));
         await engine.send({ profile: PROFILE, text: "bad final", threadId: "thread-bad", turnId: "turn-bad" });
         await settle(200);
-        expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: false, stopReason: "malformed_response" });
+        expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: false, stopReason: code });
+        assertSafeHermesDiagnostics(events);
         assertNoSecrets(JSON.stringify(events), ["bad final"]);
         return;
       }
-      if (fixtureMode === "missing-profile") {
+      if (phase === "send") {
         const discovery = await engine.discover();
         expect(discovery.profiles).toEqual([]);
         await expect(engine.send({
@@ -318,13 +413,95 @@ describe("Hermes live loopback fixture", () => {
           text: "missing",
           threadId: "thread-missing",
           turnId: "turn-missing",
-        })).rejects.toMatchObject({ code: "profile_unavailable" });
+        })).rejects.toMatchObject({ code });
+        assertNoSecrets(JSON.stringify(discovery));
         return;
       }
       const discovery = await engine.discover();
       expect(discovery.state).toBe("unavailable");
       expect(discovery.reason).toBe(code);
       expect(discovery.capabilities.roster).toBe(false);
+      assertNoSecrets(JSON.stringify(discovery));
+    });
+
+    it("fails closed when session.list reports unreadable state without leaking paths", async () => {
+      setFixtureMode(hermesHome, "happy");
+      engine = createHermesBotEngine({
+        cli: launcher,
+        environment: fixtureEnv(home, hermesHome),
+        timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
+      }) as HermesBotAdapter;
+      await engine.discover();
+      setFixtureMode(hermesHome, "protocol-fail");
+      await expect(engine.send({
+        profile: PROFILE,
+        text: "unreadable state",
+        threadId: "thread-protocol",
+        turnId: "turn-protocol",
+      })).rejects.toMatchObject({ code: "state_unavailable", message: "Hermes state is unavailable" });
+      assertNoSecrets(JSON.stringify({ message: "Hermes state is unavailable" }), ["unreadable state"]);
+    });
+
+    it("maps missing CLI spawn to fixed missing_cli diagnostics", async () => {
+      engine = createHermesBotEngine({
+        cli: join(home, "missing-hermes-cli"),
+        environment: fixtureEnv(home, hermesHome),
+        timeouts: { initializationMs: 500, requestMs: 500, turnMs: 500, reconnectMs: 500 },
+      }) as HermesBotAdapter;
+      const discovery = await engine.discover();
+      expect(discovery).toMatchObject({
+        state: "unavailable",
+        reason: "missing_cli",
+        capabilities: { roster: false, send: false, finalResponse: false },
+      });
+      assertNoSecrets(JSON.stringify(discovery));
+    });
+
+    it.each([
+      ["renamed-profile", PROFILE, "happy"],
+      ["renamed-named-profile", NAMED_PROFILE, "named-profile"],
+    ])("fails closed for %s identity drift", async (driftMode, boundProfile, seedMode) => {
+      setFixtureMode(hermesHome, seedMode);
+      engine = createHermesBotEngine({
+        cli: launcher,
+        environment: fixtureEnv(home, hermesHome),
+        timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
+      }) as HermesBotAdapter;
+      await engine.discover();
+      setFixtureMode(hermesHome, driftMode);
+      await expect(engine.send({
+        profile: boundProfile,
+        text: "drift",
+        threadId: `thread-${driftMode}`,
+        turnId: `turn-${driftMode}`,
+      })).rejects.toMatchObject({ code: "profile_unavailable", message: "Hermes profile is unavailable" });
+      const rediscovery = await engine.discover();
+      expect(rediscovery.state).toBe("available");
+      expect(rediscovery.profiles.some((row) => row.profile === boundProfile && row.availability === "available")).toBe(false);
+      assertNoSecrets(JSON.stringify(rediscovery), ["drift"]);
+    });
+
+    it("preserves stale safe roster rows when discovery fails after a successful read", async () => {
+      engine = createHermesBotEngine({
+        cli: launcher,
+        environment: fixtureEnv(home, hermesHome),
+        timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
+      }) as HermesBotAdapter;
+      const first = await engine.discover();
+      expect(first.state).toBe("available");
+      expect(first.profiles[0]?.handle).toBe("hermes");
+      setFixtureMode(hermesHome, "state-unavailable");
+      const second = await engine.discover();
+      expect(second.state).toBe("unavailable");
+      expect(second.reason).toBe("state_unavailable");
+      expect(second.profiles).toHaveLength(1);
+      expect(second.profiles[0]).toMatchObject({
+        profile: PROFILE,
+        handle: "hermes",
+        availability: "unavailable",
+        canonicalChat: "unknown",
+      });
+      assertNoSecrets(JSON.stringify(second));
     });
 
     it("ignores global gateway events with empty session ids", async () => {
@@ -463,21 +640,36 @@ describe("Hermes live loopback fixture", () => {
         expect(interruptedEvents.length).toBeGreaterThan(0);
 
         writeFileSync(rpcLog, "");
+        writeFileSync(join(hermesHome, "mode-control.txt"), "hang");
+        const hangBeforeKill = await api("POST", `/api/bots/${bot.id}/messages`, { text: "kill mid lifecycle" });
+        expect(hangBeforeKill.status).toBe(202);
+        await waitFor(async () => (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id)?.busy === true, "busy before SIGKILL", 20_000);
+        const killPid = await waitForLiveGatewayPid(hermesHome, rpcLog);
+        process.kill(killPid, "SIGKILL");
+        await waitFor(async () => (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id)?.busy === false, "gateway SIGKILL terminal turn", 20_000);
+        const killCompleted = sse.frames.filter((frame) =>
+          frame.kind === "runtime"
+          && frame.event?.type === "turn.completed"
+          && frame.event?.threadId
+          && frame.event?.stopReason === "gateway_unavailable");
+        expect(killCompleted.length).toBeGreaterThan(0);
+        expect(killCompleted.filter((frame) => frame.event?.threadId === killCompleted[0]?.event?.threadId)).toHaveLength(1);
+
+        writeFileSync(rpcLog, "");
         writeFileSync(join(hermesHome, "mode-control.txt"), "happy");
-        await api("PATCH", "/api/config", { vbot: { hermes: { enabled: true } } });
-        await settle(300);
-        const afterRestart = await api("POST", `/api/bots/${bot.id}/messages`, { text: "after gateway restart" });
-        expect(afterRestart.status).toBe(202);
+        const afterKill = await api("POST", `/api/bots/${bot.id}/messages`, { text: "after gateway SIGKILL" });
+        expect(afterKill.status).toBe(202);
         await waitFor(async () => {
           const current = await api("GET", "/api/bots");
           const found = current.body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
           return found?.messages?.filter((message: { role: string; text?: string }) =>
             message.role === "bot" && message.text === FIXTURE_REPLY).length >= 2;
-        }, "post-restart assistant message");
+        }, "post-SIGKILL assistant message");
         const restartCalls = readRpcLog(rpcLog);
         expect(restartCalls.some((entry) => entry.method === "session.list" && entry.params?.title === "Bot Chat")).toBe(true);
         expect(restartCalls.some((entry) => entry.method === "session.resume" && entry.params?.session_id === SESSION_TIP)).toBe(true);
         expect(readFileSync(bindingPath, "utf8")).toBe(bindingBefore);
+        assertNoSecrets(JSON.stringify(await api("GET", "/api/bots")));
 
         writeFileSync(bindingPath, "{not-json", { mode: 0o600 });
         const malformedBot = (await api("POST", "/api/bots")).body.bot;

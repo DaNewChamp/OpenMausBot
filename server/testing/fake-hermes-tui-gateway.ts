@@ -7,7 +7,10 @@
 //
 //   FAKE_HERMES_MODE        happy (default) | hang | malformed-final |
 //                           rpc-timeout | crash | protocol-fail |
-//                           missing-profile | renamed-profile | auth-fail
+//                           malformed-envelope | missing-profile |
+//                           renamed-profile | renamed-named-profile |
+//                           named-profile | state-unavailable |
+//                           missing-cli | auth-fail
 //   FAKE_HERMES_DELTAS      set to 1 to emit message.delta frames
 //   FAKE_HERMES_DUMP        write { argv, env, pid } JSON for test assertions
 //   FAKE_HERMES_RPC_LOG     append one JSON object per RPC method call
@@ -18,6 +21,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 const defaultMode = process.env.FAKE_HERMES_MODE ?? "happy";
 const emitDeltas = process.env.FAKE_HERMES_DELTAS === "1";
 const PROFILE = "default";
+const NAMED_PROFILE = "work";
 const SESSION_ROOT = "session-root";
 const SESSION_TIP = "session-tip";
 const FIXTURE_REPLY = "fixture Hermes wave1 reply";
@@ -45,6 +49,17 @@ function activeMode() {
     if (next) return next;
   }
   return readHomeMode() ?? defaultMode;
+}
+
+function startupMode() {
+  return activeMode();
+}
+
+function profileForMode(mode: string): { name: string; isDefault: boolean } {
+  if (mode === "named-profile") return { name: NAMED_PROFILE, isDefault: false };
+  if (mode === "renamed-named-profile") return { name: "work-renamed", isDefault: false };
+  if (mode === "renamed-profile") return { name: "profile-renamed", isDefault: true };
+  return { name: PROFILE, isDefault: true };
 }
 
 function shouldEmitDeltas() {
@@ -82,15 +97,16 @@ if (argv.includes("--version")) {
   process.exit(0);
 }
 
-if (defaultMode === "missing-cli") {
-  process.exit(127);
-}
-
 if (argv[0] !== "--tui") {
   process.exit(2);
 }
 
-if (defaultMode === "crash") {
+const initialMode = startupMode();
+if (initialMode === "missing-cli") {
+  process.exit(127);
+}
+
+if (initialMode === "crash") {
   process.stderr.write("fixture crash before ready\n");
   process.exit(3);
 }
@@ -109,6 +125,10 @@ setTimeout(() => {
   const mode = activeMode();
   if (mode === "protocol-fail") {
     process.stdout.write("{not-jsonrpc\n");
+    return;
+  }
+  if (mode === "malformed-envelope") {
+    out({ jsonrpc: "1.0", method: "event", params: { type: "gateway.ready", payload: { version: "2026.8.31-fixture" } } });
     return;
   }
   out({ jsonrpc: "2.0", method: "event", params: { type: "gateway.ready", payload: { version: "2026.8.31-fixture" } } });
@@ -146,14 +166,18 @@ process.stdin.on("data", (chunk) => {
         out({ jsonrpc: "2.0", id: request.id, result: { profiles: [] } });
         return;
       }
-      const profileName = mode === "renamed-profile" ? "profile-renamed" : PROFILE;
+      if (mode === "state-unavailable") {
+        out({ jsonrpc: "2.0", id: request.id, result: { ok: false, profiles: [] } });
+        return;
+      }
+      const { name: profileName, isDefault } = profileForMode(mode);
       out({
         jsonrpc: "2.0",
         id: request.id,
         result: {
           profiles: [{
             name: profileName,
-            is_default: true,
+            is_default: isDefault,
             display_name: "Fixture Hermes",
             description: "Wave 1 deterministic profile",
             model: "fixture-model",
@@ -205,6 +229,13 @@ process.stdin.on("data", (chunk) => {
       promptCounter += 1;
       out({ jsonrpc: "2.0", id: request.id, result: { accepted: true } });
       if (mode === "hang") {
+        return;
+      }
+      if (mode === "crash-mid-turn") {
+        setTimeout(() => {
+          process.stderr.write("fixture crash mid-turn\n");
+          process.exit(4);
+        }, 10);
         return;
       }
       const runtimeId = `runtime-gen-${runtimeCounter}`;
