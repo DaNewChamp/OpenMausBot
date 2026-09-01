@@ -1,4 +1,11 @@
-V Bot build 74: cleaner activity and unread behavior, simpler bot settings, clearer approvals, and first-party Hermes Bot Chat support through your paired hub.
+V Bot build 75: editable profile icons, a clearer paired-computer fleet, and cancellation-safe navigation.
+
+Profile & computers
+
+• Pick your own profile icon from the avatar menu
+• Computers now shows every machine paired to this iPhone and identifies the active one
+• Generic OpenMausBot machine names are replaced with the computer's friendly host name
+• Leaving a loading settings screen no longer shows a false CancellationError alert
 
 Home activity
 
