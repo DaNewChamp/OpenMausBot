@@ -1,76 +1,99 @@
 # Task 1 implementation report
 
-Commit: `a0ed9ba` (`fix(ios): refine home chrome and connection feedback`)
+Commit: task-sized `feat(vbot): add Hermes Bot Chat contracts and safe bindings`
 
 ## Files changed
 
-- `ios/Sources/CompanionCore/HomeRosterLayoutPolicy.swift`
-  - Profile avatar 36pt; 44pt profile target.
-  - Chrome circles 44pt, 17pt symbols, 8pt gap.
-  - Central single-pin hero fraction set to 20%.
-- `ios/Sources/CompanionCore/CalmSurfacePolicy.swift`
-  - `PinnedChatShelfLayout` now consumes the home policy's 20% hero fraction (required because this is where the shelf metrics live).
-- `ios/Sources/CompanionCore/ConnectionResiliencePolicy.swift`
-  - Added `Banner.showsConnectingHalo` and `Banner.showsRosterText` projections.
-  - Initial connecting state is not a roster text banner; reconnecting/offline/unauthorized remain roster-visible.
-  - Offline VoiceOver label is generic (`Offline`) so route/advice text is not exposed.
-- `ios/Tests/CompanionCoreTests/HomeRosterLayoutPolicyTests.swift`
-  - Added/updated metric and clipping/reservation assertions for the new scale.
-- `ios/Tests/CompanionCoreTests/ConnectionResiliencePolicyTests.swift`
-  - Added projection/accessibility tests for initial connecting, reconnecting, offline, and unauthorized states.
-- `ios/App/ChatListView.swift`
-  - Added a subtle rotating profile halo for initial connecting; Reduce Motion renders a static ring.
-  - Initial connecting text is omitted; actionable banners still render.
-  - Profile VoiceOver value reports connection state without route details.
-  - Header controls use policy dimensions and 17pt symbols.
-- `ios/App/PinnedChatShelf.swift`
-  - Documented the 20% single-hero metric and guaranteed caption breathing-room minimum height.
+- `server/engines/contracts.ts`
+  - Added the internal Hermes capability, profile, canonical-chat, discovery,
+    binding, and typed failure contracts.
+  - Capability keys are explicit; unsupported message-agent, group,
+    cross-machine, queueing, steer, attachment, and routine capabilities stay
+    false unless a later transport explicitly proves support.
+- `server/engines/discovery.ts`
+  - Added bounded, deterministic profile normalization with the default
+    `hermes` handle, case-insensitive named slugs, duplicate/invalid handle
+    fail-closed behavior, and safe omission of path/raw metadata.
+  - Added exact Bot Chat canonical lookup normalization, hidden-row inclusion,
+    denied `kanban`/`tool` sources, compression root/tip retention in the
+    internal result, and present/absent/unknown discrimination.
+  - Added capability projection that enables only transport-proven Wave 1
+    operations.
+- `server/engines/bindings.ts`
+  - Added strict version-1 sidecar decoding and small load/set/remove methods.
+  - Missing storage is an available empty set; malformed or unreadable
+    existing storage is unavailable and is never replaced with `{}`.
+  - Parent directories are verified/repaired to `0700`; replacements use the
+    existing atomic writer with `0600` files and preserve the prior file on
+    validation or replacement failure.
+- `server/engines/contracts.test.ts`
+- `server/engines/discovery.test.ts`
+- `server/engines/bindings.test.ts`
+  - Added red/green coverage for contracts, normalization, title/source rules,
+    bounded safe projections, strict sidecar validation, private modes, and
+    fail-closed mutation behavior.
 
 ## TDD evidence
 
-Red first (before production changes):
+Red first (before production modules existed):
 
 ```text
-swift test --package-path ios --filter 'HomeRosterLayoutPolicyTests|ConnectionResiliencePolicyTests'
+./node_modules/.bin/vitest run server/engines/contracts.test.ts \
+  server/engines/discovery.test.ts server/engines/bindings.test.ts
 ```
 
-Failed at compile time as expected because the new policy metrics/projections (`chromeButtonSymbolSize`, `showsConnectingHalo`, `showsRosterText`, `offlineAccessibility`) did not yet exist.
+Failed at collection with the expected missing-module errors for
+`./contracts.ts`, `./discovery.ts`, and `./bindings.ts`.
 
-Green focused run:
+The prescribed `pnpm vitest run ...` command was also attempted, but this
+desktop runtime invokes an automatic dependency install first and stopped on
+its existing ignored-build policy for `core-js`/`workerd`; no source files were
+changed by that failed setup step.
+
+Focused green:
 
 ```text
-swift test --package-path ios --filter 'HomeRosterLayoutPolicyTests|ConnectionResiliencePolicyTests'
+./node_modules/.bin/vitest run server/engines/contracts.test.ts \
+  server/engines/discovery.test.ts server/engines/bindings.test.ts
 ```
 
-23 tests passed, 0 failures.
+13 tests passed, 0 failures.
 
-## Full verification
+TypeScript and whitespace checks:
 
 ```text
-swift test --package-path ios
+./node_modules/.bin/tsc -p tsconfig.server.json --noEmit
+git diff --check
 ```
 
-683 tests passed, 0 failures.
+Both passed. The direct TypeScript invocation is equivalent to the server
+portion of the requested `pnpm typecheck` gate; the same automatic pnpm setup
+failure above prevented the wrapper command from reaching `tsc`.
 
-Generated the ignored Xcode project with `xcodegen generate`, then ran an unsigned simulator build:
+## Security self-review
 
-```text
-xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
-  -sdk iphonesimulator -configuration Debug \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
-```
+- Public `server/contracts.ts` and iOS wire contracts were untouched.
+- Profile/path-like and Hermes metadata fields are never copied into roster
+  rows or binding records. Binding profiles accept only bounded slugs and
+  reject path forms, session-id-shaped values, alternate titles, and schema
+  drift.
+- Error instances expose only a stable typed code and sanitized human message;
+  path, argv, stderr, provider, token, prompt, query, and state-store details
+  are not retained in messages.
+- Sidecar reads reject symlinks, non-files, unreadable files, malformed JSON,
+  schema/version drift, unsafe binding keys, and invalid bindings. Failed
+  writes use the existing atomic sibling replacement and leave prior bytes
+  intact when replacement cannot complete.
+- Serialized sidecars contain only V Bot id -> adapter/profile/title/version;
+  no Hermes path, environment, token, prompt, durable session id, or raw
+  provider payload is persisted.
 
-`** BUILD SUCCEEDED **` (iOS simulator SDK 26.5, iOS deployment target 17.0).
+## Concerns / root verification
 
-## Accessibility / motion self-review
-
-- Profile, search, and add controls retain at least 44pt hit targets.
-- Halo is marked accessibility-hidden; the profile control reports `Connecting to your computer`, `Reconnecting to your computer`, or generic offline/unauthorized state through its value.
-- Reduce Motion disables TimelineView rotation and uses a static stroked ring. Existing shelf/list animations also retain their Reduce Motion branches.
-- Reconnecting, offline, and unauthorized banners remain visible and actionable; only initial connecting text is replaced.
-
-## Concerns and root verification
-
-- The brief's file list omitted `CalmSurfacePolicy.swift`, but `PinnedChatShelfLayout.heroAvatarWidthFraction` is defined there; it was updated to consume the new `HomeRosterLayoutPolicy` fraction so runtime metrics actually reach the shelf.
-- No physical-device VoiceOver/Reduce Motion pass or visual screenshot review was performed in this bounded implementation. Root should inspect the home on a simulator/device at normal and large Dynamic Type, especially the halo against the 44pt glass profile control and the 20% hero caption clearance.
-- No backend, dependency, bundle identity, build number, signing, deployment, or TestFlight state was changed.
+- The `pnpm` wrapper's preflight currently fails on its unrelated ignored
+  `core-js`/`workerd` build policy. Root should rerun the prescribed commands
+  if that workspace setup is repaired.
+- No transport, HTTP, SQLite, Hermes import, provider registry, public
+  contract, deployment, or live runtime behavior was changed in this task.
+- Root should independently inspect the branch diff and rerun the focused
+  tests/typecheck before integrating Task 2.
