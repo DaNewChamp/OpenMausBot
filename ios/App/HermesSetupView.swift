@@ -122,7 +122,7 @@ struct HermesSetupView: View {
                     }
                 }
             }
-        } else if presentation.state == .ready {
+        } else if presentation.state == .ready, availableProfiles.isEmpty {
             VBotSurfaceGroup {
                 Text("Hermes is ready, but no profiles are available yet.")
                     .font(.subheadline)
