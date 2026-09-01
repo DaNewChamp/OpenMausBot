@@ -13,13 +13,14 @@ transcripts and computers. The phone owns nothing — it is a second client of t
 same harness the desktop app talks to, through the restricted sidecar described in
 [`docs/ios-companion.md`](../docs/ios-companion.md).
 
-## Status (build 62)
+## Status (build 73)
 
-The private release line is build 62 (`CURRENT_PROJECT_VERSION: 62`) at repository HEAD `8bf9ef9`.
+The private release line is build 73 (`CURRENT_PROJECT_VERSION: 73`) at repository HEAD `51e65aa`.
 The code and focused suites cover QR handoff, Bonjour/manual LAN and Tailscale pairing, the roster,
 paged chat, settled replies, model/provider selection, attachments, the computer view, and approval
-flows. Build 62 is recorded as valid in internal TestFlight; a fresh physical-device install,
-cellular VM exercise, and deployed-HEAD parity are release gates and are not claimed by this README.
+flows. Build 72 is recorded as valid in internal TestFlight; build 73 is the next internal candidate
+and is not uploaded yet. A fresh physical-device install, cellular VM exercise, and deployed-HEAD
+parity are release gates and are not claimed by this README.
 
 The event stream deliberately reads raw bytes rather than
 `URLSession.AsyncBytes.lines`. Three easy-to-miss failure modes are covered by

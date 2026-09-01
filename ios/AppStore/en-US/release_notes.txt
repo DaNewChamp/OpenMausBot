@@ -1,12 +1,12 @@
-V Bot build 72: home activity at a glance.
+V Bot build 73: cleaner home activity and reliable read receipts.
 
 Home activity
 
-• See active work and approval requests from the home roster in one calm pill
-• Expand the pill to review the bots that need you and the work still running
-• Connection feedback remains clear at larger text sizes and with Reduce Motion
+• Quiet home no longer shows a stray activity pill when nothing needs you
+• The compact active pill expands so you can review running work and approvals in one place
+• Connection feedback stays clear at larger text sizes and with Reduce Motion
 
-Message polish
+Messages
 
-• Makes the send-button haptic feel closer to a clean iOS keyboard tap
-• Keeps feedback immediate without becoming a heavy impact
+• Unread and read receipts now stay in sync, including Chief and Desk Docs threads
+• Send-button haptic still feels like a clean iOS keyboard tap — immediate, not heavy
