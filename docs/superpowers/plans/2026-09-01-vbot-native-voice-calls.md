@@ -20,7 +20,7 @@
 - Reuse current chat, SSE, group send, interrupt, approval respond, and TTS prepare/speak. Call overlays submit finals through `Session.send(_:to:mode:)` (which applies `VBotMutationRouting`), not `CompanionClient.send`. Do not invent a voice websocket or a second transcript store.
 - Reconstructed engine chats are reference-only in this MVP: hide the call button when `CallModePolicy.allowsNativeCall(mutationTarget:)` is false. Do not treat reconstructed rooms as sendable call targets.
 - Native room/group-call support is the server `VBotEngineCapabilities.groups` boolean on `GET /api/vbot/engine-sync`, decoded fail-closed on iOS, then AND-ed with advertised Hermes `capabilities.hermesBot.capabilities.groups` only when a visible member’s instance advertises `hermesBot`. Do not infer groups from roster shape and do not hardcode engine or instance ids.
-- Companion `/api/tts/prepare` availability is sidecar `ttsPrepareVersion` on `GET /api/companion/endpoints`. Hub `features.iosVoiceCalls` does not imply the sidecar allowlists or implements prepare. Missing/unknown versions fail closed.
+- Companion `/api/tts/prepare` availability is sidecar `ttsPrepareVersion` on `GET /api/companion/endpoints`. Hub `features.iosVoiceCalls` does not imply the sidecar allowlists or implements prepare. Missing, unknown, wrong-type, or non-int versions fail closed (`nil`, never throw). A failed endpoint refresh must clear in-memory `ttsPrepareVersion` so a stale `1` cannot keep calls enabled.
 - `requireEveryMemberVoice` and `allowsRoomCall` both require at least one visible (`hidden != true`) room member. An empty member list is not vacuously ready.
 - TTS credentials stay on the Hub. The phone receives voice labels and audio bytes only.
 - Bridges keep their current advertised capabilities (`shell`, `local-vm`, `ssh-forward`). Do not add a `tts` bridge capability in this MVP.
@@ -50,7 +50,7 @@ Read-only pass on 2026-09-01. Implementers should treat these as the source of t
 | Capability / bridges | `server/bridge-registry.ts` `BridgeCapability = "shell" \| "local-vm" \| "ssh-forward"` | TTS is Hub-owned. Phones talk only to the companion. Do not place STT or TTS on a bridge in this MVP. |
 | Engine group capability | `server/vbot-engine-sync.ts` `VBotEngineCapabilities`; iOS `VBotEngineSync` currently does **not** decode `engineCapabilities` | Add `groups: boolean` on the Hub payload. iOS must decode it with `decodeIfPresent` / `== true` fail-closed. Do not infer from `VBotSyncedGroup` roster rows. |
 | Hermes groups | `server/engines/contracts.ts` `HermesCapabilityFlags.groups` (false today); `server/index.ts` `describeProviderInstances()` copies that object onto `GET /api/instances` `capabilities.hermesBot` when Hermes is enabled | iOS `InstanceCapabilities` must decode `hermesBot.capabilities.groups` fail-closed. Room calls AND that flag only when a visible member’s instance advertises `hermesBot`. Do not switch on `"hermes"` / instance id. |
-| Sidecar prepare handshake | `companion/src/proxy.ts` `GET /api/companion/endpoints` (`CompanionEndpointSnapshot`: `serverName` + `endpoints` only today) | Advertise `ttsPrepareVersion: 1` here (sidecar-owned, not Hub config). Old snapshots without the field keep decoding for routes and fail closed for calls. |
+| Sidecar prepare handshake | `companion/src/proxy.ts` `GET /api/companion/endpoints` (`CompanionEndpointSnapshot`: `serverName` + `endpoints` only today) | Advertise `ttsPrepareVersion: 1` here (sidecar-owned, not Hub config). Old snapshots without the field, and snapshots with a wrong-type/non-int version, keep decoding for routes and fail closed for calls. |
 | Flags | `src/lib/feature-flags.ts` | Experimental features are explicit opt-in (`skillRecorder`). iOS calls follow that pattern. Existing `features.browser` stays as-is. Hub `iosVoiceCalls` is not a sidecar prepare advertisement. |
 | Voice decision doc | `docs/voice-mode.md` | Half-duplex rationale, 850ms endpointing, narration, spoken approvals, rejected realtime/S2S providers, Kokoro previously rejected as a **renderer** bundle. This plan places Kokoro later **on the Hub**, not on the phone. |
 | Supersedes | `docs/superpowers/plans/2026-08-31-vbot-ios-parity-closeout.md` Task 5 | That task said “no room calls”. This plan requires team calls in the same MVP. |
@@ -82,10 +82,11 @@ Modify:
 - `server/config.test.ts`, `src/lib/feature-flags.test.ts`
 - `server/vbot-engine-sync.ts` and `server/vbot-engine-sync.test.ts` — add `VBotEngineCapabilities.groups`; OpenMaus `true`, reconstructed `false` (do not infer from roster groups).
 - `ios/Sources/CompanionCore/Client.swift` — `prepareSpeech` and `synthesizeSpeech` next to `previewVoice`.
-- `ios/Sources/CompanionCore/Models.swift` — decode optional `ConfigStatus.features.iosVoiceCalls`; decode `VBotEngineSync.engineCapabilities` fail-closed; decode `CompanionConnectionMetadata.ttsPrepareVersion`; decode `InstanceCapabilities.hermesBot.capabilities.groups`.
+- `ios/Sources/CompanionCore/Models.swift` — decode optional `ConfigStatus.features.iosVoiceCalls`; decode `VBotEngineSync.engineCapabilities` fail-closed; decode `CompanionConnectionMetadata.ttsPrepareVersion` tolerantly (missing/null/wrong-type/non-int → `nil`, do not throw); decode `InstanceCapabilities.hermesBot.capabilities.groups`.
+- `ios/Sources/CompanionCore/ConnectionResiliencePolicy.swift` — `ttsPrepareVersion(current:refresh:)` so Session refresh can clear a stale `1` without App-target tests.
 - `ios/Tests/CompanionCoreTests/EngineSyncTests.swift`, `ios/Tests/CompanionCoreTests/EndpointRefreshTests.swift`
 - `ios/App/SpeechDictation.swift` is **not** modified. `CallCapture` calls `Dictation.localeCandidates()` directly.
-- `ios/App/ChatView.swift`, `ios/App/ChatChromeView.swift`, `ios/App/Session.swift` — call button, overlay, hang-up on leave/background/pairing loss. Call overlays use existing `Session.send` / `interrupt` / `answer` (optional deny `message`); do not add a parallel send API. `Session` keeps in-memory `ttsPrepareVersion: Int?` from `GET /api/companion/endpoints` (cleared on disconnect; not persisted on `Connection`).
+- `ios/App/ChatView.swift`, `ios/App/ChatChromeView.swift`, `ios/App/Session.swift` — call button, overlay, hang-up on leave/background/pairing loss. Call overlays use existing `Session.send` / `interrupt` / `answer` (optional deny `message`); do not add a parallel send API. `Session` keeps in-memory `ttsPrepareVersion: Int?` from `GET /api/companion/endpoints` (cleared on disconnect and on missing/malformed/decode-failure refresh via `ConnectionResiliencePolicy.ttsPrepareVersion(current:refresh:)`; not persisted on `Connection`; failed refresh keeps the last known-good route snapshot).
 - `ios/project.yml` — purpose strings mention calls.
 - `docs/voice-mode.md`, `docs/ios-companion.md`, `ios/TESTING.md` — current-state + device gates.
 - `server/tts/index.ts` is **not** modified in MVP. Kokoro is Task 11 (next), after the phone loop works.
@@ -368,12 +369,26 @@ final class CallCapture {
 // VBotMutationRouting stays intact. Do not call CompanionClient.send
 // / interrupt / respond from CallView or GroupCallView.
 extension Session {
+    /// In-memory sidecar prepare advertisement. Never persist on `Connection`.
+    var ttsPrepareVersion: Int?
     @discardableResult
     func send(_ text: String, to chat: Chat, mode: MessageDeliveryMode = .auto) async -> MessageDeliveryReceipt?
     func interrupt(chat: Chat) async
     /// Optional `message` is passed to `respond` for allow/deny (call deny copy).
     /// Existing composer / Live Activity callers omit it.
     func answer(threadId: String, requestId: String, choice: String, isPermission: Bool, message: String? = nil) async
+}
+
+extension ConnectionResiliencePolicy {
+    /// In-memory sidecar prepare advertisement after `GET /api/companion/endpoints`.
+    /// Success → `metadata.ttsPrepareVersion` (decoder already maps missing/wrong-type/non-int to nil).
+    /// `CancellationError` → `current` (a newer refresh owns the slot).
+    /// Any other failure (404, unreadable body, decode failure including empty-route rejection) → `nil`.
+    /// Does not mutate Connection routes; Session keeps the last known-good snapshot.
+    public static func ttsPrepareVersion(
+        current: Int?,
+        refresh: Result<CompanionConnectionMetadata, Error>
+    ) -> Int?
 }
 ```
 
@@ -412,7 +427,7 @@ Visible room members are bots in `room.memberIds` whose `hidden != true` (same f
 
 Do not concatenate, localize, or paraphrase these strings in overlays. Tests compare `==`, not `contains`.
 
-`companionPrepareAllowed(ttsPrepareVersion:)` is true iff `ttsPrepareVersion == requiredTtsPrepareVersion` (`1`). Hub `ConfigStatus.features.iosVoiceCalls` is `flagged` only. A true hub flag with a missing sidecar version must not start a call.
+`companionPrepareAllowed(ttsPrepareVersion:)` is true iff `ttsPrepareVersion == requiredTtsPrepareVersion` (`1`). Hub `ConfigStatus.features.iosVoiceCalls` is `flagged` only. A true hub flag with a missing, malformed, or unknown sidecar version must not start a call. `Session.refreshConnectionMetadata` must assign `ttsPrepareVersion` only through `ConnectionResiliencePolicy.ttsPrepareVersion(current:refresh:)` so a stale `1` cannot survive a 404/malformed/decode-failure refresh.
 
 `requiresAddress` is true iff `defaultResponderKind == "mentions"`.
 
@@ -499,7 +514,7 @@ export interface CompanionEndpointSnapshot {
 
 `endpointSnapshot()` always sets `ttsPrepareVersion: TTS_PREPARE_API_VERSION`. Do not forward this object to the Hub. Do not put the version on `GET /api/config`.
 
-iOS `CompanionConnectionMetadata` adds `ttsPrepareVersion: Int?` via `decodeIfPresent`. Missing/null/non-int → nil. Decode of endpoints must still succeed for old sidecars (today’s fixtures have no version). `CallModePolicy.companionPrepareAllowed(ttsPrepareVersion:)` is the only call gate.
+iOS `CompanionConnectionMetadata` adds `ttsPrepareVersion: Int?`. Decode it **tolerantly**: missing, JSON null, wrong type (string/bool/object/array), or non-int number → `nil`, and **must not throw**. Decode of endpoints must still succeed for old sidecars (today’s fixtures have no version) and for a malformed version beside valid routes. Do **not** use throwing `try container.decodeIfPresent(Int.self, …)` — that throws on a present non-int and would discard the whole snapshot. Use the existing private `Lossy<Int>` wrapper already in `Models.swift` (same as endpoint rows). `CallModePolicy.companionPrepareAllowed(ttsPrepareVersion:)` is the only call gate. `Session.ttsPrepareVersion` is in-memory only; `ConnectionResiliencePolicy.ttsPrepareVersion(current:refresh:)` is what clears a stale `1` when the snapshot is missing or the decode fails.
 
 Engine capability payload (Task 9). Add to `VBotEngineCapabilities` in `server/vbot-engine-sync.ts`:
 
@@ -583,15 +598,17 @@ Desktop constants **not** to copy onto iOS:
 - Modify: `src/lib/feature-flags.ts`
 - Modify: `src/lib/feature-flags.test.ts`
 - Modify: `ios/Sources/CompanionCore/Models.swift` (`ConfigStatus`, `CompanionConnectionMetadata`)
+- Modify: `ios/Sources/CompanionCore/ConnectionResiliencePolicy.swift`
 - Modify: `ios/Tests/CompanionCoreTests/EndpointRefreshTests.swift`
 - Test: `companion/test/routes.test.ts`
 - Test: `companion/test/proxy.test.ts`
 - Test: `src/lib/feature-flags.test.ts`
 - Test: `server/config.test.ts`
+- Test: `ios/Tests/CompanionCoreTests/EndpointRefreshTests.swift`
 
 **Interfaces:**
 - Consumes: existing companion allowlist classifier `denyReason`, existing phone-readable `GET /api/config`, existing sidecar `GET /api/companion/endpoints`.
-- Produces: paired devices may `POST /api/tts/prepare`. Sidecar snapshot includes `ttsPrepareVersion: 1`. `iosVoiceCallsEnabled(config)` is true only when `features.iosVoiceCalls === true`. Hub `configStatus().features` includes that boolean. The hub flag does **not** set `companionPrepareAllowed`. Unauthenticated devices still cannot hit TTS. Phone still cannot PATCH `/api/config`. Optional `ConfigStatus.features.iosVoiceCalls: Bool?` on iOS. Optional `CompanionConnectionMetadata.ttsPrepareVersion: Int?`.
+- Produces: paired devices may `POST /api/tts/prepare`. Sidecar snapshot includes `ttsPrepareVersion: 1`. `iosVoiceCallsEnabled(config)` is true only when `features.iosVoiceCalls === true`. Hub `configStatus().features` includes that boolean. The hub flag does **not** set `companionPrepareAllowed`. Unauthenticated devices still cannot hit TTS. Phone still cannot PATCH `/api/config`. Optional `ConfigStatus.features.iosVoiceCalls: Bool?` on iOS. Optional `CompanionConnectionMetadata.ttsPrepareVersion: Int?` decoded tolerantly (wrong type/non-int → nil, not throw). `ConnectionResiliencePolicy.ttsPrepareVersion(current:refresh:)` returns the snapshot version on success, `current` on `CancellationError`, and `nil` on any other refresh failure.
 
 - [ ] **Step 1: Write the failing allowlist, handshake, and flag tests**
 
@@ -641,6 +658,48 @@ func testSidecarPrepareVersionDecodesWhenAdvertised() throws {
     )
     XCTAssertEqual(ready.ttsPrepareVersion, 1)
 }
+
+func testMalformedPrepareVersionIsNilAndDoesNotThrow() throws {
+    let payloads = [
+        #"{"serverName":"Mac","endpoints":[{"url":"http://192.168.1.42:8810","kind":"lan","priority":200}],"ttsPrepareVersion":"1"}"#,
+        #"{"serverName":"Mac","endpoints":[{"url":"http://192.168.1.42:8810","kind":"lan","priority":200}],"ttsPrepareVersion":true}"#,
+        #"{"serverName":"Mac","endpoints":[{"url":"http://192.168.1.42:8810","kind":"lan","priority":200}],"ttsPrepareVersion":1.5}"#,
+        #"{"serverName":"Mac","endpoints":[{"url":"http://192.168.1.42:8810","kind":"lan","priority":200}],"ttsPrepareVersion":[]}"#,
+        #"{"serverName":"Mac","endpoints":[{"url":"http://192.168.1.42:8810","kind":"lan","priority":200}],"ttsPrepareVersion":{}}"#,
+        #"{"serverName":"Mac","endpoints":[{"url":"http://192.168.1.42:8810","kind":"lan","priority":200}],"ttsPrepareVersion":null}"#,
+    ]
+    for payload in payloads {
+        let decoded = try JSONDecoder().decode(
+            CompanionConnectionMetadata.self,
+            from: Data(payload.utf8)
+        )
+        XCTAssertNil(decoded.ttsPrepareVersion, payload)
+        XCTAssertEqual(decoded.endpoints.map(\.url), ["http://192.168.1.42:8810"])
+    }
+}
+
+func testRefreshFailureClearsStalePrepareVersionAndKeepsCurrentOnCancel() throws {
+    let ready = try JSONDecoder().decode(
+        CompanionConnectionMetadata.self,
+        from: Data(#"{"serverName":"Mac","endpoints":[{"url":"http://192.168.1.42:8810","kind":"lan","priority":200}],"ttsPrepareVersion":1}"#.utf8)
+    )
+    let old = try JSONDecoder().decode(
+        CompanionConnectionMetadata.self,
+        from: Data(#"{"serverName":"Mac","endpoints":[{"url":"http://192.168.1.42:8810","kind":"lan","priority":200}]}"#.utf8)
+    )
+    let malformed = try JSONDecoder().decode(
+        CompanionConnectionMetadata.self,
+        from: Data(#"{"serverName":"Mac","endpoints":[{"url":"http://192.168.1.42:8810","kind":"lan","priority":200}],"ttsPrepareVersion":"1"}"#.utf8)
+    )
+    XCTAssertEqual(ConnectionResiliencePolicy.ttsPrepareVersion(current: nil, refresh: .success(ready)), 1)
+    XCTAssertNil(ConnectionResiliencePolicy.ttsPrepareVersion(current: 1, refresh: .success(old)))
+    XCTAssertNil(ConnectionResiliencePolicy.ttsPrepareVersion(current: 1, refresh: .success(malformed)))
+    XCTAssertNil(ConnectionResiliencePolicy.ttsPrepareVersion(current: 1, refresh: .failure(URLError(.fileDoesNotExist))))
+    XCTAssertEqual(
+        ConnectionResiliencePolicy.ttsPrepareVersion(current: 1, refresh: .failure(CancellationError())),
+        1
+    )
+}
 ```
 
 - [ ] **Step 2: Run the focused tests and confirm they fail**
@@ -649,7 +708,7 @@ Run: `pnpm exec vitest run companion/test/routes.test.ts companion/test/proxy.te
 
 Then: `swift test --package-path ios --filter EndpointRefreshTests`
 
-Expected: FAIL because prepare is not allowlisted, snapshot has no `ttsPrepareVersion`, `iosVoiceCallsEnabled` is undefined, Hub config rejects/omits the flag, and iOS metadata has no `ttsPrepareVersion`.
+Expected: FAIL because prepare is not allowlisted, snapshot has no `ttsPrepareVersion`, `iosVoiceCallsEnabled` is undefined, Hub config rejects/omits the flag, iOS metadata has no `ttsPrepareVersion`, a wrong-type version still throws (or the type does not exist), and `ConnectionResiliencePolicy.ttsPrepareVersion(current:refresh:)` is undefined.
 
 - [ ] **Step 3: Add the allowlist entry, sidecar version, and flag helper**
 
@@ -676,11 +735,29 @@ public struct ConfigFeatureFlags: Codable, Sendable {
 
 Do not default it on. The phone reads the flag from `GET /api/config`; the owner turns it on from desktop Settings / config PATCH, which stays Mac-only. `flagged` is `features?.iosVoiceCalls == true`. That is not `companionPrepareAllowed`.
 
-Decode optional `ttsPrepareVersion` on `CompanionConnectionMetadata` with `decodeIfPresent`. This struct already has a custom `init(from:)` — add `ttsPrepareVersion` to `CodingKeys` and assign `try container.decodeIfPresent(Int.self, forKey: .ttsPrepareVersion)` there. Do not throw when it is missing. Do not rewrite the endpoint-route decoder. `Failover.reconcile` ignores the version (routing unchanged).
+Decode optional `ttsPrepareVersion` on `CompanionConnectionMetadata` **tolerantly**. This struct already has a custom `init(from:)` — add `ttsPrepareVersion` to `CodingKeys` and assign `try container.decodeIfPresent(Lossy<Int>.self, forKey: .ttsPrepareVersion)?.value` there (`Lossy` is already private in this file). Missing, null, wrong type, and non-int numbers become `nil`. Do **not** write `try container.decodeIfPresent(Int.self, forKey: .ttsPrepareVersion)` — a present string/bool/1.5 throws and would drop valid routes. Do not coerce `"1"` to `1`. Do not rewrite the endpoint-route decoder. `Failover.reconcile` ignores the version (routing unchanged).
+
+Add to `ConnectionResiliencePolicy`:
+
+```swift
+public static func ttsPrepareVersion(
+    current: Int?,
+    refresh: Result<CompanionConnectionMetadata, Error>
+) -> Int? {
+    switch refresh {
+    case .success(let metadata):
+        return metadata.ttsPrepareVersion
+    case .failure(let error) where error is CancellationError:
+        return current
+    case .failure:
+        return nil
+    }
+}
+```
 
 - [ ] **Step 4: Re-run the focused tests**
 
-Expected: PASS. `GET /api/config` remains allowed (booleans only). `PATCH /api/config` and `/api/instances` still deny from the phone. Hub config accepts `{ features: { iosVoiceCalls: true } }` and defaults false. Endpoint snapshot includes `ttsPrepareVersion: 1` and still strips unknown candidate fields. Old iOS fixtures without the version still decode. Hub flag and sidecar version remain independent fields.
+Expected: PASS. `GET /api/config` remains allowed (booleans only). `PATCH /api/config` and `/api/instances` still deny from the phone. Hub config accepts `{ features: { iosVoiceCalls: true } }` and defaults false. Endpoint snapshot includes `ttsPrepareVersion: 1` and still strips unknown candidate fields. Old iOS fixtures without the version still decode. Wrong-type/non-int `ttsPrepareVersion` decodes as `nil` without throwing and keeps the LAN route. `ttsPrepareVersion(current: 1, refresh: .failure(...))` is `nil` except `CancellationError`. Hub flag and sidecar version remain independent fields.
 
 - [ ] **Step 5: Commit**
 
@@ -1333,8 +1410,8 @@ Commit message: `feat(ios): add silence-endpointed call capture`
 - Modify: `ios/App/Session.swift`
 
 **Interfaces:**
-- Consumes: Tasks 2–5, `Session.send(_:to:mode:)` (applies `VBotMutationRouting`; do not call `CompanionClient.send`), SSE-folded messages, `bot.busy`, `tool.spoken`, `CallModePolicy.transfer`, `CallModePolicy.end`, `CallModePolicy.allowsNativeCall`, `CallModePolicy.companionPrepareAllowed(ttsPrepareVersion:)`.
-- Produces: one call at a time on `Session.currentCallId: String?`. Overlay with avatar, phase label, caption, Interrupt, Hang up. `Session.ttsPrepareVersion: Int?` in memory from sidecar metadata.
+- Consumes: Tasks 2–5, `Session.send(_:to:mode:)` (applies `VBotMutationRouting`; do not call `CompanionClient.send`), SSE-folded messages, `bot.busy`, `tool.spoken`, `CallModePolicy.transfer`, `CallModePolicy.end`, `CallModePolicy.allowsNativeCall`, `CallModePolicy.companionPrepareAllowed(ttsPrepareVersion:)`, `ConnectionResiliencePolicy.ttsPrepareVersion(current:refresh:)`.
+- Produces: one call at a time on `Session.currentCallId: String?`. Overlay with avatar, phase label, caption, Interrupt, Hang up. `Session.ttsPrepareVersion: Int?` in memory from sidecar metadata; `refreshConnectionMetadata` assigns it through `ConnectionResiliencePolicy.ttsPrepareVersion(current:refresh:)` on both success and failure (except cancellation, which leaves `current`).
 
 - [ ] **Step 1: Add ownership tests on `CallModePolicy`**
 
@@ -1365,7 +1442,52 @@ Loop, matching desktop `CallView.tsx`:
 5. After playback finishes: reduce `.playbackFinished`. If the bot is not busy, then reduce `.botBusy(false, ...)` so the phase becomes `.listening` (mic closed during playback; listen only after that). If `awaitingSpokenDecision`, `.playbackFinished` already returns `.listening`.
 6. Tap Interrupt: `CallSpeaker.stop()`, `CallCapture.stop(intentional: true)`, then reduce `.tapInterrupt` → `.listening` and `CallCapture.start()`. Do **not** call `Session.interrupt` on a 1:1 tap unless the bot is still `busy` after speech stopped and the product copy says so. Desktop 1:1 interrupt only stops local TTS and reopens the mic; keep that. Group interrupt is Task 8.
 7. Hang up / Back / `scenePhase != .active` / `AVAudioSession` interruption / pairing loss → `ended` only if `CallModePolicy.end(current:targetId:)` is true; stop capture, stop speaker, deactivate session.
-8. Call button sits in chat chrome next to the existing overflow. Hidden when `allowsNativeCall(mutationTarget: VBotMutationRouting.target(for: session.engineSync))` is false (reconstructed is reference-only, not a call target). Disabled state uses `CallAvailability.reason` verbatim (never paraphrase). Overlay sets `flagged` from `config.features.iosVoiceCalls == true` and `companionPrepareAllowed` from `CallModePolicy.companionPrepareAllowed(ttsPrepareVersion: session.ttsPrepareVersion)` — a true hub flag with a missing sidecar version stays disabled with `reasonCompanionPrepare`. `Session.refreshConnectionMetadata` assigns `ttsPrepareVersion` from the snapshot (nil on 404/decode miss/disconnect). Do not persist it on `Connection`. DMs that are 1:1 bots use this view; `group.dm == true` rooms do not get a team call button.
+8. Call button sits in chat chrome next to the existing overflow. Hidden when `allowsNativeCall(mutationTarget: VBotMutationRouting.target(for: session.engineSync))` is false (reconstructed is reference-only, not a call target). Disabled state uses `CallAvailability.reason` verbatim (never paraphrase). Overlay sets `flagged` from `config.features.iosVoiceCalls == true` and `companionPrepareAllowed` from `CallModePolicy.companionPrepareAllowed(ttsPrepareVersion: session.ttsPrepareVersion)` — a true hub flag with a missing sidecar version stays disabled with `reasonCompanionPrepare`. DMs that are 1:1 bots use this view; `group.dm == true` rooms do not get a team call button.
+
+   `Session.refreshConnectionMetadata` must **explicitly** assign `ttsPrepareVersion` on every terminal path except cancellation and a failed `shouldApplyEndpointRefresh` (a newer refresh owns the slot; leave `current`). Do not persist it on `Connection`. Failed refresh must not call `reconcile` (keep the last known-good route snapshot). A previous `1` must not keep calls enabled after 404, unreadable body, or decode failure:
+
+```swift
+do {
+    let metadata = try await sourceClient.connectionMetadata()
+    try Task.checkCancellation()
+    guard let self,
+          ConnectionResiliencePolicy.shouldApplyEndpointRefresh(
+            startedGeneration: generation,
+            currentGeneration: self.endpointRefreshGeneration,
+            connectionID: connectionID,
+            currentConnectionID: self.connection?.id,
+            sourceBaseURL: sourceBaseURL,
+            currentBaseURL: self.client?.connection.baseURL?.absoluteString
+          ),
+          var updated = self.connection
+    else { return }
+
+    self.ttsPrepareVersion = ConnectionResiliencePolicy.ttsPrepareVersion(
+        current: self.ttsPrepareVersion,
+        refresh: .success(metadata)
+    )
+    updated.reconcile(metadata)
+    self.connection = updated
+    UserDefaults.standard.set(try? JSONEncoder().encode(updated), forKey: Self.connectionKey)
+    self.rotation = CandidateRotation(
+        endpoints: ConnectionResiliencePolicy.liveRotation(
+            working: workingEndpoint,
+            ordered: updated.orderedEndpoints
+        )
+    )
+} catch is CancellationError {
+    return
+} catch {
+    guard let self else { return }
+    self.ttsPrepareVersion = ConnectionResiliencePolicy.ttsPrepareVersion(
+        current: self.ttsPrepareVersion,
+        refresh: .failure(error)
+    )
+    log.debug("endpoint refresh unavailable")
+}
+```
+
+   Also set `ttsPrepareVersion = nil` on disconnect / pairing loss. Never encode it onto `Connection`.
 
 Original V Bot visuals: existing `MausAvatar`, liquid-glass hang-up, no Grok Bot assets. VoiceOver labels: “Call {name}”, “Hang up”, “Interrupt {name}”.
 
@@ -1970,7 +2092,7 @@ All of these on a physical iPhone with `features.iosVoiceCalls: true`, a paired 
 | Reconstructed reference-only | 2, 6, 8, 9 |
 | Kokoro next (Hub, not phone) | 11 |
 | Native `VBotEngineCapabilities.groups` + iOS fail-closed decode + Hermes advertisement | 9 |
-| Sidecar `ttsPrepareVersion` handshake (old sidecars fail closed) | 1, 2, 6 |
+| Sidecar `ttsPrepareVersion` handshake (old/malformed sidecars fail closed; refresh clears stale `1`) | 1, 2, 6 |
 | Empty visible room cannot start a team call | 2, 8, 9 |
 | Locked `CallAvailability.reason` copy | 2, 6 |
 | Capability negotiation / bridge placement | 2, 9, 11 |
@@ -2005,6 +2127,8 @@ Locked once in Interfaces and reused:
 - `allowsRoomCall(isDm:engineSupportsGroups:visibleMemberCount:)` — Task 2, Task 8, and Task 9 use the same three-argument signature; `visibleMemberCount == 0` fails
 - `nativeRoomCallSupported(engineGroups:hermesGroups:visibleMemberAdvertisesHermes:)` — `== true` only; Hermes AND uses advertised `hermesBot`, not engine/instance id strings
 - `companionPrepareAllowed(ttsPrepareVersion:)` — exact `1`; hub `iosVoiceCalls` is `flagged` only
+- `CompanionConnectionMetadata.ttsPrepareVersion` — tolerant `Lossy<Int>` decode; wrong type/non-int → `nil`, not throw
+- `ConnectionResiliencePolicy.ttsPrepareVersion(current:refresh:)` — success uses snapshot; `CancellationError` keeps `current`; any other failure is `nil`; Session refresh assigns this on both paths and does not `reconcile` on failure
 - Locked `reason*` constants; `availability.reason` is first failing gate; overlays do not paraphrase
 - `sendPath`, `requiredBridgeCapabilities`, `shouldSend`, `shouldTreatSpeechAsApproval`, `endpointMs`
 - Task 7 does not edit `GroupCallView.swift`; Task 8 creates it and consumes CompanionCore helpers
