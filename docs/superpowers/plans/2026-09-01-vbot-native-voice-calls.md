@@ -19,6 +19,9 @@
 - Apple on-device recognition when `supportsOnDeviceRecognition` is true; never send call audio to a cloud STT. Composer dictation stays press-to-stop with no silence timeout.
 - Reuse current chat, SSE, group send, interrupt, approval respond, and TTS prepare/speak. Call overlays submit finals through `Session.send(_:to:mode:)` (which applies `VBotMutationRouting`), not `CompanionClient.send`. Do not invent a voice websocket or a second transcript store.
 - Reconstructed engine chats are reference-only in this MVP: hide the call button when `CallModePolicy.allowsNativeCall(mutationTarget:)` is false. Do not treat reconstructed rooms as sendable call targets.
+- Native room/group-call support is the server `VBotEngineCapabilities.groups` boolean on `GET /api/vbot/engine-sync`, decoded fail-closed on iOS, then AND-ed with advertised Hermes `capabilities.hermesBot.capabilities.groups` only when a visible member’s instance advertises `hermesBot`. Do not infer groups from roster shape and do not hardcode engine or instance ids.
+- Companion `/api/tts/prepare` availability is sidecar `ttsPrepareVersion` on `GET /api/companion/endpoints`. Hub `features.iosVoiceCalls` does not imply the sidecar allowlists or implements prepare. Missing/unknown versions fail closed.
+- `requireEveryMemberVoice` and `allowsRoomCall` both require at least one visible (`hidden != true`) room member. An empty member list is not vacuously ready.
 - TTS credentials stay on the Hub. The phone receives voice labels and audio bytes only.
 - Bridges keep their current advertised capabilities (`shell`, `local-vm`, `ssh-forward`). Do not add a `tts` bridge capability in this MVP.
 - Roleplay personas and local-model bots use the same send/SSE path as every other bot. Do not add a voice-only system prompt or a special engine.
@@ -45,11 +48,14 @@ Read-only pass on 2026-09-01. Implementers should treat these as the source of t
 | Group routing | `ios/Sources/CompanionCore/GroupRouting.swift`, `src/lib/group-routing.ts` | Composer `@mentions`. Spoken “Atlas, …” must be rewritten before send (`src/lib/group-call.ts` already does this on desktop). |
 | Approvals | `CompanionClient.respond(threadId:requestId:behavior:message:)`, desktop YES/NO **prefix** regex in `CallView.tsx` / `GroupCallView.tsx` | Speak the card. iOS grants or denies only on a strict whole-utterance yes/no after trim. Ambiguous speech re-asks. Non-permission questions take the next complete turn as the answer. Do not port the desktop `\b` regex. |
 | Capability / bridges | `server/bridge-registry.ts` `BridgeCapability = "shell" \| "local-vm" \| "ssh-forward"` | TTS is Hub-owned. Phones talk only to the companion. Do not place STT or TTS on a bridge in this MVP. |
-| Flags | `src/lib/feature-flags.ts` | Experimental features are explicit opt-in (`skillRecorder`). iOS calls follow that pattern. Existing `features.browser` stays as-is. |
+| Engine group capability | `server/vbot-engine-sync.ts` `VBotEngineCapabilities`; iOS `VBotEngineSync` currently does **not** decode `engineCapabilities` | Add `groups: boolean` on the Hub payload. iOS must decode it with `decodeIfPresent` / `== true` fail-closed. Do not infer from `VBotSyncedGroup` roster rows. |
+| Hermes groups | `server/engines/contracts.ts` `HermesCapabilityFlags.groups` (false today); `server/index.ts` `describeProviderInstances()` copies that object onto `GET /api/instances` `capabilities.hermesBot` when Hermes is enabled | iOS `InstanceCapabilities` must decode `hermesBot.capabilities.groups` fail-closed. Room calls AND that flag only when a visible member’s instance advertises `hermesBot`. Do not switch on `"hermes"` / instance id. |
+| Sidecar prepare handshake | `companion/src/proxy.ts` `GET /api/companion/endpoints` (`CompanionEndpointSnapshot`: `serverName` + `endpoints` only today) | Advertise `ttsPrepareVersion: 1` here (sidecar-owned, not Hub config). Old snapshots without the field keep decoding for routes and fail closed for calls. |
+| Flags | `src/lib/feature-flags.ts` | Experimental features are explicit opt-in (`skillRecorder`). iOS calls follow that pattern. Existing `features.browser` stays as-is. Hub `iosVoiceCalls` is not a sidecar prepare advertisement. |
 | Voice decision doc | `docs/voice-mode.md` | Half-duplex rationale, 850ms endpointing, narration, spoken approvals, rejected realtime/S2S providers, Kokoro previously rejected as a **renderer** bundle. This plan places Kokoro later **on the Hub**, not on the phone. |
 | Supersedes | `docs/superpowers/plans/2026-08-31-vbot-ios-parity-closeout.md` Task 5 | That task said “no room calls”. This plan requires team calls in the same MVP. |
 
-Immediate backend blocker: `companion/src/routes.ts` allowlist includes `GET /api/tts/voices` and `POST /api/tts/speak` only. Desktop `Speaker.prepare` already POSTs `/api/tts/prepare`. The phone cannot split markdown into speakable utterances until that route is allowlisted.
+Immediate backend blocker: `companion/src/routes.ts` allowlist includes `GET /api/tts/voices` and `POST /api/tts/speak` only. Desktop `Speaker.prepare` already POSTs `/api/tts/prepare`. The phone cannot split markdown into speakable utterances until that route is allowlisted **and** the sidecar advertises `ttsPrepareVersion: 1` on `GET /api/companion/endpoints`. An updated Hub flag with an old sidecar must not start a call.
 
 ---
 
@@ -71,12 +77,15 @@ Create:
 Modify:
 
 - `companion/src/routes.ts` and `companion/test/routes.test.ts` — allow `POST /api/tts/prepare`.
+- `companion/src/proxy.ts` `CompanionEndpointSnapshot` / `endpointSnapshot()` and `companion/test/proxy.test.ts` — emit `ttsPrepareVersion: 1` on `GET /api/companion/endpoints`.
 - `server/config.ts`, `server/index.ts` `configStatus()`, `src/lib/feature-flags.ts` — `iosVoiceCalls` opt-in, emitted on `GET /api/config` (already phone-readable; PATCH remains desktop-only).
 - `server/config.test.ts`, `src/lib/feature-flags.test.ts`
+- `server/vbot-engine-sync.ts` and `server/vbot-engine-sync.test.ts` — add `VBotEngineCapabilities.groups`; OpenMaus `true`, reconstructed `false` (do not infer from roster groups).
 - `ios/Sources/CompanionCore/Client.swift` — `prepareSpeech` and `synthesizeSpeech` next to `previewVoice`.
-- `ios/Sources/CompanionCore/Models.swift` — decode optional `ConfigStatus.features.iosVoiceCalls`.
+- `ios/Sources/CompanionCore/Models.swift` — decode optional `ConfigStatus.features.iosVoiceCalls`; decode `VBotEngineSync.engineCapabilities` fail-closed; decode `CompanionConnectionMetadata.ttsPrepareVersion`; decode `InstanceCapabilities.hermesBot.capabilities.groups`.
+- `ios/Tests/CompanionCoreTests/EngineSyncTests.swift`, `ios/Tests/CompanionCoreTests/EndpointRefreshTests.swift`
 - `ios/App/SpeechDictation.swift` is **not** modified. `CallCapture` calls `Dictation.localeCandidates()` directly.
-- `ios/App/ChatView.swift`, `ios/App/ChatChromeView.swift`, `ios/App/Session.swift` — call button, overlay, hang-up on leave/background/pairing loss. Call overlays use existing `Session.send` / `interrupt` / `answer` (optional deny `message`); do not add a parallel send API.
+- `ios/App/ChatView.swift`, `ios/App/ChatChromeView.swift`, `ios/App/Session.swift` — call button, overlay, hang-up on leave/background/pairing loss. Call overlays use existing `Session.send` / `interrupt` / `answer` (optional deny `message`); do not add a parallel send API. `Session` keeps in-memory `ttsPrepareVersion: Int?` from `GET /api/companion/endpoints` (cleared on disconnect; not persisted on `Connection`).
 - `ios/project.yml` — purpose strings mention calls.
 - `docs/voice-mode.md`, `docs/ios-companion.md`, `ios/TESTING.md` — current-state + device gates.
 - `server/tts/index.ts` is **not** modified in MVP. Kokoro is Task 11 (next), after the phone loop works.
@@ -230,10 +239,37 @@ public enum CallModePolicy {
     public static func end(current: String?, targetId: String) -> Bool
 
     public static func requiresAddress(defaultResponderKind: String) -> Bool
-    public static func allowsRoomCall(isDm: Bool, engineSupportsGroups: Bool) -> Bool
+    /// True iff `!isDm && engineSupportsGroups && visibleMemberCount > 0`.
+    public static func allowsRoomCall(
+        isDm: Bool,
+        engineSupportsGroups: Bool,
+        visibleMemberCount: Int
+    ) -> Bool
+    /// Authoritative native room/group-call AND. `== true` only; nil/false fail closed.
+    /// `visibleMemberAdvertisesHermes` is `instance.capabilities.hermesBot != nil`
+    /// for a visible member, never an instanceId/engine-id string compare.
+    public static func nativeRoomCallSupported(
+        engineGroups: Bool?,
+        hermesGroups: Bool?,
+        visibleMemberAdvertisesHermes: Bool
+    ) -> Bool
+    /// True iff `ttsPrepareVersion == requiredTtsPrepareVersion`. Nil/other fail closed.
+    public static func companionPrepareAllowed(ttsPrepareVersion: Int?) -> Bool
     public static func sendPath(isRoom: Bool) -> CallSendPath
     /// True iff `mutationTarget == .openmaus`. Reconstructed is reference-only, not a call target.
     public static func allowsNativeCall(mutationTarget: VBotPrimaryEngine) -> Bool
+
+    public static let requiredTtsPrepareVersion = 1
+    public static let reasonReconnect = "Reconnect this phone to start a call."
+    public static let reasonForeground = "Return to the chat to start a call."
+    public static let reasonFlagOff = "Turn on iOS voice calls in desktop Settings."
+    public static let reasonCompanionPrepare = "Update the companion on this computer to start a call."
+    public static let reasonSpeechUnavailable = "On-device speech recognition is unavailable."
+    public static let reasonTtsUnconfigured = "Set up a voice so the bot can speak."
+    public static let reasonEmptyRoom = "Add a room member before starting a team call."
+    public static let reasonEveryMemberVoice = "Give every room member a voice."
+    public static let reasonChooseVoice = "Choose a voice before starting a call."
+    public static let reasonUnsupportedRoomEngine = "Team calls need a V Bot room."
 
     /// Desktop GroupCallView caption when `speakingMember` is missing: "Channel member".
     public static let unnamedSpeakerLabel = "Channel member"
@@ -354,14 +390,35 @@ Do **not** implement those lists as the desktop regexes:
 
 Those `\b` prefix matchers live in `src/components/CallView.tsx` and `src/components/GroupCallView.tsx`. Leave them unchanged in this MVP. A later desktop-only follow-up should switch them to the same whole-utterance parser so “yes please delete everything” cannot grant. That follow-up is out of scope here.
 
-`CallModePolicy.availability` voiceReady:
+`CallModePolicy.availability` voiceReady and reason:
+
+Visible room members are bots in `room.memberIds` whose `hidden != true` (same filter as `GroupRouting.visible`). Overlay passes those members’ `voice` values as `memberVoices` and `visibleMemberCount`.
 
 - When `requireEveryMemberVoice == false`: `voiceReady` is true if `agentVoice` is non-empty or `workspaceDefaultVoice == true` (desktop 1:1 / `ConfigStatus.canSpeak`).
-- When `requireEveryMemberVoice == true`: `voiceReady` is true only if every entry in `memberVoices` is non-nil and non-empty. Workspace fallback is not enough.
+- When `requireEveryMemberVoice == true`: `voiceReady` is true only if `memberVoices` is **nonempty** and every entry is non-nil and non-empty after trim. Workspace fallback is not enough. `memberVoices: []` is not ready.
+
+`reason` is one of the locked `reason*` constants, or `""` when `canStart` is true. First failing gate wins, in this order:
+
+1. `paired == false` → `reasonReconnect`
+2. `foreground == false` → `reasonForeground`
+3. `flagged == false` → `reasonFlagOff`
+4. `companionPrepareAllowed == false` → `reasonCompanionPrepare`
+5. `speechAvailable == false` → `reasonSpeechUnavailable`
+6. `ttsConfigured == false` → `reasonTtsUnconfigured`
+7. `voiceReady == false` and `requireEveryMemberVoice` and `memberVoices.isEmpty` → `reasonEmptyRoom`
+8. `voiceReady == false` and `requireEveryMemberVoice` → `reasonEveryMemberVoice`
+9. `voiceReady == false` → `reasonChooseVoice`
+10. else → `""`
+
+Do not concatenate, localize, or paraphrase these strings in overlays. Tests compare `==`, not `contains`.
+
+`companionPrepareAllowed(ttsPrepareVersion:)` is true iff `ttsPrepareVersion == requiredTtsPrepareVersion` (`1`). Hub `ConfigStatus.features.iosVoiceCalls` is `flagged` only. A true hub flag with a missing sidecar version must not start a call.
 
 `requiresAddress` is true iff `defaultResponderKind == "mentions"`.
 
-`allowsRoomCall(isDm:engineSupportsGroups:)` is true iff `!isDm && engineSupportsGroups`.
+`nativeRoomCallSupported(engineGroups:hermesGroups:visibleMemberAdvertisesHermes:)` is true iff `engineGroups == true` and (`visibleMemberAdvertisesHermes == false` or `hermesGroups == true`). Nil bools are false. Overlay sets `visibleMemberAdvertisesHermes` when any visible member’s `GET /api/instances` row has `capabilities.hermesBot != nil`. Overlay sets `engineGroups` from `session.engineSync?.engineCapabilities.groups`. Overlay sets `hermesGroups` from that member’s `hermesBot.capabilities.groups`. Never branch on `VBotPrimaryEngine`, `"hermes"`, `"grokReconstructed"`, or instance id strings for this gate.
+
+`allowsRoomCall(isDm:engineSupportsGroups:visibleMemberCount:)` is true iff `!isDm && engineSupportsGroups && visibleMemberCount > 0`. `engineSupportsGroups` is the boolean returned by `nativeRoomCallSupported`, not an inferred engine table. Chrome may show `reasonUnsupportedRoomEngine` when `allowsNativeCall` is true and `nativeRoomCallSupported` is false; that string is not a `CallAvailability.reason` gate. Empty rooms stay visible and use `reasonEmptyRoom`.
 
 `sendPath(isRoom:)` is `.groupMessage` iff `isRoom`, else `.botMessage`.
 
@@ -424,6 +481,83 @@ Hub/client HTTP (already exists except the allowlist + iOS prepare/synthesize wr
 - `POST /api/bots/:id/interrupt` and `POST /api/groups/:id/interrupt` via `Session.interrupt(chat:)`
 - Approvals via `Session.answer` → `POST /api/threads/:id/respond` body `{ requestId, behavior, message? }`
 - `GET /api/events` existing SSE
+- `GET /api/vbot/engine-sync` — `engineCapabilities.groups` is the selected engine’s native room/group-call flag (OpenMaus `true`, reconstructed `false` until a reconstructed probe field exists). Do not treat `groups: []` vs nonempty roster as the capability.
+- `GET /api/instances` — when Hermes is enabled, the Hermes instance already includes `capabilities.hermesBot.capabilities.groups` (false today). iOS must decode that nested object; omitted `hermesBot` means that instance does not advertise Hermes.
+- `GET /api/companion/endpoints` — sidecar-owned snapshot `{ serverName, endpoints, ttsPrepareVersion: 1 }`. No paths, tokens, or Hub feature flags. Phone `companionPrepareAllowed` reads only `ttsPrepareVersion`.
+
+Sidecar handshake (Task 1). Current `CompanionEndpointSnapshot` in `companion/src/proxy.ts` is `{ serverName, endpoints }`. Extend:
+
+```ts
+export const TTS_PREPARE_API_VERSION = 1 as const;
+
+export interface CompanionEndpointSnapshot {
+  serverName: string;
+  endpoints: CompanionEndpoint[];
+  ttsPrepareVersion: typeof TTS_PREPARE_API_VERSION;
+}
+```
+
+`endpointSnapshot()` always sets `ttsPrepareVersion: TTS_PREPARE_API_VERSION`. Do not forward this object to the Hub. Do not put the version on `GET /api/config`.
+
+iOS `CompanionConnectionMetadata` adds `ttsPrepareVersion: Int?` via `decodeIfPresent`. Missing/null/non-int → nil. Decode of endpoints must still succeed for old sidecars (today’s fixtures have no version). `CallModePolicy.companionPrepareAllowed(ttsPrepareVersion:)` is the only call gate.
+
+Engine capability payload (Task 9). Add to `VBotEngineCapabilities` in `server/vbot-engine-sync.ts`:
+
+```ts
+export interface VBotEngineCapabilities {
+  readonly roster: boolean;
+  readonly sendPrompt: boolean;
+  readonly transcriptTail: boolean;
+  readonly events: boolean;
+  readonly attachments: boolean;
+  readonly queueing: boolean;
+  readonly steer: boolean;
+  readonly stop: boolean;
+  readonly mcp: boolean;
+  readonly computer: boolean;
+  readonly localVm: boolean;
+  /** Native room/group-call support for this selected engine. Not roster presence. */
+  readonly groups: boolean;
+}
+```
+
+`openMausEngineCapabilities()` sets `groups: true` (OpenMaus already has `/api/groups/:id/messages`). `reconstructedEngineCapabilities()` sets `groups: false`. Do **not** set reconstructed `groups` from `probe.roster.groups.length`. Do **not** add a reconstructed `groups` probe field in this MVP. Do **not** AND Hermes into OpenMaus `engineCapabilities.groups` (Hermes is not the primary engine; a workspace can still have non-Hermes rooms). Hermes stays on `capabilities.hermesBot` as `describeProviderInstances()` already copies `hermes.capabilities` including `groups: false`.
+
+iOS decode (fail-closed, compatible with today’s Hub payloads that omit `groups` and with older payloads that omit `engineCapabilities` entirely):
+
+```swift
+public struct VBotEngineCapabilities: Codable, Hashable, Sendable {
+    public var roster: Bool?
+    public var sendPrompt: Bool?
+    public var transcriptTail: Bool?
+    public var events: Bool?
+    public var attachments: Bool?
+    public var queueing: Bool?
+    public var steer: Bool?
+    public var stop: Bool?
+    public var mcp: Bool?
+    public var computer: Bool?
+    public var localVm: Bool?
+    public var groups: Bool?
+
+    public var supportsNativeRoomCalls: Bool { groups == true }
+}
+
+public struct HermesBotCapabilityFlags: Codable, Hashable, Sendable {
+    public var groups: Bool?
+}
+
+public struct HermesBotAdvertisement: Codable, Hashable, Sendable {
+    public var capabilities: HermesBotCapabilityFlags?
+}
+
+// InstanceCapabilities adds: public var hermesBot: HermesBotAdvertisement?
+// VBotEngineSync adds: public var engineCapabilities: VBotEngineCapabilities?
+```
+
+`VBotEngineSync.openMausOnly.engineCapabilities` is `nil` (stub without a fetched payload → `nativeRoomCallSupported` fails closed). Extra JSON keys remain ignored. A payload that includes `engineCapabilities` without `groups` decodes; `groups == true` is false.
+
+Desktop `src/lib/vbot-engine.ts` does not parse `engineCapabilities` today. Do not add a desktop parser in this MVP.
 
 Desktop constants to copy, not reinvent:
 
@@ -436,26 +570,30 @@ Desktop constants **not** to copy onto iOS:
 
 ---
 
-### Task 1: Companion Prepare Allowlist and Feature Flag
+### Task 1: Companion Prepare Allowlist, Sidecar Handshake, and Feature Flag
 
 **Files:**
 - Modify: `companion/src/routes.ts` (allowlist near the existing TTS entries around lines 708–711)
 - Modify: `companion/test/routes.test.ts` (allowed-route table around lines 141–142)
+- Modify: `companion/src/proxy.ts` (`CompanionEndpointSnapshot` around line 122, `endpointSnapshot()` around line 264)
+- Modify: `companion/test/proxy.test.ts` (endpoint snapshot exact-match around lines 741–759)
 - Modify: `server/config.ts` (`featureConfigSchema` around line 67 and `AppConfig.features`)
 - Modify: `server/index.ts` (`configStatus()` around line 4025)
 - Modify: `server/config.test.ts`
 - Modify: `src/lib/feature-flags.ts`
 - Modify: `src/lib/feature-flags.test.ts`
-- Modify: `ios/Sources/CompanionCore/Models.swift` (`ConfigStatus`)
+- Modify: `ios/Sources/CompanionCore/Models.swift` (`ConfigStatus`, `CompanionConnectionMetadata`)
+- Modify: `ios/Tests/CompanionCoreTests/EndpointRefreshTests.swift`
 - Test: `companion/test/routes.test.ts`
+- Test: `companion/test/proxy.test.ts`
 - Test: `src/lib/feature-flags.test.ts`
 - Test: `server/config.test.ts`
 
 **Interfaces:**
-- Consumes: existing companion allowlist classifier `denyReason`, existing phone-readable `GET /api/config`.
-- Produces: paired devices may `POST /api/tts/prepare`. `iosVoiceCallsEnabled(config)` is true only when `features.iosVoiceCalls === true`. Hub `configStatus().features` includes that boolean. Unauthenticated devices still cannot hit TTS. Phone still cannot PATCH `/api/config`. Optional `ConfigStatus.features.iosVoiceCalls: Bool?` on iOS.
+- Consumes: existing companion allowlist classifier `denyReason`, existing phone-readable `GET /api/config`, existing sidecar `GET /api/companion/endpoints`.
+- Produces: paired devices may `POST /api/tts/prepare`. Sidecar snapshot includes `ttsPrepareVersion: 1`. `iosVoiceCallsEnabled(config)` is true only when `features.iosVoiceCalls === true`. Hub `configStatus().features` includes that boolean. The hub flag does **not** set `companionPrepareAllowed`. Unauthenticated devices still cannot hit TTS. Phone still cannot PATCH `/api/config`. Optional `ConfigStatus.features.iosVoiceCalls: Bool?` on iOS. Optional `CompanionConnectionMetadata.ttsPrepareVersion: Int?`.
 
-- [ ] **Step 1: Write the failing allowlist and flag tests**
+- [ ] **Step 1: Write the failing allowlist, handshake, and flag tests**
 
 ```ts
 it("allows POST /api/tts/prepare", () => {
@@ -474,14 +612,50 @@ it("keeps iOS voice calls hidden by default", () => {
 });
 ```
 
+Add to the existing `GET /api/companion/endpoints` proxy test, alongside the current `serverName` / `endpoints` assertions (exact equality must include the new field):
+
+```ts
+expect(await direct.json()).toEqual({
+  serverName: "Test computer",
+  endpoints: [{ kind: "lan", priority: 200, url: "http://192.168.1.42:8810" }],
+  ttsPrepareVersion: 1,
+});
+expect(JSON.stringify(await (await load(TOKEN)).json())).not.toMatch(/iosVoiceCalls/);
+```
+
+iOS compatibility tests in `EndpointRefreshTests.swift`. Old fixtures must keep decoding; do not call `CallModePolicy` here (that type is Task 2).
+
+```swift
+func testOldSidecarEndpointSnapshotOmitsPrepareVersion() throws {
+    let old = try JSONDecoder().decode(
+        CompanionConnectionMetadata.self,
+        from: Data(#"{"serverName":"Mac","endpoints":[{"url":"http://192.168.1.42:8810","kind":"lan","priority":200}]}"#.utf8)
+    )
+    XCTAssertNil(old.ttsPrepareVersion)
+}
+
+func testSidecarPrepareVersionDecodesWhenAdvertised() throws {
+    let ready = try JSONDecoder().decode(
+        CompanionConnectionMetadata.self,
+        from: Data(#"{"serverName":"Mac","endpoints":[{"url":"http://192.168.1.42:8810","kind":"lan","priority":200}],"ttsPrepareVersion":1}"#.utf8)
+    )
+    XCTAssertEqual(ready.ttsPrepareVersion, 1)
+}
+```
+
 - [ ] **Step 2: Run the focused tests and confirm they fail**
 
-Run: `pnpm exec vitest run companion/test/routes.test.ts src/lib/feature-flags.test.ts server/config.test.ts`
-Expected: FAIL because prepare is not allowlisted, `iosVoiceCallsEnabled` is undefined, and Hub config rejects/omits the flag.
+Run: `pnpm exec vitest run companion/test/routes.test.ts companion/test/proxy.test.ts src/lib/feature-flags.test.ts server/config.test.ts`
 
-- [ ] **Step 3: Add the allowlist entry and flag helper**
+Then: `swift test --package-path ios --filter EndpointRefreshTests`
+
+Expected: FAIL because prepare is not allowlisted, snapshot has no `ttsPrepareVersion`, `iosVoiceCallsEnabled` is undefined, Hub config rejects/omits the flag, and iOS metadata has no `ttsPrepareVersion`.
+
+- [ ] **Step 3: Add the allowlist entry, sidecar version, and flag helper**
 
 Add `{ method: "POST", path: /^\/api\/tts\/prepare$/ }` next to the existing TTS rows. Comment that the route returns utterance strings only, never the ElevenLabs key.
+
+In `companion/src/proxy.ts`, export `TTS_PREPARE_API_VERSION = 1` and add `ttsPrepareVersion: TTS_PREPARE_API_VERSION` to `CompanionEndpointSnapshot` and the `return` of `endpointSnapshot()`. Keep the existing URL/kind/priority caps. Do not add Hub feature flags, paths, or tokens to this object. Update every exact `toEqual({ serverName, endpoints })` snapshot assertion in `companion/test/proxy.test.ts` (three around lines 741–759) to include `ttsPrepareVersion: 1`.
 
 Add `iosVoiceCalls: z.boolean().optional()` to `featureConfigSchema`, keep existing `browser` on `FeatureFlagConfig.features`, and emit `iosVoiceCalls: iosVoiceCallsEnabled(cfg)` beside `skillRecorder` in `configStatus()`. Implement:
 
@@ -491,11 +665,22 @@ export function iosVoiceCallsEnabled(config: FeatureFlagConfig | null | undefine
 }
 ```
 
-Extend `FeatureFlagConfig.features` to `{ skillRecorder?: boolean; browser?: boolean; iosVoiceCalls?: boolean }`. Keep a Hub helper in `server/config.ts` with the same default-false rule as `skillRecorderEnabled`. Decode optional `features.iosVoiceCalls` on iOS `ConfigStatus` (unknown extra keys are already ignored). Do not default it on. The phone reads the flag from `GET /api/config`; the owner turns it on from desktop Settings / config PATCH, which stays Mac-only.
+Extend `FeatureFlagConfig.features` to `{ skillRecorder?: boolean; browser?: boolean; iosVoiceCalls?: boolean }`. Keep a Hub helper in `server/config.ts` with the same default-false rule as `skillRecorderEnabled`. On iOS `ConfigStatus`, add an optional nested flags object (do not put `iosVoiceCalls` on the root):
+
+```swift
+public struct ConfigFeatureFlags: Codable, Sendable {
+    public var iosVoiceCalls: Bool?
+}
+// ConfigStatus.features: ConfigFeatureFlags?
+```
+
+Do not default it on. The phone reads the flag from `GET /api/config`; the owner turns it on from desktop Settings / config PATCH, which stays Mac-only. `flagged` is `features?.iosVoiceCalls == true`. That is not `companionPrepareAllowed`.
+
+Decode optional `ttsPrepareVersion` on `CompanionConnectionMetadata` with `decodeIfPresent`. This struct already has a custom `init(from:)` — add `ttsPrepareVersion` to `CodingKeys` and assign `try container.decodeIfPresent(Int.self, forKey: .ttsPrepareVersion)` there. Do not throw when it is missing. Do not rewrite the endpoint-route decoder. `Failover.reconcile` ignores the version (routing unchanged).
 
 - [ ] **Step 4: Re-run the focused tests**
 
-Expected: PASS. `GET /api/config` remains allowed (booleans only). `PATCH /api/config` and `/api/instances` still deny from the phone. Hub config accepts `{ features: { iosVoiceCalls: true } }` and defaults false.
+Expected: PASS. `GET /api/config` remains allowed (booleans only). `PATCH /api/config` and `/api/instances` still deny from the phone. Hub config accepts `{ features: { iosVoiceCalls: true } }` and defaults false. Endpoint snapshot includes `ttsPrepareVersion: 1` and still strips unknown candidate fields. Old iOS fixtures without the version still decode. Hub flag and sidecar version remain independent fields.
 
 - [ ] **Step 5: Commit**
 
@@ -511,7 +696,7 @@ Commit message: `feat(companion): allow TTS prepare for iOS calls`
 
 **Interfaces:**
 - Consumes: locked `CallPhase`, `CallTarget`, `CallAvailability`, `CallEvent`.
-- Produces: `CallModePolicy.reduce(phase:availability:awaitingSpokenDecision:event:) -> CallPhase`, `CallModePolicy.availability(...)`, `micOpen`, `allowsOpenMicDuringPlayback`, `allowsNativeCall(mutationTarget:)`. Mic-open is true only in `listening`. Reducer table in Interfaces is the implementation spec.
+- Produces: `CallModePolicy.reduce(phase:availability:awaitingSpokenDecision:event:) -> CallPhase`, `CallModePolicy.availability(...)` with locked `reason*` copy, `companionPrepareAllowed(ttsPrepareVersion:)`, `allowsRoomCall(isDm:engineSupportsGroups:visibleMemberCount:)`, `micOpen`, `allowsOpenMicDuringPlayback`, `allowsNativeCall(mutationTarget:)`. Mic-open is true only in `listening`. Reducer table in Interfaces is the implementation spec. Empty `memberVoices` cannot make `voiceReady` when `requireEveryMemberVoice` is true.
 
 - [ ] **Step 1: Write failing policy tests**
 
@@ -682,7 +867,98 @@ func testRoomCallRequiresEveryMemberVoice() {
         paired: true
     )
     XCTAssertFalse(missing.canStart)
-    XCTAssertTrue(missing.reason.contains("every"))
+    XCTAssertEqual(missing.reason, CallModePolicy.reasonEveryMemberVoice)
+}
+
+func testEmptyRoomCannotStartATeamCall() {
+    let empty = CallModePolicy.availability(
+        flagged: true,
+        speechAvailable: true,
+        ttsConfigured: true,
+        agentVoice: nil,
+        workspaceDefaultVoice: true,
+        requireEveryMemberVoice: true,
+        memberVoices: [],
+        companionPrepareAllowed: true,
+        foreground: true,
+        paired: true
+    )
+    XCTAssertFalse(empty.voiceReady)
+    XCTAssertFalse(empty.canStart)
+    XCTAssertEqual(empty.reason, CallModePolicy.reasonEmptyRoom)
+    XCTAssertFalse(CallModePolicy.allowsRoomCall(isDm: false, engineSupportsGroups: true, visibleMemberCount: 0))
+}
+
+func testAvailabilityReasonCopyIsLockedAndFirstFailingGateWins() {
+    func availability(
+        flagged: Bool = true,
+        speechAvailable: Bool = true,
+        ttsConfigured: Bool = true,
+        agentVoice: String? = "voice-1",
+        workspaceDefaultVoice: Bool = false,
+        requireEveryMemberVoice: Bool = false,
+        memberVoices: [String?] = ["voice-1"],
+        companionPrepareAllowed: Bool = true,
+        foreground: Bool = true,
+        paired: Bool = true
+    ) -> CallAvailability {
+        CallModePolicy.availability(
+            flagged: flagged,
+            speechAvailable: speechAvailable,
+            ttsConfigured: ttsConfigured,
+            agentVoice: agentVoice,
+            workspaceDefaultVoice: workspaceDefaultVoice,
+            requireEveryMemberVoice: requireEveryMemberVoice,
+            memberVoices: memberVoices,
+            companionPrepareAllowed: companionPrepareAllowed,
+            foreground: foreground,
+            paired: paired
+        )
+    }
+
+    XCTAssertEqual(availability().reason, "")
+    XCTAssertEqual(availability(paired: false).reason, CallModePolicy.reasonReconnect)
+    XCTAssertEqual(availability(foreground: false).reason, CallModePolicy.reasonForeground)
+    XCTAssertEqual(availability(flagged: false).reason, CallModePolicy.reasonFlagOff)
+    XCTAssertEqual(availability(companionPrepareAllowed: false).reason, CallModePolicy.reasonCompanionPrepare)
+    XCTAssertEqual(availability(speechAvailable: false).reason, CallModePolicy.reasonSpeechUnavailable)
+    XCTAssertEqual(availability(ttsConfigured: false).reason, CallModePolicy.reasonTtsUnconfigured)
+    XCTAssertEqual(
+        availability(agentVoice: nil, workspaceDefaultVoice: false).reason,
+        CallModePolicy.reasonChooseVoice
+    )
+    XCTAssertEqual(
+        availability(flagged: false, paired: false).reason,
+        CallModePolicy.reasonReconnect,
+        "paired is checked before flagged"
+    )
+    XCTAssertEqual(
+        availability(flagged: false, companionPrepareAllowed: false).reason,
+        CallModePolicy.reasonFlagOff,
+        "flagged is checked before sidecar prepare"
+    )
+}
+
+func testHubFlagDoesNotImplySidecarPrepare() {
+    XCTAssertEqual(CallModePolicy.requiredTtsPrepareVersion, 1)
+    XCTAssertTrue(CallModePolicy.companionPrepareAllowed(ttsPrepareVersion: 1))
+    XCTAssertFalse(CallModePolicy.companionPrepareAllowed(ttsPrepareVersion: nil))
+    XCTAssertFalse(CallModePolicy.companionPrepareAllowed(ttsPrepareVersion: 0))
+    XCTAssertFalse(CallModePolicy.companionPrepareAllowed(ttsPrepareVersion: 2))
+    let flaggedWithoutSidecar = CallModePolicy.availability(
+        flagged: true,
+        speechAvailable: true,
+        ttsConfigured: true,
+        agentVoice: "voice-1",
+        workspaceDefaultVoice: false,
+        requireEveryMemberVoice: false,
+        memberVoices: ["voice-1"],
+        companionPrepareAllowed: CallModePolicy.companionPrepareAllowed(ttsPrepareVersion: nil),
+        foreground: true,
+        paired: true
+    )
+    XCTAssertFalse(flaggedWithoutSidecar.canStart)
+    XCTAssertEqual(flaggedWithoutSidecar.reason, CallModePolicy.reasonCompanionPrepare)
 }
 
 func testFullDuplexIsRejected() {
@@ -749,7 +1025,7 @@ Expected: FAIL because `CallModePolicy` does not exist.
 
 - [ ] **Step 3: Implement the minimal reducer**
 
-Keep it pure. `allowsOpenMicDuringPlayback` is a `static let` of `false` so a future AEC patch has to change an explicit flag and the test above. Room availability copies desktop `requireExplicitVoices`: workspace fallback is not enough when several members speak. There is one `reduce` signature; tests and both overlays call it with `availability` every time. Implement the locked reducer table verbatim, including fail-closed stay-in-phase for stray `captureFinal` during `.speaking` and `botBusy(false)` that does not leave `.speaking`. `allowsNativeCall(.grokReconstructed)` is false.
+Keep it pure. `allowsOpenMicDuringPlayback` is a `static let` of `false` so a future AEC patch has to change an explicit flag and the test above. Room availability copies desktop `requireExplicitVoices`: workspace fallback is not enough when several members speak, and `memberVoices` must be nonempty. There is one `reduce` signature; tests and both overlays call it with `availability` every time. Implement the locked reducer table verbatim, including fail-closed stay-in-phase for stray `captureFinal` during `.speaking` and `botBusy(false)` that does not leave `.speaking`. `allowsNativeCall(.grokReconstructed)` is false. `availability.reason` uses the locked first-failing-gate constants; overlays display `availability.reason` verbatim. `companionPrepareAllowed(ttsPrepareVersion:)` is independent of `flagged`. `allowsRoomCall` takes `visibleMemberCount` and rejects `0`.
 
 - [ ] **Step 4: Re-run the suite**
 
@@ -1057,8 +1333,8 @@ Commit message: `feat(ios): add silence-endpointed call capture`
 - Modify: `ios/App/Session.swift`
 
 **Interfaces:**
-- Consumes: Tasks 2–5, `Session.send(_:to:mode:)` (applies `VBotMutationRouting`; do not call `CompanionClient.send`), SSE-folded messages, `bot.busy`, `tool.spoken`, `CallModePolicy.transfer`, `CallModePolicy.end`, `CallModePolicy.allowsNativeCall`.
-- Produces: one call at a time on `Session.currentCallId: String?`. Overlay with avatar, phase label, caption, Interrupt, Hang up.
+- Consumes: Tasks 2–5, `Session.send(_:to:mode:)` (applies `VBotMutationRouting`; do not call `CompanionClient.send`), SSE-folded messages, `bot.busy`, `tool.spoken`, `CallModePolicy.transfer`, `CallModePolicy.end`, `CallModePolicy.allowsNativeCall`, `CallModePolicy.companionPrepareAllowed(ttsPrepareVersion:)`.
+- Produces: one call at a time on `Session.currentCallId: String?`. Overlay with avatar, phase label, caption, Interrupt, Hang up. `Session.ttsPrepareVersion: Int?` in memory from sidecar metadata.
 
 - [ ] **Step 1: Add ownership tests on `CallModePolicy`**
 
@@ -1089,7 +1365,7 @@ Loop, matching desktop `CallView.tsx`:
 5. After playback finishes: reduce `.playbackFinished`. If the bot is not busy, then reduce `.botBusy(false, ...)` so the phase becomes `.listening` (mic closed during playback; listen only after that). If `awaitingSpokenDecision`, `.playbackFinished` already returns `.listening`.
 6. Tap Interrupt: `CallSpeaker.stop()`, `CallCapture.stop(intentional: true)`, then reduce `.tapInterrupt` → `.listening` and `CallCapture.start()`. Do **not** call `Session.interrupt` on a 1:1 tap unless the bot is still `busy` after speech stopped and the product copy says so. Desktop 1:1 interrupt only stops local TTS and reopens the mic; keep that. Group interrupt is Task 8.
 7. Hang up / Back / `scenePhase != .active` / `AVAudioSession` interruption / pairing loss → `ended` only if `CallModePolicy.end(current:targetId:)` is true; stop capture, stop speaker, deactivate session.
-8. Call button sits in chat chrome next to the existing overflow. Hidden when `allowsNativeCall(mutationTarget: VBotMutationRouting.target(for: session.engineSync))` is false (reconstructed is reference-only, not a call target). Disabled state uses `CallAvailability.reason` (flag off, no voice, no speech, not foreground). DMs that are 1:1 bots use this view; `group.dm == true` rooms do not get a team call button.
+8. Call button sits in chat chrome next to the existing overflow. Hidden when `allowsNativeCall(mutationTarget: VBotMutationRouting.target(for: session.engineSync))` is false (reconstructed is reference-only, not a call target). Disabled state uses `CallAvailability.reason` verbatim (never paraphrase). Overlay sets `flagged` from `config.features.iosVoiceCalls == true` and `companionPrepareAllowed` from `CallModePolicy.companionPrepareAllowed(ttsPrepareVersion: session.ttsPrepareVersion)` — a true hub flag with a missing sidecar version stays disabled with `reasonCompanionPrepare`. `Session.refreshConnectionMetadata` assigns `ttsPrepareVersion` from the snapshot (nil on 404/decode miss/disconnect). Do not persist it on `Connection`. DMs that are 1:1 bots use this view; `group.dm == true` rooms do not get a team call button.
 
 Original V Bot visuals: existing `MausAvatar`, liquid-glass hang-up, no Grok Bot assets. VoiceOver labels: “Call {name}”, “Hang up”, “Interrupt {name}”.
 
@@ -1177,8 +1453,8 @@ Commit message: `feat(ios): speak and answer call approvals`
 - Test: `ios/Tests/CompanionCoreTests/CallModePolicyTests.swift`
 
 **Interfaces:**
-- Consumes: `GroupCallRouting.route`, `CallModePolicy.approvalDecision`, `CallModePolicy.denyMessage(isRoom: true)`, `Session.send(_:to:mode:)` (not `CompanionClient.send`), `Session.interrupt(chat:)`, `room.busyBotId`, per-member `bot.voice`, `CallModePolicy.allowsNativeCall`.
-- Produces: `CallModePolicy.SpeechQueue` with optional `botId`, `requiresAddress(defaultResponderKind:)`, `allowsRoomCall(isDm:engineSupportsGroups:)`. One queued speaker at a time; a fast second member cannot cut off the first except via tap interrupt.
+- Consumes: `GroupCallRouting.route`, `CallModePolicy.approvalDecision`, `CallModePolicy.denyMessage(isRoom: true)`, `Session.send(_:to:mode:)` (not `CompanionClient.send`), `Session.interrupt(chat:)`, `room.busyBotId`, per-member `bot.voice`, `CallModePolicy.allowsNativeCall`, `nativeRoomCallSupported`.
+- Produces: `CallModePolicy.SpeechQueue` with optional `botId`, `requiresAddress(defaultResponderKind:)`, `allowsRoomCall(isDm:engineSupportsGroups:visibleMemberCount:)`. One queued speaker at a time; a fast second member cannot cut off the first except via tap interrupt. Visible members are `room.memberIds.compactMap { session.state.bot($0) }.filter { $0.hidden != true }`.
 
 - [ ] **Step 1: Write failing queue tests**
 
@@ -1215,8 +1491,9 @@ func testMentionsRoomRefusesUnaddressedSpeech() {
 }
 
 func testDmRoomsHaveNoTeamCall() {
-    XCTAssertFalse(CallModePolicy.allowsRoomCall(isDm: true, engineSupportsGroups: true))
-    XCTAssertTrue(CallModePolicy.allowsRoomCall(isDm: false, engineSupportsGroups: true))
+    XCTAssertFalse(CallModePolicy.allowsRoomCall(isDm: true, engineSupportsGroups: true, visibleMemberCount: 2))
+    XCTAssertTrue(CallModePolicy.allowsRoomCall(isDm: false, engineSupportsGroups: true, visibleMemberCount: 2))
+    XCTAssertFalse(CallModePolicy.allowsRoomCall(isDm: false, engineSupportsGroups: true, visibleMemberCount: 0))
 }
 ```
 
@@ -1228,8 +1505,8 @@ Expected: FAIL.
 
 Match `GroupCallView.tsx`, calling the CompanionCore helpers from Tasks 3 and 7 rather than reimplementing yes/no or prompts:
 
-- Button hidden when `allowsNativeCall` is false **or** `allowsRoomCall` is false (`room.dm == true`, reconstructed/unsupported engine, or engine cannot do groups — Task 9). Reconstructed rooms are reference-only; they are not team-call targets.
-- Start requires every visible member to have a voice (`requireEveryMemberVoice`).
+- Button hidden when `allowsNativeCall` is false **or** `room.dm == true` **or** `nativeRoomCallSupported` is false (Task 9). Reconstructed rooms are reference-only; they are not team-call targets. Empty visible roster does **not** hide the button: it stays disabled with `reasonEmptyRoom`. `allowsRoomCall(..., visibleMemberCount: 0)` is still false so `.start` cannot succeed.
+- Start requires every **visible** member to have a voice (`requireEveryMemberVoice` with nonempty `memberVoices`). Hidden bots (`hidden == true`) are omitted from `memberVoices` and `visibleMemberCount`.
 - Capture finals run through `GroupCallRouting.route`. `requiresAddress` + `addressed == false` → do not send; show “Say a member's name — {names} — or say everyone.” Addressed finals → reduce `.captureFinal` then `Session.send(text, to: .room(room))`. Do **not** call `CompanionClient.send`.
 - Enqueue `tool.spoken` and member replies via `SpeechQueue.enqueue(_:botId:voiceId:messageId:speakerLabel:)`. If `members.first(where: { $0.id == from.botId })` is nil, enqueue `botId: nil`, `voiceId: nil`, default `speakerLabel` (`"Channel member"`). Do not invent a `Member` or pick another room member. `sayGeneration` / `queueGeneration` tokens drop stale work. `CallSpeaker.speak` uses the queued `voiceId` (nil → Hub workspace default, same omit rule as prepare/synthesize).
 - `busyBotId` keeps phase `working` until the queue drains, then listen after ~140ms (desktop `scheduleListen`) by reducing `.botBusy(false)` only once playback is done. After a user send while the room is still busy, wait ~600ms before listening so the first chip can arrive.
@@ -1238,7 +1515,7 @@ Match `GroupCallView.tsx`, calling the CompanionCore helpers from Tasks 3 and 7 
 - Caption shows `QueuedSpeech.speakerLabel` (fallback `"Channel member"`, never a fake roster row).
 - Same hang-up rules as 1:1 via `CallModePolicy.end`. Only one `Session.currentCallId` globally.
 
-Skip reconstructed/unsupported rooms: `allowsNativeCall` is false for `.grokReconstructed`. If the Hub has no `/api/groups/:id/messages` semantics for that room (already true for reconstructed groups), do not start a call. Combine with `allowsRoomCall(isDm: false, engineSupportsGroups: false)` in Task 9. Reason copy: “Team calls need a V Bot room.”
+Skip reconstructed/unsupported rooms: `allowsNativeCall` is false for `.grokReconstructed`. If the Hub has no `/api/groups/:id/messages` semantics for that room (already true for reconstructed groups), do not start a call. Combine with `allowsRoomCall(isDm: false, engineSupportsGroups: false, visibleMemberCount: 2)` in Task 9. Chrome copy when `nativeRoomCallSupported` is false: `CallModePolicy.reasonUnsupportedRoomEngine` (`"Team calls need a V Bot room."`). Empty visible roster keeps the button visible and disabled with `reasonEmptyRoom`; `allowsRoomCall(..., visibleMemberCount: 0)` is false so start stays blocked.
 
 - [ ] **Step 4: Run Swift tests and simulator build**
 
@@ -1253,15 +1530,174 @@ Commit message: `feat(ios): add half-duplex team calls`
 ### Task 9: Roleplay, Local Models, and Capability Honesty
 
 **Files:**
+- Modify: `server/vbot-engine-sync.ts` (`VBotEngineCapabilities`, `openMausEngineCapabilities`, `reconstructedEngineCapabilities`)
+- Modify: `server/vbot-engine-sync.test.ts`
+- Modify: `ios/Sources/CompanionCore/Models.swift` (`VBotEngineCapabilities`, `VBotEngineSync.engineCapabilities`, `InstanceCapabilities.hermesBot`, `VBotEngineSync.openMausOnly`)
+- Modify: `ios/Tests/CompanionCoreTests/EngineSyncTests.swift`
 - Modify: `ios/Sources/CompanionCore/CallModePolicy.swift`
 - Modify: `ios/App/CallView.swift`, `ios/App/GroupCallView.swift`
 - Test: `ios/Tests/CompanionCoreTests/CallModePolicyTests.swift`
+- Do **not** hardcode `if engine == .grokReconstructed` or `instanceId == "hermes"` for group-call support. Do **not** change `server/hermes-groups.ts` (membership/dispatch already fail closed). Do **not** AND Hermes `groups` into OpenMaus `engineCapabilities.groups`.
 
 **Interfaces:**
-- Consumes: existing bot model selection, persona/instructions, engine capability flags, bridge roster, `allowsRoomCall(isDm:engineSupportsGroups:)`, `allowsNativeCall(mutationTarget:)`, `Session.send`.
-- Produces: `CallModePolicy.sendPath(isRoom:)`, `CallModePolicy.requiredBridgeCapabilities == []`, `CallModePolicy.allowsNativeCall`. Call path that does not special-case engines; unsupported and reconstructed stay hidden.
+- Consumes: existing bot model selection, persona/instructions, `GET /api/vbot/engine-sync` `engineCapabilities.groups`, `GET /api/instances` `capabilities.hermesBot.capabilities.groups` (already copied by `describeProviderInstances()` when Hermes is enabled), `allowsRoomCall(isDm:engineSupportsGroups:visibleMemberCount:)`, `allowsNativeCall(mutationTarget:)`, `Session.send`.
+- Produces: `CallModePolicy.sendPath(isRoom:)`, `CallModePolicy.requiredBridgeCapabilities == []`, `CallModePolicy.allowsNativeCall`, `CallModePolicy.nativeRoomCallSupported(engineGroups:hermesGroups:visibleMemberAdvertisesHermes:)`. Call path that does not special-case engines; unsupported and reconstructed stay hidden because the payload/decode is false, not because of an id table.
 
-- [ ] **Step 1: Write failing honesty tests**
+- [ ] **Step 1: Write failing honesty, decode, and Hermes tests**
+
+Server (`server/vbot-engine-sync.test.ts`), extend the existing OpenMaus and reconstructed `engineCapabilities` `toMatchObject` blocks:
+
+```ts
+it("advertises native group-call support from engine capabilities, not roster shape", () => {
+  const openmausSync = buildVBotEngineSync({
+    primaryEngine: "openmaus",
+    reconstructed: reconstructedUnavailable,
+    openmaus,
+  });
+  expect(openmausSync.engineCapabilities.groups).toBe(true);
+
+  const reconstructedSync = buildVBotEngineSync({
+    primaryEngine: "grokReconstructed",
+    reconstructed: reconstructedAvailable,
+    openmaus,
+  });
+  expect(reconstructedSync.groups.length).toBeGreaterThan(0);
+  expect(reconstructedSync.engineCapabilities.groups).toBe(false);
+});
+```
+
+iOS `EngineSyncTests.swift` (today’s fixtures omit `engineCapabilities` and must still decode):
+
+```swift
+func testMissingEngineCapabilitiesFailClosedForRoomCalls() throws {
+    let legacy = try JSONDecoder().decode(
+        VBotEngineSync.self,
+        from: Data("""
+        {
+          "primaryEngine":"openmaus",
+          "activeSource":"openmaus",
+          "fallback":false,
+          "engines":[],
+          "bots":[],
+          "groups":[{"id":"room_1","label":"Ops","memberIds":["bot_1"]}]
+        }
+        """.utf8)
+    )
+    XCTAssertNil(legacy.engineCapabilities)
+    XCTAssertFalse(legacy.engineCapabilities?.supportsNativeRoomCalls ?? false)
+    XCTAssertFalse(
+        CallModePolicy.nativeRoomCallSupported(
+            engineGroups: legacy.engineCapabilities?.groups,
+            hermesGroups: nil,
+            visibleMemberAdvertisesHermes: false
+        )
+    )
+}
+
+func testEngineCapabilitiesGroupsDefaultsFalseWhenOmitted() throws {
+    let partial = try JSONDecoder().decode(
+        VBotEngineSync.self,
+        from: Data("""
+        {
+          "primaryEngine":"openmaus",
+          "activeSource":"openmaus",
+          "fallback":false,
+          "engines":[],
+          "bots":[],
+          "groups":[],
+          "engineCapabilities":{
+            "roster":true,"sendPrompt":true,"transcriptTail":true,"events":true,
+            "attachments":true,"queueing":true,"steer":true,"stop":true,
+            "mcp":true,"computer":true,"localVm":true
+          }
+        }
+        """.utf8)
+    )
+    XCTAssertEqual(partial.engineCapabilities?.groups, nil)
+    XCTAssertFalse(partial.engineCapabilities?.supportsNativeRoomCalls ?? true)
+}
+
+func testOpenMausGroupsTrueDoesNotHardcodeHermes() throws {
+    let sync = try JSONDecoder().decode(
+        VBotEngineSync.self,
+        from: Data("""
+        {
+          "primaryEngine":"openmaus",
+          "activeSource":"openmaus",
+          "fallback":false,
+          "engines":[],
+          "bots":[],
+          "groups":[],
+          "engineCapabilities":{
+            "roster":true,"sendPrompt":true,"transcriptTail":true,"events":true,
+            "attachments":true,"queueing":true,"steer":true,"stop":true,
+            "mcp":true,"computer":true,"localVm":true,"groups":true
+          }
+        }
+        """.utf8)
+    )
+    XCTAssertTrue(sync.engineCapabilities?.supportsNativeRoomCalls ?? false)
+    XCTAssertTrue(
+        CallModePolicy.nativeRoomCallSupported(
+            engineGroups: sync.engineCapabilities?.groups,
+            hermesGroups: nil,
+            visibleMemberAdvertisesHermes: false
+        )
+    )
+}
+
+func testHermesGroupsAdvertisementIsDecodedFailClosed() throws {
+    let instance = try JSONDecoder().decode(
+        Instance.self,
+        from: Data("""
+        {
+          "instanceId":"local-engine",
+          "driverKind":"hermes-bot",
+          "snapshot":{"state":"available"},
+          "models":{"default":"local","options":[{"id":"local","label":"Local"}]},
+          "capabilities":{"hermesBot":{"state":"available","capabilities":{"groups":false}}}
+        }
+        """.utf8)
+    )
+    XCTAssertNotNil(instance.capabilities?.hermesBot)
+    XCTAssertEqual(instance.capabilities?.hermesBot?.capabilities?.groups, false)
+    XCTAssertFalse(
+        CallModePolicy.nativeRoomCallSupported(
+            engineGroups: true,
+            hermesGroups: instance.capabilities?.hermesBot?.capabilities?.groups,
+            visibleMemberAdvertisesHermes: true
+        )
+    )
+    XCTAssertTrue(
+        CallModePolicy.nativeRoomCallSupported(
+            engineGroups: true,
+            hermesGroups: true,
+            visibleMemberAdvertisesHermes: true
+        )
+    )
+    let omitted = try JSONDecoder().decode(
+        Instance.self,
+        from: Data("""
+        {
+          "instanceId":"local-engine",
+          "driverKind":"hermes-bot",
+          "snapshot":{"state":"available"},
+          "models":{"default":"local","options":[{"id":"local","label":"Local"}]},
+          "capabilities":{"hermesBot":{"state":"available","capabilities":{}}}
+        }
+        """.utf8)
+    )
+    XCTAssertFalse(
+        CallModePolicy.nativeRoomCallSupported(
+            engineGroups: true,
+            hermesGroups: omitted.capabilities?.hermesBot?.capabilities?.groups,
+            visibleMemberAdvertisesHermes: true
+        )
+    )
+}
+```
+
+Policy tests:
 
 ```swift
 func testRoleplayAndLocalModelsUseTheNormalSendPath() {
@@ -1274,20 +1710,73 @@ func testCallDoesNotRequireABridgeTtsCapability() {
 }
 
 func testUnsupportedGroupEnginesCannotStartATeamCall() {
-    XCTAssertFalse(CallModePolicy.allowsRoomCall(isDm: false, engineSupportsGroups: false))
+    XCTAssertFalse(CallModePolicy.allowsRoomCall(isDm: false, engineSupportsGroups: false, visibleMemberCount: 2))
+}
+
+func testEmptyVisibleRosterCannotStartATeamCall() {
+    XCTAssertFalse(CallModePolicy.allowsRoomCall(isDm: false, engineSupportsGroups: true, visibleMemberCount: 0))
 }
 
 func testReconstructedIsReferenceOnlyNotACallEngine() {
     XCTAssertFalse(CallModePolicy.allowsNativeCall(mutationTarget: .grokReconstructed))
     XCTAssertTrue(CallModePolicy.allowsNativeCall(mutationTarget: .openmaus))
 }
+
+func testNativeRoomCallReadsCapabilityPayloadNotEngineIds() {
+    XCTAssertFalse(
+        CallModePolicy.nativeRoomCallSupported(
+            engineGroups: false,
+            hermesGroups: true,
+            visibleMemberAdvertisesHermes: false
+        )
+    )
+    XCTAssertTrue(
+        CallModePolicy.nativeRoomCallSupported(
+            engineGroups: true,
+            hermesGroups: false,
+            visibleMemberAdvertisesHermes: false
+        )
+    )
+    XCTAssertEqual(CallModePolicy.reasonUnsupportedRoomEngine, "Team calls need a V Bot room.")
+}
 ```
 
 - [ ] **Step 2: Run the tests**
 
-Expected: FAIL until those predicates exist.
+Run: `pnpm exec vitest run server/vbot-engine-sync.test.ts`
 
-- [ ] **Step 3: Keep the brain on the Hub**
+Then: `swift test --package-path ios --filter EngineSyncTests --filter CallModePolicyTests`
+
+Expected: FAIL until `groups` exists on the Hub payload, iOS decode, and `nativeRoomCallSupported`.
+
+- [ ] **Step 3: Keep the brain on the Hub and wire the capability source**
+
+Add `groups: true` to `openMausEngineCapabilities()` and `groups: false` to `reconstructedEngineCapabilities()`. Do not read reconstructed roster length. Do not invent a reconstructed probe `groups` field in this MVP.
+
+Decode `engineCapabilities` as optional on `VBotEngineSync`. Nested bools are `decodeIfPresent`; `supportsNativeRoomCalls` is `groups == true`. `openMausOnly.engineCapabilities` stays `nil`. Decode optional `InstanceCapabilities.hermesBot` with optional nested `groups`. Extra keys stay ignored so today’s instances JSON without `hermesBot` still works.
+
+Overlay for a team call (`session.modelCatalog` is the existing `GET /api/instances` cache; `AdvertisedModelCatalog.instance(id:in:)` is the existing lookup):
+
+```swift
+let visible = room.memberIds.compactMap { session.state.bot($0) }.filter { $0.hidden != true }
+let hermesInstance = visible.lazy.compactMap { bot in
+    AdvertisedModelCatalog.instance(id: bot.modelSelection.instanceId, in: session.modelCatalog)
+}.first { $0.capabilities?.hermesBot != nil }
+let engineSupportsGroups = CallModePolicy.nativeRoomCallSupported(
+    engineGroups: session.engineSync?.engineCapabilities?.groups,
+    hermesGroups: hermesInstance?.capabilities?.hermesBot?.capabilities?.groups,
+    visibleMemberAdvertisesHermes: hermesInstance != nil
+)
+let allow = CallModePolicy.allowsNativeCall(
+    mutationTarget: VBotMutationRouting.target(for: session.engineSync)
+) && CallModePolicy.allowsRoomCall(
+    isDm: room.dm == true,
+    engineSupportsGroups: engineSupportsGroups,
+    visibleMemberCount: visible.count
+)
+```
+
+Look up the member’s advertised instance by `bot.modelSelection.instanceId` against `Instance.instanceId` only to find that row, then read `hermesBot` presence. Do not compare the id to `"hermes"`. If `modelCatalog` has not loaded, `hermesInstance` is nil and the Hermes AND does not fire; OpenMaus `engineCapabilities.groups` remains the engine-level source. Server membership/dispatch already rejects Hermes-bound room members (`server/hermes-groups.ts`).
 
 No speech-to-speech provider. A roleplay bot already has its persona on the Hub; the phone sends transcribed text through `Session.send` (so `VBotMutationRouting` stays intact) and speaks `speech-text.ts` output. A local model (LM Studio, injected Codex/Claude local slugs, Hermes local) is just a slower `working` phase — narration of `tool.spoken` is what keeps the call from sounding dead. If a local model emits no chips, keep the Working spinner; do not fake progress. Reconstructed chats remain reference-only: `allowsNativeCall` is false, so the call button never appears even though `Session.send` could theoretically route a reconstructed 1:1 prompt.
 
@@ -1305,7 +1794,7 @@ Do not synthesize on a bridge. Do not move the ElevenLabs key. If the Hub is Lin
 
 - [ ] **Step 4: Re-run policy tests**
 
-Expected: PASS.
+Expected: PASS. OpenMaus payload `groups: true` allows a nonempty non-DM room. Reconstructed payload `groups: false` does not, even when synced groups exist. Legacy iOS JSON without `engineCapabilities` does not. A visible member whose instance advertises `hermesBot.capabilities.groups == false` does not. A later Hermes advertisement with `groups: true` would be allowed without an iOS engine-id change.
 
 - [ ] **Step 5: Commit**
 
@@ -1480,6 +1969,10 @@ All of these on a physical iPhone with `features.iosVoiceCalls: true`, a paired 
 | Roleplay / local models | 9 |
 | Reconstructed reference-only | 2, 6, 8, 9 |
 | Kokoro next (Hub, not phone) | 11 |
+| Native `VBotEngineCapabilities.groups` + iOS fail-closed decode + Hermes advertisement | 9 |
+| Sidecar `ttsPrepareVersion` handshake (old sidecars fail closed) | 1, 2, 6 |
+| Empty visible room cannot start a team call | 2, 8, 9 |
+| Locked `CallAvailability.reason` copy | 2, 6 |
 | Capability negotiation / bridge placement | 2, 9, 11 |
 | Tests / flags | 1, 2, 10 |
 | Defer full duplex until proven AEC | 2, 12 |
@@ -1509,7 +2002,10 @@ Locked once in Interfaces and reused:
 - `CallModePolicy.transfer` / `end`
 - `CallModePolicy.SpeechQueue` (`enqueue` / `next` / `interrupt`); `QueuedSpeech.botId` is `String?`; missing sender uses `unnamedSpeakerLabel` (`"Channel member"`) and nil voice
 - `requiresAddress(defaultResponderKind:)`
-- `allowsRoomCall(isDm:engineSupportsGroups:)` — Task 8 and Task 9 use the same two-argument signature
+- `allowsRoomCall(isDm:engineSupportsGroups:visibleMemberCount:)` — Task 2, Task 8, and Task 9 use the same three-argument signature; `visibleMemberCount == 0` fails
+- `nativeRoomCallSupported(engineGroups:hermesGroups:visibleMemberAdvertisesHermes:)` — `== true` only; Hermes AND uses advertised `hermesBot`, not engine/instance id strings
+- `companionPrepareAllowed(ttsPrepareVersion:)` — exact `1`; hub `iosVoiceCalls` is `flagged` only
+- Locked `reason*` constants; `availability.reason` is first failing gate; overlays do not paraphrase
 - `sendPath`, `requiredBridgeCapabilities`, `shouldSend`, `shouldTreatSpeechAsApproval`, `endpointMs`
 - Task 7 does not edit `GroupCallView.swift`; Task 8 creates it and consumes CompanionCore helpers
 
