@@ -96,6 +96,7 @@ describe("Hermes Bot Chat engine registry", () => {
 
     expect(registry.isEnabled).toBe(false);
     expect(createEngine).not.toHaveBeenCalled();
+    expect(registry.forBinding(binding)).toBeNull();
     await expect(registry.describe()).resolves.toMatchObject({
       state: "unavailable",
       instanceId: "hermes",

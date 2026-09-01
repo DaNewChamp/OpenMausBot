@@ -166,10 +166,12 @@ describe("Hermes Bot Chat loopback transport", () => {
     await Promise.resolve();
     expect((events as Array<{ type: string }>).map((event) => event.type)).toEqual([
       "turn.started",
+      "session.started",
       "content.delta",
       "item.completed",
       "turn.completed",
     ]);
+    expect(events[1]).toMatchObject({ type: "session.started", sessionId: null });
     expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: true, usage: { input: 2, output: 1 } });
     expect(JSON.stringify(events)).not.toContain("runtime-only");
     await engine.close();
@@ -501,6 +503,56 @@ describe("Hermes Bot Chat loopback transport", () => {
     expect(completed).toHaveLength(1);
     expect(completed[0]).toMatchObject({ ok: false, stopReason: "upstream_error" });
     expect(JSON.stringify(events)).not.toContain("private");
+    await engine.close();
+  });
+
+  it("classifies an active turn timeout as transient runtime work", async () => {
+    const { child } = harness();
+    const timers: Array<{ timeout: number; handler: () => void }> = [];
+    const clock = {
+      now: () => 0,
+      setTimeout: (handler: () => void, timeout: number) => {
+        const timer = { timeout, handler };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeout: vi.fn(),
+    };
+    const engine = new HermesBotAdapter({
+      spawn: vi.fn(() => child),
+      clock,
+      timeouts: { requestMs: 100, turnMs: 20 },
+    });
+    const events: RuntimeEvent[] = [];
+    engine.onEvent((event) => events.push(event));
+
+    const send = engine.send({ profile: "coder", text: "wait", threadId: "t", turnId: "u" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "runtime-timeout" } });
+    await settle();
+    const prompt = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: prompt.id, result: { accepted: true } });
+    await send;
+
+    const turnTimer = timers.find((timer) => timer.timeout === 20);
+    expect(turnTimer).toBeDefined();
+    turnTimer!.handler();
+    expect(events.at(-2)).toMatchObject({
+      type: "runtime.error",
+      message: "Hermes request timed out",
+      setup: false,
+    });
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: false, stopReason: "timeout" });
+    expect(JSON.stringify(events)).not.toContain("runtime-timeout");
     await engine.close();
   });
 

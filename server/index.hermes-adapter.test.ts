@@ -202,6 +202,35 @@ describe("Hermes Bot Chat hub integration", () => {
     expect((await api("POST", `/api/bots/${bot.id}/interrupt`)).status).toBe(200);
     await waitFor(async () => (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id)?.busy === false, "the interrupted Hermes turn");
 
+    // Binding identity remains authoritative even when the opt-in adapter is
+    // disabled. The request settles as a typed setup failure and never reaches
+    // the generic Hermes ACP instance selected on the bot.
+    const beforeDisabled = await api("GET", "/api/bots");
+    const beforeDisabledBot = beforeDisabled.body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
+    const disabledConfig = await api("PATCH", "/api/config", { vbot: { hermes: { enabled: false } } });
+    expect(disabledConfig.status).toBe(200);
+    writeFileSync(join(dataDir, "hermes-bindings.json"), JSON.stringify({
+      version: 1,
+      bindings: {
+        [bot.id]: {
+          adapter: "hermesBot",
+          profile: "default",
+          canonicalTitle: "Bot Chat",
+          bindingVersion: 1,
+        },
+      },
+    }), { mode: 0o600 });
+    expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "must not use ACP fallback" })).status).toBe(202);
+    await waitFor(async () => (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id)?.busy === false, "the disabled Hermes binding failure");
+    const disabledState = (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
+    expect(disabledState.activity).toBe("dead");
+    const beforeDisabledReplies = beforeDisabledBot?.messages.filter((message: { role: string; kind?: string }) => message.role === "bot" && message.kind === "text") ?? [];
+    const disabledReplies = disabledState.messages.filter((message: { role: string; kind?: string }) => message.role === "bot" && message.kind === "text");
+    expect(disabledReplies).toEqual(beforeDisabledReplies);
+    const disabledInterrupt = await api("POST", `/api/bots/${bot.id}/interrupt`);
+    expect(disabledInterrupt.status).toBe(409);
+    expect(disabledInterrupt.body).toMatchObject({ code: "state_unavailable", setup: true });
+
     // A broken sidecar is unavailable state, not an empty binding set. The
     // request is retained and settles as setup/dead without falling through
     // to the generic Hermes ACP provider.
@@ -214,6 +243,9 @@ describe("Hermes Bot Chat hub integration", () => {
     expect(malformedState.activity).toBe("dead");
     expect(malformedState.messages.some((message: { role: string; text?: string }) => message.role === "user" && message.text === "must not fallback")).toBe(true);
     expect(malformedState.messages.some((message: { role: string; text?: string }) => message.role === "bot" && message.text === "fixture Hermes reply")).toBe(false);
+    const malformedInterrupt = await api("POST", `/api/bots/${malformedBot.id}/interrupt`);
+    expect(malformedInterrupt.status).toBe(409);
+    expect(malformedInterrupt.body).toMatchObject({ code: "malformed_response", setup: true });
 
     const requests = existsSync(hermesLog)
       ? readFileSync(hermesLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as { method?: string })

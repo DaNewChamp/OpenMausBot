@@ -98,7 +98,6 @@ import {
 } from "./container-computer.ts";
 import {
   ensureDirs,
-  hermesBotEnabled,
   hermesBotInstanceId,
   instanceConfigs,
   loadConfig,
@@ -2042,7 +2041,11 @@ async function startTurn(
   // Read the sidecar once for this turn. A valid binding is immutable for the
   // duration of dispatch; an unreadable sidecar is not equivalent to an empty
   // map and must never fall through to the normal OpenMaus provider path.
-  const hermesBindings = hermesBotEnabled(cfg) ? loadHermesBindings() : null;
+  // Binding identity is hub-owned and remains authoritative even when the
+  // opt-in Hermes adapter is currently disabled.  Always read the sidecar so
+  // a persisted binding cannot silently fall through to the selected generic
+  // provider.  An unreadable sidecar is likewise fail-closed for this turn.
+  const hermesBindings = loadHermesBindings();
   const hermesBinding = hermesBindings?.state === "available"
     ? hermesBindings.value.get(bot.id)
     : undefined;
@@ -4006,8 +4009,14 @@ const HERMES_SETUP_MESSAGES = new Set([
  * adapter exposes only fixed messages, so this map never parses or forwards
  * provider diagnostics. */
 function publishHermesEvent(event: RuntimeEvent, instanceId: string): void {
-  if (event.type === "runtime.error" && HERMES_SETUP_MESSAGES.has(event.message)) {
-    bus.publish({ ...event, providerInstanceId: instanceId, setup: true });
+  if (event.type === "runtime.error") {
+    // Adapter runtime errors carry an explicit setup classification when the
+    // operation was already an active turn (notably prompt/turn timeout).
+    // Only legacy/foreign events without that marker use the stable-message
+    // fallback; never turn an explicit `setup: false` into setup work merely
+    // because the public message is also used by discovery failures.
+    const setup = event.setup ?? HERMES_SETUP_MESSAGES.has(event.message);
+    bus.publish({ ...event, providerInstanceId: instanceId, setup });
     return;
   }
   bus.publish({ ...event, providerInstanceId: instanceId });
@@ -4034,6 +4043,15 @@ function publishHermesFailure(
     ...base,
     eventId: newEventId(),
     type: "turn.started",
+  });
+  // Keep the canonical lifecycle sequence even when setup fails before the
+  // adapter can resume a Hermes session.  A null session id is intentional:
+  // the normal fold must not persist a Hermes runtime handle as a cursor.
+  bus.publish({
+    ...base,
+    eventId: newEventId(),
+    type: "session.started",
+    sessionId: null,
   });
   bus.publish({
     ...base,
@@ -6594,7 +6612,10 @@ const server = createServer(async (req, res) => {
       const mode = parseDeliveryModeFromBody(body);
       const replyTo = resolveReplyTarget(bot.threadId, body.replyToId);
       const instance = bot.busy ? registry.get(bot.modelSelection.instanceId) : undefined;
-      const hermesBindingResult = hermesBotEnabled(cfg) ? loadHermesBindings() : null;
+      // A binding stays authoritative while the adapter is disabled or while
+      // its sidecar is unavailable; steer must never cross into a generic
+      // provider in either state.
+      const hermesBindingResult = loadHermesBindings();
       // An unavailable sidecar cannot prove this bot is unbound. Disable
       // steer in that state so an active turn never receives a generic
       // provider message while Hermes binding state is unreadable.
@@ -6778,6 +6799,15 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { ok: true });
       }
       const instance = registry.get(bot.modelSelection.instanceId);
+      // Read binding state before touching any generic provider.  A persisted
+      // Hermes binding (or an unreadable sidecar that prevents proving the
+      // bot is unbound) owns the interrupt boundary even when Hermes is
+      // disabled/unavailable.
+      const bindingResult = loadHermesBindings();
+      const binding = bindingResult.state === "available" ? bindingResult.value.get(bot.id) : undefined;
+      const hermesBindingError = bindingResult.state === "unavailable" ? bindingResult : null;
+      const hermesDispatch = Boolean(binding || hermesBindingError);
+      const hermes = binding ? hermesRegistry.forBinding(binding) : null;
       // a bot busy in a ROOM is running on the room's thread — stopping it
       // from its own chat must reach that turn, not just the 1:1 thread
       const busyGroup = store.groups.find((g) => g.busyBotId === bot.id);
@@ -6787,17 +6817,20 @@ const server = createServer(async (req, res) => {
         // Drop only continuations owned by this room generation. A later
         // queued user message remains durable and will get a fresh run.
         dropPendingRoomResumes(busyGroup.threadId, interruptedRun);
-        await instance?.adapter.interruptTurn(busyGroup.threadId).catch(() => {});
+        if (!hermesDispatch) await instance?.adapter.interruptTurn(busyGroup.threadId).catch(() => {});
         closeOpenApprovals(busyGroup.threadId);
       }
-      const bindingResult = hermesBotEnabled(cfg) ? loadHermesBindings() : null;
-      const binding = bindingResult?.state === "available" ? bindingResult.value.get(bot.id) : undefined;
-      const hermes = binding ? hermesRegistry.forBinding(binding) : null;
       if (binding && hermes) {
         await hermes.interrupt(binding.profile).catch(() => {});
+      } else if (hermesDispatch) {
+        // Keep the API response typed for a bound bot whose adapter is
+        // disabled/unavailable (or whose binding store cannot be read), and
+        // never fall through to the generic selected adapter.
+        const safe = new HermesEngineError(hermesBindingError?.code ?? "state_unavailable");
+        closeOpenApprovals(bot.threadId);
+        return json(res, 409, { error: safe.message, code: safe.code, setup: true });
       } else if (!busyGroup) {
-        // Existing provider interrupt behavior is unchanged for unbound bots
-        // and for a binding that is not usable during this request.
+        // Existing provider interrupt behavior is unchanged for unbound bots.
         await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
       }
       closeOpenApprovals(bot.threadId);

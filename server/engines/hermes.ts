@@ -925,6 +925,12 @@ export class HermesBotAdapter implements HermesBotEngine {
       this.runtimes.set(this.runtimeKey(resolvedProfile, generation), runtime);
       runtime.started = true;
       this.emitRuntime(runtime, { type: "turn.started" });
+      // Hermes' runtime session id is an ephemeral gateway handle.  The
+      // harness still needs the canonical lifecycle marker, but exposing that
+      // handle as `session.started.sessionId` would make the normal event fold
+      // persist it as a provider resume cursor.  A null session id preserves
+      // the shared event contract without leaking or persisting Hermes ids.
+      this.emitRuntime(runtime, { type: "session.started", sessionId: null });
       runtime.timer = this.clock.setTimeout(() => {
         this.demoteCapabilities();
         this.terminateRuntime(runtime, false, "timeout");
@@ -1140,6 +1146,7 @@ export class HermesBotAdapter implements HermesBotEngine {
       this.emitRuntime(runtime, {
         type: "runtime.error",
         message: runtimeErrorMessage(reason),
+        setup: hermesRuntimeErrorIsSetup(reason),
       });
     }
     this.emitRuntime(runtime, {
@@ -1230,6 +1237,28 @@ function runtimeErrorMessage(reason: string): string {
       // Runtime reasons are internal values. Unknown values still fail
       // closed to a fixed message rather than crossing the event boundary.
       return new HermesEngineError("upstream_error").message;
+  }
+}
+
+/** Runtime failures are not all setup failures.  In particular, a timeout
+ * after a turn has been accepted is a transient turn result and must leave the
+ * UI's retry path available.  Startup/discovery/gateway/profile failures are
+ * still setup work the user must fix first. */
+function hermesRuntimeErrorIsSetup(reason: string): boolean {
+  switch (reason) {
+    case "upstream_error":
+    case "timeout":
+    case "error":
+      return false;
+    case "missing_cli":
+    case "invalid_credentials":
+    case "gateway_unavailable":
+    case "state_unavailable":
+    case "malformed_response":
+    case "profile_unavailable":
+      return true;
+    default:
+      return true;
   }
 }
 
