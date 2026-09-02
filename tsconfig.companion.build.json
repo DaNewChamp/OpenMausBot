@@ -3,12 +3,18 @@
   "compilerOptions": {
     "noEmit": false,
     "outDir": "dist-companion",
-    "rootDir": "companion/src",
+    "rootDir": ".",
     "rewriteRelativeImportExtensions": true,
     "declaration": false,
     "sourceMap": false
   },
   "include": [
-    "companion/src"
+    "companion/src/**/*",
+    "shared/fleet-presentation.ts",
+    "server/pairing-invitations.ts",
+    "server/atomic.ts"
+  ],
+  "exclude": [
+    "companion/src/**/*.test.ts"
   ]
 }

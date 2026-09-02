@@ -57,7 +57,7 @@
     "check:electron": "node scripts/check-electron.mjs",
     "preview": "vite preview",
     "build:server": "tsc -p tsconfig.server.build.json && node scripts/bundle-server.mjs",
-    "build:companion": "tsc -p tsconfig.companion.build.json",
+    "build:companion": "tsc -p tsconfig.companion.build.json && node scripts/fix-companion-layout.mjs",
     "build:bridge": "tsc -p tsconfig.bridge.build.json && node scripts/fix-bridge-entry.mjs",
     "build:speech": "node electron/build-speech-helper.mjs",
     "build:recorder": "node electron/build-recorder-helper.mjs",
