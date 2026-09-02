@@ -55,7 +55,60 @@ export const HERMES_VBOT_ALLOWED_TOOLS = [
   "skill_manage",
 ] as const;
 
-export function createHermesVbotDaemonHandler(): (request: JsonRpcRequest) => Promise<JsonRpcSuccess> {
+export type HermesVbotToolResult = { text: string; isError?: boolean };
+export type HermesVbotToolExecutor = (
+  name: string,
+  args: Record<string, unknown>,
+) => Promise<HermesVbotToolResult>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function mcpTextResult(id: string | number, text: string, isError = false): JsonRpcSuccess {
+  return {
+    jsonrpc: "2.0",
+    id,
+    result: { content: [{ type: "text", text }], isError },
+  };
+}
+
+export function createHermesVbotEnvToolExecutor(
+  env: NodeJS.ProcessEnv = process.env,
+): HermesVbotToolExecutor {
+  return async (name, args) => {
+    const harness = (env.OMB_HARNESS_URL ?? "").trim();
+    const token = (env.OMB_COMMS_TOKEN ?? "").trim();
+    if (!harness || !token) {
+      return { text: "V Bot tool facade is unconfigured", isError: true };
+    }
+    const previous = {
+      OMB_HARNESS_URL: process.env.OMB_HARNESS_URL,
+      OMB_COMMS_TOKEN: process.env.OMB_COMMS_TOKEN,
+      OMB_BOT_ID: process.env.OMB_BOT_ID,
+      OMB_THREAD_ID: process.env.OMB_THREAD_ID,
+      OMB_TURN_DEPTH: process.env.OMB_TURN_DEPTH,
+    };
+    process.env.OMB_HARNESS_URL = harness;
+    process.env.OMB_COMMS_TOKEN = token;
+    process.env.OMB_BOT_ID = (env.OMB_BOT_ID ?? "").trim();
+    process.env.OMB_THREAD_ID = (env.OMB_THREAD_ID ?? "").trim();
+    if (env.OMB_TURN_DEPTH) process.env.OMB_TURN_DEPTH = env.OMB_TURN_DEPTH;
+    try {
+      const { executeAgentsProxyTool } = await import("../../server/drivers/agents-proxy.ts");
+      return await executeAgentsProxyTool(name, args);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  };
+}
+
+export function createHermesVbotDaemonHandler(options?: {
+  executeTool?: HermesVbotToolExecutor;
+}): (request: JsonRpcRequest) => Promise<JsonRpcSuccess> {
   return async (request) => {
     if (request.method === "initialize") {
       return {
@@ -75,10 +128,28 @@ export function createHermesVbotDaemonHandler(): (request: JsonRpcRequest) => Pr
         result: { tools: HERMES_VBOT_ALLOWED_TOOLS.map((name) => ({ name })) },
       };
     }
-    if (request.method === "ping") {
+    if (request.method === "ping" || request.method === "notifications/initialized" || request.method === "notifications/cancelled") {
       return { jsonrpc: "2.0", id: request.id, result: {} };
     }
-    return { jsonrpc: "2.0", id: request.id, result: { ok: false, message: "tool unavailable" } };
+    if (request.method === "tools/call") {
+      const params = isRecord(request.params) ? request.params : {};
+      const name = typeof params.name === "string" ? params.name : "";
+      const args = isRecord(params.arguments) ? params.arguments : {};
+      if (!(HERMES_VBOT_ALLOWED_TOOLS as readonly string[]).includes(name)) {
+        return mcpTextResult(request.id, `Unknown tool: ${name}`, true);
+      }
+      if (!options?.executeTool) {
+        return mcpTextResult(request.id, "V Bot tool facade is unconfigured", true);
+      }
+      try {
+        const result = await options.executeTool(name, args);
+        return mcpTextResult(request.id, result.text, result.isError === true);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "tool execution failed";
+        return mcpTextResult(request.id, message, true);
+      }
+    }
+    return mcpTextResult(request.id, `Method not found: ${request.method}`, true);
   };
 }
 

@@ -157,4 +157,67 @@ describe("Hermes V Bot MCP facade", () => {
       botScope: "bot-chief",
     });
   });
+
+  it("executes tools/call through the approved facade instead of a blanket tool unavailable stub", async () => {
+    const { createHermesVbotDaemonHandler } = await import("./hermes-vbot-mcp.ts");
+    const { startHermesVbotConnector, connectHermesVbotConnector } = await import("./hermes-vbot-connector.ts");
+    const dir = mkdtempSync(join(tmpdir(), "vbot-hermes-mcp-call-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "vbot.sock");
+    const server = await startHermesVbotConnector({
+      listen: { socketPath },
+      peerCredential: "bridge-mini",
+      botScope: "bot-chief",
+      handler: createHermesVbotDaemonHandler({
+        executeTool: async (name, args) => {
+          if (name === "list_bots") {
+            return { text: `Other bots you can message with ask_bot:\n- Chief [id: bot-chief]` };
+          }
+          return { text: `fixture saw ${name} ${JSON.stringify(args)}` };
+        },
+      }),
+    });
+    const client = await connectHermesVbotConnector({
+      socketPath,
+      peerCredential: "bridge-mini",
+      botScope: "bot-chief",
+    });
+    const listed = await client.request("tools/list");
+    expect(JSON.stringify(listed)).toMatch(/list_bots/);
+    const called = await client.request("tools/call", { name: "list_bots", arguments: {} });
+    const calledText = JSON.stringify(called);
+    expect(calledText).not.toMatch(/tool unavailable/i);
+    expect(calledText).toMatch(/Chief \[id: bot-chief\]/);
+    const unknown = await client.request("tools/call", { name: "docker", arguments: {} });
+    const unknownText = JSON.stringify(unknown);
+    expect(unknownText).not.toMatch(/tool unavailable/i);
+    expect(unknownText).toMatch(/Unknown tool: docker/);
+    client.close();
+    await server.close();
+  });
+
+  it("fails closed honestly when the approved facade is unconfigured", async () => {
+    const { createHermesVbotDaemonHandler } = await import("./hermes-vbot-mcp.ts");
+    const handler = createHermesVbotDaemonHandler();
+    const result = await handler({
+      jsonrpc: "2.0",
+      id: 7,
+      method: "tools/call",
+      params: { name: "list_bots", arguments: {} },
+    });
+    const text = JSON.stringify(result);
+    expect(text).not.toMatch(/tool unavailable/i);
+    expect(text).toMatch(/unconfigured/i);
+    expect(text).toMatch(/list_bots|tool facade/i);
+  });
+
+  it("fails closed honestly when hub credentials are absent from the env executor", async () => {
+    const { createHermesVbotEnvToolExecutor } = await import("./hermes-vbot-mcp.ts");
+    const execute = createHermesVbotEnvToolExecutor({ PATH: "/usr/bin" });
+    const result = await execute("list_bots", {});
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/unconfigured/i);
+    expect(result.text).not.toMatch(/tool unavailable/i);
+    expect(JSON.stringify(result)).not.toMatch(/token|OMB_COMMS|Bearer|sk-/i);
+  });
 });

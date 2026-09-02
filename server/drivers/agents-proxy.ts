@@ -39,11 +39,11 @@ import { pathToFileURL } from "node:url";
 
 import { CREDENTIAL_TARGETS, isCredentialTargetId } from "../../shared/credential-request.ts";
 
-const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
-const BOT_ID = process.env.OMB_BOT_ID ?? "";
-const THREAD_ID = process.env.OMB_THREAD_ID ?? "";
-const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
-const DEPTH = Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
+const HARNESS = () => process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
+const BOT_ID = () => process.env.OMB_BOT_ID ?? "";
+const THREAD_ID = () => process.env.OMB_THREAD_ID ?? "";
+const TOKEN = () => process.env.OMB_COMMS_TOKEN ?? "";
+const DEPTH = () => Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
 const MAX_CREATED_PER_TURN = 4;
 let createdThisTurn = 0;
 
@@ -325,18 +325,18 @@ const textResult = (id: unknown, text: string, isError = false) =>
   ok(id, { content: [{ type: "text", text }], isError });
 
 async function api(path: string, init?: RequestInit): Promise<Json> {
-  const res = await fetch(HARNESS + path, {
+  const res = await fetch(HARNESS() + path, {
     ...init,
-    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}`, ...init?.headers },
+    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN()}`, ...init?.headers },
   });
   const body = (await res.json().catch(() => ({}))) as Json;
   if (!res.ok) throw new Error(String(body.error ?? `HTTP ${res.status}`));
   return body;
 }
 
-async function callTool(name: string, args: Json): Promise<{ text: string; isError?: boolean }> {
+export async function executeAgentsProxyTool(name: string, args: Json): Promise<{ text: string; isError?: boolean }> {
   if (name === "list_bots") {
-    const r = await api(`/api/internal/agents?self=${encodeURIComponent(BOT_ID)}`);
+    const r = await api(`/api/internal/agents?self=${encodeURIComponent(BOT_ID())}`);
     const bots = (r.bots as Array<Json>) ?? [];
     if (!bots.length) return { text: "No other bots in this section yet." };
     const lines = bots.map((b) => {
@@ -358,7 +358,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     if (!toBotId || !message) return { text: "ask_bot needs bot_id and message.", isError: true };
     const r = await api(`/api/internal/ask-bot`, {
       method: "POST",
-      body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, toBotId, message, depth: DEPTH }),
+      body: JSON.stringify({ fromBotId: BOT_ID(), fromThreadId: THREAD_ID(), toBotId, message, depth: DEPTH() }),
     });
     if (r.busy) return { text: `That bot is busy right now — try again after it finishes.` };
     if (r.pending) {
@@ -378,11 +378,11 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const reason = typeof args.reason === "string" ? args.reason.trim() : "";
     if (!toBotId || !message) return { text: "delegate_bot needs bot_id and message.", isError: true };
     const body: Record<string, unknown> = {
-      fromBotId: BOT_ID,
-      fromThreadId: THREAD_ID,
+      fromBotId: BOT_ID(),
+      fromThreadId: THREAD_ID(),
       toBotId,
       message,
-      depth: DEPTH,
+      depth: DEPTH(),
     };
     if (reason) body.reason = reason;
     const r = await api(`/api/internal/delegate-bot`, { method: "POST", body: JSON.stringify(body) });
@@ -404,8 +404,8 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const r = await api(`/api/internal/create-bot`, {
       method: "POST",
       body: JSON.stringify({
-        fromBotId: BOT_ID,
-        fromThreadId: THREAD_ID,
+        fromBotId: BOT_ID(),
+        fromThreadId: THREAD_ID(),
         name: botName,
         role,
         instructions,
@@ -427,8 +427,8 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const botId = String(args.bot_id ?? "").trim();
     if (!botId) return { text: "configure_bot needs bot_id.", isError: true };
     const payload: Record<string, unknown> = {
-      fromBotId: BOT_ID,
-      fromThreadId: THREAD_ID,
+      fromBotId: BOT_ID(),
+      fromThreadId: THREAD_ID(),
       botId,
     };
     if (args.engine) payload.engine = String(args.engine);
@@ -473,8 +473,8 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const r = await api(`/api/internal/bots/${encodeURIComponent(botId)}/runtime-binding`, {
       method: "POST",
       body: JSON.stringify({
-        fromBotId: BOT_ID,
-        fromThreadId: THREAD_ID,
+        fromBotId: BOT_ID(),
+        fromThreadId: THREAD_ID(),
         targetBotId: botId,
         binding,
         contextMode: args.context_mode === "summary" ? "summary" : "none",
@@ -488,7 +488,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
   if (name === "run_on_bridge") {
     const command = String(args.command ?? "").trim();
     if (!command) return { text: "run_on_bridge needs command.", isError: true };
-    const body: Record<string, unknown> = { command, fromBotId: BOT_ID, fromThreadId: THREAD_ID };
+    const body: Record<string, unknown> = { command, fromBotId: BOT_ID(), fromThreadId: THREAD_ID() };
     if (args.bridge) body.bridge = String(args.bridge);
     if (args.cwd) body.cwd = String(args.cwd);
     if (args.timeout_ms != null) body.timeoutMs = Number(args.timeout_ms);
@@ -507,7 +507,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const target = String(args.target ?? "").trim();
     if (!command) return { text: "run_on_ssh_target needs command.", isError: true };
     if (!target) return { text: "run_on_ssh_target needs target.", isError: true };
-    const body: Record<string, unknown> = { command, target, fromBotId: BOT_ID, fromThreadId: THREAD_ID };
+    const body: Record<string, unknown> = { command, target, fromBotId: BOT_ID(), fromThreadId: THREAD_ID() };
     if (args.bridge) body.bridge = String(args.bridge);
     if (args.cwd) body.cwd = String(args.cwd);
     if (args.timeout_ms != null) body.timeoutMs = Number(args.timeout_ms);
@@ -522,7 +522,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     return { text: parts.join("\n\n"), isError: Number(r.exitCode) !== 0 };
   }
   if (name === "list_rooms") {
-    const r = await api(`/api/internal/rooms?self=${encodeURIComponent(BOT_ID)}`);
+    const r = await api(`/api/internal/rooms?self=${encodeURIComponent(BOT_ID())}`);
     const rooms = (r.rooms as Array<Json>) ?? [];
     if (!rooms.length) return { text: "No multi-bot rooms in your section yet." };
     const lines = rooms.map((room) => {
@@ -536,8 +536,8 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const memberIds = Array.isArray(args.member_ids) ? args.member_ids.map(String).filter(Boolean) : [];
     if (!memberIds.length) return { text: "create_room needs at least one member_id.", isError: true };
     const body: Record<string, unknown> = {
-      fromBotId: BOT_ID,
-      fromThreadId: THREAD_ID,
+      fromBotId: BOT_ID(),
+      fromThreadId: THREAD_ID(),
       memberIds,
     };
     if (args.name) body.name = String(args.name);
@@ -551,8 +551,8 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const roomId = String(args.room_id ?? "").trim();
     if (!roomId) return { text: "update_room needs room_id.", isError: true };
     const body: Record<string, unknown> = {
-      fromBotId: BOT_ID,
-      fromThreadId: THREAD_ID,
+      fromBotId: BOT_ID(),
+      fromThreadId: THREAD_ID(),
     };
     if (args.name !== undefined) body.name = String(args.name);
     if (args.bulletin !== undefined) body.bulletin = String(args.bulletin);
@@ -566,7 +566,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     return { text: `Updated room "${r.name ?? roomId}" [id: ${r.id}].` };
   }
   if (name === "list_routines") {
-    const r = await api(`/api/internal/routines?self=${encodeURIComponent(BOT_ID)}`);
+    const r = await api(`/api/internal/routines?self=${encodeURIComponent(BOT_ID())}`);
     const routines = (r.routines as Array<Json>) ?? [];
     if (!routines.length) return { text: "No routines in your section yet." };
     const lines = routines.map((routine) => {
@@ -608,8 +608,8 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
       return { text: "schedule_type must be once or daily.", isError: true };
     }
     const body: Record<string, unknown> = {
-      fromBotId: BOT_ID,
-      fromThreadId: THREAD_ID,
+      fromBotId: BOT_ID(),
+      fromThreadId: THREAD_ID(),
       name: routineName,
       prompt,
       schedule,
@@ -620,20 +620,20 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     if (args.duration_minutes != null) body.durationMinutes = Number(args.duration_minutes);
     const r = await api("/api/internal/create-routine", { method: "POST", body: JSON.stringify(body) });
     const routine = (r.routine ?? r) as Json;
-    return { text: `Created routine "${routine.name ?? routineName}" [id: ${routine.id}, bot id: ${routine.botId ?? BOT_ID}].` };
+    return { text: `Created routine "${routine.name ?? routineName}" [id: ${routine.id}, bot id: ${routine.botId ?? BOT_ID()}].` };
   }
   if (name === "run_routine") {
     const routineId = String(args.routine_id ?? "").trim();
     if (!routineId) return { text: "run_routine needs routine_id.", isError: true };
     const r = await api(`/api/internal/run-routine/${encodeURIComponent(routineId)}`, {
       method: "POST",
-      body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID }),
+      body: JSON.stringify({ fromBotId: BOT_ID(), fromThreadId: THREAD_ID() }),
     });
     const run = (r.run ?? r) as Json;
     return { text: `Routine run queued [run id: ${run.id}, status: ${run.status ?? "queued"}].` };
   }
   if (name === "skills_list") {
-    const r = await api(`/api/internal/skills?fromBotId=${encodeURIComponent(BOT_ID)}&fromThreadId=${encodeURIComponent(THREAD_ID)}`);
+    const r = await api(`/api/internal/skills?fromBotId=${encodeURIComponent(BOT_ID())}&fromThreadId=${encodeURIComponent(THREAD_ID())}`);
     const skills = Array.isArray(r.skills) ? (r.skills as Json[]) : [];
     const staged = Array.isArray(r.staged) ? (r.staged as Json[]) : [];
     if (!skills.length && !staged.length) return { text: "No imported or staged skills yet." };
@@ -644,7 +644,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
   if (name === "skill_view") {
     const skill = String(args.name ?? "").trim();
     if (!skill) return { text: "skill_view needs name.", isError: true };
-    const r = await api(`/api/internal/skills/${encodeURIComponent(skill)}?fromBotId=${encodeURIComponent(BOT_ID)}&fromThreadId=${encodeURIComponent(THREAD_ID)}`);
+    const r = await api(`/api/internal/skills/${encodeURIComponent(skill)}?fromBotId=${encodeURIComponent(BOT_ID())}&fromThreadId=${encodeURIComponent(THREAD_ID())}`);
     return { text: String(r.text ?? "") };
   }
   if (name === "skill_manage") {
@@ -652,7 +652,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const skillMd = typeof args.skill_md === "string" ? args.skill_md : "";
     if (!action || !skillMd.trim()) return { text: 'skill_manage needs action "create" or "update" and the full skill_md.', isError: true };
     const body: Record<string, unknown> = {
-      fromBotId: BOT_ID, fromThreadId: THREAD_ID, action, skill_md: skillMd,
+      fromBotId: BOT_ID(), fromThreadId: THREAD_ID(), action, skill_md: skillMd,
       ...(typeof args.gist === "string" ? { gist: args.gist } : {}),
       ...(typeof args.source === "string" ? { source: args.source } : {}),
     };
@@ -668,8 +668,8 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const r = await api("/api/internal/request-credential", {
       method: "POST",
       body: JSON.stringify({
-        fromBotId: BOT_ID,
-        fromThreadId: THREAD_ID,
+        fromBotId: BOT_ID(),
+        fromThreadId: THREAD_ID(),
         credentialId,
         ...(process.env.OMB_ROOM_THREAD_ID && process.env.OMB_ROOM_GENERATION
           ? {
@@ -716,7 +716,7 @@ async function handle(msg: Json) {
       const name = params.name as string;
       if (!TOOLS.some((t) => t.name === name)) return rpcErr(id, -32602, `Unknown tool: ${name}`);
       try {
-        const { text, isError } = await callTool(name, (params.arguments ?? {}) as Json);
+        const { text, isError } = await executeAgentsProxyTool(name, (params.arguments ?? {}) as Json);
         textResult(id, text, isError);
       } catch (e) {
         textResult(id, (e as Error).message, true);
