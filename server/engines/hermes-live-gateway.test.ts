@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, realpathSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
