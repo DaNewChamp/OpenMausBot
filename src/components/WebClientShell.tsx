@@ -1,13 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  Bot,
-  CheckCircle2,
   Loader2,
-  LogOut,
   Mail,
   Menu,
-  MonitorSmartphone,
-  Settings,
   ShieldCheck,
   Users,
   Wifi,
@@ -15,14 +10,21 @@ import {
 } from "lucide-react";
 import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
+import { BotAvatar } from "@/components/Avatar";
 import { PluginsPanel, preloadConnectedApps } from "@/components/PluginsPanel";
 import { SettingsPanel } from "@/components/SettingsPanel";
+import { SettingsModal } from "@/components/SettingsModal";
 import { Sidebar } from "@/components/Sidebar";
-import { StoreProvider, useStore, type Bot as BotRecord } from "@/state/store";
+import { RoutinesPage } from "@/components/RoutinesPage";
+import { SkillRecorderPage } from "@/components/SkillRecorderPage";
+import { TeamMapPage } from "@/components/TeamMapPage";
+import { StoreProvider, useStore, type Bot, type Group } from "@/state/store";
+import { isDesktopDemoMode } from "@/lib/desktop-demo";
+import { webClientLayout } from "@/lib/web-client-layout";
+import { stateForBot } from "@/lib/mascot";
 import {
   canCallHubApi,
   clearAccountSession,
-  clearHubConnection,
   completeWebAuthHandoff,
   defaultWebHubUrl,
   fetchAccountUser,
@@ -39,20 +41,6 @@ import {
   type WebClientSessionSnapshot,
   type WebFleetInstallation,
 } from "@/lib/web-client-session";
-
-export type WebClientNav = "conversations" | "bots" | "fleet" | "settings" | "approvals";
-
-function openApprovalBots(bots: BotRecord[]): BotRecord[] {
-  return bots.filter((bot) =>
-    bot.messages.some(
-      (message) =>
-        message.kind === "options" &&
-        message.card?.requestId &&
-        !message.card.answered &&
-        !message.card.dismissed,
-    ),
-  );
-}
 
 export function WebClientGate({
   session,
@@ -168,25 +156,26 @@ export function WebClientGate({
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-app px-4 py-10 text-ink">
-      <div className="w-full max-w-lg rounded-2xl border border-border bg-raised p-6 shadow-lg">
-        <h1 className="text-[22px] font-semibold">V Bot on the web</h1>
-        <p className="mt-2 text-[14px] text-ink-secondary">
+    <div data-web-client-gate className="flex min-h-screen items-center justify-center bg-app px-4 py-8 text-ink">
+      <div className="w-full max-w-md rounded-2xl border border-hairline/50 bg-panel p-5 shadow-2xl shadow-black/40 sm:p-6">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-ink-secondary">V Bot · Web</div>
+        <h1 className="mt-2 text-[22px] font-semibold tracking-tight">V Bot on the web</h1>
+        <p className="mt-2 text-[13px] leading-relaxed text-ink-secondary">
           Account sign-in discovers your systems. Hub pairing still requires a code, QR, or invitation from the hub.
         </p>
 
         {mode === "choose" && (
-          <div className="mt-6 flex flex-col gap-3">
+          <div className="mt-5 flex flex-col gap-2.5">
             <button
               type="button"
-              className="rounded-xl bg-accent px-4 py-3 text-left text-[14px] font-medium text-accent-ink"
+              className="rounded-xl bg-accent px-4 py-3 text-left text-[13px] font-semibold text-accent-ink transition hover:brightness-110"
               onClick={() => setMode("account")}
             >
               Sign in to find my systems
             </button>
             <button
               type="button"
-              className="rounded-xl bg-control px-4 py-3 text-left text-[14px] font-medium text-ink"
+              className="rounded-xl bg-control px-4 py-3 text-left text-[13px] font-medium text-ink transition hover:bg-raised"
               onClick={() => setMode("direct")}
             >
               Pair directly
@@ -342,177 +331,151 @@ export function WebClientGate({
   );
 }
 
-function WebClientNavButton({
-  active,
-  label,
-  icon: Icon,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  icon: typeof Bot;
-  onClick: () => void;
-}) {
+function RoomInfoPanel({ group, onClose }: { group: Group; onClose: () => void }) {
+  const { state } = useStore();
+  const members = group.memberIds
+    .map((id) => state.bots.find((candidate) => candidate.id === id))
+    .filter((candidate): candidate is Bot => Boolean(candidate));
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] ${
-        active ? "bg-accent text-accent-ink" : "text-ink-secondary hover:bg-control hover:text-ink"
-      }`}
+    <aside
+      aria-label={`${group.name} room info`}
+      className="animate-panel-in flex h-full w-[min(320px,100vw)] shrink-0 flex-col border-l border-hairline/40 bg-panel"
     >
-      <Icon size={15} />
-      {label}
-    </button>
+      <header className="flex items-center justify-between border-b border-hairline/20 px-4 py-3">
+        <span className="text-[15px] font-semibold text-ink">Room info</span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close room info"
+          className="flex size-8 items-center justify-center rounded-lg text-ink-secondary hover:bg-control hover:text-ink"
+        >
+          <X size={17} />
+        </button>
+      </header>
+      <div className="flex-1 overflow-y-auto px-4 py-4">
+        <div className="rounded-xl border border-hairline/30 bg-card p-4">
+          <div className="flex items-center gap-2.5">
+            <span className="flex size-9 items-center justify-center rounded-full bg-control text-ink-secondary">
+              <Users size={18} />
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-[15px] font-medium text-ink">{group.name}</div>
+              <div className="mt-0.5 text-[12px] text-ink-secondary">
+                {members.length} {members.length === 1 ? "member" : "members"}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <section className="mt-5" aria-labelledby="web-room-members-title">
+          <h2 id="web-room-members-title" className="px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-secondary">
+            Members
+          </h2>
+          <div className="mt-2 flex flex-col gap-1">
+            {members.map((member) => (
+              <div key={member.id} className="flex items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-raised/40">
+                <BotAvatar bot={member} state={stateForBot(member)} size={30} animated={false} />
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] font-medium text-ink">{member.name}</div>
+                  <div className="truncate text-[11.5px] text-ink-secondary">{member.title || "Bot"}</div>
+                </div>
+              </div>
+            ))}
+            {members.length === 0 && <p className="px-2 py-3 text-[13px] text-ink-secondary">No members listed.</p>}
+          </div>
+        </section>
+
+        {group.bulletin && (
+          <section className="mt-5" aria-labelledby="web-room-bulletin-title">
+            <h2 id="web-room-bulletin-title" className="px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-secondary">
+              Room instructions
+            </h2>
+            <p className="mt-2 whitespace-pre-wrap rounded-xl border border-hairline/30 bg-card p-3 text-[13px] leading-relaxed text-ink-secondary">
+              {group.bulletin}
+            </p>
+          </section>
+        )}
+      </div>
+    </aside>
   );
 }
 
 export function WebClientShell() {
-  const { state, dispatch } = useStore();
-  const [nav, setNav] = useState<WebClientNav>("conversations");
+  const { state } = useStore();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [roomInfoOpen, setRoomInfoOpen] = useState(false);
   const group = state.groups.find((entry) => entry.id === state.selectedId);
   const bot = group ? undefined : (state.bots.find((entry) => entry.id === state.selectedId) ?? state.bots[0]);
-  const approvalBots = useMemo(() => openApprovalBots(state.bots), [state.bots]);
+  const [viewportWidth, setViewportWidth] = useState(() => globalThis.innerWidth || 1280);
+  const mobile = viewportWidth < 768;
+  const layout = webClientLayout();
 
   useEffect(() => {
     if (canCallHubApi()) void preloadConnectedApps();
   }, []);
 
-  const signOutHub = () => {
-    clearHubConnection();
-    globalThis.location.reload();
-  };
+  useEffect(() => {
+    const onResize = () => setViewportWidth(globalThis.innerWidth || 1280);
+    globalThis.addEventListener("resize", onResize);
+    return () => globalThis.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    if (!mobile) setDrawerOpen(false);
+  }, [mobile]);
+
+  useEffect(() => {
+    setRoomInfoOpen(false);
+  }, [state.selectedId]);
 
   return (
-    <div className="flex h-screen bg-app text-ink">
-      <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-border bg-raised p-4 transition-transform md:static md:translate-x-0 ${
-          drawerOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
-      >
-        <div className="mb-4 flex items-center justify-between">
-          <div className="text-[15px] font-semibold">V Bot</div>
-          <button type="button" className="md:hidden" onClick={() => setDrawerOpen(false)} aria-label="Close menu">
-            <X size={16} />
-          </button>
-        </div>
-        <nav className="flex flex-col gap-1">
-          <WebClientNavButton active={nav === "conversations"} label="Conversations" icon={Users} onClick={() => setNav("conversations")} />
-          <WebClientNavButton active={nav === "bots"} label="Bots" icon={Bot} onClick={() => setNav("bots")} />
-          <WebClientNavButton active={nav === "fleet"} label="Fleet" icon={MonitorSmartphone} onClick={() => setNav("fleet")} />
-          <WebClientNavButton active={nav === "settings"} label="Settings" icon={Settings} onClick={() => setNav("settings")} />
-          <WebClientNavButton active={nav === "approvals"} label="Approvals" icon={CheckCircle2} onClick={() => setNav("approvals")} />
-        </nav>
+    <div
+      data-web-client-shell
+      data-web-left-rail={layout.leftRail}
+      data-web-main={layout.main}
+      data-web-right-pane={layout.rightPane}
+      data-web-traffic-lights={String(layout.trafficLights)}
+      className="relative flex h-screen min-h-0 overflow-hidden bg-app text-ink"
+    >
+      {mobile && drawerOpen && (
         <button
           type="button"
-          className="mt-auto inline-flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] text-ink-secondary hover:bg-control hover:text-ink"
-          onClick={signOutHub}
-        >
-          <LogOut size={15} />
-          Unpair browser
-        </button>
-      </aside>
+          aria-label="Close bot list"
+          className="absolute inset-0 z-30 cursor-default bg-black/45"
+          onClick={() => setDrawerOpen(false)}
+        />
+      )}
+      <Sidebar
+        web
+        open={mobile ? drawerOpen : true}
+        overlay={mobile}
+        onClose={() => setDrawerOpen(false)}
+      />
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-3 border-b border-border px-4 py-3 md:hidden">
-          <button type="button" onClick={() => setDrawerOpen(true)} aria-label="Open menu">
+      <div data-web-main-column className="relative flex min-w-0 flex-1 flex-col bg-app">
+        {mobile && (
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            aria-label="Open bot list"
+            className="shell-control absolute left-2 top-2 z-20 rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
+          >
             <Menu size={18} />
           </button>
-          <div className="text-[14px] font-medium capitalize">{nav}</div>
-        </header>
-
-        {nav === "conversations" && (
-          <div className="flex min-h-0 flex-1">
-            <div className="hidden w-72 border-r border-border md:block">
-              <Sidebar open onClose={() => setDrawerOpen(false)} />
+        )}
+        <div className="flex min-h-0 flex-1">
+          {state.activeView === "team-map" ? <TeamMapPage /> : state.activeView === "routines" ? <RoutinesPage /> : state.activeView === "skill-recorder" ? <SkillRecorderPage /> : group ? <GroupView key={group.id} group={group} onOpenInfo={() => setRoomInfoOpen(true)} /> : bot ? <ChatView bot={bot} /> : (
+            <div className="flex h-full min-w-0 flex-1 items-center justify-center text-[14px] text-ink-secondary">
+              No bots yet
             </div>
-            <div className="min-w-0 flex-1">
-              {group ? <GroupView key={group.id} group={group} /> : bot ? <ChatView bot={bot} /> : (
-                <div className="flex h-full items-center justify-center text-ink-secondary">Select a conversation</div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {nav === "bots" && (
-          <div className="grid gap-3 overflow-auto p-4 sm:grid-cols-2 lg:grid-cols-3">
-            {state.bots.map((entry) => (
-              <button
-                key={entry.id}
-                type="button"
-                className="rounded-xl border border-border bg-raised px-4 py-4 text-left"
-                onClick={() => {
-                  dispatch({ type: "select", id: entry.id });
-                  setNav("conversations");
-                }}
-              >
-                <div className="font-medium">{entry.name}</div>
-                <div className="mt-1 text-[12px] text-ink-secondary">{entry.title || "Bot"}</div>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {nav === "fleet" && (
-          <div className="space-y-3 overflow-auto p-4">
-            <div className="rounded-xl border border-border bg-raised px-4 py-4 text-[13px]">
-              <div className="font-medium">This browser</div>
-              <div className="mt-1 text-ink-secondary">Paired to the selected hub with a device token.</div>
-            </div>
-            {state.bots.map((entry) => (
-              <div key={entry.id} className="rounded-xl border border-border bg-raised px-4 py-4 text-[13px]">
-                <div className="font-medium">{entry.name}</div>
-                <div className="mt-1 text-ink-secondary">
-                  {entry.busy ? "Running" : "Idle"} · {entry.computer ?? "off"} computer
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {nav === "settings" && bot && (
-          <div className="overflow-auto p-4">
-            <SettingsPanel bot={bot} />
-            <button
-              type="button"
-              className="mt-4 rounded-lg bg-control px-3 py-2 text-[13px]"
-              onClick={() => dispatch({ type: "togglePlugins", open: true })}
-            >
-              Connected apps
-            </button>
-          </div>
-        )}
-
-        {nav === "settings" && !bot && (
-          <div className="flex h-full items-center justify-center text-ink-secondary">Choose a bot to edit settings.</div>
-        )}
-
-        {nav === "approvals" && (
-          <div className="space-y-3 overflow-auto p-4">
-            {approvalBots.map((entry) => (
-              <button
-                key={entry.id}
-                type="button"
-                className="block w-full rounded-xl border border-border bg-raised px-4 py-4 text-left text-[13px]"
-                onClick={() => {
-                  dispatch({ type: "select", id: entry.id });
-                  setNav("conversations");
-                }}
-              >
-                <div className="font-medium">{entry.name}</div>
-                <div className="mt-1 text-ink-secondary">Needs approval in chat</div>
-              </button>
-            ))}
-            {!approvalBots.length && (
-              <div className="rounded-xl border border-border bg-raised px-4 py-8 text-center text-[13px] text-ink-secondary">
-                No open approvals.
-              </div>
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
+      {state.settingsOpen && bot && <SettingsPanel bot={bot} />}
+      {roomInfoOpen && group && <RoomInfoPanel group={group} onClose={() => setRoomInfoOpen(false)} />}
+      {state.appSettingsOpen && <SettingsModal />}
       {state.pluginsOpen && <PluginsPanel />}
     </div>
   );
@@ -521,7 +484,10 @@ export function WebClientShell() {
 export function WebClientApp() {
   const [session, setSession] = useState(() => loadWebClientSession());
 
-  if (!canCallHubApi()) {
+  // The public demo is intentionally self-contained: StoreProvider hydrates
+  // its frozen fixture and never calls a hub, so designers can open the web
+  // chrome without a pairing code or persisted credentials.
+  if (!isDesktopDemoMode() && !canCallHubApi()) {
     return <WebClientGate session={session} onSessionChange={setSession} />;
   }
   return (

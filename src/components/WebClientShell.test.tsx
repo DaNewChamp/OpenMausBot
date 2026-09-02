@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { WebClientGate } from "./WebClientShell";
+import { WEB_CLIENT_NAV_ITEMS, webClientLayout } from "@/lib/web-client-layout";
 import {
   assertHubApiReady,
   canCallHubApi,
@@ -8,8 +9,6 @@ import {
   setHubApiBase,
   setHubDeviceToken,
 } from "@/lib/web-client-session";
-
-const NAV_LABELS = ["Conversations", "Bots", "Fleet", "Settings", "Approvals"] as const;
 
 describe("WebClientShell", () => {
   it("describes the gate and blocks hub API access before pairing", () => {
@@ -19,14 +18,14 @@ describe("WebClientShell", () => {
     expect(() => assertHubApiReady()).toThrow(/pairing/i);
   });
 
-  it("defines the five paired-shell navigation areas", () => {
-    expect(NAV_LABELS).toEqual([
-      "Conversations",
-      "Bots",
-      "Fleet",
-      "Settings",
-      "Approvals",
-    ]);
+  it("defines the compact Grok desktop chrome instead of section navigation", () => {
+    expect(WEB_CLIENT_NAV_ITEMS).toEqual(["Bots", "Rooms", "Find", "Account"]);
+    expect(webClientLayout()).toEqual({
+      leftRail: "bots",
+      main: "conversation",
+      rightPane: "on-demand",
+      trafficLights: false,
+    });
   });
 
   it("requires hub pairing before connector preload can run", () => {

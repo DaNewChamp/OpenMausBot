@@ -1059,7 +1059,18 @@ function ArchivedBotsPanel({
   );
 }
 
-export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onClose: () => void; overlay?: boolean }) {
+export function Sidebar({
+  open,
+  onClose,
+  overlay = false,
+  web = false,
+}: {
+  open: boolean;
+  onClose: () => void;
+  overlay?: boolean;
+  /** Hosted V Bot uses the Grok-style rail and never renders window chrome. */
+  web?: boolean;
+}) {
   const { state, dispatch } = useStore();
   const { capabilities } = useDesktopCapabilities();
   const importReturnRef = useRef<HTMLButtonElement>(null);
@@ -1240,8 +1251,8 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
     }
   };
 
-  const macInset = capabilities.windowChrome === "mac-inset";
-  const browser = capabilities.host.label === "Browser";
+  const macInset = !web && capabilities.windowChrome === "mac-inset";
+  const browser = capabilities.host.label === "Browser" && !web;
   // SAFETY: Electron's documented -webkit-app-region CSS property is not in
   // React's CSSProperties type, but the renderer accepts it as an inline style.
   const windowDragStyle = macInset
@@ -1317,7 +1328,11 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
       aria-label="Bots and navigation"
       className={cn(
         "shell-rail flex h-full shrink-0 flex-col border-r border-hairline/30 bg-panel transition-[width] duration-200",
-        density === "icons" ? "w-[var(--shell-left-icons)]" : "w-[var(--shell-left-width)]",
+        density === "icons"
+          ? "w-[var(--shell-left-icons)]"
+          : web
+            ? "w-[248px]"
+            : "w-[var(--shell-left-width)]",
         // Overlay only: the rail leaves the flow. Do not emit a translate when
         // in-flow — Tailwind v4's native `translate` makes this a containing
         // block for fixed menus (+ and NewRoomPanel).
@@ -1330,7 +1345,9 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
         className={cn("flex items-center pb-1 pt-3", density === "icons" ? "flex-col gap-1 px-2" : "justify-between px-3")}
         style={windowDragStyle}
       >
-        {macInset ? (
+        {web && density !== "icons" ? (
+          <div className="px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-secondary">Bots</div>
+        ) : macInset ? (
           <div className={density === "icons" ? "h-5 w-full" : "w-[var(--shell-traffic-inset)] shrink-0"} />
         ) : browser ? (
           <div className="flex items-center gap-2">
@@ -1469,8 +1486,8 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Escape" && setQuery("")}
-            placeholder="Search"
-            aria-label="Search bots and messages"
+            placeholder={web ? "Find bots or rooms" : "Search"}
+            aria-label={web ? "Find bots or rooms and messages" : "Search bots and messages"}
             className="w-full bg-transparent text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
           />
         </div>
@@ -1485,7 +1502,11 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
           {unsectionedChief && (
             <PinnedChiefCard bot={unsectionedChief} density={density} onMenu={setMenu} />
           )}
-          {unsectionedGroups.length > 0 && density !== "icons" && <SectionDivider name="Channels" />}
+          {unsectionedGroups.length > 0 && density !== "icons" && (
+            web ? (
+              <div className="px-2 pb-0.5 pt-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-secondary">Rooms</div>
+            ) : <SectionDivider name="Channels" />
+          )}
           {unsectionedGroups.map((g) => (
             <GroupListItem key={g.id} group={g} density={density} onMenu={setRoomMenu} />
           ))}
@@ -1619,13 +1640,22 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
           <button
             onClick={() => dispatch({ type: "toggleAppSettings" })}
             className={cn("shell-control flex min-w-0 items-center rounded-lg text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "flex-1 gap-3 px-2")}
-            aria-label={density === "icons" ? "App settings" : undefined}
-            title={density === "icons" ? (state.config?.profile?.name?.trim() || "App settings") : undefined}
+            aria-label={web ? "Account settings" : density === "icons" ? "App settings" : undefined}
+            title={web ? "Account settings" : density === "icons" ? (state.config?.profile?.name?.trim() || "App settings") : undefined}
           >
             <InitialsAvatar initials={profileInitials(state.config?.profile)} size={28} />
-            <span className={cn("truncate text-[14px] text-ink", density === "icons" && "hidden")}>
-              {state.config?.profile?.name?.trim() || state.config?.profile?.email?.trim() || "You"}
-            </span>
+            {web ? (
+              <span className="flex min-w-0 flex-col leading-tight">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-secondary">Account</span>
+                <span className="truncate text-[13px] text-ink">
+                  {state.config?.profile?.name?.trim() || state.config?.profile?.email?.trim() || "You"}
+                </span>
+              </span>
+            ) : (
+              <span className={cn("truncate text-[14px] text-ink", density === "icons" && "hidden")}>
+                {state.config?.profile?.name?.trim() || state.config?.profile?.email?.trim() || "You"}
+              </span>
+            )}
           </button>
           {density !== "icons" && <UpdateButton />}
         </div>
