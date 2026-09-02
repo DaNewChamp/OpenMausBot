@@ -45,6 +45,7 @@ OMB_BRIDGE_LOCAL_VM=1 bun run deploy:bridge -- --pair
 | `OMB_BRIDGE_SHELL=1` | `shell` | `run_on_bridge`, loopback `/api/bridges/:id/shell` |
 | `OMB_BRIDGE_LOCAL_VM=1` | `local-vm` | Relay `GET/POST /api/bots/:id/local-computer*` when harness has no local docker |
 | `OMB_BRIDGE_SSH_FORWARD=1` | `ssh-forward` | `run_on_ssh_target`, `/api/internal/bridge/ssh` |
+| `OMB_BRIDGE_HERMES=1` | `hermes` | Typed Hermes discovery, adopt-before-mint, send/events, interrupt |
 
 On the **harness**, set `OMB_LOCAL_VM_RELAY=1` to always relay Local VM API calls
 through a bridge (even when the VPS itself has docker). Otherwise relay activates
@@ -53,19 +54,18 @@ online bridge advertises `local-vm`.
 
 ## Hermes boundary
 
-The bridge roster is an execution-fleet view, not a Hermes connection path.
-Current bridges expose exactly three opt-in capabilities: `shell`, `local-vm`,
-and `ssh-forward`. They do not advertise Hermes, TUI, TTS, or a generic
-streaming capability.
+The bridge roster is an execution-fleet view. Hermes never rides the shell,
+ssh-forward, or local-vm job kinds. When `OMB_BRIDGE_HERMES=1` is granted at
+pairing time, a bridge may advertise the dedicated `hermes` capability and
+execute typed jobs (`hermes-discover`, `hermes-ensure-canonical`,
+`hermes-send`, `hermes-interrupt`). The bridge owns local Hermes CLI/session
+/auth and returns only scrubbed V Bot domain events over stdout JSON. The hub
+stores bridge id/profile bindings only in `hermes-bridge-bindings.json`.
 
-To use Hermes on another machine, run the V Bot hub and companion on that
-machine, pair it as its own V Bot computer, then use **Settings → Integrations →
-Hermes** on the iPhone while that computer is selected. The existing bridge
-shell route cannot safely carry Hermes prompts, JSON-RPC events, credentials, or
-session state and must not be used as a substitute. Remote Hermes-over-bridge is
-therefore **not implemented**. A future implementation needs a dedicated,
-authenticated Hermes capability and streaming protocol with cancellation,
-backpressure, and fail-closed identity checks.
+Phones still do not talk to bridges directly. Remote Hermes setup remains
+hub-mediated and fail-closed: missing or ungranted `hermes` capability,
+offline bridges, malformed payloads, and forbidden secret material all surface
+as typed unavailable states rather than falling back to shell execution.
 
 ## Local VM relay
 

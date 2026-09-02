@@ -40,6 +40,28 @@ export type BridgeJob =
       alias: string;
       command: string;
       cwd?: string;
+    })
+  | (BridgeJobBase & {
+      kind: "hermes-discover";
+      payload: Record<string, never>;
+    })
+  | (BridgeJobBase & {
+      kind: "hermes-ensure-canonical";
+      payload: { profile: string };
+    })
+  | (BridgeJobBase & {
+      kind: "hermes-send";
+      payload: {
+        profile: string;
+        text: string;
+        threadId: string;
+        turnId: string;
+        model?: string;
+      };
+    })
+  | (BridgeJobBase & {
+      kind: "hermes-interrupt";
+      payload: { profile: string; turnId?: string };
     });
 
 export type LocalVmBridgeJob = Extract<

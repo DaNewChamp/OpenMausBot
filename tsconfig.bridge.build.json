@@ -3,12 +3,20 @@
   "compilerOptions": {
     "noEmit": false,
     "outDir": "dist-bridge",
-    "rootDir": "bridge/src",
+    "rootDir": ".",
     "rewriteRelativeImportExtensions": true,
     "declaration": false,
     "sourceMap": false
   },
   "include": [
-    "bridge/src"
+    "bridge/src/**/*",
+    "shared/bridge-hermes-contract.ts",
+    "server/contracts.ts",
+    "server/atomic.ts",
+    "server/config.ts",
+    "server/engines/contracts.ts",
+    "server/engines/discovery.ts",
+    "server/engines/bindings.ts",
+    "server/engines/hermes.ts"
   ]
 }

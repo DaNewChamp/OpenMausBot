@@ -5,6 +5,8 @@ import { heartbeat, registerBridge, submitResult } from "./client.ts";
 import { credentialsPath, loadCredentials, saveCredentials } from "./config.ts";
 import { runShellJob, runSshJob } from "./exec.ts";
 import { runLocalVmJob } from "./local-vm.ts";
+import { runHermesBridgeJob } from "./hermes.ts";
+import { defaultHermesBridgeRuntimeFactory } from "./hermes-runtime.ts";
 import type { BridgeJob } from "./types.ts";
 
 const args = process.argv.slice(2);
@@ -20,14 +22,25 @@ function bridgeCapabilities(): string[] {
   if (process.env.OMB_BRIDGE_SHELL === "1") capabilities.push("shell");
   if (process.env.OMB_BRIDGE_LOCAL_VM === "1") capabilities.push("local-vm");
   if (process.env.OMB_BRIDGE_SSH_FORWARD === "1") capabilities.push("ssh-forward");
+  if (process.env.OMB_BRIDGE_HERMES === "1") capabilities.push("hermes");
   return capabilities;
 }
+
+const hermesRuntimeFactory = defaultHermesBridgeRuntimeFactory();
 
 async function handleJob(job: BridgeJob, signal?: AbortSignal) {
   if (job.kind === "shell") return runShellJob(job, signal);
   if (job.kind === "ssh-exec") return runSshJob(job, signal);
   if (job.kind === "local-vm-status" || job.kind === "local-vm-action" || job.kind === "local-vm-screenshot") {
     return runLocalVmJob(job);
+  }
+  if (
+    job.kind === "hermes-discover"
+    || job.kind === "hermes-ensure-canonical"
+    || job.kind === "hermes-send"
+    || job.kind === "hermes-interrupt"
+  ) {
+    return runHermesBridgeJob(job, hermesRuntimeFactory, signal);
   }
   return { exitCode: 1, stdout: "", stderr: `unsupported job kind: ${(job as BridgeJob).kind}`, truncated: false };
 }
@@ -64,7 +77,9 @@ async function runDaemon(credentials = loadCredentials()) {
             ? job.command
             : job.kind === "ssh-exec"
               ? `ssh ${job.alias} ${job.command}`
-              : `${job.kind} ${job.payload.botId}`;
+              : job.kind.startsWith("hermes-")
+                ? `${job.kind}${"profile" in job.payload ? ` ${job.payload.profile}` : ""}`
+                : `${job.kind} ${"botId" in job.payload ? job.payload.botId : ""}`;
         console.log(`job ${job.id}: ${label}`);
         void handleJob(job, abort.signal)
           .then((result) => submitResult(credentials, job.id, result, job.generation))
@@ -125,6 +140,7 @@ async function main() {
   OMB_BRIDGE_SHELL=1        advertise shell execution capability
   OMB_BRIDGE_LOCAL_VM=1     advertise local-vm relay capability
   OMB_BRIDGE_SSH_FORWARD=1  advertise ssh-forward capability
+  OMB_BRIDGE_HERMES=1       advertise typed Hermes bridge capability
 `);
 }
 
