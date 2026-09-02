@@ -9,6 +9,7 @@ import {
   clearHubConnection,
   completeWebAuthHandoff,
   createWebControlPlaneClient,
+  defaultWebHubUrl,
   exchangeWebAuthCode,
   isWebAuthHandoffMessage,
   normalizeHubBaseUrl,
@@ -49,6 +50,11 @@ describe("web client session gates", () => {
     clearHubConnection();
     expect(canCallHubApi()).toBe(false);
     expect(() => assertHubApiReady()).toThrow(/pairing/i);
+  });
+
+  it("defaults the branded web client to the branded hosted hub", () => {
+    expect(defaultWebHubUrl("vbot.posival.com")).toBe("https://hub-vbot.posival.com");
+    expect(defaultWebHubUrl("localhost")).toBe("");
   });
 
   it("rejects malformed hub base URLs", () => {

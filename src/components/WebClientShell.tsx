@@ -24,6 +24,7 @@ import {
   clearAccountSession,
   clearHubConnection,
   completeWebAuthHandoff,
+  defaultWebHubUrl,
   fetchAccountUser,
   fetchFleet,
   loadWebClientSession,
@@ -64,7 +65,7 @@ export function WebClientGate({
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [otpSent, setOtpSent] = useState(false);
-  const [hubUrl, setHubUrl] = useState("");
+  const [hubUrl, setHubUrl] = useState(() => defaultWebHubUrl());
   const [credential, setCredential] = useState("");
   const [deviceName, setDeviceName] = useState("Web browser");
   const [busy, setBusy] = useState(false);

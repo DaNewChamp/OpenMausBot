@@ -364,6 +364,10 @@ export interface PairDirectInput {
   pairRequestId?: string;
 }
 
+export function defaultWebHubUrl(hostname = globalThis.location?.hostname ?? ""): string {
+  return hostname === "vbot.posival.com" ? "https://hub-vbot.posival.com" : "";
+}
+
 export async function pairDirectHub(input: PairDirectInput): Promise<WebHubConnection> {
   const baseUrl = normalizeHubBaseUrl(input.baseUrl);
   if (!baseUrl) throw new Error("Enter a valid hub address.");
