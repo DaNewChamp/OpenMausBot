@@ -5,8 +5,13 @@ import { heartbeat, registerBridge, submitResult } from "./client.ts";
 import { credentialsPath, loadCredentials, saveCredentials } from "./config.ts";
 import { runShellJob, runSshJob } from "./exec.ts";
 import { runLocalVmJob } from "./local-vm.ts";
-import { runHermesBridgeJob } from "./hermes.ts";
+import { runHermesBridgeJob, type HermesBridgeJob } from "./hermes.ts";
 import { defaultHermesBridgeRuntimeFactory } from "./hermes-runtime.ts";
+import { runHermesJobSerialized } from "./hermes-queue.ts";
+import {
+  bridgeHeartbeatIntervalMs,
+  bridgeHermesExecutionEnabled,
+} from "./daemon-timing.ts";
 import type { BridgeJob } from "./types.ts";
 
 const args = process.argv.slice(2);
@@ -28,18 +33,28 @@ function bridgeCapabilities(): string[] {
 
 const hermesRuntimeFactory = defaultHermesBridgeRuntimeFactory();
 
+function isHermesJob(job: BridgeJob): job is BridgeJob & HermesBridgeJob {
+  return job.kind === "hermes-discover"
+    || job.kind === "hermes-ensure-canonical"
+    || job.kind === "hermes-send"
+    || job.kind === "hermes-interrupt";
+}
+
 async function handleJob(job: BridgeJob, signal?: AbortSignal) {
   if (job.kind === "shell") return runShellJob(job, signal);
   if (job.kind === "ssh-exec") return runSshJob(job, signal);
   if (job.kind === "local-vm-status" || job.kind === "local-vm-action" || job.kind === "local-vm-screenshot") {
     return runLocalVmJob(job);
   }
-  if (
-    job.kind === "hermes-discover"
-    || job.kind === "hermes-ensure-canonical"
-    || job.kind === "hermes-send"
-    || job.kind === "hermes-interrupt"
-  ) {
+  if (isHermesJob(job)) {
+    if (!bridgeHermesExecutionEnabled()) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: "hermes capability disabled locally",
+        truncated: false,
+      };
+    }
     return runHermesBridgeJob(job, hermesRuntimeFactory, signal);
   }
   return { exitCode: 1, stdout: "", stderr: `unsupported job kind: ${(job as BridgeJob).kind}`, truncated: false };
@@ -48,6 +63,7 @@ async function handleJob(job: BridgeJob, signal?: AbortSignal) {
 interface InFlightJob {
   generation: number;
   abort: AbortController;
+  hermes: boolean;
 }
 
 async function runDaemon(credentials = loadCredentials()) {
@@ -71,7 +87,8 @@ async function runDaemon(credentials = loadCredentials()) {
           inFlight.delete(job.id);
         }
         const abort = new AbortController();
-        inFlight.set(job.id, { generation: job.generation ?? 0, abort });
+        const hermes = isHermesJob(job);
+        inFlight.set(job.id, { generation: job.generation ?? 0, abort, hermes });
         const label =
           job.kind === "shell"
             ? job.command
@@ -81,7 +98,7 @@ async function runDaemon(credentials = loadCredentials()) {
                 ? `${job.kind}${"profile" in job.payload ? ` ${job.payload.profile}` : ""}`
                 : `${job.kind} ${"botId" in job.payload ? job.payload.botId : ""}`;
         console.log(`job ${job.id}: ${label}`);
-        void handleJob(job, abort.signal)
+        const run = () => handleJob(job, abort.signal)
           .then((result) => submitResult(credentials, job.id, result, job.generation))
           .catch((error) => {
             console.warn(`job ${job.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -90,11 +107,17 @@ async function runDaemon(credentials = loadCredentials()) {
             const current = inFlight.get(job.id);
             if (current?.abort === abort) inFlight.delete(job.id);
           });
+        if (hermes) {
+          void runHermesJobSerialized(run);
+        } else {
+          void run();
+        }
       }
     } catch (error) {
       console.warn(`bridge heartbeat: ${error instanceof Error ? error.message : String(error)}`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    const hermesActive = [...inFlight.values()].some((entry) => entry.hermes);
+    await new Promise((resolve) => setTimeout(resolve, bridgeHeartbeatIntervalMs(hermesActive)));
   }
 }
 

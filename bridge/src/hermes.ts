@@ -37,7 +37,10 @@ export type HermesBridgeJob =
 export interface HermesBridgeRuntime {
   discover(): Promise<HermesBridgeDiscoveryWire>;
   ensureCanonical(profile: string): Promise<HermesBridgeEnsureCanonicalWire>;
-  send(payload: Extract<HermesBridgeJob, { kind: "hermes-send" }>["payload"]): Promise<HermesBridgeSendWire>;
+  send(
+    payload: Extract<HermesBridgeJob, { kind: "hermes-send" }>["payload"],
+    signal?: AbortSignal,
+  ): Promise<HermesBridgeSendWire>;
   interrupt(payload: Extract<HermesBridgeJob, { kind: "hermes-interrupt" }>["payload"]): Promise<HermesBridgeInterruptWire>;
   close(): Promise<void>;
 }
@@ -72,9 +75,10 @@ export async function runHermesBridgeJob(
         await runtime.interrupt({ profile: job.payload.profile, turnId: job.payload.turnId });
         return { exitCode: 1, stdout: "", stderr: "cancelled", truncated: false };
       }
-      const body = await runtime.send(job.payload);
+      const body = await runtime.send(job.payload, signal);
       if (signal?.aborted) {
         await runtime.interrupt({ profile: job.payload.profile, turnId: job.payload.turnId });
+        return { exitCode: 1, stdout: "", stderr: "cancelled", truncated: false };
       }
       wire = { kind: "hermes-send", body };
     } else {
@@ -94,7 +98,7 @@ export async function runHermesBridgeJob(
       truncated: false,
     };
   } finally {
-    await runtime.close();
+    await runtime.close().catch(() => {});
   }
 }
 
@@ -127,7 +131,7 @@ export function createFakeHermesBridgeRuntime(state: {
           profiles: [],
         },
         ensureCanonical: async () => state.ensure ?? { state: "present", adopted: true },
-        send: async (payload) => state.send ?? {
+        send: async (payload, _signal) => state.send ?? {
           ok: true,
           turnId: payload.turnId,
           events: [{

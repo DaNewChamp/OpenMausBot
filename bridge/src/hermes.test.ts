@@ -56,4 +56,49 @@ describe("bridge Hermes job handler", () => {
     expect(result.stderr).toBe("cancelled");
     expect(result.stdout).toBe("");
   });
+
+  it("aborts in-flight send jobs and returns cancelled instead of success stdout", async () => {
+    const controller = new AbortController();
+    const factory = createFakeHermesBridgeRuntime({
+      send: {
+        ok: true,
+        turnId: "turn-1",
+        events: [],
+      },
+    });
+    const originalCreate = factory.create;
+    factory.create = async () => {
+      const runtime = await originalCreate();
+      return {
+        ...runtime,
+        send: async (payload, signal) => {
+          signal?.addEventListener("abort", () => {}, { once: true });
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          if (signal?.aborted) {
+            return { ok: false, reason: "upstream_error", turnId: payload.turnId, events: [] };
+          }
+          return { ok: true, turnId: payload.turnId, events: [] };
+        },
+        interrupt: async () => ({ ok: true }),
+      };
+    };
+    const promise = runHermesBridgeJob(
+      {
+        kind: "hermes-send",
+        payload: {
+          profile: "default",
+          text: "hello",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+      },
+      factory,
+      controller.signal,
+    );
+    setTimeout(() => controller.abort(), 5);
+    const result = await promise;
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("cancelled");
+    expect(result.stdout).toBe("");
+  });
 });
