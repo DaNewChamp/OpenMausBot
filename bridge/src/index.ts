@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { heartbeat, registerBridge, submitResult } from "./client.ts";
 import { credentialsPath, loadCredentials, saveCredentials } from "./config.ts";
@@ -13,7 +14,14 @@ import {
   discoverLocalHermesEndpoints,
   type HermesEndpointDescriptor,
 } from "./hermes-endpoints.ts";
-import { installHermesVbotConnector } from "./hermes-vbot-mcp.ts";
+import {
+  createHermesVbotDaemonHandler,
+  hermesVbotMcpLaunchSpec,
+  installHermesVbotConnector,
+  parseInstalledHermesVbotConnector,
+  runHermesVbotMcpStdio,
+} from "./hermes-vbot-mcp.ts";
+import { daemonHermesVbotConnectorOptions, startHermesVbotConnector } from "./hermes-vbot-connector.ts";
 import {
   bridgeHeartbeatIntervalMs,
   bridgeHermesExecutionEnabled,
@@ -101,7 +109,19 @@ interface InFlightJob {
 async function runDaemon(credentials = loadCredentials()) {
   if (!credentials) throw new Error(`no saved credentials at ${credentialsPath()} — run: connect --url … --code …`);
   console.log(`bridge: ${credentials.name} → ${credentials.url}`);
+  const bridgeDir = process.env.OMB_BRIDGE_DIR ?? join(homedir(), ".openmausbot-bridge");
+  const connectorConfigPath = join(bridgeDir, "hermes-vbot-mcp.json");
+  const installed = parseInstalledHermesVbotConnector(connectorConfigPath);
+  const connector = await startHermesVbotConnector({
+    ...daemonHermesVbotConnectorOptions({
+      bridgeId: credentials.bridgeId,
+      socketPath: installed?.socketPath ?? join(bridgeDir, "vbot.sock"),
+      botScope: installed?.botScope ?? credentials.bridgeId,
+    }),
+    handler: createHermesVbotDaemonHandler(),
+  });
   const inFlight = new Map<string, InFlightJob>();
+  try {
   for (;;) {
     try {
       const { jobs, cancelJobIds } = await heartbeat(
@@ -159,6 +179,9 @@ async function runDaemon(credentials = loadCredentials()) {
     const hermesActive = [...inFlight.values()].some((entry) => entry.hermes);
     await new Promise((resolve) => setTimeout(resolve, bridgeHeartbeatIntervalMs(hermesActive)));
   }
+  } finally {
+    await connector.close().catch(() => {});
+  }
 }
 
 async function main() {
@@ -194,6 +217,14 @@ async function main() {
     return;
   }
 
+  if (command === "hermes-mcp") {
+    await runHermesVbotMcpStdio({
+      argv: args.slice(1),
+      credentialsPath: credentialsPath(),
+    });
+    return;
+  }
+
   if (command === "hermes-connector-install") {
     const hub = flag("--hub");
     const botScope = flag("--bot-scope");
@@ -208,6 +239,11 @@ async function main() {
       socketPath,
       botScope,
       hubDisplayName: hub,
+      ...hermesVbotMcpLaunchSpec({
+        cliPath: fileURLToPath(import.meta.url),
+        socketPath,
+        botScope,
+      }),
     });
     console.log(`${result.adopted ? "updated" : "installed"} Hermes V Bot connector for ${hub} (bot scope ${botScope})`);
     return;
@@ -219,6 +255,7 @@ async function main() {
   run
   status
   hermes-connector-install --hub <name> --bot-scope <bot-id> [--config path] [--socket path]
+  hermes-mcp --socket <path> --bot-scope <bot-id>
 
   OMB_BRIDGE_SHELL=1        advertise shell execution capability
   OMB_BRIDGE_LOCAL_VM=1     advertise local-vm relay capability

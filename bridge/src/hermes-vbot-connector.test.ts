@@ -97,4 +97,35 @@ describe("Hermes V Bot connector transport", () => {
     expect(started.address).toMatchObject({ host: "127.0.0.1" });
     await started.close();
   });
+
+  it("starts a loopback daemon listener from bridge identity without putting tokens in argv", async () => {
+    const { daemonHermesVbotConnectorOptions, startHermesVbotConnector, connectHermesVbotConnector } = await import(
+      "./hermes-vbot-connector.ts"
+    );
+    const dir = mkdtempSync(join(tmpdir(), "vbot-hermes-connector-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "vbot.sock");
+    const options = daemonHermesVbotConnectorOptions({
+      bridgeId: "bridge-mini",
+      bridgeToken: "bridge-token-secret",
+      socketPath,
+      botScope: "bot-chief",
+    });
+    expect(options.peerCredential).toBe("bridge-mini");
+    expect(options.peerCredential).not.toMatch(/token|secret|Bearer/i);
+    expect(JSON.stringify(options)).not.toMatch(/bridge-token-secret|OMB_COMMS|Bearer/i);
+    expect(options.listen).toEqual({ socketPath });
+    const server = await startHermesVbotConnector({
+      ...options,
+      handler: async (request) => ({ jsonrpc: "2.0", id: request.id, result: { method: request.method } }),
+    });
+    const client = await connectHermesVbotConnector({
+      socketPath,
+      peerCredential: "bridge-mini",
+      botScope: "bot-chief",
+    });
+    await expect(client.request("tools/list")).resolves.toEqual({ method: "tools/list" });
+    client.close();
+    await server.close();
+  });
 });

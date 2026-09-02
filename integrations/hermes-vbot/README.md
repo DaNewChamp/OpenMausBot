@@ -22,10 +22,10 @@ It does not write tokens, `HERMES_HOME`, or hostnames of production hubs.
 
 ## Manual fallback
 
-If you need to register the stdio facade yourself, point Hermes at the local facade with socket and scope only:
+If you need to register the stdio facade yourself, point Hermes at the compiled bridge CLI with socket and scope only:
 
 ```sh
-vbot-hermes-mcp --socket /path/to/vbot.sock --bot-scope <bot-id>
+node dist-bridge/index.js hermes-mcp --socket /path/to/vbot.sock --bot-scope <bot-id>
 ```
 
 Do not put a hub URL, bearer token, or provider key in argv, env, or `mcp.json`.

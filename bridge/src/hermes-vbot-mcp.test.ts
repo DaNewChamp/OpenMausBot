@@ -58,4 +58,103 @@ describe("Hermes V Bot MCP facade", () => {
     const line = formatMcpLog("connected token=sk-ant-secret-value-123456 HERMES_HOME=/Users/vincent/.hermes");
     expect(line).not.toMatch(/sk-ant-secret-value-123456|\/Users\/vincent/i);
   });
+
+  it("installs a real node CLI instead of a missing vbot-hermes-mcp binary", async () => {
+    const { installHermesVbotConnector, hermesVbotMcpLaunchSpec } = await import("./hermes-vbot-mcp.ts");
+    const dir = mkdtempSync(join(tmpdir(), "vbot-hermes-setup-"));
+    dirs.push(dir);
+    const configPath = join(dir, "mcp.json");
+    const socketPath = join("/Users", "vincent", ".openmausbot-bridge", "vbot.sock");
+    const launch = hermesVbotMcpLaunchSpec({
+      cliPath: "/opt/vbot/dist-bridge/index.js",
+      socketPath,
+      botScope: "bot-chief",
+      execPath: "/usr/bin/node",
+      execArgv: [],
+    });
+    const result = installHermesVbotConnector({
+      configPath,
+      socketPath,
+      botScope: "bot-chief",
+      hubDisplayName: "Mac mini",
+      command: launch.command,
+      args: launch.args,
+    });
+    const parsed = JSON.parse(readFileSync(configPath, "utf8")) as {
+      mcpServers: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
+    };
+    expect(result.adopted).toBe(false);
+    expect(parsed.mcpServers.vbot?.command).toBe("/usr/bin/node");
+    expect(parsed.mcpServers.vbot?.command).not.toBe("vbot-hermes-mcp");
+    expect(parsed.mcpServers.vbot?.args).toEqual(expect.arrayContaining([
+      "/opt/vbot/dist-bridge/index.js",
+      "hermes-mcp",
+      "--socket",
+      socketPath,
+      "--bot-scope",
+      "bot-chief",
+    ]));
+    expect(JSON.stringify(parsed)).not.toMatch(/token|OMB_COMMS|Bearer|sk-|HERMES_HOME/i);
+    expect(parsed.mcpServers.vbot?.env).toBeUndefined();
+  });
+
+  it("refuses secret-shaped installer argv and config while allowing a Unix home socket", async () => {
+    const { installHermesVbotConnector } = await import("./hermes-vbot-mcp.ts");
+    const dir = mkdtempSync(join(tmpdir(), "vbot-hermes-setup-"));
+    dirs.push(dir);
+    expect(() => installHermesVbotConnector({
+      configPath: join(dir, "ok.json"),
+      socketPath: join("/Users", "vincent", ".openmausbot-bridge", "vbot.sock"),
+      botScope: "bot-1",
+      hubDisplayName: "Mac mini",
+    })).not.toThrow();
+    expect(() => installHermesVbotConnector({
+      configPath: join(dir, "token.json"),
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-1",
+      hubDisplayName: "token-hub",
+    })).toThrow(/secret-shaped/i);
+    expect(() => installHermesVbotConnector({
+      configPath: join(dir, "home.json"),
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-1",
+      hubDisplayName: "Mac mini",
+      args: ["--socket", "/tmp/vbot.sock", "--token", "secret"],
+    })).toThrow(/secret-shaped|hub credentials/i);
+    expect(() => installHermesVbotConnector({
+      configPath: join(dir, "key.json"),
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-1",
+      hubDisplayName: "Mac mini",
+      args: ["--socket", "/tmp/vbot.sock", "--bot-scope", "sk-ant-secret-value-123456"],
+    })).toThrow(/secret-shaped/i);
+  });
+
+  it("loads the peer credential from the bridge identity file rather than argv", async () => {
+    const { peerCredentialFromBridgeIdentity, parseInstalledHermesVbotConnector } = await import("./hermes-vbot-mcp.ts");
+    const dir = mkdtempSync(join(tmpdir(), "vbot-hermes-setup-"));
+    dirs.push(dir);
+    const credentialsPath = join(dir, "credentials.json");
+    writeFileSync(credentialsPath, JSON.stringify({
+      url: "http://127.0.0.1:8799",
+      bridgeId: "bridge-mini",
+      bridgeToken: "bridge-token-secret",
+      name: "Mac mini",
+    }));
+    expect(peerCredentialFromBridgeIdentity(credentialsPath)).toBe("bridge-mini");
+    const configPath = join(dir, "hermes-vbot-mcp.json");
+    writeFileSync(configPath, JSON.stringify({
+      mcpServers: {
+        vbot: {
+          command: "/usr/bin/node",
+          args: ["index.js", "hermes-mcp", "--socket", "/tmp/vbot.sock", "--bot-scope", "bot-chief"],
+          metadata: { hub: "Mac mini", profile: "vbot" },
+        },
+      },
+    }));
+    expect(parseInstalledHermesVbotConnector(configPath)).toEqual({
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-chief",
+    });
+  });
 });

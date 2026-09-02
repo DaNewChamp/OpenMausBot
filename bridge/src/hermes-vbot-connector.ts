@@ -50,6 +50,20 @@ export type HermesVbotConnectorClient = {
   close: () => void;
 };
 
+export function daemonHermesVbotConnectorOptions(input: {
+  bridgeId: string;
+  bridgeToken?: string;
+  socketPath: string;
+  botScope: string;
+}): StartHermesVbotConnectorInput {
+  void input.bridgeToken;
+  return {
+    listen: { socketPath: input.socketPath },
+    peerCredential: input.bridgeId,
+    botScope: input.botScope,
+  };
+}
+
 const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
 
 function redact(line: string): string {
@@ -143,6 +157,7 @@ export async function startHermesVbotConnector(input: StartHermesVbotConnectorIn
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     if ("socketPath" in input.listen) {
+      try { unlinkSync(input.listen.socketPath); } catch { /* nothing to replace */ }
       server.listen(input.listen.socketPath, resolve);
     } else {
       server.listen(input.listen.port, input.listen.host, resolve);
