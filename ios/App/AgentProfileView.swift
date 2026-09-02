@@ -53,6 +53,9 @@ struct AgentProfileView: View {
     @State private var routinesLoading = true
     @State private var showingMedia = false
     @State private var showingModelPicker = false
+    @State private var hermesStatus: HermesSetupStatus?
+    @State private var hermesLoading = false
+    @State private var hermesRebinding = false
 
     init(bot: Bot) {
         self.bot = bot
@@ -133,6 +136,7 @@ struct AgentProfileView: View {
                                 .padding(.bottom, VBotSurface.Space.section)
                         }
                         identityCard
+                        hermesEndpointSection
                         characterSection
                         permissionSection
                         instructionsRow
@@ -176,6 +180,7 @@ struct AgentProfileView: View {
                     speakReplies = false
                 }
                 await session.retryPendingAppearanceOverrides()
+                await loadHermesEndpoints()
             }
             .onChange(of: session.modelCatalogRefreshing) { _, _ in
                 applySessionCatalogSnapshot()
@@ -325,6 +330,122 @@ struct AgentProfileView: View {
         }
         .vbotCard()
         .accessibilityElement(children: .contain)
+    }
+
+    private var isHermesBot: Bool {
+        HermesSetupPresentationPolicy.isHermesBoundBot(
+            title: current.title,
+            instanceId: current.modelSelection.instanceId
+        )
+    }
+
+    @ViewBuilder
+    private var hermesEndpointSection: some View {
+        if isHermesBot {
+            VStack(alignment: .leading, spacing: 10) {
+                profileSectionLabel("Hermes endpoint")
+                VStack(alignment: .leading, spacing: 0) {
+                    if hermesLoading && hermesStatus == nil {
+                        ProgressView()
+                            .controlSize(.small)
+                            .padding(18)
+                    } else if let hermesStatus {
+                        let profiles = HermesSetupPresentationPolicy.endpointPickerProfiles(hermesStatus)
+                        if profiles.isEmpty {
+                            Text("No Hermes endpoints are available yet.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .padding(18)
+                        } else {
+                            ForEach(profiles) { profile in
+                                hermesEndpointRow(profile)
+                                if profile.id != profiles.last?.id {
+                                    VBotHairline().padding(.leading, 16)
+                                }
+                            }
+                        }
+                    } else {
+                        Text("Hermes endpoints could not be loaded.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .padding(18)
+                    }
+                }
+                .profileCard()
+            }
+            .padding(.top, 18)
+        }
+    }
+
+    private func hermesEndpointRow(_ profile: HermesSetupProfile) -> some View {
+        let selected = profile.botId == current.id
+        let statusLabel = HermesSetupPresentationPolicy.authStatusLabel(profile.authStatus)
+        let canSelect = canEdit && !hermesRebinding && (
+            profile.availability == .available || profile.authStatus == .signInRequired
+        )
+        return Button {
+            if profile.authStatus == .signInRequired, let placement = profile.placement {
+                Task { await startHermesSignIn(placement: placement) }
+            } else {
+                Task { await rebindHermes(to: profile) }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(profile.endpoint?.label ?? profile.displayName)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(statusLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                } else if profile.authStatus == .signInRequired {
+                    Text("Sign in")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!canSelect && !selected)
+    }
+
+    private func loadHermesEndpoints() async {
+        guard isHermesBot else { return }
+        hermesLoading = true
+        hermesStatus = await session.hermesSetupStatus()
+        hermesLoading = false
+    }
+
+    private func rebindHermes(to profile: HermesSetupProfile) async {
+        guard canEdit, profile.botId != current.id else { return }
+        hermesRebinding = true
+        defer { hermesRebinding = false }
+        _ = await session.connectHermes(
+            profile: profile.placement == nil || profile.placement?.kind == .local ? profile.profile : nil,
+            placement: profile.placement,
+            botId: current.id
+        )
+        await loadHermesEndpoints()
+    }
+
+    private func startHermesSignIn(placement: HermesSetupPlacement) async {
+        hermesRebinding = true
+        defer { hermesRebinding = false }
+        let handoff = await session.startHermesSignIn(placement: placement)
+        if let handoff, !handoff.message.isEmpty {
+            session.actionError = handoff.message
+        }
+        await loadHermesEndpoints()
     }
 
     private var characterSection: some View {

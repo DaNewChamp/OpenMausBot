@@ -30,10 +30,6 @@ struct HermesSetupView: View {
         return HermesSetupPresentationPolicy.availableProfiles(status)
     }
 
-    private var connectedProfiles: [HermesSetupProfile] {
-        status?.profiles.filter { $0.botId?.isEmpty == false } ?? []
-    }
-
     var body: some View {
         ScrollView {
             VStack(spacing: VBotSurface.Space.section) {
@@ -85,6 +81,8 @@ struct HermesSetupView: View {
                     Button(actionTitle) {
                         if presentation.state == .ready {
                             connectDefaultOrShowProfiles()
+                        } else if presentation.actionTitle == "Sign in" {
+                            signInDefault()
                         } else {
                             Task { await loadStatus() }
                         }
@@ -99,24 +97,12 @@ struct HermesSetupView: View {
 
     @ViewBuilder
     private var profileContent: some View {
-        if presentation.state == .connected, !connectedProfiles.isEmpty {
-            VBotSurfaceGroup(title: "Connected profiles") {
-                ForEach(connectedProfiles) { profile in
-                    profileRow(profile, actionTitle: "Open chat") {
-                        openChat(for: profile)
-                    }
-                    if profile.id != connectedProfiles.last?.id {
-                        VBotHairline().padding(.leading, 16)
-                    }
-                }
-            }
-        } else if presentation.state == .ready,
-                  HermesSetupPresentationPolicy.shouldShowProfileList(status ?? HermesSetupStatus()) {
+        if !placementGroups.isEmpty {
             ForEach(placementGroups, id: \.label) { group in
                 VBotSurfaceGroup(title: group.label) {
                     ForEach(group.profiles) { profile in
-                        profileRow(profile, actionTitle: connectLabel(for: profile)) {
-                            connect(profile: profile)
+                        profileRow(profile, actionTitle: actionTitle(for: profile)) {
+                            perform(profile)
                         }
                         if profile.id != group.profiles.last?.id {
                             VBotHairline().padding(.leading, 16)
@@ -200,7 +186,7 @@ struct HermesSetupView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(connecting)
+        .disabled(connecting || actionTitle.isEmpty)
     }
 
     private func connectDefaultOrShowProfiles() {
@@ -224,6 +210,57 @@ struct HermesSetupView: View {
         return actionTitle
     }
 
+    private func actionTitle(for profile: HermesSetupProfile) -> String {
+        switch HermesSetupPresentationPolicy.profileAction(profile) {
+        case .openChat:
+            return "Open chat"
+        case .connect:
+            return connectLabel(for: profile)
+        case .signIn:
+            return "Sign in"
+        case .none:
+            return ""
+        }
+    }
+
+    private func perform(_ profile: HermesSetupProfile) {
+        switch HermesSetupPresentationPolicy.profileAction(profile) {
+        case .openChat:
+            openChat(for: profile)
+        case .connect:
+            connect(profile: profile)
+        case .signIn:
+            signIn(profile: profile)
+        case .none:
+            return
+        }
+    }
+
+    private func signInDefault() {
+        let profile = status.flatMap { HermesSetupPresentationPolicy.visibleProfiles($0).first }
+        signIn(profile: profile)
+    }
+
+    private func signIn(profile: HermesSetupProfile?) {
+        let placement = profile?.placement ?? HermesSetupPlacement(kind: .local, profile: profile?.profile ?? "default")
+        connectTask?.cancel()
+        connecting = true
+        connectTask = Task { @MainActor in
+            defer {
+                if !Task.isCancelled {
+                    connecting = false
+                    connectTask = nil
+                }
+            }
+            let handoff = await session.startHermesSignIn(placement: placement)
+            guard !Task.isCancelled else { return }
+            if let handoff, !handoff.message.isEmpty {
+                session.actionError = handoff.message
+            }
+            await loadStatus()
+        }
+    }
+
     private func connectLabel(for profile: HermesSetupProfile) -> String {
         if HermesSetupPresentationPolicy.defaultProfile(status ?? HermesSetupStatus())?.id == profile.id {
             return "Connect"
@@ -245,12 +282,25 @@ struct HermesSetupView: View {
     }
 
     private func profileSubtitle(_ profile: HermesSetupProfile) -> String? {
-        guard let placement = profile.placement else { return nil }
-        switch placement.kind {
-        case .bridge:
-            let bridge = placement.bridge?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return bridge.isEmpty ? nil : bridge
-        case .local, .unknown:
+        let statusLabel = profile.authStatus.map { HermesSetupPresentationPolicy.authStatusLabel($0) }
+        let computer = profile.endpoint?.computerName
+            ?? profile.placement.flatMap { placement -> String? in
+                switch placement.kind {
+                case .bridge:
+                    let bridge = placement.bridge?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    return bridge.isEmpty ? nil : bridge
+                case .local, .unknown:
+                    return nil
+                }
+            }
+        switch (statusLabel, computer) {
+        case let (status?, computer?):
+            return "\(status) · \(computer)"
+        case let (status?, nil):
+            return status
+        case let (nil, computer?):
+            return computer
+        case (nil, nil):
             return nil
         }
     }

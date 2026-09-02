@@ -225,19 +225,58 @@ export function projectConnectedRemoteCapabilities(
   };
 }
 
+function publicOfflineBridgeProfile(bridgeName: string): HermesSetupProfile {
+  return {
+    profile: "default",
+    handle: "hermes",
+    displayName: "Hermes",
+    description: "Remote assistant",
+    canonicalChat: "absent",
+    availability: "unavailable",
+    placement: { kind: "bridge", bridge: bridgeName, profile: "default" },
+    authStatus: "offline",
+  };
+}
+
+function publicUnreachableBridgeProfile(
+  bridgeName: string,
+  authStatus: "signInRequired" | "unavailable",
+): HermesSetupProfile {
+  return {
+    profile: "default",
+    handle: "hermes",
+    displayName: "Hermes",
+    description: "Remote assistant",
+    canonicalChat: "absent",
+    availability: "unavailable",
+    placement: { kind: "bridge", bridge: bridgeName, profile: "default" },
+    authStatus,
+    ...(authStatus === "signInRequired" ? { signIn: { available: true } } : {}),
+  };
+}
+
 export async function discoverBridgeHermesPlacements(
   registry: BridgeRegistry,
 ): Promise<BridgeHermesDiscoveryResult> {
   const bridges = registry.list().filter((bridge) =>
-    bridge.online &&
     bridge.capabilities.includes("hermes") &&
     bridge.grantedCapabilities.includes("hermes"));
   const profiles: HermesSetupProfile[] = [];
   const capabilitySets: HermesCapabilityFlags[] = [];
   for (const bridge of bridges) {
+    if (!bridge.online) {
+      profiles.push(publicOfflineBridgeProfile(bridge.name));
+      continue;
+    }
     try {
       const { discovery, bridgeName } = await discoverHermesOnBridge(registry, { bridgeId: bridge.id });
-      if (discovery.state !== "available") continue;
+      if (discovery.state !== "available") {
+        profiles.push(publicUnreachableBridgeProfile(
+          bridgeName,
+          discovery.reason === "invalid_credentials" ? "signInRequired" : "unavailable",
+        ));
+        continue;
+      }
       capabilitySets.push(discovery.capabilities);
       for (const row of discovery.profiles) {
         if (row.availability !== "available" || !row.profile) continue;
@@ -253,7 +292,7 @@ export async function discoverBridgeHermesPlacements(
         }));
       }
     } catch {
-      continue;
+      profiles.push(publicUnreachableBridgeProfile(bridge.name, "unavailable"));
     }
   }
   return {

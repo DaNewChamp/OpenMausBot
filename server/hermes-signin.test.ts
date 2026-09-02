@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  parseHermesSignInInput,
   projectHermesSignInHandoff,
   startHermesSignIn,
   type HermesSignInLaunch,
@@ -61,5 +62,19 @@ describe("Hermes sign-in handoff", () => {
       message: "Complete sign-in on Mac mini, then try again.",
     });
     expect(JSON.stringify(projected)).not.toMatch(/sk-|HERMES_HOME|\/Users\/|token/i);
+  });
+
+  it("accepts only a placement for sign-in and never extra secret fields", () => {
+    expect(parseHermesSignInInput({
+      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+    })).toEqual({
+      ok: true,
+      placement: { kind: "bridge", bridge: "mac mini", profile: "default" },
+    });
+    expect(parseHermesSignInInput({ token: "sk-secret" })).toMatchObject({ ok: false });
+    expect(parseHermesSignInInput({
+      placement: { kind: "local", profile: "default" },
+      stdout: "token=sk-secret",
+    })).toMatchObject({ ok: false });
   });
 });

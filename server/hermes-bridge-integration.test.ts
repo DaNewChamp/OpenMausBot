@@ -170,6 +170,20 @@ describe("Hermes bridge integration setup", () => {
     expect(parseHermesSetupConnectInput({ botId: "sk-secret", profile: "default" })).toMatchObject({ ok: false });
   });
 
+  it("lists a registered offline hermes bridge as an offline endpoint", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-02T12:00:00.000Z"));
+    const { registry } = pairedHermesBridge("Mac mini");
+    vi.setSystemTime(new Date("2026-09-02T12:00:30.000Z"));
+    const discovery = await discoverBridgeHermesPlacements(registry);
+    expect(discovery.profiles).toEqual([expect.objectContaining({
+      profile: "default",
+      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+      authStatus: "offline",
+    })]);
+    expect(JSON.stringify(discovery)).not.toMatch(/bridgeId|HERMES_HOME|jsonrpc|Bearer |sk-/i);
+  });
+
   it("lists online granted bridge placements by friendly bridge name and profile only", async () => {
     vi.useFakeTimers();
     const { registry, bridgeId } = pairedHermesBridge("Mac mini");

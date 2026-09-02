@@ -5,6 +5,10 @@ import {
   hermesEndpointComputerName,
   type HermesEndpointPlacement,
 } from "./engines/hermes-endpoints.ts";
+import {
+  normalizeHermesSetupPlacement,
+  type HermesSetupPlacement,
+} from "./hermes-bridge-integration.ts";
 
 export type HermesSignInKind = "browser" | "terminal";
 
@@ -31,18 +35,26 @@ export interface StartHermesSignInOptions {
 
 const SIGNIN_ARGV = ["setup"] as const;
 
-function spawnDetached(command: string, args: readonly string[]): boolean {
-  try {
-    const child = spawn(command, [...args], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
-    return true;
-  } catch {
-    return false;
-  }
+function spawnDetached(command: string, args: readonly string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn(command, [...args], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      const onError = () => resolve(false);
+      const onSpawn = () => {
+        child.removeListener("error", onError);
+        child.unref();
+        resolve(true);
+      };
+      child.once("error", onError);
+      child.once("spawn", onSpawn);
+    } catch {
+      resolve(false);
+    }
+  });
 }
 
 /** Launch Hermes setup on this computer without reading stdout or stderr.
@@ -52,17 +64,33 @@ export async function defaultHermesSignInLaunch(
 ): Promise<HermesSignInLaunchResult> {
   if (process.platform === "darwin") {
     const script = "hermes setup";
-    if (spawnDetached("osascript", [
+    if (await spawnDetached("osascript", [
       "-e",
       `tell application "Terminal" to do script ${JSON.stringify(script)}`,
     ])) {
       return { ok: true, kind: command.kind };
     }
   }
-  if (spawnDetached("hermes", [...command.argv])) {
+  if (await spawnDetached("hermes", [...command.argv])) {
     return { ok: true, kind: command.kind };
   }
   return { ok: false };
+}
+
+export function parseHermesSignInInput(body: unknown):
+  | { ok: true; placement: HermesSetupPlacement }
+  | { ok: false; error: string } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, error: "Hermes sign-in requires a JSON object" };
+  }
+  const values = body as Record<string, unknown>;
+  if (Object.keys(values).some((key) => key !== "placement")) {
+    return { ok: false, error: "Hermes sign-in accepts only placement" };
+  }
+  const placement = normalizeHermesSetupPlacement(values.placement);
+  return placement
+    ? { ok: true, placement }
+    : { ok: false, error: "placement must name a Hermes profile and, for bridge placements, a bridge" };
 }
 
 export function projectHermesSignInHandoff(

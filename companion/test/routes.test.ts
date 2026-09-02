@@ -84,6 +84,7 @@ describe("what the app may do", () => {
     ["GET", "/api/hermes/setup/status"],
     ["POST", "/api/hermes/setup"],
     ["POST", "/api/hermes/setup/connect"],
+    ["POST", "/api/hermes/setup/signin"],
     ["GET", "/api/vbot/engine-sync"],
     ["PATCH", "/api/vbot/primary-engine"],
     ["GET", "/api/vbot/bots"],
@@ -164,13 +165,34 @@ describe("what it may not", () => {
   it("keeps Hermes setup authenticated, exact, and profile-only", () => {
     expect(ask("GET", "/api/hermes/setup", false)?.status).toBe(401);
     expect(ask("POST", "/api/hermes/setup", false)?.status).toBe(401);
+    expect(ask("POST", "/api/hermes/setup/signin", false)?.status).toBe(401);
+    expect(ask("POST", "/api/hermes/setup/signin", true)).toBeNull();
     expect(ask("GET", "/api/hermes/setup/status/extra")?.status).toBe(404);
     expect(ask("POST", "/api/hermes/setup/connect/extra")?.status).toBe(404);
     expect(ask("POST", "/api/hermes/setup", true)).toBeNull();
     expect(validateHermesSetupBody("POST", "/api/hermes/setup", {})).toEqual({});
     expect(validateHermesSetupBody("POST", "/api/hermes/setup", { profile: "Default" })).toEqual({ profile: "default" });
+    expect(validateHermesSetupBody("POST", "/api/hermes/setup", {
+      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+    })).toEqual({
+      placement: { kind: "bridge", bridge: "mac mini", profile: "default" },
+    });
+    expect(validateHermesSetupBody("POST", "/api/hermes/setup", {
+      botId: "bot-keep",
+      placement: { kind: "local", profile: "work" },
+    })).toEqual({
+      botId: "bot-keep",
+      placement: { kind: "local", profile: "work" },
+    });
     expect(validateHermesSetupBody("POST", "/api/hermes/setup", { token: "secret" })).toMatchObject({ denial: { status: 400 } });
     expect(validateHermesSetupBody("POST", "/api/hermes/setup", { profile: "../etc" })).toMatchObject({ denial: { status: 400 } });
+    expect(validateHermesSetupBody("POST", "/api/hermes/setup", { botId: "sk-secret", profile: "default" })).toMatchObject({ denial: { status: 400 } });
+    expect(validateHermesSetupBody("POST", "/api/hermes/setup/signin", {
+      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+    })).toEqual({
+      placement: { kind: "bridge", bridge: "mac mini", profile: "default" },
+    });
+    expect(validateHermesSetupBody("POST", "/api/hermes/setup/signin", { token: "secret" })).toMatchObject({ denial: { status: 400 } });
     for (const profile of ["session-root", "root-session", "resolved_session", "0123456789abcdef", "01234567-89ab-cdef-0123-456789abcdef"]) {
       expect(validateHermesSetupBody("POST", "/api/hermes/setup", { profile }), profile).toMatchObject({ denial: { status: 400 } });
     }
