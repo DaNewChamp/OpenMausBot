@@ -554,7 +554,7 @@ function Bubble({
 
 /** A tool run: spinner while live, check/cross once settled. */
 function ActivityChip({ message }: { message: Message }) {
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
   const tool = message.tool;
   if (!tool) return null;
   // bot⇄bot comm chip: opens the channel where the exchange lives
@@ -563,7 +563,13 @@ function ActivityChip({ message }: { message: Message }) {
     return (
       <div className="flex justify-center py-1">
         <button
-          onClick={() => dispatch({ type: "select", id: comm.groupId })}
+          onClick={() => {
+            dispatch({ type: "select", id: comm.groupId });
+            const group = state.groups.find((candidate) => candidate.id === comm.groupId);
+            if (group && comm.messageId) {
+              dispatch({ type: "focusMessage", threadId: group.threadId, messageId: comm.messageId });
+            }
+          }}
           title={`Open the conversation with ${comm.withName}`}
           className="flex items-center gap-2 text-[12.5px] text-ink-secondary hover:text-ink"
         >

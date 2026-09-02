@@ -58,14 +58,21 @@ function dayLabel(at: number): string {
 /** One finished tool step in a room. Same pill the 1:1 chat uses, minus the
  * status glyph — a room reads as a conversation, not a build log. */
 function RoomToolChip({ message }: { message: Message }) {
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
   const tool = message.tool;
   if (!tool) return null;
   if (message.comm) {
     return (
       <div className="flex justify-start">
         <button
-          onClick={() => message.comm && dispatch({ type: "select", id: message.comm.groupId })}
+          onClick={() => {
+            if (!message.comm) return;
+            dispatch({ type: "select", id: message.comm.groupId });
+            const group = state.groups.find((candidate) => candidate.id === message.comm!.groupId);
+            if (group && message.comm.messageId) {
+              dispatch({ type: "focusMessage", threadId: group.threadId, messageId: message.comm.messageId });
+            }
+          }}
           title={`Open the conversation with ${message.comm.withName}`}
           className="flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
         >
