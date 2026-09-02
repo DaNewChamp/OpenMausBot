@@ -149,7 +149,7 @@ export interface HermesBotEngineOptions {
   pendingPath?: string;
   fromBotId?: string;
   senderHandle?: string;
-  handleToBotId?: ReadonlyMap<string, string>;
+  handleToBotId?: ReadonlyMap<string, string> | (() => ReadonlyMap<string, string>);
   onComm?: (candidate: HermesCommCandidate) => void;
   commBudget?: HermesCommBudget;
   commReplay?: HermesCommReplay;
@@ -866,6 +866,7 @@ export class HermesBotAdapter implements HermesBotEngine {
   private readonly fromBotId?: string;
   private readonly senderHandle?: string;
   private readonly handleToBotId: ReadonlyMap<string, string>;
+  private readonly resolveHandleToBotId?: () => ReadonlyMap<string, string>;
   private readonly onComm?: (candidate: HermesCommCandidate) => void;
   private readonly commBudget: HermesCommBudget;
   private readonly commReplay: HermesCommReplay;
@@ -881,7 +882,12 @@ export class HermesBotAdapter implements HermesBotEngine {
     this.pendingPath = options.pendingPath;
     this.fromBotId = options.fromBotId;
     this.senderHandle = options.senderHandle;
-    this.handleToBotId = options.handleToBotId ?? new Map();
+    if (typeof options.handleToBotId === "function") {
+      this.resolveHandleToBotId = options.handleToBotId;
+      this.handleToBotId = new Map();
+    } else {
+      this.handleToBotId = options.handleToBotId ?? new Map();
+    }
     this.onComm = options.onComm;
     this.commBudget = options.commBudget ?? new HermesCommBudget();
     this.commReplay = options.commReplay ?? new HermesCommReplay();
@@ -913,6 +919,11 @@ export class HermesBotAdapter implements HermesBotEngine {
         && (capabilities as Record<string, unknown>).per_session_exclusive_submit === true
       ) {
         this.readiness.exclusiveSubmit = true;
+      }
+      try {
+        await this.client.request("groups.capabilities", {});
+      } catch {
+        // Optional probe for later waves; never enables groups.
       }
       const payload = await this.client.request("profiles.list", { include_sessions: true });
       const normalized = normalizeProfileRowsResult(payload);
@@ -1398,6 +1409,10 @@ export class HermesBotAdapter implements HermesBotEngine {
     this.commBudget.releaseTurn(runtime.turnId);
   }
 
+  private currentHandleToBotId(): ReadonlyMap<string, string> {
+    return this.resolveHandleToBotId?.() ?? this.handleToBotId;
+  }
+
   private projectExtendedEvent(runtime: RuntimeRecord, type: string, params: Record<string, unknown>): void {
     const createdAt = new Date(this.clock.now()).toISOString();
     const baseInput = {
@@ -1408,7 +1423,7 @@ export class HermesBotAdapter implements HermesBotEngine {
       turnId: runtime.turnId,
       fromBotId: runtime.fromBotId ?? this.fromBotId ?? runtime.requestedProfile,
       senderHandle: runtime.senderHandle ?? this.senderHandle ?? runtime.requestedProfile,
-      handleToBotId: this.handleToBotId,
+      handleToBotId: this.currentHandleToBotId(),
       createdAt,
     };
     const toolProjection = projectHermesGatewayToolEvent(baseInput);
@@ -1439,7 +1454,7 @@ export class HermesBotAdapter implements HermesBotEngine {
     if (projection.approval) this.readiness.approvals = true;
   }
 
-  private emitRuntime(runtime: RuntimeRecord, event: { type: string; [key: string]: unknown }): void {
+  private emitRuntime(runtime: RuntimeRecord, event: Partial<RuntimeEvent> & Pick<RuntimeEvent, "type">): void {
     const normalized = {
       eventId: newEventId(),
       provider: "hermesBot",

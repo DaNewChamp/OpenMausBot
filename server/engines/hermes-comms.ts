@@ -45,8 +45,12 @@ export function normalizeMessageAgentBody(
 }
 
 export class HermesCommBudget {
-  constructor(private readonly maxPerTurn = 4) {}
+  private readonly maxPerTurn: number;
   private counts = new Map<string, number>();
+
+  constructor(maxPerTurn = 4) {
+    this.maxPerTurn = maxPerTurn;
+  }
 
   tryConsume(turnId: string): boolean {
     const next = (this.counts.get(turnId) ?? 0) + 1;

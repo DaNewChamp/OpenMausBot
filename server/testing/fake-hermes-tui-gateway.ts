@@ -120,6 +120,20 @@ const logRpc = (method: string, params: unknown) => {
 let runtimeCounter = 0;
 let promptCounter = 0;
 let interrupted = false;
+let mintedCanonical = false;
+
+function readMessageAgentTarget(): string {
+  if (!HERMES_HOME) return "work";
+  const path = `${HERMES_HOME}/fixture-message-agent-target`;
+  if (!existsSync(path)) return "work";
+  const next = readFileSync(path, "utf8").trim();
+  return next || "work";
+}
+
+function dualProfileEnabled(): boolean {
+  if (!HERMES_HOME) return false;
+  return existsSync(`${HERMES_HOME}/fixture-dual-profile`);
+}
 
 setTimeout(() => {
   const mode = activeMode();
@@ -162,6 +176,11 @@ process.stdin.on("data", (chunk) => {
       return;
     }
 
+    if (request.method === "groups.capabilities") {
+      out({ jsonrpc: "2.0", id: request.id, result: { authority_epoch: 1, replicas: 1 } });
+      return;
+    }
+
     if (request.method === "profiles.list") {
       if (mode === "auth-fail") {
         out({ jsonrpc: "2.0", id: request.id, error: { code: 401, message: "token=/fixture/secret" } });
@@ -176,21 +195,43 @@ process.stdin.on("data", (chunk) => {
         return;
       }
       const { name: profileName, isDefault } = profileForMode(mode);
-      out({
-        jsonrpc: "2.0",
-        id: request.id,
-        result: {
-          profiles: [{
-            name: profileName,
-            is_default: isDefault,
+      const profiles = dualProfileEnabled()
+        ? [
+          {
+            name: PROFILE,
+            is_default: true,
             display_name: "Fixture Hermes",
-            description: "Wave 1 deterministic profile",
+            description: "Wave 2 default profile",
             model: "fixture-model",
             provider: "fixture-provider",
             path: "/must-not-leak/profile-path",
             ui_meta: { secret: "must-not-leak" },
-          }],
-        },
+          },
+          {
+            name: NAMED_PROFILE,
+            is_default: false,
+            display_name: "Fixture Work",
+            description: "Wave 2 named profile",
+            model: "fixture-model",
+            provider: "fixture-provider",
+            path: "/must-not-leak/work-profile-path",
+            ui_meta: { secret: "must-not-leak" },
+          },
+        ]
+        : [{
+          name: profileName,
+          is_default: isDefault,
+          display_name: "Fixture Hermes",
+          description: "Wave 1 deterministic profile",
+          model: "fixture-model",
+          provider: "fixture-provider",
+          path: "/must-not-leak/profile-path",
+          ui_meta: { secret: "must-not-leak" },
+        }];
+      out({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: { profiles },
       });
       return;
     }
@@ -205,7 +246,7 @@ process.stdin.on("data", (chunk) => {
         out({ jsonrpc: "2.0", id: request.id, error: { code: 500, message: "state.db unreadable at /fixture/state.db" } });
         return;
       }
-      if (mode === "mint-on-absent") {
+      if (mode === "mint-on-absent" && !mintedCanonical) {
         out({ jsonrpc: "2.0", id: request.id, result: { sessions: [] } });
         return;
       }
@@ -228,6 +269,7 @@ process.stdin.on("data", (chunk) => {
     }
 
     if (request.method === "session.create") {
+      mintedCanonical = true;
       out({ jsonrpc: "2.0", id: request.id, result: { session_id: "runtime-minted" } });
       return;
     }
@@ -257,6 +299,39 @@ process.stdin.on("data", (chunk) => {
         out({ jsonrpc: "2.0", method: "event", params: { type: "message.start", session_id: runtimeId } });
         if (shouldEmitDeltas()) {
           out({ jsonrpc: "2.0", method: "event", params: { type: "message.delta", session_id: runtimeId, payload: { text: `${FIXTURE_DELTA_PREFIX}hel` } } });
+        }
+        if (mode === "message-agent") {
+          out({
+            jsonrpc: "2.0",
+            method: "event",
+            params: {
+              type: "tool.start",
+              session_id: runtimeId,
+              payload: {
+                name: "message_agent",
+                arguments: {
+                  target: readMessageAgentTarget(),
+                  message: "fixture teammate ping",
+                },
+              },
+            },
+          });
+        }
+        if (mode === "approval-ask") {
+          out({
+            jsonrpc: "2.0",
+            method: "event",
+            params: {
+              type: "approval.pending",
+              session_id: runtimeId,
+              payload: {
+                request_id: "req-fixture-1",
+                tool: "shell",
+                summary: "Run a command",
+              },
+            },
+          });
+          return;
         }
         if (mode === "malformed-final") {
           out({ jsonrpc: "2.0", method: "event", params: { type: "message.complete", session_id: runtimeId, payload: { status: "complete" } } });
@@ -300,6 +375,24 @@ process.stdin.on("data", (chunk) => {
 
     if (request.method === "approval.respond") {
       out({ jsonrpc: "2.0", id: request.id, result: { ok: true } });
+      if (activeMode() === "approval-ask") {
+        const runtimeId = `runtime-gen-${runtimeCounter}`;
+        setTimeout(() => {
+          out({
+            jsonrpc: "2.0",
+            method: "event",
+            params: {
+              type: "message.complete",
+              session_id: runtimeId,
+              payload: {
+                text: FIXTURE_REPLY,
+                status: "complete",
+                usage: { input: 4, output: 2 },
+              },
+            },
+          });
+        }, 10);
+      }
       return;
     }
   }

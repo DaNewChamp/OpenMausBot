@@ -56,14 +56,14 @@ describe("Hermes internal contracts", () => {
       events: true,
       stop: true,
       routinesRead: false,
-      messageAgent: false,
+      messageAgent: true,
       groups: false,
       crossMachine: false,
       queueing: false,
       steer: false,
       attachments: false,
-      adoptMint: false,
-      approvals: false,
+      adoptMint: true,
+      approvals: true,
       exclusiveSubmit: true,
     } satisfies HermesCapabilityFlags);
   });

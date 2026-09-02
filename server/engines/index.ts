@@ -157,7 +157,7 @@ export class HermesEngineRegistry {
       try {
         engine = this.createEngine({
           ...rawHermesOptions(entry),
-          ...(this.handleToBotId ? { handleToBotId: this.handleToBotId() } : {}),
+          ...(this.handleToBotId ? { handleToBotId: this.handleToBotId } : {}),
           ...(this.onComm ? { onComm: this.onComm } : {}),
         });
       } catch {

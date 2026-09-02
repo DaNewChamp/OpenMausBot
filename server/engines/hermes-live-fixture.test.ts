@@ -117,6 +117,14 @@ function enableFixtureDeltas(hermesHome: string): void {
   writeFileSync(join(hermesHome, "fixture-deltas"), "1");
 }
 
+function enableFixtureDualProfile(hermesHome: string): void {
+  writeFileSync(join(hermesHome, "fixture-dual-profile"), "1");
+}
+
+function setMessageAgentTarget(hermesHome: string, target: string): void {
+  writeFileSync(join(hermesHome, "fixture-message-agent-target"), target);
+}
+
 function clearFixtureControls(hermesHome: string): void {
   for (const name of ["fixture-mode", "fixture-deltas", "mode-control.txt", "rpc.ndjson"]) {
     const path = join(hermesHome, name);
@@ -201,6 +209,10 @@ describe("Hermes live loopback fixture", () => {
         "hermesBot",
         "VBotPrimaryEngine",
         "message_agent",
+        "adopt-before-mint",
+        "per_session_exclusive_submit",
+        "1:1",
+        "prompt.btw",
         "deferral",
         "unknown",
         "unavailable",
@@ -534,6 +546,38 @@ describe("Hermes live loopback fixture", () => {
       expect(description.profiles[0]?.handle).toBe("hermes");
       await registry.disposeAll();
     });
+
+    it("mints Bot Chat only on the first absent lookup send", async () => {
+      setFixtureMode(hermesHome, "mint-on-absent");
+      engine = createHermesBotEngine({
+        cli: launcher,
+        environment: fixtureEnv(home, hermesHome),
+        timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
+      }) as HermesBotAdapter;
+      await engine.discover();
+      await engine.send({ profile: PROFILE, text: "mint once", threadId: "thread-mint", turnId: "turn-mint" });
+      await settle(250);
+      const firstSend = readRpcLog(rpcLog);
+      expect(firstSend.filter((entry) => entry.method === "session.create")).toHaveLength(1);
+
+      writeFileSync(rpcLog, "");
+      await engine.send({ profile: PROFILE, text: "mint never again", threadId: "thread-mint-2", turnId: "turn-mint-2" });
+      await settle(250);
+      const secondSend = readRpcLog(rpcLog);
+      expect(secondSend.filter((entry) => entry.method === "session.create")).toHaveLength(0);
+      expect(engine.capabilities.adoptMint).toBe(true);
+    });
+
+    it("probes groups.capabilities without enabling groups", async () => {
+      engine = createHermesBotEngine({
+        cli: launcher,
+        environment: fixtureEnv(home, hermesHome),
+        timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
+      }) as HermesBotAdapter;
+      const discovery = await engine.discover();
+      expect(discovery.capabilities.groups).toBe(false);
+      expect(readRpcLog(rpcLog).some((entry) => entry.method === "groups.capabilities")).toBe(true);
+    });
   });
 
   describe("hub integration through live fixture", () => {
@@ -686,6 +730,93 @@ describe("Hermes live loopback fixture", () => {
       } finally {
         sse.close();
       }
+    }, 60_000);
+
+    it("projects message_agent comm chips with plane attribution and no Hermes ids", async () => {
+      enableFixtureDualProfile(hermesHome);
+      setMessageAgentTarget(hermesHome, "work");
+      writeFileSync(join(hermesHome, "mode-control.txt"), "message-agent");
+      const sender = await api("POST", "/api/bots");
+      const receiver = await api("POST", "/api/bots");
+      expect(sender.status).toBe(201);
+      expect(receiver.status).toBe(201);
+      writeFileSync(bindingPath, JSON.stringify({
+        version: 1,
+        bindings: {
+          [sender.body.bot.id]: {
+            adapter: "hermesBot",
+            profile: PROFILE,
+            canonicalTitle: "Bot Chat",
+            bindingVersion: 1,
+          },
+          [receiver.body.bot.id]: {
+            adapter: "hermesBot",
+            profile: NAMED_PROFILE,
+            canonicalTitle: "Bot Chat",
+            bindingVersion: 1,
+          },
+        },
+      }), { mode: 0o600 });
+
+      const sent = await api("POST", `/api/bots/${sender.body.bot.id}/messages`, { text: "ping teammate" });
+      expect(sent.status).toBe(202);
+      await waitFor(async () => {
+        const current = await api("GET", "/api/bots");
+        const found = current.body.bots.find((candidate: { id: string }) => candidate.id === sender.body.bot.id);
+        return found?.messages?.some((message: { comm?: { plane?: string } }) =>
+          message.comm?.plane === "hermesMessageAgent");
+      }, "hermesMessageAgent comm chip");
+
+      const bots = (await api("GET", "/api/bots")).body.bots;
+      const senderBot = bots.find((candidate: { id: string }) => candidate.id === sender.body.bot.id);
+      const receiverBot = bots.find((candidate: { id: string }) => candidate.id === receiver.body.bot.id);
+      const senderChip = senderBot?.messages?.find((message: { comm?: { plane?: string } }) =>
+        message.comm?.plane === "hermesMessageAgent");
+      const receiverChip = receiverBot?.messages?.find((message: { comm?: { plane?: string } }) =>
+        message.comm?.plane === "hermesMessageAgent");
+      expect(senderChip?.comm?.plane).toBe("hermesMessageAgent");
+      expect(receiverChip?.comm?.plane).toBe("hermesMessageAgent");
+      assertNoSecrets(JSON.stringify({ senderBot, receiverBot }));
+    }, 60_000);
+
+    it("brokers approval cards through respond once", async () => {
+      writeFileSync(join(hermesHome, "mode-control.txt"), "approval-ask");
+      const created = await api("POST", "/api/bots");
+      expect(created.status).toBe(201);
+      writeFileSync(bindingPath, JSON.stringify({
+        version: 1,
+        bindings: {
+          [created.body.bot.id]: {
+            adapter: "hermesBot",
+            profile: PROFILE,
+            canonicalTitle: "Bot Chat",
+            bindingVersion: 1,
+          },
+        },
+      }), { mode: 0o600 });
+
+      const sent = await api("POST", `/api/bots/${created.body.bot.id}/messages`, { text: "needs approval" });
+      expect(sent.status).toBe(202);
+      await waitFor(async () => {
+        const current = await api("GET", "/api/bots");
+        const found = current.body.bots.find((candidate: { id: string }) => candidate.id === created.body.bot.id);
+        return found?.messages?.some((message: { card?: { requestId?: string; tool?: string } }) =>
+          message.card?.requestId === "req-fixture-1" && message.card?.tool === "shell");
+      }, "approval card");
+      await waitFor(async () => (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === created.body.bot.id)?.busy === true, "approval wait");
+
+      const answered = await api("POST", `/api/bots/${created.body.bot.id}/respond`, {
+        requestId: "req-fixture-1",
+        behavior: "allow",
+      });
+      expect(answered.status).toBe(200);
+      expect(answered.body).toMatchObject({ ok: true, outcome: "allowed-once" });
+      const approvalCalls = readRpcLog(rpcLog).filter((entry) => entry.method === "approval.respond");
+      expect(approvalCalls.at(-1)?.params).toMatchObject({
+        request_id: "req-fixture-1",
+        choice: "once",
+      });
+      assertNoSecrets(JSON.stringify(answered.body));
     }, 60_000);
   });
 
