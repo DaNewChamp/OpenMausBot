@@ -11,6 +11,7 @@ import {
   normalizeCanonicalLookup,
   normalizeProfileRowsResult,
   projectHermesCapabilities,
+  projectLegacyDiscoveryProfiles,
   type HermesReadiness,
 } from "./discovery.ts";
 import {
@@ -1035,13 +1036,27 @@ export class HermesBotAdapter implements HermesBotEngine {
     this.readiness.roster = true;
     this.readiness.events = true;
     this.readiness.exclusiveSubmit = false;
-    this.lastProfiles = normalized.profiles;
+    let profiles = normalized.profiles;
+    try {
+      const payload = await this.client.request(
+        "session.list",
+        sessionListParams(this.protocol, "default"),
+      );
+      const canonical = normalizeCanonicalLookup(payload, "default", { legacy: true });
+      if (canonical.state === "present") {
+        this.readiness.canonicalChat = true;
+        profiles = projectLegacyDiscoveryProfiles(profiles, canonical);
+      }
+    } catch {
+      /* keep synthetic absent when legacy session.list is unavailable */
+    }
+    this.lastProfiles = profiles;
     this.rosterAvailable = true;
     return {
       state: "available",
       ...(version ? { version } : {}),
       capabilities: projectHermesCapabilities(this.readiness),
-      profiles: normalized.profiles,
+      profiles,
     };
   }
 

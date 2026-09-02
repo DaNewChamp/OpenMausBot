@@ -390,6 +390,16 @@ export interface HermesReadiness {
   exclusiveSubmit?: boolean;
 }
 
+export function projectLegacyDiscoveryProfiles(
+  profiles: HermesRosterRow[],
+  canonical: HermesCanonicalLookup,
+): HermesRosterRow[] {
+  if (canonical.state !== "present") return profiles;
+  return profiles.map((row) =>
+    row.profile === "default" ? { ...row, canonicalChat: "present" } : row,
+  );
+}
+
 export function projectHermesCapabilities(readiness: HermesReadiness): HermesCapabilityFlags {
   const supported = new Set<keyof HermesCapabilityFlags>([
     "roster",

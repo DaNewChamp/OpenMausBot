@@ -193,17 +193,52 @@ describe("Hermes Bot Chat loopback transport", () => {
     expect(methods).toContain("gateway.capabilities");
     expect(methods).toContain("profiles.list");
     expect(methods).toContain("setup.status");
+    expect(methods).toContain("session.list");
     const setup = JSON.parse(child.stdin.writes.find((raw) => JSON.parse(raw).method === "setup.status")!);
     child.frame({ jsonrpc: "2.0", id: setup.id, result: { provider_configured: true } });
     await settle();
     const version = JSON.parse(child.stdin.writes.find((raw) => JSON.parse(raw).method === "cli.exec")!);
     child.frame({ jsonrpc: "2.0", id: version.id, result: { blocked: false, code: 0, output: "0.10.0-fixture\n" } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.find((raw) => JSON.parse(raw).method === "session.list")!);
+    expect(list.params).toEqual({ limit: 200 });
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [] } });
     const discovery = await discover;
     expect(discovery).toMatchObject({
       state: "available",
       version: "0.10.0-fixture",
-      profiles: [{ profile: "default", handle: "hermes" }],
-      capabilities: { roster: true, exclusiveSubmit: false },
+      profiles: [{ profile: "default", handle: "hermes", canonicalChat: "absent" }],
+      capabilities: { roster: true, exclusiveSubmit: false, canonicalChat: false },
+    });
+    await engine.close();
+  });
+
+  it("projects legacy discovery canonicalChat present after Bot Chat exists", async () => {
+    const child = new FakeProcess();
+    child.protocolMode = "legacy";
+    const engine = createTestHermesEngine({ spawn: () => child });
+    const discover = engine.discover();
+    await settle();
+    ready(child);
+    await settle();
+    const setup = JSON.parse(child.stdin.writes.find((raw) => JSON.parse(raw).method === "setup.status")!);
+    child.frame({ jsonrpc: "2.0", id: setup.id, result: { provider_configured: true } });
+    await settle();
+    const version = JSON.parse(child.stdin.writes.find((raw) => JSON.parse(raw).method === "cli.exec")!);
+    child.frame({ jsonrpc: "2.0", id: version.id, result: { blocked: false, code: 0, output: "0.10.0-fixture\n" } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.find((raw) => JSON.parse(raw).method === "session.list")!);
+    expect(list.params).toEqual({ limit: 200 });
+    child.frame({
+      jsonrpc: "2.0",
+      id: list.id,
+      result: { sessions: [{ id: "root", resolved_id: "tip", title: "Bot Chat", source: "tui" }] },
+    });
+    const discovery = await discover;
+    expect(discovery).toMatchObject({
+      state: "available",
+      profiles: [{ profile: "default", handle: "hermes", canonicalChat: "present" }],
+      capabilities: { roster: true, canonicalChat: true, send: false },
     });
     await engine.close();
   });

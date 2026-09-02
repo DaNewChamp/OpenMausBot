@@ -5,6 +5,7 @@ import {
   normalizeProfileRows,
   normalizeProfileRowsResult,
   projectHermesCapabilities,
+  projectLegacyDiscoveryProfiles,
 } from "./discovery.ts";
 
 describe("Hermes discovery normalization", () => {
@@ -373,5 +374,25 @@ describe("Hermes discovery normalization", () => {
       approvals: false,
       exclusiveSubmit: false,
     });
+  });
+
+  it("projects legacy default profile canonicalChat present only after Bot Chat proof", () => {
+    const profiles = normalizeProfileRowsResult({
+      profiles: [{ name: "default", is_default: true, available: true }],
+    });
+    expect(profiles.state).toBe("available");
+    expect(profiles.profiles[0]?.canonicalChat).toBe("absent");
+    const projected = projectLegacyDiscoveryProfiles(profiles.profiles, {
+      state: "present",
+      chat: {
+        profile: "default",
+        title: "Bot Chat",
+        rootSessionId: "root",
+        resolvedSessionId: "tip",
+        messageCount: 0,
+      },
+    });
+    expect(projected[0]).toMatchObject({ profile: "default", canonicalChat: "present" });
+    expect(projectLegacyDiscoveryProfiles(profiles.profiles, { state: "absent" })).toEqual(profiles.profiles);
   });
 });
