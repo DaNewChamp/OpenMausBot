@@ -20,8 +20,14 @@
 // inside a process you chose to start would be ceremony: stopping it is the
 // off switch, and it is a more honest one than a flag in a file.
 import { createServer, request as httpRequest } from "node:http";
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
+import { join } from "node:path";
 
+import { readHubIdentity } from "../../shared/hub-identity.mjs";
+import {
+  PAIRING_INVITATION_CHALLENGE_PATTERN,
+  PairingInvitationRegistry,
+} from "../../server/pairing-invitations.ts";
 import { createAddressWatcher } from "./advertise-watch.ts";
 import { createControlServer, hostCandidates } from "./control.ts";
 import { createConnectedDeviceTracker } from "./connected-devices.ts";
@@ -40,6 +46,7 @@ import {
 import { createProxyHandler } from "./proxy.ts";
 import { companionOriginSocket, listenCompanionOrigin } from "./origin.ts";
 import { bearerToken } from "./devices.ts";
+import { DATA_DIR as companionDataDir } from "./state.ts";
 import { isLocalVmViewerUpgrade, localVmViewerBotId } from "./routes.ts";
 import { resolveViewerAccessDeviceId, stripViewerAccessQuery } from "./viewer-access.ts";
 import { viewerUpgradeHeaders } from "./viewer-upgrade-headers.ts";
@@ -116,6 +123,25 @@ async function refreshMachineName(): Promise<void> {
 }
 
 const devices = new DeviceRegistry();
+const hubDataDir = process.env.OMB_DATA_DIR ?? join(homedir(), ".openmausbot");
+const hubIdentity = readHubIdentity({ dataDir: hubDataDir });
+const hubId = hubIdentity.status === "ok" ? hubIdentity.identity.id : "unavailable";
+const pairingInvitations = new PairingInvitationRegistry(companionDataDir);
+devices.setRevokeListener((deviceId) => pairingInvitations.invalidateForDevice(deviceId));
+
+const redeemCredential = (
+  credential: string,
+  deviceName: unknown,
+  pairRequestId?: unknown,
+) => {
+  if (PAIRING_INVITATION_CHALLENGE_PATTERN.test(credential)) {
+    const invitation = pairingInvitations.redeem(credential);
+    if ("error" in invitation) return { error: invitation.error };
+    if (invitation.invitation.hubId !== hubId) return { error: "that pairing invitation is not valid" };
+    return devices.mintDevice(deviceName);
+  }
+  return devices.redeem(credential, deviceName, pairRequestId);
+};
 const mdns = new MdnsResponder();
 
 /** Keeps the Bonjour record matching the interface table: advertise when a
@@ -150,7 +176,18 @@ const proxy = createProxyHandler({
     // `authenticate` also stamps lastSeenAt, which is what makes the control
     // page able to say when a phone was last heard from.
     authenticate: (token) => devices.authenticate(token),
-    redeem: (code, deviceName, pairRequestId) => devices.redeem(code, deviceName, pairRequestId),
+    redeem: redeemCredential,
+    createPairingInvitation: (deviceId) => {
+      if (hubId === "unavailable") return { error: "pairing invitations are unavailable" };
+      const invitation = pairingInvitations.create(hubId, deviceId);
+      return {
+        id: invitation.id,
+        challenge: invitation.challenge,
+        hubId: invitation.hubId,
+        expiresAt: invitation.expiresAt,
+        attemptsLeft: invitation.attemptsLeft,
+      };
+    },
     serverName: machineName,
     // Recomputed per pairing rather than cached: addresses change when the
     // machine joins another network, and a pairing is exactly the moment the

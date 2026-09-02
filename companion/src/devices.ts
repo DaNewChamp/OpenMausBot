@@ -319,6 +319,30 @@ export class DeviceRegistry {
     return result;
   }
 
+  /** Mint a device token after a hub-approved invitation, without an open pairing window. */
+  mintDevice(name: unknown): { device: PublicDevice; token: string } | { error: string } {
+    if (this.devices.length >= MAX_DEVICES) return { error: "too many paired devices — remove one first" };
+    const token = `omb_${randomBytes(32).toString("base64url")}`;
+    const device: DeviceRecord = {
+      id: randomUUID(),
+      name: cleanDeviceName(name),
+      tokenHash: sha256(token),
+      createdAt: Date.now(),
+      lastSeenAt: Date.now(),
+      cloudDesktopAccess: false,
+      localVmAccess: false,
+    };
+    this.devices.push(device);
+    try {
+      this.persist();
+    } catch (e) {
+      this.devices.pop();
+      return { error: `could not save the pairing: ${(e as Error).message}` };
+    }
+    const { tokenHash, ...pub } = device;
+    return { device: pub, token };
+  }
+
   /** Look up one paired device by id without a bearer token. */
   find(id: string): DeviceRecord | null {
     return this.devices.find((candidate) => candidate.id === id) ?? null;
@@ -356,7 +380,14 @@ export class DeviceRegistry {
     if (this.devices.length === before) return false;
     this.lastSeenWrites.delete(id);
     this.persist();
+    this.onRevoke?.(id);
     return true;
+  }
+
+  private onRevoke?: (deviceId: string) => void;
+
+  setRevokeListener(listener: ((deviceId: string) => void) | undefined) {
+    this.onRevoke = listener;
   }
 
   /** Grant or remove the one capability that crosses from companion actions

@@ -119,6 +119,14 @@ export interface ProxyOptions {
     cloudDesktopAccess: boolean;
     localVmAccess?: boolean;
   } | null;
+  /** Mint a hub-approved pairing invitation for another client. */
+  createPairingInvitation?: (deviceId: string) => {
+    id: string;
+    challenge: string;
+    hubId: string;
+    expiresAt: number;
+    attemptsLeft: number;
+  } | { error: string };
 }
 
 export interface CompanionEndpointSnapshot {
@@ -391,6 +399,23 @@ export function createProxyHandler(options: ProxyOptions) {
     // default-deny checks above and never send it to the harness.
     if (method === "GET" && path === "/api/companion/endpoints") {
       return sendJson(res, 200, endpointSnapshot(options));
+    }
+
+    if (method === "POST" && path === "/api/pairing-invitations") {
+      if (!device?.id || !options.createPairingInvitation) {
+        return sendJson(res, 403, { error: "pairing invitations require a paired device" });
+      }
+      const created = options.createPairingInvitation(device.id);
+      if ("error" in created) return sendJson(res, 403, { error: created.error });
+      return sendJson(res, 201, {
+        invitation: {
+          id: created.id,
+          hubId: created.hubId,
+          expiresAt: created.expiresAt,
+          attemptsLeft: created.attemptsLeft,
+        },
+        challenge: created.challenge,
+      });
     }
 
     if (isHermesSetupConnect(method, path)) {
