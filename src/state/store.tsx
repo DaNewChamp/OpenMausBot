@@ -34,6 +34,12 @@ import {
   type VBotEngineSync,
   type VBotPrimaryEngine,
 } from "@/lib/vbot-engine";
+import { isWebClientMode } from "@/lib/web-client-mode";
+import {
+  getHubDeviceToken,
+  hubApiUrl,
+} from "@/lib/web-client-session";
+import { openAuthorizedEventStream } from "@/lib/web-client-stream";
 
 export type { MausColor } from "@/lib/mascot";
 
@@ -1203,11 +1209,22 @@ export const initialState: AppState = {
 };
 
 // ── API client ─────────────────────────────────────────────────────────
+function hubAuthHeaders(headers?: HeadersInit): Headers {
+  const next = new Headers(headers);
+  if (!next.has("content-type")) next.set("content-type", "application/json");
+  if (isWebClientMode()) {
+    const token = getHubDeviceToken();
+    if (token) next.set("authorization", `Bearer ${token}`);
+  }
+  return next;
+}
+
+function hubFetch(path: string, init?: RequestInit): Promise<Response> {
+  return fetch(hubApiUrl(path), { ...init, headers: hubAuthHeaders(init?.headers) });
+}
+
 export async function api(path: string, init?: RequestInit): Promise<any> {
-  const res = await fetch(path, {
-    headers: { "content-type": "application/json" },
-    ...init,
-  });
+  const res = await hubFetch(path, init);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? `${res.status} ${res.statusText}`);
   return body;
@@ -1359,9 +1376,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
     // fire-and-forget card persistence; the route is optional server-side
     const persistCard = (botId: string, messageId: string, patch: Partial<OptionCardData>) => {
-      fetch(`/api/bots/${botId}/cards/${messageId}`, {
+      fetch(hubApiUrl(`/api/bots/${botId}/cards/${messageId}`), {
         method: "PATCH",
-        headers: { "content-type": "application/json" },
+        headers: hubAuthHeaders(),
         body: JSON.stringify(patch),
       }).catch(() => {});
     };
@@ -1786,12 +1803,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // gap before that connection opened.
     const hydrationFallback = setTimeout(hydrate, 1_000);
 
-    const es = new EventSource("/api/events");
-    // The hydrate decision belongs to the hello frame, not to onopen: the
-    // server replays what we missed when it can, and re-downloading every
-    // transcript on a reconnect it already covered is pure waste.
-    es.onopen = () => rawDispatch({ type: "connected", value: true });
-    es.onerror = () => rawDispatch({ type: "connected", value: false });
     handleFrame = (frame) => {
       switch (frame.kind) {
         case "message": {
@@ -1835,9 +1846,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // reading the selected chat clears its badge immediately
           if (bot.unread && bot.id === stateRef.current.selectedId) {
             bot.unread = false;
-            fetch(`/api/bots/${bot.id}`, {
+            hubFetch(`/api/bots/${bot.id}`, {
               method: "PATCH",
-              headers: { "content-type": "application/json" },
               body: JSON.stringify({ unread: false }),
             }).catch(() => {});
           }
@@ -1852,9 +1862,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // reading the selected room clears its badge immediately
           if (group.unread && group.id === stateRef.current.selectedId) {
             group.unread = false;
-            fetch(`/api/groups/${group.id}`, {
+            hubFetch(`/api/groups/${group.id}`, {
               method: "PATCH",
-              headers: { "content-type": "application/json" },
               body: JSON.stringify({ unread: false }),
             }).catch(() => {});
           }
@@ -1951,15 +1960,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
       }
     };
-    es.onmessage = (raw) => {
-      let frame: any;
-      try {
-        frame = JSON.parse(raw.data);
-      } catch {
-        return;
-      }
-      // `hello` is the snapshot boundary. A false `resumed` means the server
-      // could not fill the gap, so queue subsequent frames behind a hydrate.
+    const consumeStreamFrame = (frame: any) => {
       if (frame.kind === "hello") {
         clearTimeout(hydrationFallback);
         if (!frame.resumed) hydrate();
@@ -1967,6 +1968,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       if (hydrated) handleFrame(frame);
       else pendingFrames.push(frame);
+    };
+
+    const token = isWebClientMode() ? getHubDeviceToken() : null;
+    if (token) {
+      const stop = openAuthorizedEventStream({
+        url: hubApiUrl("/api/events"),
+        token,
+        onOpen: () => rawDispatch({ type: "connected", value: true }),
+        onError: () => rawDispatch({ type: "connected", value: false }),
+        onFrame: consumeStreamFrame,
+      });
+      return () => {
+        alive = false;
+        clearTimeout(hydrationFallback);
+        stop();
+      };
+    }
+
+    const es = new EventSource("/api/events");
+    es.onopen = () => rawDispatch({ type: "connected", value: true });
+    es.onerror = () => rawDispatch({ type: "connected", value: false });
+    es.onmessage = (raw) => {
+      let frame: any;
+      try {
+        frame = JSON.parse(raw.data);
+      } catch {
+        return;
+      }
+      consumeStreamFrame(frame);
     };
     return () => {
       alive = false;

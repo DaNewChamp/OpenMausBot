@@ -279,7 +279,11 @@ function Shell() {
   );
 }
 
+import { isWebClientMode } from "@/lib/web-client-mode";
+import { WebClientApp } from "@/components/WebClientShell";
+
 export default function App() {
+  if (isWebClientMode()) return <WebClientApp />;
   const [gated, setGated] = useState(() => !isDesktopDemoMode() && !emailGateDone());
   useEffect(() => {
     initAnalytics();
