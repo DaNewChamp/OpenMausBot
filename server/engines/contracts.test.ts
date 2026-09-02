@@ -90,6 +90,9 @@ describe("Hermes internal contracts", () => {
     expect(error.message).toBe("Hermes state is unavailable");
     expect(Object.keys(error)).toEqual(["code"]);
     expect(`${error}`).not.toContain("/private");
+    const numbered = new HermesEngineError("upstream_error", 32603);
+    expect(Object.keys(numbered)).toEqual(["code"]);
+    expect(numbered.rpcCode).toBe(32603);
     const groups = new HermesEngineError("groups_unavailable");
     expect(groups.message).toBe("Hermes does not support groups");
     expect(groups.code).toBe("groups_unavailable");

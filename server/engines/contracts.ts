@@ -116,9 +116,11 @@ export class HermesEngineError extends Error {
     Object.defineProperty(this, "name", { value: "HermesEngineError", enumerable: false });
     this.code = code;
     Object.defineProperty(this, "code", { value: code, enumerable: true, writable: false, configurable: false });
-    if (typeof detail === "number" && Number.isSafeInteger(detail)) {
-      Object.defineProperty(this, "rpcCode", { value: detail, enumerable: false, writable: false, configurable: false });
-    }
+    // Type stripping on Node 24 emits the optional class field as an enumerable
+    // `undefined` own property. Always replace it so public JSON/key enumeration
+    // stays `{ code }` even when no numeric RPC code was captured.
+    const rpcCode = typeof detail === "number" && Number.isSafeInteger(detail) ? detail : undefined;
+    Object.defineProperty(this, "rpcCode", { value: rpcCode, enumerable: false, writable: false, configurable: false });
   }
 }
 
