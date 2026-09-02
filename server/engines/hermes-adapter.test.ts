@@ -304,7 +304,7 @@ describe("Hermes Bot Chat loopback transport", () => {
     await engine.close();
   });
 
-  it("distinguishes absent canonical chats from unknown lookup failures and does not create sessions", async () => {
+  it("distinguishes absent canonical chats from unknown lookup failures without minting on lookup alone", async () => {
     const { child } = harness();
     const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
     const absent = engine.lookupCanonical("coder");
@@ -317,17 +317,108 @@ describe("Hermes Bot Chat loopback transport", () => {
     const request = JSON.parse(child.stdin.writes.at(-1)!);
     child.frame({ jsonrpc: "2.0", id: request.id, result: { sessions: [] } });
     await expect(absent).resolves.toEqual({ state: "absent" });
-    const send = engine.send({ profile: "coder", text: "never", threadId: "t", turnId: "u" });
-    await settle();
-    const retryLookup = JSON.parse(child.stdin.writes.at(-1)!);
-    expect(retryLookup.method).toBe("profiles.list");
-    child.frame({ jsonrpc: "2.0", id: retryLookup.id, result: { profiles: [{ name: "coder" }] } });
-    await settle();
-    const retrySessionLookup = JSON.parse(child.stdin.writes.at(-1)!);
-    expect(retrySessionLookup.method).toBe("session.list");
-    child.frame({ jsonrpc: "2.0", id: retrySessionLookup.id, result: { sessions: [] } });
-    await expect(send).rejects.toMatchObject({ code: "profile_unavailable" });
     expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).not.toContain("session.create");
+    await engine.close();
+  });
+
+  it("mints Bot Chat only after a successful empty hidden lookup, then re-resolves", async () => {
+    const { child } = harness();
+    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const send = engine.send({ profile: "coder", text: "hello", threadId: "thr", turnId: "turn-1" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list1 = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(list1.method).toBe("session.list");
+    expect(list1.params).toEqual({ profile: "coder", title: "Bot Chat", include_hidden: true, limit: 200 });
+    child.frame({ jsonrpc: "2.0", id: list1.id, result: { sessions: [] } });
+    await settle();
+    const mintRoster = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(mintRoster.method).toBe("profiles.list");
+    child.frame({ jsonrpc: "2.0", id: mintRoster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const created = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(created.method).toBe("session.create");
+    expect(created.params).toEqual({ profile: "coder", title: "Bot Chat", hidden: true, source: "tui" });
+    child.frame({ jsonrpc: "2.0", id: created.id, result: { session_id: "rt-new" } });
+    await settle();
+    const refreshRoster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: refreshRoster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list2 = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({
+      jsonrpc: "2.0",
+      id: list2.id,
+      result: {
+        sessions: [{
+          id: "root-new",
+          resolved_id: "tip-new",
+          title: "Bot Chat",
+          hidden: true,
+          source: "tui",
+        }],
+      },
+    });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(resume.params.session_id).toBe("tip-new");
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "rt-live" } });
+    await settle();
+    const submit = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(submit.params.session_id).toBe("rt-live");
+    child.frame({ jsonrpc: "2.0", id: submit.id, result: { ok: true } });
+    await send;
+    expect(engine.capabilities.adoptMint).toBe(true);
+    await engine.close();
+  });
+
+  it("does not mint when hidden lookup fails", async () => {
+    const { child } = harness();
+    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const send = engine.send({ profile: "coder", text: "hello", threadId: "t", turnId: "u" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, error: { code: 500, message: "lookup failed" } });
+    await expect(send).rejects.toMatchObject({ code: "state_unavailable" });
+    expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).not.toContain("session.create");
+    await engine.close();
+  });
+
+  it("does not mint a second chat when post-create lookup is unknown", async () => {
+    const { child } = harness();
+    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const send = engine.send({ profile: "coder", text: "hello", threadId: "t", turnId: "u" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list1 = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list1.id, result: { sessions: [] } });
+    await settle();
+    const mintRoster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: mintRoster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const create = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: create.id, result: { session_id: "rt-new" } });
+    await settle();
+    const refreshRoster = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(refreshRoster.method).toBe("profiles.list");
+    child.frame({ jsonrpc: "2.0", id: refreshRoster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list2 = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list2.id, error: { code: 500, message: "broken" } });
+    await expect(send).rejects.toMatchObject({ code: "state_unavailable" });
+    expect(child.stdin.writes.filter((raw) => JSON.parse(raw).method === "session.create")).toHaveLength(1);
     await engine.close();
   });
 

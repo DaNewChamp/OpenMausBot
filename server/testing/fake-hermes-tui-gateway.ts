@@ -205,6 +205,10 @@ process.stdin.on("data", (chunk) => {
         out({ jsonrpc: "2.0", id: request.id, error: { code: 500, message: "state.db unreadable at /fixture/state.db" } });
         return;
       }
+      if (mode === "mint-on-absent") {
+        out({ jsonrpc: "2.0", id: request.id, result: { sessions: [] } });
+        return;
+      }
       out({
         jsonrpc: "2.0",
         id: request.id,
@@ -220,6 +224,11 @@ process.stdin.on("data", (chunk) => {
           }],
         },
       });
+      return;
+    }
+
+    if (request.method === "session.create") {
+      out({ jsonrpc: "2.0", id: request.id, result: { session_id: "runtime-minted" } });
       return;
     }
 

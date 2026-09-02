@@ -1021,13 +1021,38 @@ export class HermesBotAdapter implements HermesBotEngine {
       const existing = this.runtimeFor(profile);
       if (existing) throw new HermesEngineError("upstream_error");
       const canonical = await this.lookupCanonicalOutsideLock(profile);
-      if (canonical.state !== "present") throw errorForLookup(canonical);
-      const resolvedProfile = canonical.chat.profile;
+      if (canonical.state === "unknown") throw errorForLookup(canonical);
+      let resolvedChat = canonical.state === "present" ? canonical.chat : undefined;
+      if (!resolvedChat) {
+        await this.client.start();
+        try {
+          const discovered = await this.requireDiscoveredProfile(profile);
+          if (discovered.state !== "available") throw new HermesEngineError(discovered.code);
+          const created = await this.client.request("session.create", {
+            profile: discovered.profile,
+            title: "Bot Chat",
+            hidden: true,
+            source: "tui",
+          });
+          if (!createdSessionId(created)) throw new HermesEngineError("malformed_response");
+        } catch (error) {
+          throw asHermesError(error);
+        }
+        const reminted = await this.lookupCanonicalOutsideLock(profile);
+        if (reminted.state !== "present") {
+          throw reminted.state === "unknown"
+            ? errorForLookup(reminted)
+            : new HermesEngineError("malformed_response");
+        }
+        resolvedChat = reminted.chat;
+        this.readiness.adoptMint = true;
+      }
+      const resolvedProfile = resolvedChat.profile;
       if (this.runtimeFor(resolvedProfile)) throw new HermesEngineError("upstream_error");
       await this.client.start();
       let resume: unknown;
       try {
-        resume = await this.client.request("session.resume", { profile: resolvedProfile, session_id: canonical.chat.resolvedSessionId });
+        resume = await this.client.request("session.resume", { profile: resolvedProfile, session_id: resolvedChat.resolvedSessionId });
       } catch (error) {
         this.demoteCapabilities();
         throw asHermesError(error);
