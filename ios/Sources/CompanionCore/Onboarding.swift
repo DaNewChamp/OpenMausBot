@@ -34,8 +34,13 @@ public enum CompanionNotificationAuthorizationState: Equatable, Sendable {
 public enum CompanionOnboardingPreferences {
     public static let pendingNotificationOnboardingKey =
         "companion.onboarding.notificationPending"
-    public static let pendingHermesConnectionCardKey =
+    /// Legacy global marker kept only so upgrades can clear it once.
+    public static let legacyPendingHermesConnectionCardKey =
         "companion.onboarding.hermesCardPending"
+
+    public static func pendingHermesConnectionCardKey(connectionID: String) -> String {
+        "companion.onboarding.hermesCardPending.\(connectionID)"
+    }
 
     public static func dismissedHermesConnectionCardKey(connectionID: String) -> String {
         "companion.onboarding.hermesCardDismissed.\(connectionID)"
@@ -43,15 +48,17 @@ public enum CompanionOnboardingPreferences {
 }
 
 /// Keeps the crash-sensitive part of a successful pairing commit explicit
-/// and testable. The notification marker must exist before the restorable
-/// connection: an orphan marker while unpaired is harmless, but a connection
-/// without its marker can permanently skip first-pair education.
+/// and testable. The notification and Hermes markers must exist before the
+/// restorable connection: orphan markers while unpaired are harmless, but a
+/// connection without its marker can permanently skip first-pair education.
 public enum CompanionPairingCommitSequence {
     public static func persist(
         markNotificationOnboardingPending: () -> Void,
+        markHermesConnectionCardPending: () -> Void,
         saveConnection: () -> Void
     ) {
         markNotificationOnboardingPending()
+        markHermesConnectionCardPending()
         saveConnection()
     }
 }

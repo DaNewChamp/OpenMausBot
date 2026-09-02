@@ -467,13 +467,14 @@ final class Session: ObservableObject {
                 true,
                 forKey: CompanionOnboardingPreferences.pendingNotificationOnboardingKey
             )
+        } markHermesConnectionCardPending: {
+            UserDefaults.standard.set(
+                true,
+                forKey: CompanionOnboardingPreferences.pendingHermesConnectionCardKey(connectionID: stored.id)
+            )
         } saveConnection: {
             UserDefaults.standard.set(try? JSONEncoder().encode(updatedRegistry), forKey: Self.connectionsKey)
         }
-        UserDefaults.standard.set(
-            true,
-            forKey: CompanionOnboardingPreferences.pendingHermesConnectionCardKey
-        )
 
         pairingInvite = CompanionPairingInvitePolicy.nextInvite(
             current: pairingInvite,
@@ -616,6 +617,15 @@ final class Session: ObservableObject {
 
     func forgetConnection(id: String) {
         guard registry.connection(id: id) != nil else { return }
+        UserDefaults.standard.removeObject(
+            forKey: CompanionOnboardingPreferences.pendingHermesConnectionCardKey(connectionID: id)
+        )
+        UserDefaults.standard.removeObject(
+            forKey: CompanionOnboardingPreferences.dismissedHermesConnectionCardKey(connectionID: id)
+        )
+        UserDefaults.standard.removeObject(
+            forKey: CompanionOnboardingPreferences.legacyPendingHermesConnectionCardKey
+        )
         let wasActive = registry.activeConnectionID == id
         if wasActive { stopActiveRuntime() }
         Keychain.remove(id)
@@ -639,7 +649,9 @@ final class Session: ObservableObject {
         }
         if connections.isEmpty {
             UserDefaults.standard.removeObject(forKey: CompanionOnboardingPreferences.pendingNotificationOnboardingKey)
-            UserDefaults.standard.removeObject(forKey: CompanionOnboardingPreferences.pendingHermesConnectionCardKey)
+            UserDefaults.standard.removeObject(
+                forKey: CompanionOnboardingPreferences.legacyPendingHermesConnectionCardKey
+            )
         }
     }
 
@@ -670,8 +682,16 @@ final class Session: ObservableObject {
         UserDefaults.standard.removeObject(
             forKey: CompanionOnboardingPreferences.pendingNotificationOnboardingKey
         )
+        for saved in registry.connections {
+            UserDefaults.standard.removeObject(
+                forKey: CompanionOnboardingPreferences.pendingHermesConnectionCardKey(connectionID: saved.id)
+            )
+            UserDefaults.standard.removeObject(
+                forKey: CompanionOnboardingPreferences.dismissedHermesConnectionCardKey(connectionID: saved.id)
+            )
+        }
         UserDefaults.standard.removeObject(
-            forKey: CompanionOnboardingPreferences.pendingHermesConnectionCardKey
+            forKey: CompanionOnboardingPreferences.legacyPendingHermesConnectionCardKey
         )
         connection = nil
         client = nil

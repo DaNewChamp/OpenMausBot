@@ -40,6 +40,20 @@ final class HermesConnectionCardPolicyTests: XCTestCase {
             hermesStatus: nil,
             isLoading: true
         )))
+        XCTAssertTrue(HermesConnectionCardPolicy.shouldKeepPending(.init(
+            isPending: true,
+            isDismissed: false,
+            hermesStatus: nil,
+            isLoading: false,
+            hasAttemptedStatusFetch: false
+        )))
+        XCTAssertFalse(HermesConnectionCardPolicy.shouldKeepPending(.init(
+            isPending: true,
+            isDismissed: false,
+            hermesStatus: nil,
+            isLoading: false,
+            hasAttemptedStatusFetch: true
+        )))
         XCTAssertFalse(HermesConnectionCardPolicy.shouldKeepPending(.init(
             isPending: true,
             isDismissed: false,
@@ -52,6 +66,72 @@ final class HermesConnectionCardPolicyTests: XCTestCase {
             hermesStatus: HermesSetupStatus(state: .connected),
             isLoading: false
         )))
+    }
+
+    func testMultiConnectionPendingAndDismissAreIndependent() {
+        let ready = HermesSetupStatus(state: .ready)
+        let contextA = HermesConnectionCardContext(
+            isPending: true,
+            isDismissed: false,
+            hermesStatus: ready,
+            isLoading: false
+        )
+        let contextB = HermesConnectionCardContext(
+            isPending: true,
+            isDismissed: false,
+            hermesStatus: ready,
+            isLoading: false
+        )
+
+        XCTAssertTrue(HermesConnectionCardPolicy.shouldShow(contextA))
+        XCTAssertTrue(HermesConnectionCardPolicy.shouldShow(contextB))
+
+        let dismissedA = HermesConnectionCardContext(
+            isPending: true,
+            isDismissed: true,
+            hermesStatus: ready,
+            isLoading: false
+        )
+        XCTAssertFalse(HermesConnectionCardPolicy.shouldShow(dismissedA))
+        XCTAssertTrue(HermesConnectionCardPolicy.shouldShow(contextB))
+
+        let clearedAStillPendingB = HermesConnectionCardContext(
+            isPending: false,
+            isDismissed: true,
+            hermesStatus: ready,
+            isLoading: false
+        )
+        XCTAssertFalse(HermesConnectionCardPolicy.shouldShow(clearedAStillPendingB))
+        XCTAssertTrue(HermesConnectionCardPolicy.shouldShow(contextB))
+    }
+
+    func testPerConnectionPreferenceKeysAreDistinct() {
+        let first = CompanionOnboardingPreferences.pendingHermesConnectionCardKey(connectionID: "mac-a")
+        let second = CompanionOnboardingPreferences.pendingHermesConnectionCardKey(connectionID: "mac-b")
+        XCTAssertNotEqual(first, second)
+        XCTAssertEqual(
+            CompanionOnboardingPreferences.dismissedHermesConnectionCardKey(connectionID: "mac-a"),
+            "companion.onboarding.hermesCardDismissed.mac-a"
+        )
+    }
+
+    func testCardConnectNavigationResolvesImportedBot() {
+        let response = HermesSetupConnectionResponse(
+            botId: "hermes-bot",
+            profile: HermesSetupProfile(
+                profile: "default",
+                handle: "hermes",
+                displayName: "Hermes",
+                description: ""
+            ),
+            status: HermesSetupStatus(state: .connected),
+            created: true
+        )
+        XCTAssertEqual(
+            HermesConnectionCardPolicy.navigationBotID(afterConnect: response),
+            "hermes-bot"
+        )
+        XCTAssertNil(HermesConnectionCardPolicy.navigationBotID(afterConnect: nil))
     }
 
     func testCardPresentationUsesSafeSetupCopyWithoutSecrets() {

@@ -155,11 +155,37 @@ final class OnboardingTests: XCTestCase {
 
         CompanionPairingCommitSequence.persist {
             writes.append("notification-pending")
+        } markHermesConnectionCardPending: {
+            writes.append("hermes-pending")
         } saveConnection: {
             writes.append("connection")
         }
 
-        XCTAssertEqual(writes, ["notification-pending", "connection"])
+        XCTAssertEqual(writes, ["notification-pending", "hermes-pending", "connection"])
+    }
+
+    func testPairingCommitMarksHermesStepBeforeSavingConnection() throws {
+        let connectionID = "studio-mac"
+        let suiteName = "CompanionOnboardingTests.\(UUID().uuidString)"
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        var registrySaved = false
+
+        CompanionPairingCommitSequence.persist {
+            defaults.set(true, forKey: CompanionOnboardingPreferences.pendingNotificationOnboardingKey)
+        } markHermesConnectionCardPending: {
+            defaults.set(
+                true,
+                forKey: CompanionOnboardingPreferences.pendingHermesConnectionCardKey(connectionID: connectionID)
+            )
+        } saveConnection: {
+            registrySaved = true
+        }
+
+        XCTAssertTrue(registrySaved)
+        XCTAssertTrue(defaults.bool(
+            forKey: CompanionOnboardingPreferences.pendingHermesConnectionCardKey(connectionID: connectionID)
+        ))
     }
 
     func testResolvedOrCompletedNotificationEducationClearsPendingMarker() {

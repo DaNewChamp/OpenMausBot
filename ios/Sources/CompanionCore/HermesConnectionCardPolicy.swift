@@ -5,17 +5,22 @@ public struct HermesConnectionCardContext: Equatable, Sendable {
     public var isDismissed: Bool
     public var hermesStatus: HermesSetupStatus?
     public var isLoading: Bool
+    /// False until the first status fetch for the active connection finishes.
+    /// A nil status before that is still loading; afterward nil means cancel.
+    public var hasAttemptedStatusFetch: Bool
 
     public init(
         isPending: Bool,
         isDismissed: Bool,
         hermesStatus: HermesSetupStatus? = nil,
-        isLoading: Bool = false
+        isLoading: Bool = false,
+        hasAttemptedStatusFetch: Bool = false
     ) {
         self.isPending = isPending
         self.isDismissed = isDismissed
         self.hermesStatus = hermesStatus
         self.isLoading = isLoading
+        self.hasAttemptedStatusFetch = hasAttemptedStatusFetch
     }
 }
 
@@ -51,7 +56,10 @@ public enum HermesConnectionCardPolicy {
     public static func shouldKeepPending(_ context: HermesConnectionCardContext) -> Bool {
         guard context.isPending else { return false }
         guard !context.isDismissed else { return false }
-        if context.isLoading || context.hermesStatus == nil { return true }
+        if context.isLoading { return true }
+        if context.hermesStatus == nil {
+            return !context.hasAttemptedStatusFetch
+        }
         switch context.hermesStatus?.state {
         case .connected, .unavailable, .unknown:
             return false
@@ -68,6 +76,12 @@ public enum HermesConnectionCardPolicy {
         case .connected, .unavailable, .unknown:
             return false
         }
+    }
+
+    /// Resolves the Hermes bot to open after a successful card connect action.
+    public static func navigationBotID(afterConnect response: HermesSetupConnectionResponse?) -> String? {
+        guard let response, !response.botId.isEmpty else { return nil }
+        return response.botId
     }
 
     public static func presentation(

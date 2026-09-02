@@ -89,4 +89,31 @@ final class ConnectedAppsPresentationPolicyTests: XCTestCase {
 
         XCTAssertEqual(ordered.map(\.slug), ["slack"])
     }
+
+    func testDoesNotPinUnlistedGoogleFamilySlugs() {
+        let catalog = ConnectorCatalog(
+            configured: true,
+            cards: [
+                card("googlemeet", label: "Google Meet"),
+                card("gmail", label: "Gmail"),
+                card("slack", label: "Slack"),
+            ]
+        )
+        let statuses: [String: ConnectorStatus] = [
+            "googlemeet": ConnectorStatus(connected: false),
+            "gmail": ConnectorStatus(connected: false),
+        ]
+
+        let ordered = ConnectedAppsPresentationPolicy.orderedCards(
+            catalog: catalog,
+            statuses: statuses,
+            query: ""
+        )
+
+        XCTAssertEqual(ordered.map(\.slug), ["gmail", "googlemeet", "slack"])
+        XCTAssertFalse(ConnectedAppsPresentationPolicy.shouldPin(
+            card("googlemeet", label: "Google Meet"),
+            statuses: statuses
+        ))
+    }
 }

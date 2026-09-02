@@ -41,12 +41,12 @@ public enum ConnectedAppsPresentationPolicy {
     }
 
     public static func shouldPin(_ card: ConnectorCard, statuses: [String: ConnectorStatus]) -> Bool {
-        guard isGoogleFamilySlug(card.slug) else { return false }
+        guard isPinnedGoogleSlug(card.slug) else { return false }
         return !isConnected(statuses[card.slug])
     }
 
-    public static func isGoogleFamilySlug(_ slug: String) -> Bool {
-        slug == "gmail" || slug.hasPrefix("google")
+    public static func isPinnedGoogleSlug(_ slug: String) -> Bool {
+        pinnedGoogleSlugs.contains(slug)
     }
 
     public static func isConnected(_ status: ConnectorStatus?) -> Bool {

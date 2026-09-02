@@ -47,6 +47,7 @@ struct HermesConnectionCard: View {
                         Spacer()
                         ProgressView()
                             .controlSize(.small)
+                            .accessibilityLabel("Connecting Hermes")
                     }
                 }
             }
