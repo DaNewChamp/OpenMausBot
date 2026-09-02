@@ -331,6 +331,7 @@ final class DecodingTests: XCTestCase {
             "options": ["Allow", "Deny"], "requestId": "req-2", "tool": "Bash",
             "toolLabel": "Terminal", "hostLabel": "Mac mini",
             "actionSummary": "This will let Terminal run on Mac mini.",
+            "alwaysAllowSummary": "Always allow Terminal to run git commands on Mac mini.",
             "details": "git status --short", "allowKey": "Bash:git"
           }
         }
@@ -339,6 +340,7 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(card.toolLabel, "Terminal")
         XCTAssertEqual(card.hostLabel, "Mac mini")
         XCTAssertEqual(card.actionSummary, "This will let Terminal run on Mac mini.")
+        XCTAssertEqual(card.alwaysAllowSummary, "Always allow Terminal to run git commands on Mac mini.")
         XCTAssertEqual(card.details, "git status --short")
         XCTAssertEqual(card.displayLabel(for: "Allow"), "Allow once")
         XCTAssertEqual(card.displayLabel(for: "Deny"), "Deny")

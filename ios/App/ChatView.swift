@@ -1826,6 +1826,12 @@ private struct ApprovalDetailSheet: View {
         }
         return "This action needs your permission before the bot can continue. Nothing happens unless you approve."
     }
+    private var alwaysAllowSummary: String? {
+        guard card.allowKey != nil,
+              let value = card.alwaysAllowSummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return OptionCard.sanitizedPresentation(value)
+    }
     private var executiveSummary: String? {
         guard let value = card.executiveSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
         return OptionCard.sanitizedPresentation(value)
@@ -1886,6 +1892,17 @@ private struct ApprovalDetailSheet: View {
                             .font(typography.font(size: 16, relativeTo: .body))
                             .foregroundStyle(Color.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                        if let alwaysAllowSummary {
+                            Divider()
+                                .overlay(Color.white.opacity(0.08))
+                            Text("Always allow")
+                                .font(typography.font(size: 15, relativeTo: .subheadline, weight: .semibold))
+                                .foregroundStyle(Color.accentColor)
+                            Text(alwaysAllowSummary)
+                                .font(typography.font(size: 14, relativeTo: .subheadline))
+                                .foregroundStyle(Color.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
@@ -1894,7 +1911,7 @@ private struct ApprovalDetailSheet: View {
                     if let executiveSummary {
                         explanationBlock("What this does", executiveSummary)
                     }
-                    if let changeSummary {
+                    if let changeSummary, changeSummary.caseInsensitiveCompare("Nothing; read-only") != .orderedSame {
                         explanationBlock("What changes", changeSummary)
                     }
                     if let resourceSummary {
@@ -1956,7 +1973,7 @@ private struct ApprovalDetailSheet: View {
                             .accessibilityHint("Allows this request once")
                     }
                     if card.allowKey != nil, case .bot = chat {
-                        Button("Always allow this tool") {
+                        Button("Always allow") {
                             answering = true
                             Task {
                                 if case let .bot(bot) = chat { await session.alwaysAllow(bot: bot, card: card) }

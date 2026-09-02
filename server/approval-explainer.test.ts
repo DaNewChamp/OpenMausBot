@@ -21,6 +21,22 @@ describe("approval explanations", () => {
     expect(presentation.actionSummary).toBe("Run a read-only command on Mac mini");
     expect(presentation.riskLevel).toBe("low");
     expect(presentation.changeSummary).toBe("Nothing; read-only");
+    expect(presentation.reason).toBe(
+      "This request needs your approval because the bot wants to inspect recent Git history, configured remotes, and the latest files for the OpenMausBot repository on Mac mini. Nothing runs unless you approve.",
+    );
+    expect(presentation.alwaysAllowSummary).toBeUndefined();
+  });
+
+  it("uses a concrete executive summary for a mutating command and scopes a standing grant", () => {
+    const explanation = explainApproval("terminal", "git push origin main", "Mac mini");
+    expect(explanation.executiveSummary).toBe("Publishes local commits to a remote repository");
+    expect(approvalPresentation("terminal", "git push origin main", "local-computer").reason).toBe(
+      "This request needs your approval because the bot wants to publish local commits to a remote repository on Mac mini. Nothing runs unless you approve.",
+    );
+
+    const presentation = approvalPresentation("terminal", "git status --short", "bridge");
+    expect(presentation.alwaysAllowSummary).toBe("Always allow Terminal to run git commands on Bridge.");
+    expect(approvalPresentation("terminal", "rm -rf /tmp/scratch", "bridge").alwaysAllowSummary).toBeUndefined();
   });
 
   function expectFailClosed(command: string) {

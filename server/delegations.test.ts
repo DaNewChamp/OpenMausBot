@@ -383,6 +383,7 @@ describe("drainDelegations", () => {
     expect(card.card?.tool).toBe("delegate_bot");
     expect(card.card?.allowKey).toBe(peerAllowKey("delegate_bot", target.id));
     expect(card.card?.options).toEqual(["Allow", "Deny", "Always allow"]);
+    expect(card.card?.alwaysAllowSummary).toBe(`Always allow ${from.name} to delegate tasks to ${target.name}.`);
     expect(runTargetCalls).toEqual([]);
 
     resolvePeerComms(approvalBus, card.card!.requestId!, "allow");

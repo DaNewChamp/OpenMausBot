@@ -21,7 +21,7 @@ import {
   type CredentialTargetId,
 } from "../shared/credential-request.ts";
 
-import { approvalKey, autoVerdict, permissionMode } from "./auto-approve.ts";
+import { approvalKey, autoVerdict, looksDestructive, looksSensitive, permissionMode } from "./auto-approve.ts";
 import * as checkpoints from "./checkpoints.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
@@ -130,7 +130,7 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
 import { searchMessages } from "./message-db.ts";
 import { promptWithReply, transcriptText } from "./replies.ts";
-import { explainApproval, reviewApproval } from "./approval-explainer.ts";
+import { approvalGrantSummary, approvalReason, explainApproval, reviewApproval } from "./approval-explainer.ts";
 import {
   approvalReviewerSelection,
   parseApprovalReviewerPatch,
@@ -995,6 +995,10 @@ watchdog.start();
 /** Keep approval cards readable on a phone. Provider summaries remain
  * available as `details`, but the headline never exposes raw UUIDs, paths, or
  * gateway payloads. */
+function grantBlocked(command: string, tool: string): boolean {
+  return looksDestructive(command) || looksDestructive(tool) || looksSensitive(command);
+}
+
 export function approvalPresentation(tool: string, summary: string, scope?: "local-computer" | "bridge"): {
   toolLabel: string;
   hostLabel: string;
@@ -1008,6 +1012,7 @@ export function approvalPresentation(tool: string, summary: string, scope?: "loc
   explanationConfidence: "high" | "medium" | "low";
   explanationSource: "local" | "ai-reviewed";
   advisorySummary?: string;
+  alwaysAllowSummary?: string;
 } {
   const bare = tool.replace(/^mcp__[^_]+__/, "").replace(/[_-]+/g, " ").trim().toLowerCase();
   const toolLabel = /computer|screenshot|click|type text|press key|scroll|open url/.test(bare)
@@ -1016,13 +1021,9 @@ export function approvalPresentation(tool: string, summary: string, scope?: "loc
       ? "Terminal"
       : bare ? bare.replace(/\b\w/g, (letter) => letter.toUpperCase()).slice(0, 48) : "Tool";
   const hostLabel = scope === "local-computer" ? "Mac mini" : scope === "bridge" ? "Bridge" : "bot workspace";
-  const reason = scope === "local-computer"
-    ? "This action needs permission because it will use your Mac mini. Nothing runs unless you approve."
-    : scope === "bridge"
-      ? "This action needs permission because it will run through your paired computer. Nothing runs unless you approve."
-      : "This action needs permission before the bot can continue. Nothing runs unless you approve.";
   const details = sanitizeLocalVmInvokeText(String(summary ?? "").slice(0, 16_000));
   const explanation = explainApproval(tool, details, hostLabel);
+  const reason = approvalReason(explanation, hostLabel);
   const readOnlyCommand = explanation.riskLevel === "low" && explanation.changeSummary === "Nothing; read-only";
   const actionSummary = toolLabel === "Terminal"
     ? `${readOnlyCommand ? "Run a read-only command" : "Run a command"} on ${hostLabel}`
@@ -1044,6 +1045,11 @@ export function approvalPresentation(tool: string, summary: string, scope?: "loc
     riskLevel: explanation.riskLevel,
     explanationConfidence: explanation.confidence,
     explanationSource: explanation.source ?? "local",
+    ...(
+      scope !== "local-computer" && !grantBlocked(details, tool)
+        ? { alwaysAllowSummary: approvalGrantSummary(toolLabel, details, hostLabel) }
+        : {}
+    ),
   };
 }
 
@@ -1444,6 +1450,9 @@ bus.subscribe((event: RuntimeEvent) => {
             // couldn't answer it for them — hand it back to the human
             // rather than leaving the bot waiting on nobody
             const presentation = approvalPresentation(tool, summary, event.approvalScope);
+            const grantKey = event.approvalScope || grantBlocked(summary, tool)
+              ? undefined
+              : approvalKey(tool, summary, event.approvalScope);
             const card = pushMessage({
               role: "bot",
               kind: "options",
@@ -1460,12 +1469,13 @@ bus.subscribe((event: RuntimeEvent) => {
                 riskLevel: presentation.riskLevel,
                 explanationConfidence: presentation.explanationConfidence,
                 explanationSource: presentation.explanationSource,
-                options: ["Allow", "Deny"],
+                ...(grantKey && presentation.alwaysAllowSummary
+                  ? { alwaysAllowSummary: presentation.alwaysAllowSummary }
+                  : {}),
+                options: grantKey ? ["Allow", "Deny", "Always allow"] : ["Allow", "Deny"],
                 requestId,
                 tool,
-                allowKey: event.approvalScope
-                  ? undefined
-                  : approvalKey(tool, summary, event.approvalScope),
+                ...(grantKey ? { allowKey: grantKey } : {}),
                 held: "Auto mode couldn't answer this one.",
                 approvalScope: event.approvalScope,
               },
@@ -1497,6 +1507,9 @@ bus.subscribe((event: RuntimeEvent) => {
       const presentation = permission
         ? approvalPresentation(event.tool, event.summary, event.approvalScope)
         : null;
+      const grantKey = permission && !event.approvalScope && !grantBlocked(event.summary, event.tool)
+        ? approvalKey(event.tool, event.summary, event.approvalScope)
+        : undefined;
       const message = pushMessage({
         role: "bot",
         kind: "options",
@@ -1515,6 +1528,9 @@ bus.subscribe((event: RuntimeEvent) => {
               riskLevel: presentation.riskLevel,
               explanationConfidence: presentation.explanationConfidence,
               explanationSource: presentation.explanationSource,
+              ...(grantKey && presentation.alwaysAllowSummary
+                ? { alwaysAllowSummary: presentation.alwaysAllowSummary }
+                : {}),
             }
             : {
               title: "Your bot has a question",
@@ -1525,10 +1541,7 @@ bus.subscribe((event: RuntimeEvent) => {
           tool: permission ? event.tool : undefined,
           // the exact grant "always allow" would remember, decided here so
           // client and server can never derive it differently
-          allowKey:
-            permission && !event.approvalScope
-              ? approvalKey(event.tool, event.summary, event.approvalScope)
-              : undefined,
+          ...(grantKey ? { allowKey: grantKey } : {}),
           // in auto mode a card can only mean the guard stopped it — say so
           held:
             permission && asker && permissionMode({ ...asker, defaultPermissionMode: defaultPermissionMode(cfg) }) === "allow"

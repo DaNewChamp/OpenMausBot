@@ -19,7 +19,7 @@ import { newId } from "./contracts.ts";
 import { appendDecision } from "./decision-log.ts";
 import { buildNotification } from "./notify.ts";
 import { sanitizeLocalVmInvokeText } from "./local-vm-invoke.ts";
-import { explainApproval } from "./approval-explainer.ts";
+import { approvalGrantSummary, approvalReason, explainApproval } from "./approval-explainer.ts";
 import type { ApprovalBus } from "./peer-approval.ts";
 import type { BotRecord, Message } from "./store.ts";
 
@@ -274,7 +274,7 @@ function pushApprovalCard(
     card: {
       title: `${bot.name} needs your approval`,
       subtitle,
-      reason: `This command will run on ${hostLabel}. Nothing runs unless you approve.`,
+      reason: approvalReason(explanation, hostLabel),
       actionSummary,
       details: subtitle,
       toolLabel: "Terminal",
@@ -285,6 +285,7 @@ function pushApprovalCard(
       riskLevel: explanation.riskLevel,
       explanationConfidence: explanation.confidence,
       explanationSource: explanation.source ?? "local",
+      ...(allowKey ? { alwaysAllowSummary: approvalGrantSummary("Terminal", safeCommand, hostLabel) } : {}),
       options: allowKey ? ["Allow", "Deny", "Always allow"] : ["Allow", "Deny"],
       requestId,
       tool: req.tool,

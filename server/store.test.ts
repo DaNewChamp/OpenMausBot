@@ -657,9 +657,17 @@ describe("Store redacts bot-authored secrets on write", () => {
     const card = store.appendMessage(bot.threadId, {
       role: "bot",
       kind: "options",
-      card: { title: "Run this?", summary: `curl -H "Authorization: Bearer ${key}"`, options: [], requestId: "r1", tool: "Bash" } as never,
+      card: {
+        title: "Run this?",
+        summary: `curl -H "Authorization: Bearer ${key}"`,
+        alwaysAllowSummary: `Always allow Terminal to use ${key}.`,
+        options: [],
+        requestId: "r1",
+        tool: "Bash",
+      } as never,
     });
     expect((card.card as { summary?: string }).summary).not.toContain(key);
+    expect(card.card?.alwaysAllowSummary).not.toContain(key);
     const secretCard = store.appendMessage(bot.threadId, {
       role: "bot",
       kind: "secret",

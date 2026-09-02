@@ -84,6 +84,7 @@ describe("bridge approval card lifecycle", () => {
     expect(card!.card!.subtitle).toBe("echo hi");
     expect(card!.card!.title).toBe("Worker needs your approval");
     expect(card!.card!.actionSummary).toBe("Run a read-only command on mini");
+    expect(card!.card!.alwaysAllowSummary).toBe("Always allow Terminal to run echo commands on mini.");
     expect(card!.card!.title).not.toContain("br-mini");
 
     expect(resolveBridgeApproval(bus, card!.card!.requestId!, "allow", ownerOf())).toEqual({
@@ -113,6 +114,7 @@ describe("bridge approval card lifecycle", () => {
     expect(card!.card!.title).toBe("Worker needs your approval");
     expect(card!.card!.actionSummary).toBe("Run a command on SSH target nas");
     expect(card!.card!.actionSummary).not.toContain("read-only");
+    expect(card!.card!.alwaysAllowSummary).toBe("Always allow Terminal to run uptime commands on SSH target nas.");
     expect(card!.card!.title).not.toContain("br-mini");
     expect(store.messagesFor("some-other-thread")).toHaveLength(0);
 
@@ -506,6 +508,7 @@ describe("bridge approval card lifecycle", () => {
     expect(card.card!.actionSummary).toBe("Run a read-only command on mini");
     expect(card.card!.riskLevel).toBe("low");
     expect(card.card!.changeSummary).toBe("Nothing; read-only");
+    expect(card.card!.alwaysAllowSummary).toBe("Always allow Terminal to run git commands on mini.");
     cancelBridgeApprovalsFor(bot.id);
     await expect(verdict).resolves.toEqual({ outcome: "deny" });
   });

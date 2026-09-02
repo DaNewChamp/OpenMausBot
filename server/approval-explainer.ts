@@ -22,6 +22,63 @@ export interface ApprovalExplanation {
   advisorySummary?: string;
 }
 
+/** Turn the deterministic action summary into the short, human-facing reason
+ * shown above the details. This is display copy only: the approval broker
+ * still owns the decision and the summary never changes risk or policy. */
+export function approvalReason(explanation: ApprovalExplanation, hostLabel?: string): string {
+  const host = sanitizeExplanationText(hostLabel ?? "the computer") || "the computer";
+  const summary = explanation.executiveSummary.trim();
+  const intent = summary
+    .replace(/^Inspects\s+/i, "inspect ")
+    .replace(/^Reads\s+/i, "read ")
+    .replace(/^Lists\s+/i, "list ")
+    .replace(/^Searches\s+/i, "search ")
+    .replace(/^Shows\s+/i, "show ")
+    .replace(/^Counts\s+/i, "count ")
+    .replace(/^Publishes\s+/i, "publish ")
+    .replace(/^Creates\s+/i, "create ")
+    .replace(/^Deletes\s+/i, "delete ")
+    .replace(/^Edits\s+/i, "edit ")
+    .replace(/^Runs\s+/i, "run ");
+
+  if (explanation.riskLevel === "low" && intent) {
+    return `This request needs your approval because the bot wants to ${intent} on ${host}. Nothing runs unless you approve.`;
+  }
+  if (explanation.executiveSummary.toLowerCase().includes("credential") || explanation.executiveSummary.toLowerCase().includes("private")) {
+    return `This request needs your approval because it may expose credentials or private data on ${host}. Nothing runs unless you approve.`;
+  }
+  if (explanation.riskLevel === "high") {
+    if (/^(?:inspect|read|list|search|show|count|publish|create|delete|edit|run)\s/i.test(intent)) {
+      return `This request needs your approval because the bot wants to ${intent} on ${host}. Nothing runs unless you approve.`;
+    }
+    return `This request needs your approval because it may change files, processes, or system state on ${host}. Nothing runs unless you approve.`;
+  }
+  if (explanation.executiveSummary.toLowerCase().includes("connects")) {
+    return "This request needs your approval because it may send data to another computer or online service. Nothing runs unless you approve.";
+  }
+  if (explanation.executiveSummary.toLowerCase().includes("computer") || explanation.executiveSummary.toLowerCase().includes("on-screen")) {
+    return `This request needs your approval because it will interact with the desktop on ${host}. Nothing runs unless you approve.`;
+  }
+  return "This request needs your approval because the effect of the tool could not be determined safely. Nothing runs unless you approve.";
+}
+
+/** Explain the exact scope of a narrow remembered grant without exposing its
+ * internal key. The caller only puts this on a card when the broker supplied
+ * an allow key, so sensitive/destructive actions never inherit this copy. */
+export function approvalGrantSummary(toolLabel: string, command: string, hostLabel: string): string {
+  const safeTool = sanitizeExplanationText(toolLabel) || "this tool";
+  const safeHost = sanitizeExplanationText(hostLabel) || "this computer";
+  const segments = shellSegments(sanitizeLocalVmInvokeText(String(command ?? "").slice(0, 16_000)));
+  const program = segments
+    .map(firstProgram)
+    .find((candidate) => candidate && !["cd", "pushd", "popd"].includes(candidate))
+    ?? firstProgram(segments[0] ?? "");
+  const isCommand = /terminal|shell|bash|execute|command|bridge|ssh/i.test(safeTool);
+  return isCommand && program
+    ? `Always allow ${safeTool} to run ${program} commands on ${safeHost}.`
+    : `Always allow ${safeTool} for this exact action on ${safeHost}.`;
+}
+
 /** Sanitized, display-only input for an optional BYOK reviewer. It carries no
  * tools, memory, credentials, or authority to approve an action. */
 export interface ApprovalReviewInput {
@@ -504,6 +561,35 @@ function readSummary(command: string, resources: string[]): string {
   return resources.length ? `Reads ${humanList(resources)}` : "Reads information from the computer";
 }
 
+function mutatingSummary(command: string, resources: string[]): string {
+  const segments = shellSegments(command);
+  const programs = segments.map(firstProgram);
+  const gitActions = segments
+    .map((segment) => (firstProgram(segment) === "git" ? gitAction(segment) : undefined))
+    .filter((value): value is string => Boolean(value));
+  if (gitActions.includes("push")) return "Publishes local commits to a remote repository";
+  if (gitActions.includes("commit")) return "Creates a new repository commit";
+  if (gitActions.some((action) => ["reset", "checkout", "clean", "merge", "rebase"].includes(action))) {
+    return "Changes repository history or working files";
+  }
+  if (programs.some((program) => ["rm", "rmdir"].includes(program))) return "Deletes files or folders";
+  if (programs.includes("mv")) return "Moves or renames files";
+  if (programs.includes("cp")) return "Copies files";
+  if (programs.includes("mkdir")) return "Creates folders";
+  if (programs.includes("sed")) return "Edits file contents";
+  if (programs.includes("npm") || programs.includes("pnpm")) {
+    if (/\b(?:npm|pnpm)\s+(?:uninstall|remove)\b/i.test(command)) return "Removes packages from the workspace";
+    if (/\b(?:npm|pnpm)\s+install\b/i.test(command)) return "Installs packages in the workspace";
+    if (/\b(?:npm|pnpm)\s+publish\b/i.test(command)) return "Publishes a package to a registry";
+  }
+  if (programs.includes("docker")) return "Changes or controls a container";
+  if (programs.includes("kill") || programs.includes("shutdown") || programs.includes("reboot")) {
+    return "Stops or restarts a process or computer";
+  }
+  if (/>/.test(stripHarmlessRedirections(command))) return "Writes command output to a file";
+  return resources.length ? `May change ${humanList(resources)}` : "Runs a command that may change files, processes, or system state";
+}
+
 /** Shared read-only classifier for approval cards and explanations. */
 export function isReadOnlyShellCommand(tool: string, command: string): boolean {
   const safeCommand = sanitizeLocalVmInvokeText(String(command ?? "").slice(0, 16_000));
@@ -541,7 +627,7 @@ export function explainApproval(tool: string, summary: string, hostLabel?: strin
       };
     case "mutating":
       return {
-        executiveSummary: "Runs a command that may change files, processes, or system state",
+        executiveSummary: sanitizeExplanationText(mutatingSummary(safeCommand, resources)),
         changeSummary: "May create, modify, move, or delete data",
         resourceSummary: where,
         riskLevel: "high",

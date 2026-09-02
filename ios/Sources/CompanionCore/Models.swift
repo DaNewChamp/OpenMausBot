@@ -39,6 +39,8 @@ public struct OptionCard: Codable, Hashable, Sendable {
     public var explanationSource: String?
     /// Optional model wording. The local explanation fields remain authoritative.
     public var advisorySummary: String?
+    /// Plain-language scope of the narrow remembered grant, when available.
+    public var alwaysAllowSummary: String?
     /// Why auto mode stopped to ask anyway.
     public var held: String?
     /// The narrow grant "always allow" would remember, e.g. `Bash:git`.

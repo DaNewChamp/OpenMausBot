@@ -46,6 +46,10 @@ export interface OptionCardData {
   requestId?: string;
   /** permission asks: the tool being requested (drives the approval box) */
   tool?: string;
+  /** Plain-language explanation shown before the exact action details. */
+  reason?: string;
+  /** Raw provider detail, shown only after opening the disclosure. */
+  details?: string;
   /** why auto mode stopped to ask anyway */
   held?: string;
   /** the narrow grant "always allow" remembers, e.g. "Bash:git" */
@@ -59,6 +63,8 @@ export interface OptionCardData {
   explanationConfidence?: "high" | "medium" | "low";
   explanationSource?: "local" | "ai-reviewed";
   advisorySummary?: string;
+  /** Plain-language scope of the narrow remembered grant, when available. */
+  alwaysAllowSummary?: string;
   skillRequest?: import("../../shared/skill-request").SkillRequestCardData;
 }
 

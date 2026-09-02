@@ -49,16 +49,43 @@ export function ApprovalCard({
     >
       <div className="flex items-baseline justify-between gap-3">
         <div className="text-[15px] font-semibold text-ink">
-          {bot ? `${bot.name} wants to ` : "Wants to "}
+          {bot ? `${bot.name} needs your approval to ` : "Approval requested to "}
           {toolLabel(card.tool)}
         </div>
-        {card.tool && <span className="shrink-0 font-mono text-[11px] text-ink-secondary">{card.tool}</span>}
       </div>
 
-      {/* what, exactly */}
-      <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-inset px-3 py-2 font-mono text-[12.5px] leading-relaxed text-ink">
-        {card.subtitle}
-      </pre>
+      <div className="mt-3 rounded-xl border border-hairline/40 bg-inset/70 px-3 py-2.5">
+        <div className="text-[12px] font-medium text-ink-secondary">Reason</div>
+        <div className="mt-1 text-[13px] leading-relaxed text-ink">
+          {card.reason || "This request needs your approval before the bot can continue. Nothing runs unless you approve."}
+        </div>
+        {card.alwaysAllowSummary && !settled && (
+          <div className="mt-2 border-t border-hairline/30 pt-2">
+            <div className="text-[13px] font-medium text-accent">Always allow</div>
+            <div className="mt-0.5 text-[12px] leading-relaxed text-ink-secondary">{card.alwaysAllowSummary}</div>
+          </div>
+        )}
+      </div>
+      {card.executiveSummary && (
+        <div className="mt-2 text-[13px] leading-relaxed text-ink">
+          <span className="font-medium text-ink-secondary">What this does · </span>{card.executiveSummary}
+        </div>
+      )}
+      {(card.changeSummary && card.changeSummary !== "Nothing; read-only" || card.resourceSummary || card.riskLevel) && (
+        <div className="mt-1 text-[12px] leading-relaxed text-ink-secondary">
+          {card.changeSummary && card.changeSummary !== "Nothing; read-only" ? card.changeSummary : null}
+          {card.changeSummary && card.changeSummary !== "Nothing; read-only" && card.resourceSummary ? " · " : ""}
+          {card.resourceSummary}
+          {(card.changeSummary && card.changeSummary !== "Nothing; read-only" || card.resourceSummary) && card.riskLevel ? " · " : ""}
+          {card.riskLevel && `Risk: ${card.riskLevel}`}
+        </div>
+      )}
+      <details className="mt-2 rounded-lg border border-hairline/30 bg-inset px-3 py-2">
+        <summary className="cursor-pointer text-[12px] font-medium text-ink-secondary">Details</summary>
+        <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[12.5px] leading-relaxed text-ink">
+          {card.details || card.subtitle}
+        </pre>
+      </details>
 
       {card.held && (
         <div className="mt-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12.5px] text-warning">

@@ -113,6 +113,9 @@ function pushApprovalCard(
       riskLevel: explanation.riskLevel,
       explanationConfidence: explanation.confidence,
       explanationSource: explanation.source ?? "local",
+      alwaysAllowSummary: action === "ask_bot"
+        ? `Always allow ${from.name} to message ${target.name}.`
+        : `Always allow ${from.name} to delegate tasks to ${target.name}.`,
       options: ["Allow", "Deny", "Always allow"],
       requestId,
       tool: action,

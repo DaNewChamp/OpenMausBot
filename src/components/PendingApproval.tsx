@@ -23,6 +23,8 @@ export interface Pending {
   allowKey?: string;
   detail: string;
   held?: string;
+  reason?: string;
+  alwaysAllowSummary?: string;
   executiveSummary?: string;
   changeSummary?: string;
   resourceSummary?: string;
@@ -39,8 +41,10 @@ export function pendingApprovals(messages: Message[]): Pending[] {
       requestId: m.card!.requestId!,
       tool: m.card!.tool!,
       allowKey: m.card!.allowKey,
-      detail: m.card!.subtitle,
+      detail: m.card!.details ?? m.card!.subtitle,
       held: m.card!.held,
+      reason: m.card!.reason,
+      alwaysAllowSummary: m.card!.alwaysAllowSummary,
       executiveSummary: m.card!.executiveSummary,
       changeSummary: m.card!.changeSummary,
       resourceSummary: m.card!.resourceSummary,
@@ -82,21 +86,31 @@ export const PendingApprovalPanel = memo(function PendingApprovalPanel({
           </span>
         )}
         <span className="text-[13px] text-ink">{label(pending.tool)}</span>
-        <span className="font-mono text-[11px] text-ink-secondary">{pending.tool}</span>
+      </div>
+      <div className="mt-3 rounded-xl border border-hairline/40 bg-card/70 px-3 py-2.5">
+        <div className="text-[12px] font-medium text-ink-secondary">Reason</div>
+        <div className="mt-1 text-[13px] leading-relaxed text-ink">
+          {pending.reason || "This request needs your approval before the bot can continue. Nothing runs unless you approve."}
+        </div>
+        {pending.alwaysAllowSummary && (
+          <div className="mt-2 border-t border-hairline/30 pt-2">
+            <div className="text-[13px] font-medium text-accent">Always allow</div>
+            <div className="mt-0.5 text-[12px] leading-relaxed text-ink-secondary">{pending.alwaysAllowSummary}</div>
+          </div>
+        )}
       </div>
       {pending.executiveSummary && (
-        <div className="mt-2 text-[13px] leading-relaxed text-ink">{pending.executiveSummary}</div>
-      )}
-      {(pending.changeSummary || pending.resourceSummary) && (
-        <div className="mt-1 text-[12px] leading-relaxed text-ink-secondary">
-          {pending.changeSummary}
-          {pending.changeSummary && pending.resourceSummary ? " · " : ""}
-          {pending.resourceSummary}
+        <div className="mt-2 text-[13px] leading-relaxed text-ink">
+          <span className="font-medium text-ink-secondary">What this does · </span>{pending.executiveSummary}
         </div>
       )}
-      {pending.riskLevel && (
-        <div className="mt-1 text-[11px] uppercase tracking-[0.12em] text-ink-secondary">
-          Risk: {pending.riskLevel}
+      {(pending.changeSummary || pending.resourceSummary || pending.riskLevel) && (
+        <div className="mt-1 text-[12px] leading-relaxed text-ink-secondary">
+          {pending.changeSummary && pending.changeSummary !== "Nothing; read-only" ? pending.changeSummary : null}
+          {pending.changeSummary && pending.changeSummary !== "Nothing; read-only" && pending.resourceSummary ? " · " : ""}
+          {pending.resourceSummary}
+          {(pending.changeSummary && pending.changeSummary !== "Nothing; read-only" || pending.resourceSummary) && pending.riskLevel ? " · " : ""}
+          {pending.riskLevel && `Risk: ${pending.riskLevel}`}
         </div>
       )}
       {pending.advisorySummary && (
@@ -104,10 +118,14 @@ export const PendingApprovalPanel = memo(function PendingApprovalPanel({
           <span className="font-medium text-ink">AI review · advisory: </span>{pending.advisorySummary}
         </div>
       )}
-      {/* never truncated — long commands wrap and scroll */}
-      <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-ink">
-        {pending.detail}
-      </pre>
+      <details className="mt-2 rounded-lg border border-hairline/30 bg-inset/70 px-3 py-2">
+        <summary className="cursor-pointer text-[12px] font-medium text-ink-secondary">
+          {pending.tool.toLowerCase().includes("terminal") || pending.tool.toLowerCase().includes("bash") || pending.tool.toLowerCase().includes("shell") ? "Command" : "Details"}
+        </summary>
+        <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-ink">
+          {pending.detail}
+        </pre>
+      </details>
       {pending.held && <div className="mt-2 text-[12px] text-warning">{pending.held}</div>}
     </div>
   );
