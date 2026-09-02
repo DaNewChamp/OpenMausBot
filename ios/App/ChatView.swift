@@ -70,6 +70,7 @@ struct ChatView: View {
     /// leaving a focused field behind the keyboard on the next appearance.
     @State private var composerLayoutRevision = 0
     @State private var activityExpanded = false
+    @State private var focusedActivityChat: Chat?
 
     /// The live chat record, so busy/unread stay current as frames land.
     private var current: Chat {
@@ -265,6 +266,9 @@ struct ChatView: View {
             .navigationDestination(item: $groupProfileRoom) { room in
                 GroupProfileView(room: room)
             }
+            .navigationDestination(item: $focusedActivityChat) { chat in
+                ChatView(chat: chat)
+            }
     }
 
     /// Keep the composer as a sibling of the flexible transcript. A sibling
@@ -293,14 +297,19 @@ struct ChatView: View {
             if HomeActivityRailLayoutPolicy.composerPillPlacement(
                 presentationState: session.state.homeActivityPresentation(
                     queuedReceipts: [],
-                    subagents: session.state.hermesSubagents.filter {
-                        $0.parentThreadId == threadId || $0.transcriptThreadId == threadId
-                    }
+                    subagents: HomeInChatActivityProjectionPolicy.scopedSubagents(
+                        session.state.hermesSubagents,
+                        parentThreadId: threadId
+                    ),
+                    parentThreadId: threadId
                 ).state
             ) == .immediatelyAboveComposer {
                 HomeActivityPill(
                     open: { chat in
                         session.beginOpeningFromHome(chat)
+                        if ChatActivityNavigationPolicy.action(fromParentThreadId: threadId) == .pushFocusedTranscript {
+                            focusedActivityChat = chat
+                        }
                     },
                     expanded: $activityExpanded,
                     parentThreadId: threadId

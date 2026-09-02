@@ -105,9 +105,15 @@ public struct HomeActivityPresentation: Equatable, Sendable {
     public init(
         state: CompanionState,
         queuedReceipts: [HomeActivityQueueReceipt] = [],
-        subagents: [HermesSubagentActivity] = []
+        subagents: [HermesSubagentActivity] = [],
+        parentThreadId: String? = nil
     ) {
-        self.init(projecting: state, queuedReceipts: queuedReceipts, subagents: subagents)
+        self.init(
+            projecting: state,
+            queuedReceipts: queuedReceipts,
+            subagents: subagents,
+            parentThreadId: parentThreadId
+        )
     }
 
     public init(
@@ -193,14 +199,21 @@ public struct HomeActivityPresentation: Equatable, Sendable {
     private init(
         projecting state: CompanionState,
         queuedReceipts: [HomeActivityQueueReceipt],
-        subagents: [HermesSubagentActivity]
+        subagents: [HermesSubagentActivity],
+        parentThreadId: String? = nil
     ) {
         let hiddenBotIDs = Set(state.bots.filter { $0.hidden == true }.map(\.threadId))
+        let scopedThreadId = HomeInChatActivityProjectionPolicy.scopedThreadId(
+            parentThreadId: parentThreadId
+        )
         let chats: [(threadId: String, title: String, active: Bool, unread: Bool)] =
             state.bots
                 .filter { $0.hidden != true }
+                .filter { scopedThreadId == nil || $0.threadId == scopedThreadId }
                 .map { ($0.threadId, $0.name, $0.isWorking, $0.unread) }
-            + state.rooms.map { ($0.threadId, $0.name, $0.busyBotId != nil, $0.unread) }
+            + state.rooms
+                .filter { scopedThreadId == nil || $0.threadId == scopedThreadId }
+                .map { ($0.threadId, $0.name, $0.busyBotId != nil, $0.unread) }
         let knownThreads = Set(chats.map(\.threadId))
         let chatByThread = Dictionary(uniqueKeysWithValues: chats.map { ($0.threadId, $0) })
 
@@ -304,9 +317,15 @@ public struct HomeActivityPresentation: Equatable, Sendable {
 
         let grouped: [(Group, [Item])] = [
             (.needsYou, needs.sorted(by: Self.itemOrder)),
-            (.active, (active + subagentActive).sorted(by: Self.itemOrder)),
+            (.active, (
+                (HomeInChatActivityProjectionPolicy.includesFleetActivityRows(parentThreadId: parentThreadId) ? active : [])
+                    + subagentActive
+            ).sorted(by: Self.itemOrder)),
             (.queued, queued),
-            (.recentlyFinished, (recentlyFinished + subagentFinished).sorted(by: Self.itemOrder))
+            (.recentlyFinished, (
+                (HomeInChatActivityProjectionPolicy.includesFleetActivityRows(parentThreadId: parentThreadId) ? recentlyFinished : [])
+                    + subagentFinished
+            ).sorted(by: Self.itemOrder))
         ]
         self.sections = grouped.map { Section(kind: $0.0, items: $0.1) }
         self.items = grouped.flatMap(\.1)
@@ -345,8 +364,14 @@ public struct HomeActivityPresentation: Equatable, Sendable {
 public extension CompanionState {
     func homeActivityPresentation(
         queuedReceipts: [HomeActivityQueueReceipt] = [],
-        subagents: [HermesSubagentActivity] = []
+        subagents: [HermesSubagentActivity] = [],
+        parentThreadId: String? = nil
     ) -> HomeActivityPresentation {
-        HomeActivityPresentation(state: self, queuedReceipts: queuedReceipts, subagents: subagents)
+        HomeActivityPresentation(
+            state: self,
+            queuedReceipts: queuedReceipts,
+            subagents: subagents,
+            parentThreadId: parentThreadId
+        )
     }
 }

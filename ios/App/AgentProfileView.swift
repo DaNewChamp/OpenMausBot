@@ -55,6 +55,7 @@ struct AgentProfileView: View {
     @State private var showingModelPicker = false
     @State private var showingHermesConversion = false
     @State private var selectedHermesEndpoint: HermesEndpointOption?
+    @State private var includeContextSummary = false
     @State private var hermesStatus: HermesSetupStatus?
     @State private var hermesLoading = false
     @State private var hermesRebinding = false
@@ -836,9 +837,17 @@ struct AgentProfileView: View {
                     sourceLabel: ModelSelectionPolicy.subscriptionModelLabel(current.modelSelection.model),
                     destinationLabel: selectedHermesEndpoint?.label ?? session.defaultHermesEndpoint()?.label ?? "Hermes"
                 ))
-                Text("Avatar, hierarchy, rooms, transcript, unread state, pins, policies, and fleet grants stay.")
+                Text(HermesConversionConfirmationPolicy.preservedSummary)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                DisclosureGroup(HermesConversionConfirmationPolicy.contextHandoffTitle) {
+                    Text(HermesConversionConfirmationPolicy.contextHandoffDetail)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Toggle("Include sanitized summary", isOn: $includeContextSummary)
+                        .font(.subheadline)
+                }
+                .font(.subheadline.weight(.medium))
                 Spacer()
                 Button("Convert") {
                     let endpoint = selectedHermesEndpoint ?? session.defaultHermesEndpoint()
@@ -846,7 +855,10 @@ struct AgentProfileView: View {
                     guard let endpoint else { return }
                     session.configureHermesRuntime(
                         botId: current.id,
-                        request: HermesConversionApplyPolicy.request(from: endpoint)
+                        request: HermesConversionConfirmationPolicy.applyRequest(
+                            endpoint: endpoint,
+                            includeContextSummary: includeContextSummary
+                        )
                     )
                 }
                 .buttonStyle(.borderedProminent)

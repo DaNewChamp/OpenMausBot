@@ -15,6 +15,9 @@ struct ChatModelPickerSheet: View {
     @State private var pickedEffort: String?
     @State private var savingModel = false
     @State private var modelSaveRevision = 0
+    @State private var showingHermesConversion = false
+    @State private var selectedHermesEndpoint: HermesEndpointOption?
+    @State private var includeContextSummary = false
 
     init(bot: Bot) {
         self.bot = bot
@@ -64,14 +67,14 @@ struct ChatModelPickerSheet: View {
                     onRetry: { Task { await loadInstances() } },
                     onSelectionChange: { Task { await saveModel() } },
                     hermesEndpoints: session.hermesEndpointOptions,
-                    selectedHermesId: session.defaultHermesEndpoint()?.id,
+                    selectedHermesId: selectedHermesEndpoint?.id ?? session.defaultHermesEndpoint()?.id,
                     onSelectHermes: { endpoint in
+                        guard ModelSelectionPolicy.allowsHermesRuntimeSwitch(working: current.busy == true) else { return }
+                        selectedHermesEndpoint = endpoint
                         session.setDefaultHermesEndpoint(endpoint)
-                        session.configureHermesRuntime(
-                            botId: current.id,
-                            request: HermesConversionApplyPolicy.request(from: endpoint)
-                        )
-                        dismiss()
+                        if HermesConversionConfirmationPolicy.requiresConfirmationBeforeApply(fromModelPicker: true) {
+                            showingHermesConversion = true
+                        }
                     }
                 )
                 .padding(20)
@@ -86,6 +89,9 @@ struct ChatModelPickerSheet: View {
             }
         }
         .task { await loadInstances() }
+        .sheet(isPresented: $showingHermesConversion) {
+            hermesConversionSheet
+        }
         .onChange(of: session.modelCatalogRefreshing) { _, _ in
             applySessionCatalogSnapshot()
         }
@@ -108,6 +114,53 @@ struct ChatModelPickerSheet: View {
                 savingModel = false
             }
         }
+    }
+
+    private var hermesConversionSheet: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(HermesRuntimePresentationPolicy.conversionSummary(
+                    botName: current.name,
+                    sourceLabel: ModelSelectionPolicy.subscriptionModelLabel(current.modelSelection.model),
+                    destinationLabel: selectedHermesEndpoint?.label ?? session.defaultHermesEndpoint()?.label ?? "Hermes"
+                ))
+                Text(HermesConversionConfirmationPolicy.preservedSummary)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                DisclosureGroup(HermesConversionConfirmationPolicy.contextHandoffTitle) {
+                    Text(HermesConversionConfirmationPolicy.contextHandoffDetail)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Toggle("Include sanitized summary", isOn: $includeContextSummary)
+                        .font(.subheadline)
+                }
+                .font(.subheadline.weight(.medium))
+                Spacer()
+                Button("Convert") {
+                    let endpoint = selectedHermesEndpoint ?? session.defaultHermesEndpoint()
+                    showingHermesConversion = false
+                    guard let endpoint else { return }
+                    session.configureHermesRuntime(
+                        botId: current.id,
+                        request: HermesConversionConfirmationPolicy.applyRequest(
+                            endpoint: endpoint,
+                            includeContextSummary: includeContextSummary
+                        )
+                    )
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedHermesEndpoint == nil && session.defaultHermesEndpoint() == nil)
+            }
+            .padding()
+            .navigationTitle("Convert runtime")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showingHermesConversion = false }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 
     private func applySessionCatalogSnapshot() {

@@ -19,15 +19,17 @@ struct HomeActivityPill: View {
     private var presentation: HomeActivityPresentation {
         let subagents: [HermesSubagentActivity]
         if let parentThreadId {
-            subagents = session.state.hermesSubagents.filter {
-                $0.parentThreadId == parentThreadId || $0.transcriptThreadId == parentThreadId
-            }
+            subagents = HomeInChatActivityProjectionPolicy.scopedSubagents(
+                session.state.hermesSubagents,
+                parentThreadId: parentThreadId
+            )
         } else {
             subagents = session.state.hermesSubagents
         }
         return session.state.homeActivityPresentation(
             queuedReceipts: parentThreadId == nil ? queuedReceipts : [],
-            subagents: subagents
+            subagents: subagents,
+            parentThreadId: parentThreadId
         )
     }
 
