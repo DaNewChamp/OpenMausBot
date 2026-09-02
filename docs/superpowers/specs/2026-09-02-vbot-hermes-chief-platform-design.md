@@ -1,7 +1,7 @@
 # V Bot Hermes Chief Platform Design
 
-**Date:** 2026-09-02  
-**Status:** Approved direction  
+**Date:** 2026-09-02
+**Status:** Approved direction
 **Scope:** Runtime rebinding, Hermes-native capabilities, temporary agents, fleet/VM access, protected web client, and voice sequencing
 
 ## Product Position
