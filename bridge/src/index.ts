@@ -5,7 +5,7 @@ import { heartbeat, registerBridge, submitResult } from "./client.ts";
 import { credentialsPath, loadCredentials, saveCredentials } from "./config.ts";
 import { runShellJob, runSshJob } from "./exec.ts";
 import { runLocalVmJob } from "./local-vm.ts";
-import { runHermesBridgeJob, type HermesBridgeJob } from "./hermes.ts";
+import { runHermesBridgeJob, runHermesSignInJob, type HermesBridgeJob } from "./hermes.ts";
 import { defaultHermesBridgeRuntimeFactory } from "./hermes-runtime.ts";
 import { runHermesJobSerialized } from "./hermes-queue.ts";
 import {
@@ -40,21 +40,27 @@ function isHermesJob(job: BridgeJob): job is BridgeJob & HermesBridgeJob {
     || job.kind === "hermes-interrupt";
 }
 
+function hermesCapabilityDisabledResult() {
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: "hermes capability disabled locally",
+    truncated: false,
+  };
+}
+
 async function handleJob(job: BridgeJob, signal?: AbortSignal) {
   if (job.kind === "shell") return runShellJob(job, signal);
   if (job.kind === "ssh-exec") return runSshJob(job, signal);
   if (job.kind === "local-vm-status" || job.kind === "local-vm-action" || job.kind === "local-vm-screenshot") {
     return runLocalVmJob(job);
   }
+  if (job.kind === "hermes-signin") {
+    if (!bridgeHermesExecutionEnabled()) return hermesCapabilityDisabledResult();
+    return runHermesSignInJob(job);
+  }
   if (isHermesJob(job)) {
-    if (!bridgeHermesExecutionEnabled()) {
-      return {
-        exitCode: 1,
-        stdout: "",
-        stderr: "hermes capability disabled locally",
-        truncated: false,
-      };
-    }
+    if (!bridgeHermesExecutionEnabled()) return hermesCapabilityDisabledResult();
     return runHermesBridgeJob(job, hermesRuntimeFactory, signal);
   }
   return { exitCode: 1, stdout: "", stderr: `unsupported job kind: ${(job as BridgeJob).kind}`, truncated: false };

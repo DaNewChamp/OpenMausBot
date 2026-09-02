@@ -62,6 +62,10 @@ export type BridgeJob =
   | (BridgeJobBase & {
       kind: "hermes-interrupt";
       payload: { profile: string; turnId?: string };
+    })
+  | (BridgeJobBase & {
+      kind: "hermes-signin";
+      payload: { argv: ["setup"] };
     });
 
 export type LocalVmBridgeJob = Extract<

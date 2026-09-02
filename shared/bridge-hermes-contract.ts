@@ -16,7 +16,8 @@ export type HermesBridgeJobKind =
   | "hermes-discover"
   | "hermes-ensure-canonical"
   | "hermes-send"
-  | "hermes-interrupt";
+  | "hermes-interrupt"
+  | "hermes-signin";
 
 export interface HermesBridgeDiscoverPayload {}
 
@@ -37,11 +38,16 @@ export interface HermesBridgeInterruptPayload {
   turnId?: string;
 }
 
+export interface HermesBridgeSignInPayload {
+  argv: ["setup"];
+}
+
 export type HermesBridgeJobPayload =
   | HermesBridgeDiscoverPayload
   | HermesBridgeEnsureCanonicalPayload
   | HermesBridgeSendPayload
-  | HermesBridgeInterruptPayload;
+  | HermesBridgeInterruptPayload
+  | HermesBridgeSignInPayload;
 
 export interface HermesBridgeBinding {
   bridgeId: string;
@@ -76,11 +82,18 @@ export interface HermesBridgeInterruptWire {
   reason?: HermesFailureCode;
 }
 
+export type HermesBridgeSignInKind = "browser" | "terminal";
+
+export interface HermesBridgeSignInWire {
+  kind: HermesBridgeSignInKind;
+}
+
 export type HermesBridgeResultWire =
   | { kind: "hermes-discover"; body: HermesBridgeDiscoveryWire }
   | { kind: "hermes-ensure-canonical"; body: HermesBridgeEnsureCanonicalWire }
   | { kind: "hermes-send"; body: HermesBridgeSendWire }
-  | { kind: "hermes-interrupt"; body: HermesBridgeInterruptWire };
+  | { kind: "hermes-interrupt"; body: HermesBridgeInterruptWire }
+  | { kind: "hermes-signin"; body: HermesBridgeSignInWire };
 
 export type ScrubbedRuntimeEvent = Pick<
   RuntimeEvent,
@@ -309,6 +322,11 @@ function validateInterruptBody(body: Record<string, unknown>): boolean {
   return isBoolean(body.ok);
 }
 
+function validateSignInBody(body: Record<string, unknown>): boolean {
+  if (body.kind !== "terminal" && body.kind !== "browser") return false;
+  return Object.keys(body).every((key) => key === "kind");
+}
+
 export function validateHermesBridgeResultWire(value: unknown): HermesBridgeResultWire {
   if (!isRecord(value)) throw new Error("bridge hermes job returned invalid envelope");
   const kind = value.kind;
@@ -317,6 +335,7 @@ export function validateHermesBridgeResultWire(value: unknown): HermesBridgeResu
     && kind !== "hermes-ensure-canonical"
     && kind !== "hermes-send"
     && kind !== "hermes-interrupt"
+    && kind !== "hermes-signin"
   ) {
     throw new Error("bridge hermes job returned unknown kind");
   }
@@ -333,6 +352,9 @@ export function validateHermesBridgeResultWire(value: unknown): HermesBridgeResu
   }
   if (kind === "hermes-interrupt" && !validateInterruptBody(body)) {
     throw new Error("bridge hermes interrupt body is invalid");
+  }
+  if (kind === "hermes-signin" && !validateSignInBody(body)) {
+    throw new Error("bridge hermes sign-in body is invalid");
   }
   if (wireContainsForbiddenMaterial(value)) {
     throw new Error("bridge hermes job leaked forbidden material");

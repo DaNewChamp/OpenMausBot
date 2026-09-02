@@ -127,6 +127,22 @@ describe("Hermes bridge wire contract", () => {
     }))).toThrow(/send body is invalid/i);
   });
 
+  it("round-trips hermes-signin results without captured output or secrets", () => {
+    const encoded = encodeHermesBridgeResult({
+      kind: "hermes-signin",
+      body: { kind: "terminal" },
+    });
+    expect(parseHermesBridgeResult(encoded)).toEqual({
+      kind: "hermes-signin",
+      body: { kind: "terminal" },
+    });
+    expect(encoded).not.toMatch(/sk-|HERMES_HOME|stderr|\/Users\/|token|secret/i);
+    expect(() => encodeHermesBridgeResult({
+      kind: "hermes-signin",
+      body: { kind: "terminal", stdout: "token=sk-secret" },
+    } as never)).toThrow();
+  });
+
   it("validates profile slugs at the contract boundary", () => {
     expect(validHermesBridgeProfile("default")).toBe("default");
     expect(validHermesBridgeProfile("../escape")).toBeUndefined();

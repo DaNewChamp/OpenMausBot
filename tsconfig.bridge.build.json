@@ -11,6 +11,7 @@
   "include": [
     "bridge/src/**/*",
     "shared/bridge-hermes-contract.ts",
+    "shared/hermes-signin-launch.ts",
     "server/contracts.ts",
     "server/atomic.ts",
     "server/data-dir.ts",

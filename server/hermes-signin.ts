@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-
+import type { BridgeRegistry } from "./bridge-registry.ts";
+import { startHermesSignInOnBridge } from "./bridge-hermes.ts";
 import { HermesEngineError } from "./engines/contracts.ts";
 import {
   hermesEndpointComputerName,
@@ -9,13 +9,21 @@ import {
   normalizeHermesSetupPlacement,
   type HermesSetupPlacement,
 } from "./hermes-bridge-integration.ts";
+import {
+  defaultHermesSignInLaunch,
+  HERMES_SIGNIN_ARGV,
+  type HermesSignInKind,
+  type HermesSignInLaunch,
+  type HermesSignInLaunchResult,
+} from "../shared/hermes-signin-launch.ts";
 
-export type HermesSignInKind = "browser" | "terminal";
-
-export interface HermesSignInLaunch {
-  kind: HermesSignInKind;
-  argv: readonly string[];
-}
+export {
+  defaultHermesSignInLaunch,
+  HERMES_SIGNIN_ARGV,
+  type HermesSignInKind,
+  type HermesSignInLaunch,
+  type HermesSignInLaunchResult,
+};
 
 export interface HermesSignInHandoff {
   kind: HermesSignInKind;
@@ -23,58 +31,11 @@ export interface HermesSignInHandoff {
   message: string;
 }
 
-export type HermesSignInLaunchResult =
-  | { ok: true; kind: HermesSignInKind }
-  | { ok: false };
-
 export interface StartHermesSignInOptions {
   placement: HermesEndpointPlacement;
   localComputerName?: string;
+  bridgeRegistry?: BridgeRegistry;
   launch?: (command: HermesSignInLaunch) => Promise<HermesSignInLaunchResult>;
-}
-
-const SIGNIN_ARGV = ["setup"] as const;
-
-function spawnDetached(command: string, args: readonly string[]): Promise<boolean> {
-  return new Promise((resolve) => {
-    try {
-      const child = spawn(command, [...args], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      const onError = () => resolve(false);
-      const onSpawn = () => {
-        child.removeListener("error", onError);
-        child.unref();
-        resolve(true);
-      };
-      child.once("error", onError);
-      child.once("spawn", onSpawn);
-    } catch {
-      resolve(false);
-    }
-  });
-}
-
-/** Launch Hermes setup on this computer without reading stdout or stderr.
- * Argv is only `setup`. Provider tokens never pass through this process. */
-export async function defaultHermesSignInLaunch(
-  command: HermesSignInLaunch,
-): Promise<HermesSignInLaunchResult> {
-  if (process.platform === "darwin") {
-    const script = "hermes setup";
-    if (await spawnDetached("osascript", [
-      "-e",
-      `tell application "Terminal" to do script ${JSON.stringify(script)}`,
-    ])) {
-      return { ok: true, kind: command.kind };
-    }
-  }
-  if (await spawnDetached("hermes", [...command.argv])) {
-    return { ok: true, kind: command.kind };
-  }
-  return { ok: false };
 }
 
 export function parseHermesSignInInput(body: unknown):
@@ -106,12 +67,27 @@ export function projectHermesSignInHandoff(
 export async function startHermesSignIn(
   options: StartHermesSignInOptions,
 ): Promise<HermesSignInHandoff> {
+  if (options.placement.kind === "bridge") {
+    if (!options.bridgeRegistry) throw new HermesEngineError("gateway_unavailable");
+    try {
+      const started = await startHermesSignInOnBridge(options.bridgeRegistry, {
+        name: options.placement.bridge,
+      });
+      return projectHermesSignInHandoff({
+        kind: started.kind,
+        computerName: started.bridgeName,
+        message: `Complete sign-in on ${started.bridgeName}, then try again.`,
+      });
+    } catch {
+      throw new HermesEngineError("gateway_unavailable");
+    }
+  }
   const computerName = hermesEndpointComputerName(
     options.placement,
     options.localComputerName,
   );
   const launch = options.launch ?? defaultHermesSignInLaunch;
-  const result = await launch({ kind: "terminal", argv: SIGNIN_ARGV });
+  const result = await launch({ kind: "terminal", argv: HERMES_SIGNIN_ARGV });
   if (!result.ok) throw new HermesEngineError("gateway_unavailable");
   return projectHermesSignInHandoff({
     kind: result.kind,

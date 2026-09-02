@@ -177,7 +177,6 @@ import {
   readHermesSetupStatus,
 } from "./hermes-setup.ts";
 import {
-  defaultHermesSignInLaunch,
   parseHermesSignInInput,
   startHermesSignIn,
 } from "./hermes-signin.ts";
@@ -7779,17 +7778,7 @@ const server = createServer(async (req, res) => {
         const handoff = await startHermesSignIn({
           placement: parsed.placement,
           localComputerName: hostname(),
-          launch: async (command) => {
-            if (parsed.placement.kind === "bridge") {
-              const bridge = resolveBridge(bridges, {
-                name: parsed.placement.bridge,
-                capability: "hermes",
-              });
-              if (!bridge) return { ok: false };
-              return { ok: true, kind: "terminal" };
-            }
-            return defaultHermesSignInLaunch(command);
-          },
+          bridgeRegistry: bridges,
         });
         return json(res, 200, handoff);
       } catch (error) {
