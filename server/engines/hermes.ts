@@ -10,6 +10,15 @@ import {
   type HermesReadiness,
 } from "./discovery.ts";
 import {
+  HermesCommBudget,
+  HermesCommReplay,
+  type HermesCommCandidate,
+} from "./hermes-comms.ts";
+import {
+  projectHermesGatewayApprovalEvent,
+  projectHermesGatewayToolEvent,
+} from "./hermes-events.ts";
+import {
   clearHermesPendingProfile,
   loadHermesPendingProfiles,
   markHermesPendingProfile,
@@ -138,6 +147,12 @@ export interface HermesBotEngineOptions {
   timeouts?: Partial<HermesTimeouts>;
   /** Optional test/runtime override for the adapter-owned pending marker. */
   pendingPath?: string;
+  fromBotId?: string;
+  senderHandle?: string;
+  handleToBotId?: ReadonlyMap<string, string>;
+  onComm?: (candidate: HermesCommCandidate) => void;
+  commBudget?: HermesCommBudget;
+  commReplay?: HermesCommReplay;
 }
 
 export interface HermesBotEngine {
@@ -154,8 +169,15 @@ export interface HermesBotEngine {
     cwd?: string;
     threadId: string;
     turnId: string;
+    fromBotId?: string;
+    senderHandle?: string;
   }): Promise<{ turnId: string }>;
   interrupt(profile: string, turnId?: string): Promise<void>;
+  respondToApproval?(input: {
+    profile: string;
+    requestId: string;
+    choice: "allow" | "deny";
+  }): Promise<void>;
   onEvent(listener: (event: RuntimeEvent) => void): () => void;
   close(): Promise<void>;
 }
@@ -567,6 +589,8 @@ interface RuntimeRecord {
   runtimeId: string;
   threadId: string;
   turnId: string;
+  fromBotId?: string;
+  senderHandle?: string;
   terminal: boolean;
   started: boolean;
   timer: unknown;
@@ -768,6 +792,16 @@ function sanitizeGatewayEvent(value: unknown): Record<string, unknown> | undefin
   }
 
   if (hasOwn(value, "payload") && value.payload !== undefined && !isRecord(value.payload)) return undefined;
+  if (/^tool[./]/.test(type) || type === "tool.start" || type === "tool.complete" || type === "tool.call" || type === "tool.result") {
+    if (!hasOwn(value, "payload") || !isRecord(value.payload)) return undefined;
+    output.payload = value.payload;
+    return output;
+  }
+  if (type.startsWith("approval.")) {
+    if (!hasOwn(value, "payload") || !isRecord(value.payload)) return undefined;
+    output.payload = value.payload;
+    return output;
+  }
   // For status/unknown event kinds, retain only the bounded type/session
   // fields.  Their payload is intentionally not forwarded to the adapter.
   return output;
@@ -829,6 +863,12 @@ export class HermesBotAdapter implements HermesBotEngine {
   private readonly timeouts: HermesTimeouts;
   private readonly client: HermesGatewayClient;
   private readonly pendingPath?: string;
+  private readonly fromBotId?: string;
+  private readonly senderHandle?: string;
+  private readonly handleToBotId: ReadonlyMap<string, string>;
+  private readonly onComm?: (candidate: HermesCommCandidate) => void;
+  private readonly commBudget: HermesCommBudget;
+  private readonly commReplay: HermesCommReplay;
   private readonly locks = new Map<string, AsyncLock>();
   private readonly runtimes = new Map<string, RuntimeRecord>();
   private readonly listeners = new Set<(event: RuntimeEvent) => void>();
@@ -839,6 +879,12 @@ export class HermesBotAdapter implements HermesBotEngine {
 
   constructor(options: HermesBotEngineOptions = {}) {
     this.pendingPath = options.pendingPath;
+    this.fromBotId = options.fromBotId;
+    this.senderHandle = options.senderHandle;
+    this.handleToBotId = options.handleToBotId ?? new Map();
+    this.onComm = options.onComm;
+    this.commBudget = options.commBudget ?? new HermesCommBudget();
+    this.commReplay = options.commReplay ?? new HermesCommReplay();
     this.clock = normalizeClock(options.clock);
     this.timeouts = normalizeTimeouts(options.timeouts);
     const environment = sanitizeHermesChildEnv(options.environment ?? options.env ?? {});
@@ -1010,6 +1056,8 @@ export class HermesBotAdapter implements HermesBotEngine {
     cwd?: string;
     threadId: string;
     turnId: string;
+    fromBotId?: string;
+    senderHandle?: string;
   }): Promise<{ turnId: string }> {
     if (!input || typeof input !== "object") throw new HermesEngineError("malformed_response");
     const profile = normalizeProfile(input.profile);
@@ -1070,6 +1118,8 @@ export class HermesBotAdapter implements HermesBotEngine {
         runtimeId,
         threadId: input.threadId,
         turnId: input.turnId,
+        fromBotId: input.fromBotId,
+        senderHandle: input.senderHandle,
         terminal: false,
         started: false,
         timer: undefined,
@@ -1116,6 +1166,24 @@ export class HermesBotAdapter implements HermesBotEngine {
         this.terminateRuntime(runtime, false, failure ? failure.code : "interrupted");
       }
       if (failure) throw failure;
+    });
+  }
+
+  async respondToApproval(input: {
+    profile: string;
+    requestId: string;
+    choice: "allow" | "deny";
+  }): Promise<void> {
+    const normalizedProfile = normalizeProfile(input.profile);
+    await this.lockFor(normalizedProfile).run(async () => {
+      const runtime = this.runtimeFor(normalizedProfile);
+      if (!runtime) throw new HermesEngineError("gateway_unavailable");
+      await this.client.request("approval.respond", {
+        session_id: runtime.runtimeId,
+        request_id: input.requestId,
+        choice: input.choice === "allow" ? "once" : "deny",
+      });
+      this.readiness.approvals = true;
     });
   }
 
@@ -1266,6 +1334,10 @@ export class HermesBotAdapter implements HermesBotEngine {
       if (delta) this.emitRuntime(runtime, { type: "content.delta", streamKind: "assistant_text", delta });
       return;
     }
+    if (type.startsWith("tool") || type.startsWith("approval.")) {
+      this.projectExtendedEvent(runtime, type, params);
+      return;
+    }
     if (type === "error") {
       // Hermes error events can carry provider diagnostics in their payload.
       // Drop that text and terminate with a fixed safe reason.
@@ -1323,6 +1395,48 @@ export class HermesBotAdapter implements HermesBotEngine {
       stopReason: isOk ? null : reason,
       ...(result?.usage ? { usage: result.usage } : {}),
     });
+    this.commBudget.releaseTurn(runtime.turnId);
+  }
+
+  private projectExtendedEvent(runtime: RuntimeRecord, type: string, params: Record<string, unknown>): void {
+    const createdAt = new Date(this.clock.now()).toISOString();
+    const baseInput = {
+      type,
+      sessionId: typeof params.session_id === "string" ? params.session_id : "",
+      payload: asRecord(params.payload),
+      threadId: runtime.threadId,
+      turnId: runtime.turnId,
+      fromBotId: runtime.fromBotId ?? this.fromBotId ?? runtime.requestedProfile,
+      senderHandle: runtime.senderHandle ?? this.senderHandle ?? runtime.requestedProfile,
+      handleToBotId: this.handleToBotId,
+      createdAt,
+    };
+    const toolProjection = projectHermesGatewayToolEvent(baseInput);
+    const approvalProjection = projectHermesGatewayApprovalEvent(baseInput);
+    const projection = toolProjection ?? approvalProjection;
+    if (!projection) return;
+    for (const event of projection.events) this.emitRuntime(runtime, event);
+    if (projection.comm && this.onComm) {
+      if (!this.commBudget.tryConsume(runtime.turnId)) {
+        this.emitRuntime(runtime, {
+          type: "item.completed",
+          itemType: "tool",
+          ok: false,
+          title: "too many teammate messages",
+        });
+        return;
+      }
+      if (!this.commReplay.remember(projection.comm.deliveryKey)) return;
+      this.onComm(projection.comm);
+      this.readiness.messageAgent = true;
+      this.emitRuntime(runtime, {
+        type: "item.completed",
+        itemType: "tool",
+        ok: true,
+        title: "message_agent",
+      });
+    }
+    if (projection.approval) this.readiness.approvals = true;
   }
 
   private emitRuntime(runtime: RuntimeRecord, event: { type: string; [key: string]: unknown }): void {

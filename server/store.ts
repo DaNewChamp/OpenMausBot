@@ -160,6 +160,8 @@ export interface Message {
     withColor: string;
     /** Canonical channel message to scroll to when opening from a comm chip. */
     messageId?: string;
+    /** Which peer-messaging plane produced this activity chip. */
+    plane?: "vbot" | "hermesMessageAgent";
   };
   /** user messages sent while the bot was mid-turn, waiting in the
    * steer-queue to auto-send on settle. Cleared when the drain consumes

@@ -202,7 +202,7 @@ describe("drainDelegations", () => {
     void runTargetCalls;
   });
 
-  it("reports Hermes-bound peer comms as a setup failure without minting a DM", async () => {
+  it("allows Hermes-bound 1:1 peer comms and mirrors the exchange", async () => {
     mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
     writeFileSync(join(DATA_DIR, "hermes-bindings.json"), JSON.stringify({
       version: 1,
@@ -219,11 +219,10 @@ describe("drainDelegations", () => {
     drainDelegations(commsBus, approvalBus, from.threadId, (toBotId, message, commsDepth) => {
       runTargetCalls.push({ toBotId, message, commsDepth });
     });
-    await waitFor(() =>
-      store.messagesFor(from.threadId).some((m) => m.tool?.ok === false && m.tool.name.includes("does not support groups")),
-    );
-    expect(runTargetCalls).toHaveLength(0);
-    expect(store.groups.filter((group) => group.dm)).toHaveLength(0);
+    await waitFor(() => runTargetCalls.length === 1);
+    expect(store.groups.filter((group) => group.dm)).toHaveLength(1);
+    const chips = store.messagesFor(from.threadId).filter((m) => m.kind === "activity" && m.tool?.name === "Messaged @Helper");
+    expect(chips[0]?.comm?.plane).toBe("vbot");
   });
 
   it("runs the target's turn via runTarget and mirrors the exchange", async () => {

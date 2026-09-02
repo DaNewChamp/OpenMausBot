@@ -2,7 +2,7 @@
 // per-thread chips. Extracted from /api/internal/ask-bot so delegations
 // (delegate_bot) and any future peer flow reuse the same UX without a copy.
 
-import { hermesGroupMembershipError } from "./hermes-groups.ts";
+import { hermesPairChannelError } from "./hermes-groups.ts";
 import { sectionKey, type BotRecord, type GroupRecord, type Message, type Store } from "./store.ts";
 
 /** What a peer-exchange helper needs from the outside world:
@@ -26,7 +26,7 @@ export function getOrCreateChannel(store: Store, from: BotRecord, target: BotRec
     }
     return existing;
   }
-  const hermesPeer = hermesGroupMembershipError([from.id, target.id]);
+  const hermesPeer = hermesPairChannelError([from.id, target.id], true);
   if (hermesPeer) throw hermesPeer;
   return store.createGroup(`${from.name} ⇄ ${target.name}`, [from.id, target.id], true, from.section);
 }
@@ -50,6 +50,7 @@ export function mirrorExchange(
   message: string,
   channel: GroupRecord | undefined,
   sourceThreadId = from.threadId,
+  plane: "vbot" | "hermesMessageAgent" = "vbot",
 ): void {
   const note = (threadId: string, m: Omit<Message, "id" | "at">) => bus.store.appendMessage(threadId, m);
   let channelMessageId: string | undefined;
@@ -68,6 +69,7 @@ export function mirrorExchange(
           withBotId: peer.id,
           withName: peer.name,
           withColor: peer.color,
+          plane,
           ...(channelMessageId ? { messageId: channelMessageId } : {}),
         }
       : undefined;

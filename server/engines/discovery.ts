@@ -388,6 +388,8 @@ export function projectHermesCapabilities(readiness: HermesReadiness): HermesCap
     "stop",
     "exclusiveSubmit",
     "adoptMint",
+    "messageAgent",
+    "approvals",
   ]);
   const output = {} as HermesCapabilityFlags;
   for (const key of HERMES_CAPABILITY_KEYS) {

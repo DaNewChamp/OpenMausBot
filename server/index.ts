@@ -135,6 +135,7 @@ import {
   resolveCommChipAnchorId,
   type CommsBus,
 } from "./comms-visibility.ts";
+import type { HermesCommCandidate } from "./engines/hermes-comms.ts";
 import { searchMessages } from "./message-db.ts";
 import { promptWithReply, transcriptText } from "./replies.ts";
 import { approvalGrantSummary, approvalReason, explainApproval, reviewApproval } from "./approval-explainer.ts";
@@ -333,6 +334,8 @@ let hermesRegistry: HermesEngineRegistry = createHermesEngineRegistry({
   instanceConfigs: instanceConfigs(cfg),
   providerRegistry: registry,
   onEvent: (event, instanceId) => publishHermesEvent(event, instanceId),
+  handleToBotId: () => buildHermesHandleToBotId(),
+  onComm: (candidate) => projectHermesComm(candidate),
 });
 await hermesRegistry.discover();
 
@@ -503,7 +506,13 @@ const wireTask = ({ resumeCursors, lastInstanceId, ...task }: TaskRecord) => tas
 
 const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
   const { resumeCursors, tasks, ...rest } = bot;
-  return { ...rest, avatarUrl: rest.avatarUrl ?? null, ...(tasks ? { tasks: tasks.map(wireTask) } : {}) };
+  const composer = projectBotComposer(bot.id);
+  return {
+    ...rest,
+    avatarUrl: rest.avatarUrl ?? null,
+    ...(composer ? { composer } : {}),
+    ...(tasks ? { tasks: tasks.map(wireTask) } : {}),
+  };
 };
 
 /** Profile URLs are app-owned references, not merely strings with a trusted
@@ -701,7 +710,23 @@ async function answerRequest(
   const card = cardMessage?.card;
   const instance = registry.get(instanceId);
   let outcome: RequestOutcome = "unavailable";
-  if (instance) {
+  const hermesBindings = loadHermesBindings();
+  const hermesBinding = decidedFor?.id && hermesBindings.state === "available"
+    ? hermesBindings.value.get(decidedFor.id)
+    : undefined;
+  const hermesEngine = hermesBinding ? hermesRegistry.forBinding(hermesBinding) : null;
+  if (hermesEngine?.respondToApproval && hermesBinding) {
+    try {
+      await hermesEngine.respondToApproval({
+        profile: hermesBinding.profile,
+        requestId,
+        choice: behavior === "allow" ? "allow" : "deny",
+      });
+      outcome = behavior === "allow" ? "allowed-once" : "rejected";
+    } catch {
+      outcome = "unavailable";
+    }
+  } else if (instance) {
     try {
       outcome = await instance.adapter.respondToRequest(threadId, requestId, { behavior, message });
     } catch {
@@ -2283,6 +2308,8 @@ async function startTurn(
             model,
             threadId,
             turnId: adapterTurnId,
+            fromBotId: bot.id,
+            senderHandle: hermesBinding.profile === "default" ? "hermes" : hermesBinding.profile,
           });
           if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
           // Preserve the V Bot selection and task bookkeeping; Hermes session
@@ -4089,6 +4116,32 @@ function hermesFailure(error: unknown): HermesEngineError {
   return new HermesEngineError("upstream_error");
 }
 
+function buildHermesHandleToBotId(): Map<string, string> {
+  const bindings = loadHermesBindings();
+  const map = new Map<string, string>();
+  if (bindings.state !== "available") return map;
+  for (const [botId, binding] of bindings.value) {
+    map.set(binding.profile.toLowerCase(), botId);
+    if (binding.profile === "default") map.set("hermes", botId);
+  }
+  return map;
+}
+
+function projectHermesComm(candidate: HermesCommCandidate): void {
+  const from = store.bot(candidate.fromBotId);
+  const to = store.bot(candidate.toBotId);
+  if (!from || !to) return;
+  const channel = getOrCreateChannel(store, from, to);
+  mirrorExchange({ store, broadcast }, from, to, candidate.text, channel, from.threadId, candidate.plane);
+}
+
+function projectBotComposer(botId: string): { queueing: false; steer: false; stop: true } | undefined {
+  const bindings = loadHermesBindings();
+  if (bindings.state !== "available") return undefined;
+  if (!bindings.value.has(botId)) return undefined;
+  return { queueing: false, steer: false, stop: true };
+}
+
 function hermesSetupCode(code: HermesEngineError["code"]): boolean {
   return [
     "missing_cli",
@@ -4191,6 +4244,8 @@ async function reloadProviders() {
     instanceConfigs: instanceConfigs(cfg),
     providerRegistry: registry,
     onEvent: (event, instanceId) => publishHermesEvent(event, instanceId),
+    handleToBotId: () => buildHermesHandleToBotId(),
+    onComm: (candidate) => projectHermesComm(candidate),
   });
   await hermesRegistry.discover();
   // A killed turn's terminal events can die with the old fleet (dispose is

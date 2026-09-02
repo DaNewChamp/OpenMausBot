@@ -20,6 +20,19 @@ export function hermesGroupMembershipError(
   return null;
 }
 
+/** Allow a 1:1 DM channel between Hermes-bound bots; keep multi-member rooms blocked. */
+export function hermesPairChannelError(
+  memberIds: readonly string[],
+  dm: boolean,
+  loadBindings: HermesBindingLoader = loadHermesBindings,
+): HermesEngineError | null {
+  const bindings = loadBindings();
+  if (bindings.state === "unavailable") return new HermesEngineError(bindings.code);
+  if (dm && memberIds.length === 2) return null;
+  if (memberIds.some((id) => bindings.value.has(id))) return hermesGroupsUnavailable();
+  return null;
+}
+
 /** Reject a room/group send, resume, or connector continuation before it can
  * reach a generic ProviderAdapter. Bound bots stay on the groups=false
  * boundary; an unreadable sidecar is unknown state, not unbound. */

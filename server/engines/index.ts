@@ -6,6 +6,7 @@ import {
   type HermesBotEngine,
   type HermesBotEngineOptions,
 } from "./hermes.ts";
+import type { HermesCommCandidate } from "./hermes-comms.ts";
 import {
   HermesEngineError,
   type HermesBotBinding,
@@ -32,6 +33,8 @@ export interface HermesEngineRegistryOptions {
   createEngine?: (options: HermesBotEngineOptions) => HermesBotEngine;
   /** Receives already-normalized events. The registry never writes a second log. */
   onEvent?: (event: RuntimeEvent, instanceId: string) => void;
+  handleToBotId?: () => ReadonlyMap<string, string>;
+  onComm?: (candidate: HermesCommCandidate) => void;
   /** Test-friendly shorthand for the disabled-by-default metadata. */
   enabled?: boolean;
   instanceId?: string;
@@ -128,6 +131,8 @@ export class HermesEngineRegistry {
   private readonly createEngine: (options: HermesBotEngineOptions) => HermesBotEngine;
   private readonly providerRegistry?: HermesEngineRegistryOptions["providerRegistry"];
   private readonly onEvent?: HermesEngineRegistryOptions["onEvent"];
+  private readonly handleToBotId?: HermesEngineRegistryOptions["handleToBotId"];
+  private readonly onComm?: HermesEngineRegistryOptions["onComm"];
   private disposed = false;
 
   constructor(options: HermesEngineRegistryOptions = {}) {
@@ -137,6 +142,8 @@ export class HermesEngineRegistry {
     this.createEngine = options.createEngine ?? createHermesBotEngine;
     this.providerRegistry = options.providerRegistry;
     this.onEvent = options.onEvent;
+    this.handleToBotId = options.handleToBotId;
+    this.onComm = options.onComm;
     if (!this.enabled) return;
 
     const configs = options.instanceConfigs ?? this.configuredInstances(options.config);
@@ -148,7 +155,11 @@ export class HermesEngineRegistry {
       if (this.providerRegistry && (!provider || provider.driverKind !== "hermesAgent")) continue;
       let engine: HermesBotEngine;
       try {
-        engine = this.createEngine(rawHermesOptions(entry));
+        engine = this.createEngine({
+          ...rawHermesOptions(entry),
+          ...(this.handleToBotId ? { handleToBotId: this.handleToBotId() } : {}),
+          ...(this.onComm ? { onComm: this.onComm } : {}),
+        });
       } catch {
         continue;
       }

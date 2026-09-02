@@ -40,7 +40,7 @@ describe("comms-visibility Hermes peer gates", () => {
     expect(getOrCreateChannel(store, from, target).id).toBe(first.id);
   });
 
-  it("refuses to mint a DM when either peer is Hermes-bound", () => {
+  it("allows a 1:1 DM when either peer is Hermes-bound", () => {
     const store = new Store(selection);
     const from = store.createBot({ name: "Alpha", section: "Work" }, { seedMessages: false });
     const target = store.createBot({ name: "Beta", section: "Work" }, { seedMessages: false });
@@ -56,9 +56,9 @@ describe("comms-visibility Hermes peer gates", () => {
         },
       },
     }), { mode: 0o600 });
-    expect(() => getOrCreateChannel(store, from, target)).toThrow(HermesEngineError);
-    expect(() => getOrCreateChannel(store, from, target)).toThrow(/does not support groups/);
-    expect(store.groups.filter((group) => group.dm)).toHaveLength(0);
+    const channel = getOrCreateChannel(store, from, target);
+    expect(channel.dm).toBe(true);
+    expect(store.groups.filter((group) => group.dm)).toHaveLength(1);
   });
 
   it("refuses to mint a DM when binding state is unreadable", () => {

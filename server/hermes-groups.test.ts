@@ -8,6 +8,7 @@ import { loadHermesBindings } from "./engines/bindings.ts";
 import {
   hermesGroupDispatchError,
   hermesGroupMembershipError,
+  hermesPairChannelError,
   hermesGroupsUnavailable,
   hermesSetupJson,
 } from "./hermes-groups.ts";
@@ -54,6 +55,24 @@ describe("Hermes group membership and room dispatch gates", () => {
     });
     expect(hermesGroupMembershipError(["bot-unbound"], load)).toBeNull();
     expect(hermesGroupDispatchError("bot-unbound", load)).toBeNull();
+  });
+
+  it("allows a 1:1 dm channel for Hermes-bound bots", () => {
+    const file = sidecar(mkdtempSync(join(tmpdir(), "vbot-hermes-groups-dm-")), {
+      version: 1,
+      bindings: { "bot-a": binding },
+    });
+    const load = () => loadHermesBindings(file);
+    expect(hermesPairChannelError(["bot-a", "bot-b"], true, load)).toBeNull();
+  });
+
+  it("still rejects multi-member rooms for Hermes-bound bots", () => {
+    const file = sidecar(mkdtempSync(join(tmpdir(), "vbot-hermes-groups-room-")), {
+      version: 1,
+      bindings: { "bot-a": binding },
+    });
+    const load = () => loadHermesBindings(file);
+    expect(hermesPairChannelError(["bot-a", "bot-b", "bot-c"], false, load)?.code).toBe("groups_unavailable");
   });
 
   it("rejects unreadable binding state instead of treating it as unbound", () => {
