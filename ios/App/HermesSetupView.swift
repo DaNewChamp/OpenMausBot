@@ -112,13 +112,15 @@ struct HermesSetupView: View {
             }
         } else if presentation.state == .ready,
                   HermesSetupPresentationPolicy.shouldShowProfileList(status ?? HermesSetupStatus()) {
-            VBotSurfaceGroup(title: "Choose a profile") {
-                ForEach(availableProfiles) { profile in
-                    profileRow(profile, actionTitle: connectLabel(for: profile)) {
-                        connect(profile: profile)
-                    }
-                    if profile.id != availableProfiles.last?.id {
-                        VBotHairline().padding(.leading, 16)
+            ForEach(placementGroups, id: \.label) { group in
+                VBotSurfaceGroup(title: group.label) {
+                    ForEach(group.profiles) { profile in
+                        profileRow(profile, actionTitle: connectLabel(for: profile)) {
+                            connect(profile: profile)
+                        }
+                        if profile.id != group.profiles.last?.id {
+                            VBotHairline().padding(.leading, 16)
+                        }
                     }
                 }
             }
@@ -132,12 +134,30 @@ struct HermesSetupView: View {
         }
     }
 
+    private var placementGroups: [HermesSetupPresentationPolicy.HermesSetupPlacementGroup] {
+        guard let status else { return [] }
+        return HermesSetupPresentationPolicy.profilesGroupedByPlacement(
+            status,
+            computerName: session.connection?.name
+        )
+    }
+
     private var placementCard: some View {
-        Text("Hermes connects directly on this computer. For another machine, pair that V Bot first, then connect Hermes there.")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 4)
+        Group {
+            if let status, HermesSetupPresentationPolicy.hasRemotePlacements(status) {
+                Text("Profiles on paired computers appear by computer name. Hermes credentials and bridge ids never leave the hub.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+            } else {
+                Text("Hermes connects directly on this computer. For another machine, pair that V Bot first, then connect Hermes there.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+            }
+        }
     }
 
     private func profileRow(
@@ -159,6 +179,12 @@ struct HermesSetupView: View {
                         .font(.body.weight(.medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
+                    if let subtitle = profileSubtitle(profile) {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
                     Text(profile.description)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -218,6 +244,17 @@ struct HermesSetupView: View {
         }
     }
 
+    private func profileSubtitle(_ profile: HermesSetupProfile) -> String? {
+        guard let placement = profile.placement else { return nil }
+        switch placement.kind {
+        case .bridge:
+            let bridge = placement.bridge?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return bridge.isEmpty ? nil : bridge
+        case .local, .unknown:
+            return nil
+        }
+    }
+
     private func connect(profile: HermesSetupProfile?) {
         connectTask?.cancel()
         connecting = true
@@ -228,7 +265,10 @@ struct HermesSetupView: View {
                     connectTask = nil
                 }
             }
-            let result = await session.connectHermes(profile: profile?.profile)
+            let result = await session.connectHermes(
+                profile: profile?.placement == nil || profile?.placement?.kind == .local ? profile?.profile : nil,
+                placement: profile?.placement
+            )
             guard !Task.isCancelled else { return }
             guard let result else {
                 await loadStatus()

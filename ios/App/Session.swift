@@ -808,13 +808,16 @@ final class Session: ObservableObject {
     /// idempotency and profile validation; the phone only sends an optional
     /// safe profile slug.
     @discardableResult
-    func connectHermes(profile: String? = nil) async -> HermesSetupConnectionResponse? {
+    func connectHermes(
+        profile: String? = nil,
+        placement: HermesSetupPlacement? = nil
+    ) async -> HermesSetupConnectionResponse? {
         guard let client else {
             actionError = "Pair this phone with a computer before connecting Hermes."
             return nil
         }
         do {
-            let result = try await client.connectHermes(profile: profile)
+            let result = try await client.connectHermes(profile: profile, placement: placement)
             guard !Task.isCancelled else { return nil }
             do {
                 _ = try await hydrate()

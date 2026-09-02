@@ -156,7 +156,14 @@ import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { createHermesEngineRegistry, type HermesEngineRegistry } from "./engines/index.ts";
 import { loadHermesBindings } from "./engines/bindings.ts";
-import { HermesEngineError } from "./engines/contracts.ts";
+import { HermesEngineError, type HermesBotBinding } from "./engines/contracts.ts";
+import { loadHermesBridgeBindings } from "./bridge-hermes-bindings.ts";
+import {
+  bridgeBindingUnavailableError,
+  dispatchHermesBridgeSend,
+  parseHermesSetupConnectInput,
+  type HermesSetupPlacement,
+} from "./hermes-bridge-integration.ts";
 import {
   hermesGroupDispatchError,
   hermesGroupMembershipError,
@@ -164,7 +171,6 @@ import {
 } from "./hermes-groups.ts";
 import {
   connectHermesProfile,
-  normalizeHermesSetupProfile,
   readHermesSetupStatus,
 } from "./hermes-setup.ts";
 import {
@@ -710,12 +716,14 @@ async function answerRequest(
   const card = cardMessage?.card;
   const instance = registry.get(instanceId);
   let outcome: RequestOutcome = "unavailable";
-  const hermesBindings = loadHermesBindings();
-  const hermesBinding = decidedFor?.id && hermesBindings.state === "available"
-    ? hermesBindings.value.get(decidedFor.id)
-    : undefined;
+  const hermesBinding = decidedFor?.id ? localHermesBindingForBot(decidedFor.id) : undefined;
   const hermesEngine = hermesBinding ? hermesRegistry.forBinding(hermesBinding) : null;
-  if (hermesEngine?.respondToApproval && hermesBinding) {
+  const bridgeBindings = loadHermesBridgeBindings();
+  const bridgeBound = Boolean(decidedFor?.id && bridgeBindings.state === "available"
+    && bridgeBindings.value.has(decidedFor.id));
+  if (bridgeBound) {
+    outcome = "unavailable";
+  } else if (hermesEngine?.respondToApproval && hermesBinding) {
     if (behavior !== "allow" && behavior !== "deny") {
       outcome = "unavailable";
     } else {
@@ -856,6 +864,8 @@ async function interruptBotTurn(
     { botId, threadId, runOn },
     {
       loadBindings: loadHermesBindings,
+      loadBridgeBindings: loadHermesBridgeBindings,
+      bridgeRegistry: bridges,
       hermesRegistry,
       resolveProvider: ({ botId: targetBotId, runOn: targetRunOn }) => {
         const bot = store.bot(targetBotId);
@@ -1468,13 +1478,14 @@ bus.subscribe((event: RuntimeEvent) => {
         void (async () => {
           try {
             const behavior = verdict.deny ? "deny" : "allow";
-            const hermesBindings = loadHermesBindings();
-            const hermesBinding = hermesBindings.state === "available"
-              ? hermesBindings.value.get(asker.id)
-              : undefined;
+            const hermesBinding = localHermesBindingForBot(asker.id);
             const hermesEngine = hermesBinding ? hermesRegistry.forBinding(hermesBinding) : null;
+            const bridgeBindings = loadHermesBridgeBindings();
+            const bridgeBound = bridgeBindings.state === "available" && bridgeBindings.value.has(asker.id);
             let outcome: RequestOutcome;
-            if (hermesEngine?.respondToApproval && hermesBinding) {
+            if (bridgeBound) {
+              outcome = "unavailable";
+            } else if (hermesEngine?.respondToApproval && hermesBinding) {
               if (behavior !== "allow" && behavior !== "deny") {
                 throw new Error("unsupported behavior");
               }
@@ -2169,7 +2180,12 @@ async function startTurn(
     ? hermesBindings.value.get(bot.id)
     : undefined;
   const hermesBindingError = hermesBindings?.state === "unavailable" ? hermesBindings : null;
-  const hermesDispatch = Boolean(hermesBinding || hermesBindingError);
+  const hermesBridgeBindings = loadHermesBridgeBindings();
+  const hermesBridgeBinding = hermesBridgeBindings?.state === "available"
+    ? hermesBridgeBindings.value.get(bot.id)
+    : undefined;
+  const hermesBridgeBindingError = hermesBridgeBindings?.state === "unavailable" ? hermesBridgeBindings : null;
+  const hermesDispatch = Boolean(hermesBinding || hermesBindingError || hermesBridgeBinding || hermesBridgeBindingError);
   const hermesEngine = hermesBinding ? hermesRegistry.forBinding(hermesBinding) : null;
   // a task takes its name from the first thing you asked it to do
   if (text.trim() && !opts?.cardContinuation) store.titleTaskFromFirstMessage(bot.id, text, threadId);
@@ -2302,9 +2318,48 @@ async function startTurn(
       // Keep this branch ahead of integrations/computer setup: Hermes Bot
       // Mode has no MCP, queue, steer, or attachment contract, and a bound
       // turn must never silently fall back to the stored provider instance.
-      if (hermesBinding || hermesBindingError) {
+      if (hermesBinding || hermesBindingError || hermesBridgeBinding || hermesBridgeBindingError) {
         const adapterTurnId = randomUUID();
         const adapterInstanceId = hermesBotInstanceId(cfg);
+        if (hermesBridgeBinding || hermesBridgeBindingError) {
+          if (!hermesBridgeBinding) {
+            const safe = publishHermesFailure(
+              threadId,
+              adapterTurnId,
+              adapterInstanceId,
+              new HermesEngineError(hermesBridgeBindingError?.code ?? "state_unavailable"),
+            );
+            opts?.onDispatchError?.(safe.message);
+            return;
+          }
+          watchdog.watch(threadId, bot.id);
+          try {
+            await dispatchHermesBridgeSend({
+              registry: bridges,
+              binding: hermesBridgeBinding,
+              payload: {
+                text: turnText,
+                threadId,
+                turnId: adapterTurnId,
+                model,
+              },
+              publishEvent: (event) => publishHermesEvent(event, adapterInstanceId),
+              instanceId: adapterInstanceId,
+            });
+            if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
+            store.markTaskDispatched(bot.id, threadId, instanceId);
+            return;
+          } catch (error) {
+            const safe = publishHermesFailure(
+              threadId,
+              adapterTurnId,
+              adapterInstanceId,
+              bridgeBindingUnavailableError(error),
+            );
+            opts?.onDispatchError?.(safe.message);
+            return;
+          }
+        }
         if (!hermesBinding || !hermesEngine) {
           const safe = publishHermesFailure(
             threadId,
@@ -4140,6 +4195,20 @@ function hermesFailure(error: unknown): HermesEngineError {
   return new HermesEngineError("upstream_error");
 }
 
+function isHermesBoundBot(botId: string): boolean {
+  const bindings = loadHermesBindings();
+  if (bindings.state === "unavailable") return true;
+  if (bindings.value.has(botId)) return true;
+  const bridgeBindings = loadHermesBridgeBindings();
+  if (bridgeBindings.state === "unavailable") return true;
+  return bridgeBindings.value.has(botId);
+}
+
+function localHermesBindingForBot(botId: string): HermesBotBinding | undefined {
+  const bindings = loadHermesBindings();
+  return bindings.state === "available" ? bindings.value.get(botId) : undefined;
+}
+
 function buildHermesHandleToBotId(): Map<string, string> {
   const bindings = loadHermesBindings();
   const map = new Map<string, string>();
@@ -4161,9 +4230,14 @@ function projectHermesComm(candidate: HermesCommCandidate): void {
 
 function projectBotComposer(botId: string): { queueing: false; steer: false; stop: true } | undefined {
   const bindings = loadHermesBindings();
-  if (bindings.state !== "available") return undefined;
-  if (!bindings.value.has(botId)) return undefined;
-  return { queueing: false, steer: false, stop: true };
+  if (bindings.state === "available" && bindings.value.has(botId)) {
+    return { queueing: false, steer: false, stop: true };
+  }
+  const bridgeBindings = loadHermesBridgeBindings();
+  if (bridgeBindings.state === "available" && bridgeBindings.value.has(botId)) {
+    return { queueing: false, steer: false, stop: true };
+  }
+  return undefined;
 }
 
 function hermesSetupCode(code: HermesEngineError["code"]): boolean {
@@ -4363,18 +4437,17 @@ function readBody(req: IncomingMessage): Promise<any> {
  * the same strict, non-secret request shape without forwarding arbitrary JSON
  * into the provider or Store. */
 function parseHermesSetupBody(body: unknown):
-  | { ok: true; profile?: string }
+  | { ok: true; profile?: string; placement?: HermesSetupPlacement }
   | { ok: false; error: string } {
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return { ok: false, error: "Hermes setup requires a JSON object" };
+  const parsed = parseHermesSetupConnectInput(body);
+  if (!parsed.ok) return parsed;
+  if (parsed.placement?.kind === "local") {
+    return { ok: true, profile: parsed.placement.profile, placement: parsed.placement };
   }
-  const values = body as Record<string, unknown>;
-  if (Object.keys(values).some((key) => key !== "profile")) {
-    return { ok: false, error: "Hermes setup accepts only profile" };
+  if (parsed.placement?.kind === "bridge") {
+    return { ok: true, placement: parsed.placement };
   }
-  if (values.profile === undefined) return { ok: true };
-  const profile = normalizeHermesSetupProfile(values.profile);
-  return profile ? { ok: true, profile } : { ok: false, error: "profile must be a Hermes profile name" };
+  return { ok: true };
 }
 
 // Loopback-only enforcement: the harness runs on 127.0.0.1 but accepts
@@ -6223,9 +6296,7 @@ const server = createServer(async (req, res) => {
       // stored model selection points at another provider. An unreadable
       // binding sidecar cannot prove the member is unbound, so steer is
       // disabled rather than crossing into a generic provider.
-      const hermesBindingResult = loadHermesBindings();
-      const hermesBound = hermesBindingResult.state === "unavailable"
-        || Boolean(busyBot && hermesBindingResult.value.has(busyBot.id));
+      const hermesBound = Boolean(busyBot && isHermesBoundBot(busyBot.id));
       const canSteer = !hermesBound && Boolean(busyInstance?.adapter.capabilities.queueing && busyInstance.adapter.steer);
       // Rooms historically serialize every user turn through groupQueues. Keep
       // that default for omitted/auto delivery; only an explicit `steer` may
@@ -6859,12 +6930,7 @@ const server = createServer(async (req, res) => {
       // A binding stays authoritative while the adapter is disabled or while
       // its sidecar is unavailable; steer must never cross into a generic
       // provider in either state.
-      const hermesBindingResult = loadHermesBindings();
-      // An unavailable sidecar cannot prove this bot is unbound. Disable
-      // steer in that state so an active turn never receives a generic
-      // provider message while Hermes binding state is unreadable.
-      const hermesBound = hermesBindingResult?.state === "unavailable"
-        || (hermesBindingResult?.state === "available" && hermesBindingResult.value.has(bot.id));
+      const hermesBound = isHermesBoundBot(bot.id);
       const canSteer = !hermesBound && Boolean(instance?.adapter.capabilities.queueing && instance.adapter.steer);
       const action = decideDelivery({ mode, busy: Boolean(bot.busy), canSteer });
       if (action === "unsupported") {
@@ -7658,6 +7724,7 @@ const server = createServer(async (req, res) => {
     if (method === "GET" && hermesSetupStatusPath) {
       const status = await readHermesSetupStatus(hermesRegistry, {
         botExists: (id) => Boolean(store.bot(id)),
+        bridgeRegistry: bridges,
       });
       return json(res, 200, status);
     }
@@ -7702,6 +7769,8 @@ const server = createServer(async (req, res) => {
         const result = await connectHermesProfile({
           registry: hermesRegistry,
           profile: parsed.profile,
+          placement: parsed.placement,
+          bridgeRegistry: bridges,
           bot: (id) => store.bot(id),
           createBot: (profile, opts) => store.createBot(profile, opts),
           deleteBot: (id) => store.deleteBot(id),

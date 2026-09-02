@@ -828,11 +828,16 @@ public enum ConversationPinResult<Value: Sendable>: Sendable {
 
 private struct HermesSetupConnectBody: Encodable, Sendable {
     let profile: String?
+    let placement: HermesSetupPlacement?
 
-    private enum CodingKeys: String, CodingKey { case profile }
+    private enum CodingKeys: String, CodingKey { case profile, placement }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        if let placement {
+            try container.encode(placement, forKey: .placement)
+            return
+        }
         if let profile {
             try container.encode(profile, forKey: .profile)
         }
@@ -1100,12 +1105,15 @@ public struct CompanionClient: Sendable {
     /// Connect one Hermes profile and import its canonical V Bot chat. An
     /// omitted profile deliberately means "the server's default profile" and
     /// is encoded as an empty object rather than a JSON null.
-    public func connectHermes(profile: String? = nil) async throws -> HermesSetupConnectionResponse {
+    public func connectHermes(
+        profile: String? = nil,
+        placement: HermesSetupPlacement? = nil
+    ) async throws -> HermesSetupConnectionResponse {
         try await send(
             try makeRequest(
                 "POST",
                 "/api/hermes/setup",
-                encodedBody: HermesSetupConnectBody(profile: profile)
+                encodedBody: HermesSetupConnectBody(profile: profile, placement: placement)
             ),
             as: HermesSetupConnectionResponse.self
         )

@@ -85,6 +85,96 @@ final class HermesSetupTests: XCTestCase {
         XCTAssertTrue(status.capabilities.canonicalChat)
     }
 
+    func testDecodesBridgePlacementProfilesSafely() throws {
+        let data = Data(
+            #"{"state":"ready","profiles":[{"profile":"default","handle":"hermes","displayName":"Hermes","description":"Remote assistant","canonicalChat":"absent","availability":"available","placement":{"kind":"bridge","bridge":"Mac mini","profile":"default"}}],"capabilities":{"roster":true,"canonicalChat":false,"send":false,"finalResponse":false,"events":false,"stop":false,"routinesRead":false,"messageAgent":false,"groups":false,"crossMachine":false,"queueing":false,"steer":false,"attachments":false}}"#.utf8
+        )
+
+        let status = try JSONDecoder().decode(HermesSetupStatus.self, from: data)
+        let profile = status.profiles.first
+
+        XCTAssertEqual(profile?.placement?.kind, .bridge)
+        XCTAssertEqual(profile?.placement?.bridge, "Mac mini")
+        XCTAssertEqual(profile?.id, "bridge:mac mini:default")
+        XCTAssertFalse(String(data: data, encoding: .utf8)!.contains("bridgeId"))
+    }
+
+    func testConnectEncodesTypedBridgePlacement() async throws {
+        HermesSetupRequestStub.responseBody = Data(
+            #"{"botId":"bot-1","profile":{"profile":"default","handle":"hermes","displayName":"Hermes","description":"Remote","canonicalChat":"absent","availability":"available","placement":{"kind":"bridge","bridge":"mini","profile":"default"},"botId":"bot-1"},"status":{"state":"connected","profiles":[],"capabilities":{"roster":true,"canonicalChat":false,"send":true,"finalResponse":true,"events":true,"stop":true,"routinesRead":false,"messageAgent":false,"groups":false,"crossMachine":false,"queueing":false,"steer":false,"attachments":false}},"created":true}"#.utf8
+        )
+
+        _ = try await client.connectHermes(
+            placement: HermesSetupPlacement(kind: .bridge, profile: "default", bridge: "mini")
+        )
+        struct ConnectBody: Decodable { let placement: HermesSetupPlacement }
+        let body = try JSONDecoder().decode(
+            ConnectBody.self,
+            from: HermesSetupRequestStub.capturedBody ?? Data()
+        )
+        XCTAssertEqual(body.placement.kind, .bridge)
+        XCTAssertEqual(body.placement.profile, "default")
+        XCTAssertEqual(body.placement.bridge, "mini")
+    }
+
+    func testPlacementLabelsAndGroupingUseFriendlyBridgeNames() {
+        let status = HermesSetupStatus(profiles: [
+            profile("default", handle: "hermes"),
+            HermesSetupProfile(
+                profile: "default",
+                handle: "hermes",
+                displayName: "Hermes",
+                description: "Remote",
+                canonicalChat: .absent,
+                availability: .available,
+                placement: HermesSetupPlacement(kind: .bridge, profile: "default", bridge: "Mac mini")
+            ),
+            HermesSetupProfile(
+                profile: "work",
+                handle: "work",
+                displayName: "Work",
+                description: "Remote work",
+                canonicalChat: .absent,
+                availability: .available,
+                placement: HermesSetupPlacement(kind: .bridge, profile: "work", bridge: "office mac")
+            ),
+        ])
+
+        XCTAssertEqual(
+            HermesSetupPresentationPolicy.placementLabel(
+                placement: HermesSetupPlacement(kind: .local, profile: "default"),
+                computerName: "MacBook Pro"
+            ),
+            "MacBook Pro"
+        )
+        XCTAssertEqual(
+            HermesSetupPresentationPolicy.placementLabel(
+                placement: HermesSetupPlacement(kind: .bridge, profile: "default", bridge: "Mac mini")
+            ),
+            "Mac mini"
+        )
+        XCTAssertTrue(HermesSetupPresentationPolicy.hasRemotePlacements(status))
+
+        let groups = HermesSetupPresentationPolicy.profilesGroupedByPlacement(status, computerName: "Hub")
+        XCTAssertEqual(groups.map(\.label), ["Hub", "Mac mini", "office mac"])
+        XCTAssertEqual(groups[1].profiles.map(\.profile), ["default"])
+        XCTAssertEqual(groups[2].profiles.map(\.profile), ["work"])
+    }
+
+    func testDistinctIdsForSameProfileOnDifferentPlacements() {
+        let local = profile("default", handle: "hermes")
+        let remote = HermesSetupProfile(
+            profile: "default",
+            handle: "hermes",
+            displayName: "Hermes",
+            description: "Remote",
+            canonicalChat: .absent,
+            availability: .available,
+            placement: HermesSetupPlacement(kind: .bridge, profile: "default", bridge: "mini")
+        )
+        XCTAssertNotEqual(local.id, remote.id)
+    }
+
     func testReadsStatusThroughAuthenticatedHermesRoute() async throws {
         HermesSetupRequestStub.responseBody = Data(
             #"{"state":"ready","profiles":[],"capabilities":{"roster":true,"canonicalChat":false,"send":false,"finalResponse":false,"events":false,"stop":false,"routinesRead":false,"messageAgent":false,"groups":false,"crossMachine":false,"queueing":false,"steer":false,"attachments":false}}"#.utf8

@@ -3,6 +3,40 @@ import Foundation
 /// The safe, display-only state returned by the companion Hermes setup
 /// routes. Provider credentials, paths, session ids, and diagnostics never
 /// cross this boundary.
+public enum HermesSetupPlacementKind: String, Codable, Sendable, Equatable {
+    case local
+    case bridge
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = Self(rawValue: value) ?? .unknown
+    }
+}
+
+public struct HermesSetupPlacement: Codable, Hashable, Sendable, Equatable {
+    public var kind: HermesSetupPlacementKind
+    public var profile: String
+    public var bridge: String?
+
+    public init(kind: HermesSetupPlacementKind = .local, profile: String = "", bridge: String? = nil) {
+        self.kind = kind
+        self.profile = profile
+        self.bridge = bridge
+    }
+
+    private enum CodingKeys: String, CodingKey { case kind, profile, bridge }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            kind: try container.decodeIfPresent(HermesSetupPlacementKind.self, forKey: .kind) ?? .unknown,
+            profile: try container.decodeIfPresent(String.self, forKey: .profile) ?? "",
+            bridge: try container.decodeIfPresent(String.self, forKey: .bridge)
+        )
+    }
+}
+
 public enum HermesSetupState: String, Codable, Sendable, Equatable {
     case disabled
     case ready
@@ -129,9 +163,21 @@ public struct HermesSetupProfile: Codable, Hashable, Identifiable, Sendable, Equ
     public var provider: String?
     public var canonicalChat: HermesCanonicalState
     public var availability: HermesProfileAvailability
+    public var placement: HermesSetupPlacement?
     public var botId: String?
 
-    public var id: String { profile }
+    public var id: String {
+        guard let placement else { return profile }
+        switch placement.kind {
+        case .local:
+            return "local:\(placement.profile)"
+        case .bridge:
+            let bridge = placement.bridge?.lowercased() ?? "bridge"
+            return "bridge:\(bridge):\(placement.profile)"
+        case .unknown:
+            return profile
+        }
+    }
 
     public init(
         profile: String,
@@ -142,6 +188,7 @@ public struct HermesSetupProfile: Codable, Hashable, Identifiable, Sendable, Equ
         provider: String? = nil,
         canonicalChat: HermesCanonicalState = .unknown,
         availability: HermesProfileAvailability = .unknown,
+        placement: HermesSetupPlacement? = nil,
         botId: String? = nil
     ) {
         self.profile = profile
@@ -152,11 +199,12 @@ public struct HermesSetupProfile: Codable, Hashable, Identifiable, Sendable, Equ
         self.provider = provider
         self.canonicalChat = canonicalChat
         self.availability = availability
+        self.placement = placement
         self.botId = botId
     }
 
     private enum CodingKeys: String, CodingKey {
-        case profile, handle, displayName, description, model, provider, canonicalChat, availability, botId
+        case profile, handle, displayName, description, model, provider, canonicalChat, availability, placement, botId
     }
 
     public init(from decoder: Decoder) throws {
@@ -170,6 +218,7 @@ public struct HermesSetupProfile: Codable, Hashable, Identifiable, Sendable, Equ
             provider: try container.decodeIfPresent(String.self, forKey: .provider),
             canonicalChat: try container.decodeIfPresent(HermesCanonicalState.self, forKey: .canonicalChat) ?? .unknown,
             availability: try container.decodeIfPresent(HermesProfileAvailability.self, forKey: .availability) ?? .unknown,
+            placement: try container.decodeIfPresent(HermesSetupPlacement.self, forKey: .placement),
             botId: try container.decodeIfPresent(String.self, forKey: .botId)
         )
     }
@@ -343,5 +392,74 @@ public enum HermesSetupPresentationPolicy {
             return preferred
         }
         return profiles.count == 1 ? profiles[0] : nil
+    }
+
+    public static func placementLabel(
+        placement: HermesSetupPlacement,
+        computerName: String? = nil
+    ) -> String {
+        switch placement.kind {
+        case .local:
+            let trimmed = computerName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? "This computer" : trimmed
+        case .bridge:
+            let bridge = placement.bridge?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return bridge.isEmpty ? "Remote computer" : bridge
+        case .unknown:
+            return "Unknown"
+        }
+    }
+
+    public static func hasRemotePlacements(_ status: HermesSetupStatus) -> Bool {
+        status.profiles.contains { $0.placement?.kind == .bridge }
+    }
+
+    public struct HermesSetupPlacementGroup: Equatable, Sendable {
+        public let label: String
+        public let profiles: [HermesSetupProfile]
+
+        public init(label: String, profiles: [HermesSetupProfile]) {
+            self.label = label
+            self.profiles = profiles
+        }
+    }
+
+    public static func profilesGroupedByPlacement(
+        _ status: HermesSetupStatus,
+        computerName: String? = nil
+    ) -> [HermesSetupPlacementGroup] {
+        let available = availableProfiles(status)
+        var local: [HermesSetupProfile] = []
+        var bridgeGroups: [String: (label: String, profiles: [HermesSetupProfile])] = [:]
+        for profile in available {
+            let placement = profile.placement ?? HermesSetupPlacement(kind: .local, profile: profile.profile)
+            switch placement.kind {
+            case .local:
+                local.append(profile)
+            case .bridge:
+                let key = placement.bridge?.lowercased() ?? ""
+                let existing = bridgeGroups[key]
+                bridgeGroups[key] = (
+                    label: existing?.label ?? placementLabel(placement: placement),
+                    profiles: (existing?.profiles ?? []) + [profile]
+                )
+            case .unknown:
+                local.append(profile)
+            }
+        }
+        var groups: [HermesSetupPlacementGroup] = []
+        if !local.isEmpty {
+            groups.append(HermesSetupPlacementGroup(
+                label: placementLabel(
+                    placement: HermesSetupPlacement(kind: .local, profile: ""),
+                    computerName: computerName
+                ),
+                profiles: local
+            ))
+        }
+        groups.append(contentsOf: bridgeGroups.values.sorted {
+            $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+        }.map { HermesSetupPlacementGroup(label: $0.label, profiles: $0.profiles) })
+        return groups
     }
 }

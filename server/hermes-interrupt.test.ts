@@ -2,11 +2,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchHermesInterrupt, type HermesInterruptDependencies } from "./hermes-interrupt.ts";
 import { RoutineManager } from "./routines.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
+import { BridgeRegistry } from "./bridge-registry.ts";
+import { encodeHermesBridgeResult } from "../shared/bridge-hermes-contract.ts";
 
 const binding = {
   adapter: "hermesBot" as const,
@@ -32,6 +34,7 @@ function harness(state: "available" | "disabled" | "unreadable") {
         "bot-1",
         binding,
       ]]) },
+    loadBridgeBindings: () => ({ state: "available", value: new Map() }),
     hermesRegistry: {
       forBinding: () => state === "disabled" ? null : engine,
     },
@@ -90,6 +93,53 @@ describe("binding-aware interrupt dispatch", () => {
     await manager.cancelRun(run!.id);
     expect(h.calls()).toEqual({ hermes, provider });
     expect(manager.listRuns()[0]).toMatchObject({ status: "cancelled" });
+  });
+
+  it("routes bridge-bound bots through interruptHermesOnBridge", async () => {
+    const registry = new BridgeRegistry();
+    const { code } = registry.startPairing();
+    const { bridgeId } = registry.register({ name: "mini", code, capabilities: ["hermes"] });
+    registry.touch(bridgeId);
+
+    let providerCalls = 0;
+    const dependencies: HermesInterruptDependencies = {
+      loadBindings: () => ({ state: "available", value: new Map() }),
+      loadBridgeBindings: () => ({
+        state: "available",
+        value: new Map([["bot-bridge", { bridgeId, profile: "default", bindingVersion: 1 }]]),
+      }),
+      bridgeRegistry: registry,
+      hermesRegistry: { forBinding: () => null },
+      resolveProvider: () => ({
+        adapter: {
+          interruptTurn: async () => {
+            providerCalls += 1;
+          },
+        },
+      }),
+    };
+
+    vi.useFakeTimers();
+    const promise = dispatchHermesInterrupt({ botId: "bot-bridge", threadId: "thread-1" }, dependencies);
+    await vi.advanceTimersByTimeAsync(500);
+    const [job] = registry.pollJobs(bridgeId);
+    registry.storeResult({
+      jobId: job!.id,
+      bridgeId,
+      exitCode: 0,
+      stdout: encodeHermesBridgeResult({ kind: "hermes-interrupt", body: { ok: true } }),
+      stderr: "",
+      truncated: false,
+      finishedAt: Date.now(),
+      generation: job!.generation,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    const route = await promise;
+    vi.useRealTimers();
+
+    expect(route).toBe("hermes-bridge");
+    expect(providerCalls).toBe(0);
+    expect(job?.kind).toBe("hermes-interrupt");
   });
 
   it("keeps an unbound bot on its generic provider", async () => {
