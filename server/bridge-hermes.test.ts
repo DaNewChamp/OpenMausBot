@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -212,5 +212,30 @@ describe("typed Hermes bridge transport", () => {
     await vi.advanceTimersByTimeAsync(500);
     await expect(promise).rejects.toMatchObject({ code: "malformed_response" });
     vi.useRealTimers();
+  });
+
+  it("rejects invalid profile strings at enqueue", () => {
+    const { registry, bridgeId } = pairedHermesBridge();
+    expect(() => registry.enqueueHermesSend(bridgeId, {
+      profile: "../escape",
+      text: "hello",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    })).toThrow(/invalid hermes profile/i);
+    expect(() => registry.enqueueHermesEnsureCanonical(bridgeId, "bad profile!")).toThrow(/invalid hermes profile/i);
+  });
+
+  it("requires both advertised and granted hermes capability", () => {
+    const { registry, bridgeId } = pairedHermesBridge();
+    const path = join(DATA_DIR, "bridges.json");
+    const store = JSON.parse(readFileSync(path, "utf8")) as {
+      bridges: Array<{ id: string; capabilities: string[]; grantedCapabilities: string[] }>;
+    };
+    const bridge = store.bridges.find((entry) => entry.id === bridgeId);
+    expect(bridge).toBeTruthy();
+    bridge!.capabilities = ["hermes"];
+    bridge!.grantedCapabilities = ["shell"];
+    writeFileSync(path, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+    expect(() => registry.enqueueHermesDiscover(bridgeId)).toThrow(/granted hermes capability/i);
   });
 });

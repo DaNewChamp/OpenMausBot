@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
+import { validHermesBridgeProfile } from "../shared/bridge-hermes-contract.ts";
 
 export type BridgeCapability = "shell" | "local-vm" | "ssh-forward" | "hermes";
 
@@ -215,8 +216,18 @@ function bridgeRecord(bridgeId: string): BridgeRecord | null {
 function requireCapability(bridgeId: string, capability: BridgeCapability): BridgeRecord {
   const bridge = bridgeRecord(bridgeId);
   if (!bridge) throw new Error("unknown bridge");
-  if (!bridge.capabilities.includes(capability)) throw new Error(`bridge lacks ${capability} capability`);
-  return bridge;
+  const normalized = normalizeBridge(bridge);
+  if (!normalized.capabilities.includes(capability)) throw new Error(`bridge lacks ${capability} capability`);
+  if (!normalized.grantedCapabilities.includes(capability)) {
+    throw new Error(`bridge lacks granted ${capability} capability`);
+  }
+  return normalized;
+}
+
+function requireHermesProfile(profile: string): string {
+  const normalized = validHermesBridgeProfile(profile);
+  if (!normalized) throw new Error("invalid hermes profile");
+  return normalized;
 }
 
 function isTerminal(status: BridgeJobStatus): boolean {
@@ -630,11 +641,12 @@ export class BridgeRegistry {
     opts: EnqueueBridgeJobOpts = {},
   ): HermesEnsureCanonicalBridgeJob {
     requireCapability(bridgeId, "hermes");
+    const normalizedProfile = requireHermesProfile(profile);
     const job: HermesEnsureCanonicalBridgeJob = {
       id: randomUUID(),
       bridgeId,
       kind: "hermes-ensure-canonical",
-      payload: { profile },
+      payload: { profile: normalizedProfile },
       timeoutMs,
       createdAt: Date.now(),
     };
@@ -653,11 +665,12 @@ export class BridgeRegistry {
     opts: EnqueueBridgeJobOpts = {},
   ): HermesSendBridgeJob {
     requireCapability(bridgeId, "hermes");
+    const normalizedProfile = requireHermesProfile(payload.profile);
     const job: HermesSendBridgeJob = {
       id: randomUUID(),
       bridgeId,
       kind: "hermes-send",
-      payload,
+      payload: { ...payload, profile: normalizedProfile },
       timeoutMs,
       createdAt: Date.now(),
     };
@@ -676,11 +689,12 @@ export class BridgeRegistry {
     opts: EnqueueBridgeJobOpts = {},
   ): HermesInterruptBridgeJob {
     requireCapability(bridgeId, "hermes");
+    const normalizedProfile = requireHermesProfile(payload.profile);
     const job: HermesInterruptBridgeJob = {
       id: randomUUID(),
       bridgeId,
       kind: "hermes-interrupt",
-      payload,
+      payload: { ...payload, profile: normalizedProfile },
       timeoutMs,
       createdAt: Date.now(),
     };
