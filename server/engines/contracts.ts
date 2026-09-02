@@ -106,8 +106,9 @@ const DEFAULT_FAILURE_MESSAGES = {
 
 export class HermesEngineError extends Error {
   readonly code: HermesFailureCode;
+  readonly rpcCode?: number;
 
-  constructor(code: HermesFailureCode, _ignored?: unknown) {
+  constructor(code: HermesFailureCode, detail?: unknown) {
     // Public diagnostics are deliberately selected only from this fixed map.
     // Callers receive no escape hatch for paths, argv, stderr, provider
     // payloads, or query text to reach the error message.
@@ -115,6 +116,9 @@ export class HermesEngineError extends Error {
     Object.defineProperty(this, "name", { value: "HermesEngineError", enumerable: false });
     this.code = code;
     Object.defineProperty(this, "code", { value: code, enumerable: true, writable: false, configurable: false });
+    if (typeof detail === "number" && Number.isSafeInteger(detail)) {
+      Object.defineProperty(this, "rpcCode", { value: detail, enumerable: false, writable: false, configurable: false });
+    }
   }
 }
 

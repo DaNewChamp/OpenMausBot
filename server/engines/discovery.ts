@@ -319,7 +319,12 @@ function canonicalRowTypesValid(value: RecordLike): boolean {
   return true;
 }
 
-export function normalizeCanonicalLookup(payload: unknown, profile: string): HermesCanonicalLookup {
+export function normalizeCanonicalLookup(
+  payload: unknown,
+  profile: string,
+  options: { legacy?: boolean } = {},
+): HermesCanonicalLookup {
+  const legacy = options.legacy === true;
   const normalizedProfile = validProfileSlug(profile);
   if (!normalizedProfile || !isRecord(payload)) return unknownCanonical("malformed_response");
   // An explicit unavailable/pending envelope must never be mistaken for an
@@ -328,8 +333,15 @@ export function normalizeCanonicalLookup(payload: unknown, profile: string): Her
   if (envelopeMarkersUnavailable(payload)) {
     return unknownCanonical("state_unavailable");
   }
-  if (payload.limit !== undefined && payload.limit !== HERMES_SESSION_LIST_LIMIT) return unknownCanonical("malformed_response");
-  if (payload.include_hidden !== undefined && payload.include_hidden !== true) return unknownCanonical("malformed_response");
+  if (!legacy && payload.limit !== undefined && payload.limit !== HERMES_SESSION_LIST_LIMIT) {
+    return unknownCanonical("malformed_response");
+  }
+  if (!legacy && payload.include_hidden !== undefined && payload.include_hidden !== true) {
+    return unknownCanonical("malformed_response");
+  }
+  if (legacy && payload.limit !== undefined && payload.limit !== HERMES_SESSION_LIST_LIMIT) {
+    return unknownCanonical("malformed_response");
+  }
   if (!Array.isArray(payload.sessions) || payload.sessions.length > HERMES_SESSION_LIST_LIMIT) {
     return unknownCanonical("malformed_response");
   }
@@ -342,8 +354,8 @@ export function normalizeCanonicalLookup(payload: unknown, profile: string): Her
     if (value.title !== "Bot Chat") continue;
     if (!canonicalRowTypesValid(value)) return unknownCanonical("malformed_response");
     const source = canonicalSource(value.source);
-    if (source === "malformed") return unknownCanonical("malformed_response");
-    if (source === "kanban" || source === "tool") continue;
+    if (source === "malformed" && !legacy) return unknownCanonical("malformed_response");
+    if (!legacy && (source === "kanban" || source === "tool")) continue;
 
     const archived = value.archived === true || value.status === "archived";
     const recoverable = value.recoverable === true || value.can_resume === true;

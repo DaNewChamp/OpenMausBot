@@ -28,6 +28,14 @@ import {
   markHermesPendingProfile,
 } from "./bindings.ts";
 import {
+  isHermesMethodNotFound,
+  legacyDefaultProfileRow,
+  normalizeSetupStatus,
+  sessionListParams,
+  sessionResumeParams,
+  type HermesGatewayProtocol,
+} from "./hermes-protocol.ts";
+import {
   HermesEngineError,
   type HermesCanonicalChat,
   type HermesCanonicalLookup,
@@ -64,6 +72,7 @@ const HERMES_CHILD_ENV_KEYS = new Set([
   "HERMES_PYTHON",
   "HERMES_PYTHON_SRC_ROOT",
   "HERMES_CWD",
+  "PYTHON",
   "PYTHONPATH",
   "VIRTUAL_ENV",
   "LANG",
@@ -522,7 +531,11 @@ export class HermesGatewayClient extends EventEmitter {
     this.pending.delete(message.id);
     this.options.clock.clearTimeout(pending.timer);
     if (hasError) {
-      pending.reject(new HermesEngineError(classifyRpcError(message.error)));
+      const rpcCode = isRecord(message.error) && typeof message.error.code === "number"
+        && Number.isSafeInteger(message.error.code)
+        ? message.error.code
+        : undefined;
+      pending.reject(new HermesEngineError(classifyRpcError(message.error), rpcCode));
       return true;
     }
     pending.resolve(message.result);
@@ -897,6 +910,7 @@ export class HermesBotAdapter implements HermesBotEngine {
   private readonly listeners = new Set<(event: RuntimeEvent) => void>();
   private readonly readiness: HermesReadiness = {};
   private groupsProtocolSeen = false;
+  private protocol: HermesGatewayProtocol = "modern";
   private lastProfiles: HermesDiscovery["profiles"] = [];
   private rosterAvailable = false;
   private closed = false;
@@ -934,6 +948,19 @@ export class HermesBotAdapter implements HermesBotEngine {
   async discover(): Promise<HermesDiscovery> {
     try {
       await this.client.start();
+      const modern = await this.tryDiscoverModern();
+      if (modern) return modern;
+      return await this.discoverLegacy();
+    } catch (error) {
+      const safe = asHermesError(error);
+      this.demoteCapabilities();
+      this.rosterAvailable = false;
+      return this.discoveryUnavailable(safe.code);
+    }
+  }
+
+  private async tryDiscoverModern(): Promise<HermesDiscovery | null> {
+    try {
       const capabilities = await this.client.request("gateway.capabilities", {});
       if (
         capabilities
@@ -943,34 +970,92 @@ export class HermesBotAdapter implements HermesBotEngine {
       ) {
         this.readiness.exclusiveSubmit = true;
       }
-      try {
-        await this.client.request("groups.capabilities", {});
-        this.groupsProtocolSeen = true;
-      } catch {
+    } catch (error) {
+      if (!isHermesMethodNotFound(error)) throw error;
+    }
+
+    try {
+      await this.client.request("groups.capabilities", {});
+      this.groupsProtocolSeen = true;
+    } catch (error) {
+      if (!isHermesMethodNotFound(error)) {
         // Optional probe for later waves; never enables groups.
       }
-      const payload = await this.client.request("profiles.list", { include_sessions: true });
-      const normalized = normalizeProfileRowsResult(payload);
-      if (normalized.state === "unknown") {
-        this.demoteCapabilities();
-        this.rosterAvailable = false;
-        return this.discoveryUnavailable(normalized.code);
-      }
-      this.readiness.roster = true;
-      this.readiness.events = true;
-      this.lastProfiles = normalized.profiles;
-      this.rosterAvailable = true;
-      return {
-        state: "available",
-        ...(this.version() ? { version: this.version() } : {}),
-        capabilities: projectHermesCapabilities(this.readiness),
-        profiles: normalized.profiles,
-      };
+    }
+
+    let payload: unknown;
+    try {
+      payload = await this.client.request("profiles.list", { include_sessions: true });
     } catch (error) {
-      const safe = asHermesError(error);
+      if (isHermesMethodNotFound(error)) return null;
+      throw error;
+    }
+
+    this.protocol = "modern";
+    const normalized = normalizeProfileRowsResult(payload);
+    if (normalized.state === "unknown") {
       this.demoteCapabilities();
       this.rosterAvailable = false;
-      return this.discoveryUnavailable(safe.code);
+      return this.discoveryUnavailable(normalized.code);
+    }
+    this.readiness.roster = true;
+    this.readiness.events = true;
+    this.lastProfiles = normalized.profiles;
+    this.rosterAvailable = true;
+    return {
+      state: "available",
+      ...(this.version() ? { version: this.version() } : {}),
+      capabilities: projectHermesCapabilities(this.readiness),
+      profiles: normalized.profiles,
+    };
+  }
+
+  private async discoverLegacy(): Promise<HermesDiscovery> {
+    this.protocol = "legacy";
+    const setupPayload = await this.client.request("setup.status", {});
+    const setup = normalizeSetupStatus(setupPayload);
+    if (!setup) {
+      this.demoteCapabilities();
+      this.rosterAvailable = false;
+      return this.discoveryUnavailable("malformed_response");
+    }
+    if (!setup.providerConfigured) {
+      this.demoteCapabilities();
+      this.rosterAvailable = false;
+      return this.discoveryUnavailable("invalid_credentials");
+    }
+
+    const version = await this.probeLegacyVersion();
+    const normalized = normalizeProfileRowsResult({ profiles: [legacyDefaultProfileRow(true)] });
+    if (normalized.state === "unknown") {
+      this.demoteCapabilities();
+      this.rosterAvailable = false;
+      return this.discoveryUnavailable(normalized.code);
+    }
+    this.readiness.roster = true;
+    this.readiness.events = true;
+    this.readiness.exclusiveSubmit = false;
+    this.lastProfiles = normalized.profiles;
+    this.rosterAvailable = true;
+    return {
+      state: "available",
+      ...(version ? { version } : {}),
+      capabilities: projectHermesCapabilities(this.readiness),
+      profiles: normalized.profiles,
+    };
+  }
+
+  private async probeLegacyVersion(): Promise<string | undefined> {
+    try {
+      const payload = await this.client.request("cli.exec", { argv: ["--version"], timeout: 15 });
+      const record = asRecord(payload);
+      if (!record || record.blocked === true) return undefined;
+      const output = typeof record.output === "string" ? record.output.trim().split("\n", 1)[0]?.trim() : undefined;
+      if (!output || output.length === 0 || output.length > MAX_READY_VERSION_LENGTH) return undefined;
+      if (/[\u0000-\u001f\u007f\u0080-\u009f]/.test(output)) return undefined;
+      return output;
+    } catch {
+      return undefined;
     }
   }
 
@@ -1027,16 +1112,7 @@ export class HermesBotAdapter implements HermesBotEngine {
       }
 
       try {
-        const created = await this.client.request("session.create", {
-          profile: resolvedProfile,
-          title: "Bot Chat",
-          hidden: true,
-          source: "tui",
-        });
-        if (!createdSessionId(created)) {
-          this.demoteCapabilities();
-          throw new HermesEngineError("malformed_response");
-        }
+        await this.mintCanonicalSession(resolvedProfile);
       } catch (error) {
         const safe = asHermesError(error);
         this.demoteCapabilities();
@@ -1111,13 +1187,7 @@ export class HermesBotAdapter implements HermesBotEngine {
         try {
           const discovered = await this.requireDiscoveredProfile(profile);
           if (discovered.state !== "available") throw new HermesEngineError(discovered.code);
-          const created = await this.client.request("session.create", {
-            profile: discovered.profile,
-            title: "Bot Chat",
-            hidden: true,
-            source: "tui",
-          });
-          if (!createdSessionId(created)) throw new HermesEngineError("malformed_response");
+          await this.mintCanonicalSession(discovered.profile);
         } catch (error) {
           throw asHermesError(error);
         }
@@ -1135,7 +1205,10 @@ export class HermesBotAdapter implements HermesBotEngine {
       await this.client.start();
       let resume: unknown;
       try {
-        resume = await this.client.request("session.resume", { profile: resolvedProfile, session_id: resolvedChat.resolvedSessionId });
+        resume = await this.client.request(
+          "session.resume",
+          sessionResumeParams(this.protocol, resolvedChat.resolvedSessionId, resolvedProfile),
+        );
       } catch (error) {
         this.demoteCapabilities();
         throw asHermesError(error);
@@ -1263,20 +1336,25 @@ export class HermesBotAdapter implements HermesBotEngine {
       await this.client.start();
       const payload = await this.client.request(
         "session.list",
-        { profile: resolvedProfile, title: "Bot Chat", include_hidden: true, limit: 200 },
+        sessionListParams(this.protocol, resolvedProfile),
       );
-      const normalized = normalizeCanonicalLookup(payload, resolvedProfile);
+      const normalized = normalizeCanonicalLookup(payload, resolvedProfile, { legacy: this.protocol === "legacy" });
       if (normalized.state !== "unknown") {
         this.readiness.canonicalChat = true;
         if (
-          normalized.state === "present" &&
-          canonicalHiddenState(payload, normalized.chat.rootSessionId) === false
+          this.protocol === "modern"
+          && normalized.state === "present"
+          && canonicalHiddenState(payload, normalized.chat.rootSessionId) === false
         ) {
-          await this.client.request("session.set_hidden", {
-            profile: resolvedProfile,
-            session_id: normalized.chat.rootSessionId,
-            hidden: true,
-          });
+          try {
+            await this.client.request("session.set_hidden", {
+              profile: resolvedProfile,
+              session_id: normalized.chat.rootSessionId,
+              hidden: true,
+            });
+          } catch (error) {
+            if (!isHermesMethodNotFound(error)) throw error;
+          }
         }
       } else {
         this.demoteCapabilities();
@@ -1286,6 +1364,37 @@ export class HermesBotAdapter implements HermesBotEngine {
       const safe = asHermesError(error);
       this.demoteCapabilities();
       return { state: "unknown", code: canonicalUnknownCode(safe.code), message: safe.message };
+    }
+  }
+
+  private async mintCanonicalSession(profile: string): Promise<void> {
+    if (this.protocol === "legacy") {
+      const created = await this.client.request("session.create", { cols: 80 });
+      const runtimeId = createdSessionId(created);
+      if (!runtimeId) {
+        this.demoteCapabilities();
+        throw new HermesEngineError("malformed_response");
+      }
+      try {
+        await this.client.request("session.title", { session_id: runtimeId, title: "Bot Chat" });
+      } finally {
+        try {
+          await this.client.request("session.close", { session_id: runtimeId });
+        } catch {
+          /* best effort */
+        }
+      }
+      return;
+    }
+    const created = await this.client.request("session.create", {
+      profile,
+      title: "Bot Chat",
+      hidden: true,
+      source: "tui",
+    });
+    if (!createdSessionId(created)) {
+      this.demoteCapabilities();
+      throw new HermesEngineError("malformed_response");
     }
   }
 
@@ -1342,6 +1451,7 @@ export class HermesBotAdapter implements HermesBotEngine {
       return;
     }
     this.rosterAvailable = false;
+    this.protocol = "modern";
     for (const key of Object.keys(this.readiness) as Array<keyof HermesReadiness>) {
       delete this.readiness[key];
     }

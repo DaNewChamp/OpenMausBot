@@ -60,6 +60,10 @@ class FakeProcess extends EventEmitter implements HermesProcess {
       this.stdin.writes.push(chunk);
       const request = JSON.parse(chunk) as { id: number; method: string; params: Record<string, unknown> };
       if (request.method === "gateway.capabilities") {
+        if (this.protocolMode === "legacy") {
+          this.frame({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "unknown method" } });
+          return true;
+        }
         if (this.capabilitiesMode === "auto") {
           this.frame({ jsonrpc: "2.0", id: request.id, result: { per_session_exclusive_submit: true } });
         } else if (this.capabilitiesMode === "omit") {
@@ -68,7 +72,25 @@ class FakeProcess extends EventEmitter implements HermesProcess {
         return true;
       }
       if (request.method === "groups.capabilities") {
+        if (this.protocolMode === "legacy") {
+          this.frame({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "unknown method" } });
+          return true;
+        }
         this.frame({ jsonrpc: "2.0", id: request.id, result: { authority_epoch: 1 } });
+        return true;
+      }
+      if (request.method === "profiles.list") {
+        if (this.protocolMode === "legacy") {
+          this.frame({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "unknown method" } });
+          return true;
+        }
+      }
+      if (request.method === "setup.status") {
+        this.frame({ jsonrpc: "2.0", id: request.id, result: { provider_configured: true } });
+        return true;
+      }
+      if (request.method === "cli.exec") {
+        this.frame({ jsonrpc: "2.0", id: request.id, result: { blocked: false, code: 0, output: "0.10.0-fixture\n" } });
         return true;
       }
       this.onRequest?.(request);
@@ -78,6 +100,7 @@ class FakeProcess extends EventEmitter implements HermesProcess {
     on: vi.fn(),
   };
   capabilitiesMode: "auto" | "manual" | "omit" = "auto";
+  protocolMode: "modern" | "legacy" = "modern";
   onRequest?: (request: { id: number; method: string; params: Record<string, unknown> }) => void;
   kill = vi.fn(() => true);
 
@@ -155,6 +178,33 @@ describe("Hermes Bot Chat loopback transport", () => {
     expect(env.V_BOT_TOKEN).toBeUndefined();
     expect(env.OPENMAUSBOT_SECRET).toBeUndefined();
     expect(env.HERMES_HOME).toBe("/private/hermes");
+    await engine.close();
+  });
+
+  it("falls back to Hermes 0.10 setup.status when profiles.list is missing", async () => {
+    const child = new FakeProcess();
+    child.protocolMode = "legacy";
+    const engine = createTestHermesEngine({ spawn: () => child });
+    const discover = engine.discover();
+    await settle();
+    ready(child);
+    await settle();
+    const methods = child.stdin.writes.map((raw) => JSON.parse(raw).method);
+    expect(methods).toContain("gateway.capabilities");
+    expect(methods).toContain("profiles.list");
+    expect(methods).toContain("setup.status");
+    const setup = JSON.parse(child.stdin.writes.find((raw) => JSON.parse(raw).method === "setup.status")!);
+    child.frame({ jsonrpc: "2.0", id: setup.id, result: { provider_configured: true } });
+    await settle();
+    const version = JSON.parse(child.stdin.writes.find((raw) => JSON.parse(raw).method === "cli.exec")!);
+    child.frame({ jsonrpc: "2.0", id: version.id, result: { blocked: false, code: 0, output: "0.10.0-fixture\n" } });
+    const discovery = await discover;
+    expect(discovery).toMatchObject({
+      state: "available",
+      version: "0.10.0-fixture",
+      profiles: [{ profile: "default", handle: "hermes" }],
+      capabilities: { roster: true, exclusiveSubmit: false },
+    });
     await engine.close();
   });
 

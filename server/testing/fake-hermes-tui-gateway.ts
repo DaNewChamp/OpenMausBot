@@ -19,6 +19,7 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const defaultMode = process.env.FAKE_HERMES_MODE ?? "happy";
+const protocol = process.env.FAKE_HERMES_PROTOCOL ?? "modern";
 const emitDeltas = process.env.FAKE_HERMES_DELTAS === "1";
 const PROFILE = "default";
 const NAMED_PROFILE = "work";
@@ -39,6 +40,14 @@ function readHomeMode(): string | undefined {
 function readHomeDeltas(): boolean {
   if (!HERMES_HOME) return emitDeltas;
   return emitDeltas || existsSync(`${HERMES_HOME}/fixture-deltas`);
+}
+
+function activeProtocol() {
+  return process.env.FAKE_HERMES_PROTOCOL?.trim() || protocol;
+}
+
+function isLegacyProtocol() {
+  return activeProtocol() === "legacy";
 }
 
 function activeMode() {
@@ -124,6 +133,9 @@ if (initialMode === "crash") {
 }
 
 const out = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
+const methodNotFound = (id: number) => {
+  out({ jsonrpc: "2.0", id, error: { code: -32601, message: "unknown method" } });
+};
 const logRpc = (method: string, params: unknown) => {
   if (!rpcLogPath) return;
   appendFileSync(rpcLogPath, `${JSON.stringify({ method, params, pid: process.pid })}\n`);
@@ -184,16 +196,47 @@ process.stdin.on("data", (chunk) => {
     }
 
     if (request.method === "gateway.capabilities") {
+      if (isLegacyProtocol()) {
+        methodNotFound(request.id);
+        return;
+      }
       out({ jsonrpc: "2.0", id: request.id, result: { per_session_exclusive_submit: true } });
       return;
     }
 
     if (request.method === "groups.capabilities") {
+      if (isLegacyProtocol()) {
+        methodNotFound(request.id);
+        return;
+      }
       out({ jsonrpc: "2.0", id: request.id, result: { authority_epoch: 1, replicas: 1 } });
       return;
     }
 
+    if (request.method === "setup.status") {
+      if (mode === "auth-fail") {
+        out({ jsonrpc: "2.0", id: request.id, result: { provider_configured: false } });
+        return;
+      }
+      out({ jsonrpc: "2.0", id: request.id, result: { provider_configured: true } });
+      return;
+    }
+
+    if (request.method === "cli.exec") {
+      const argv = request.params?.argv;
+      if (Array.isArray(argv) && argv[0] === "--version") {
+        out({ jsonrpc: "2.0", id: request.id, result: { blocked: false, code: 0, output: "2026.8.31-fixture\n" } });
+        return;
+      }
+      out({ jsonrpc: "2.0", id: request.id, result: { blocked: true, code: -1, output: "" } });
+      return;
+    }
+
     if (request.method === "profiles.list") {
+      if (isLegacyProtocol()) {
+        methodNotFound(request.id);
+        return;
+      }
       if (mode === "auth-fail") {
         out({ jsonrpc: "2.0", id: request.id, error: { code: 401, message: "token=/fixture/secret" } });
         return;
@@ -250,7 +293,12 @@ process.stdin.on("data", (chunk) => {
 
     if (request.method === "session.list") {
       const params = request.params ?? {};
-      if (params.title !== "Bot Chat" || params.include_hidden !== true || params.limit !== 200) {
+      if (isLegacyProtocol()) {
+        if (params.limit !== undefined && params.limit !== 200) {
+          out({ jsonrpc: "2.0", id: request.id, error: { code: -32602, message: "invalid lookup" } });
+          return;
+        }
+      } else if (params.title !== "Bot Chat" || params.include_hidden !== true || params.limit !== 200) {
         out({ jsonrpc: "2.0", id: request.id, error: { code: -32602, message: "invalid lookup" } });
         return;
       }
@@ -282,7 +330,21 @@ process.stdin.on("data", (chunk) => {
 
     if (request.method === "session.create") {
       mintedCanonical = true;
+      if (isLegacyProtocol()) {
+        out({ jsonrpc: "2.0", id: request.id, result: { session_id: "runtime-minted", info: { model: "fixture-model" } } });
+        return;
+      }
       out({ jsonrpc: "2.0", id: request.id, result: { session_id: "runtime-minted" } });
+      return;
+    }
+
+    if (request.method === "session.title") {
+      out({ jsonrpc: "2.0", id: request.id, result: { title: request.params?.title ?? "", session_key: SESSION_ROOT } });
+      return;
+    }
+
+    if (request.method === "session.close") {
+      out({ jsonrpc: "2.0", id: request.id, result: { closed: true } });
       return;
     }
 
