@@ -158,6 +158,7 @@ export function projectHermesGatewayToolEvent(input: ProjectHermesEventInput): H
   const name = safeToolName(payload.name ?? payload.tool);
   if (!name) return null;
   if (name === "message_agent") {
+    if (input.type !== "tool.start" && input.type !== "tool.call") return null;
     return projectHermesMessageAgent(input, {
       name,
       arguments: payload.arguments as Record<string, unknown> | undefined,

@@ -64,12 +64,52 @@ export class HermesCommBudget {
   }
 }
 
+export const REPLAY_TTL_MS = 24 * 60 * 60 * 1000;
+
+export interface HermesCommReplayClock {
+  now(): number;
+}
+
+export interface HermesCommReplayOptions {
+  ttlMs?: number;
+  clock?: HermesCommReplayClock;
+  cleanupLimit?: number;
+}
+
 export class HermesCommReplay {
-  private readonly seen = new Set<string>();
+  private readonly seen = new Map<string, number>();
+  private readonly ttlMs: number;
+  private readonly clock: HermesCommReplayClock;
+  private readonly cleanupLimit: number;
+
+  constructor(options: HermesCommReplayOptions = {}) {
+    this.ttlMs = options.ttlMs ?? REPLAY_TTL_MS;
+    this.clock = options.clock ?? { now: () => Date.now() };
+    this.cleanupLimit = options.cleanupLimit ?? 64;
+  }
 
   remember(deliveryKey: string): boolean {
-    if (this.seen.has(deliveryKey)) return false;
-    this.seen.add(deliveryKey);
+    this.evictExpired();
+    const now = this.clock.now();
+    const seenAt = this.seen.get(deliveryKey);
+    if (seenAt !== undefined && now - seenAt < this.ttlMs) return false;
+    this.seen.set(deliveryKey, now);
     return true;
+  }
+
+  /** @internal test seam for bounded cleanup assertions */
+  sizeForTests(): number {
+    return this.seen.size;
+  }
+
+  private evictExpired(): void {
+    const now = this.clock.now();
+    let removed = 0;
+    for (const [key, seenAt] of this.seen) {
+      if (now - seenAt < this.ttlMs) continue;
+      this.seen.delete(key);
+      removed += 1;
+      if (removed >= this.cleanupLimit) break;
+    }
   }
 }

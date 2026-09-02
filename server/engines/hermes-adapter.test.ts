@@ -13,6 +13,7 @@ import {
   type HermesProcess,
   type HermesSpawn,
 } from "./hermes.ts";
+import { HermesCommBudget } from "./hermes-comms.ts";
 import type { RuntimeEvent } from "../contracts.ts";
 
 class FakeStream extends EventEmitter {
@@ -1081,6 +1082,156 @@ describe("Hermes Bot Chat loopback transport", () => {
     expect(rpc.params.request_id).toBe("req-1");
     child.frame({ jsonrpc: "2.0", id: rpc.id, result: { ok: true } });
     await approval;
+    await engine.close();
+  });
+
+  it("denies through approval.respond with deny", async () => {
+    const { child } = harness();
+    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const send = engine.send({ profile: "coder", text: "run", threadId: "t", turnId: "turn-deny" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", resolved_id: "tip", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "runtime-deny" } });
+    await settle();
+    const prompt = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: prompt.id, result: { accepted: true } });
+    await send;
+    const approval = engine.respondToApproval({ profile: "coder", requestId: "req-deny", choice: "deny" });
+    await settle();
+    const rpc = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(rpc.method).toBe("approval.respond");
+    expect(rpc.params.choice).toBe("deny");
+    child.frame({ jsonrpc: "2.0", id: rpc.id, result: { ok: true } });
+    await approval;
+    await engine.close();
+  });
+
+  it("records groupsProtocolSeen without enabling groups capability", async () => {
+    const { child, spawn } = harness();
+    const engine = createHermesBotEngine({ spawn });
+    const discover = engine.discover();
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "default" }] } });
+    await discover;
+    expect(engine.adapterMemory.groupsProtocolSeen).toBe(true);
+    expect(engine.capabilities.groups).toBe(false);
+    await engine.close();
+  });
+
+  it("projects request.opened without paths or tokens in the summary", async () => {
+    const { child } = harness();
+    const engine = new HermesBotAdapter({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const events: RuntimeEvent[] = [];
+    engine.onEvent((event) => events.push(event));
+    const send = engine.send({ profile: "coder", text: "run", threadId: "t", turnId: "turn-opened" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", resolved_id: "tip", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "runtime-opened" } });
+    await settle();
+    const prompt = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: prompt.id, result: { accepted: true } });
+    await send;
+    child.frame({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "approval.pending",
+        session_id: "runtime-opened",
+        payload: {
+          request_id: "req-opened",
+          tool: "shell",
+          summary: "rm -rf /private/hermes/state.db",
+          command: "Bearer sk-secret-token",
+        },
+      },
+    });
+    await settle();
+    const opened = events.find((event) => event.type === "request.opened");
+    expect(opened).toMatchObject({ requestType: "permission", tool: "shell", requestId: "req-opened" });
+    expect(JSON.stringify(opened)).not.toMatch(/private|Bearer|sk-secret|state\.db/i);
+    await engine.close();
+  });
+
+  async function startRuntime(
+    engine: HermesBotAdapter,
+    child: FakeProcess,
+    turnId: string,
+  ): Promise<string> {
+    const send = engine.send({ profile: "coder", text: "ping", threadId: "t-comm", turnId });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", resolved_id: "tip", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: `runtime-${turnId}` } });
+    await settle();
+    const prompt = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: prompt.id, result: { accepted: true } });
+    await send;
+    return `runtime-${turnId}`;
+  }
+
+  function emitMessageAgent(child: FakeProcess, runtimeId: string, eventType: "tool.start" | "tool.complete"): void {
+    const payload = {
+      name: "message_agent",
+      arguments: { target: "researcher", message: "ship it" },
+      ...(eventType === "tool.complete" ? { ok: true, status: "complete" } : {}),
+    };
+    child.frame({
+      jsonrpc: "2.0",
+      method: "event",
+      params: { type: eventType, session_id: runtimeId, payload },
+    });
+  }
+
+  it("delivers message_agent comm once across start and complete without burning budget on replay skip", async () => {
+    const { child } = harness();
+    const budget = new HermesCommBudget(1);
+    const delivered: unknown[] = [];
+    const engine = new HermesBotAdapter({
+      spawn: vi.fn(() => child),
+      timeouts: { requestMs: 100, turnMs: 500 },
+      handleToBotId: new Map([["researcher", "bot-b"]]),
+      fromBotId: "bot-a",
+      senderHandle: "coder",
+      onComm: (candidate) => delivered.push(candidate),
+      commBudget: budget,
+    });
+    const events: RuntimeEvent[] = [];
+    engine.onEvent((event) => events.push(event));
+    const runtimeId = await startRuntime(engine, child, "comm-once");
+    emitMessageAgent(child, runtimeId, "tool.start");
+    emitMessageAgent(child, runtimeId, "tool.complete");
+    emitMessageAgent(child, runtimeId, "tool.start");
+    await settle();
+    expect(delivered).toHaveLength(1);
+    expect(events.filter((event) => event.title === "too many teammate messages")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "item.started" && event.title === "message_agent")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "item.completed" && event.title === "message_agent")).toHaveLength(1);
     await engine.close();
   });
 

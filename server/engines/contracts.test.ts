@@ -68,9 +68,10 @@ describe("Hermes internal contracts", () => {
     } satisfies HermesCapabilityFlags);
   });
 
-  it("turns exclusiveSubmit on only after gateway.capabilities proves per_session_exclusive_submit", () => {
+  it("projects exclusiveSubmit only from readiness flags set after live gateway.capabilities proof", () => {
     expect(projectHermesCapabilities({ exclusiveSubmit: true }).exclusiveSubmit).toBe(true);
-    expect(projectHermesCapabilities({ provenExclusiveSubmit: true } as never).exclusiveSubmit).toBe(false);
+    expect(projectHermesCapabilities({}).exclusiveSubmit).toBe(false);
+    expect(projectHermesCapabilities({ roster: true }).exclusiveSubmit).toBe(false);
   });
 
   it("lists the Wave 2 keys after the Wave 1 keys", () => {

@@ -316,6 +316,23 @@ process.stdin.on("data", (chunk) => {
               },
             },
           });
+          out({
+            jsonrpc: "2.0",
+            method: "event",
+            params: {
+              type: "tool.complete",
+              session_id: runtimeId,
+              payload: {
+                name: "message_agent",
+                arguments: {
+                  target: readMessageAgentTarget(),
+                  message: "fixture teammate ping",
+                },
+                ok: true,
+                status: "complete",
+              },
+            },
+          });
         }
         if (mode === "approval-ask") {
           out({

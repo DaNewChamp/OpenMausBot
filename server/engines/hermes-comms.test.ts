@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   HermesCommBudget,
   HermesCommReplay,
+  REPLAY_TTL_MS,
   deliveryKey,
   normalizeMessageAgentBody,
   resolveLocalTarget,
@@ -31,5 +32,26 @@ describe("hermes-comms", () => {
     const key = deliveryKey({ fromBotId: "a", toBotId: "b", turnId: "t", text: "hi" });
     expect(replay.remember(key)).toBe(true);
     expect(replay.remember(key)).toBe(false);
+  });
+
+  it("expires delivery keys after 24h using an injectable clock", () => {
+    let now = 1_700_000_000_000;
+    const replay = new HermesCommReplay({ clock: { now: () => now } });
+    const key = deliveryKey({ fromBotId: "a", toBotId: "b", turnId: "t", text: "hi" });
+    expect(replay.remember(key)).toBe(true);
+    now += REPLAY_TTL_MS - 1;
+    expect(replay.remember(key)).toBe(false);
+    now += 1;
+    expect(replay.remember(key)).toBe(true);
+  });
+
+  it("bounds replay cleanup work per remember call", () => {
+    let now = 0;
+    const replay = new HermesCommReplay({ clock: { now: () => now }, cleanupLimit: 2 });
+    for (let index = 0; index < 5; index += 1) {
+      replay.remember(`key-${index}`);
+      now += REPLAY_TTL_MS + 1;
+    }
+    expect(replay.sizeForTests()).toBeLessThanOrEqual(3);
   });
 });

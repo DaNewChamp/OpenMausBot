@@ -716,15 +716,19 @@ async function answerRequest(
     : undefined;
   const hermesEngine = hermesBinding ? hermesRegistry.forBinding(hermesBinding) : null;
   if (hermesEngine?.respondToApproval && hermesBinding) {
-    try {
-      await hermesEngine.respondToApproval({
-        profile: hermesBinding.profile,
-        requestId,
-        choice: behavior === "allow" ? "allow" : "deny",
-      });
-      outcome = behavior === "allow" ? "allowed-once" : "rejected";
-    } catch {
+    if (behavior !== "allow" && behavior !== "deny") {
       outcome = "unavailable";
+    } else {
+      try {
+        await hermesEngine.respondToApproval({
+          profile: hermesBinding.profile,
+          requestId,
+          choice: behavior,
+        });
+        outcome = behavior === "allow" ? "allowed-once" : "rejected";
+      } catch {
+        outcome = "unavailable";
+      }
     }
   } else if (instance) {
     try {
@@ -1463,9 +1467,27 @@ bus.subscribe((event: RuntimeEvent) => {
         // answered — and if the provider is gone entirely, forever.
         void (async () => {
           try {
-            if (!instance) throw new Error("provider unavailable");
             const behavior = verdict.deny ? "deny" : "allow";
-            const outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior });
+            const hermesBindings = loadHermesBindings();
+            const hermesBinding = hermesBindings.state === "available"
+              ? hermesBindings.value.get(asker.id)
+              : undefined;
+            const hermesEngine = hermesBinding ? hermesRegistry.forBinding(hermesBinding) : null;
+            let outcome: RequestOutcome;
+            if (hermesEngine?.respondToApproval && hermesBinding) {
+              if (behavior !== "allow" && behavior !== "deny") {
+                throw new Error("unsupported behavior");
+              }
+              await hermesEngine.respondToApproval({
+                profile: hermesBinding.profile,
+                requestId,
+                choice: behavior,
+              });
+              outcome = behavior === "allow" ? "allowed-once" : "rejected";
+            } else {
+              if (!instance) throw new Error("provider unavailable");
+              outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior });
+            }
             if (outcome === "unavailable") throw new Error("the ask is no longer open");
             pushMessage({
               role: "bot",

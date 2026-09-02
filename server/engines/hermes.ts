@@ -180,6 +180,8 @@ export interface HermesBotEngine {
   }): Promise<void>;
   onEvent(listener: (event: RuntimeEvent) => void): () => void;
   close(): Promise<void>;
+  /** Adapter-only memory not projected into public capability flags. */
+  readonly adapterMemory?: { groupsProtocolSeen: boolean };
 }
 
 export interface HermesGatewayEventFrame {
@@ -874,6 +876,7 @@ export class HermesBotAdapter implements HermesBotEngine {
   private readonly runtimes = new Map<string, RuntimeRecord>();
   private readonly listeners = new Set<(event: RuntimeEvent) => void>();
   private readonly readiness: HermesReadiness = {};
+  private groupsProtocolSeen = false;
   private lastProfiles: HermesDiscovery["profiles"] = [];
   private rosterAvailable = false;
   private closed = false;
@@ -922,6 +925,7 @@ export class HermesBotAdapter implements HermesBotEngine {
       }
       try {
         await this.client.request("groups.capabilities", {});
+        this.groupsProtocolSeen = true;
       } catch {
         // Optional probe for later waves; never enables groups.
       }
@@ -1223,6 +1227,10 @@ export class HermesBotAdapter implements HermesBotEngine {
     return projectHermesCapabilities(this.readiness);
   }
 
+  get adapterMemory(): { groupsProtocolSeen: boolean } {
+    return { groupsProtocolSeen: this.groupsProtocolSeen };
+  }
+
   private async lookupCanonicalOutsideLock(profile: string): Promise<HermesCanonicalLookup> {
     const discovered = await this.requireDiscoveredProfile(profile);
     if (discovered.state !== "available") {
@@ -1305,6 +1313,7 @@ export class HermesBotAdapter implements HermesBotEngine {
     for (const key of Object.keys(this.readiness) as Array<keyof HermesReadiness>) {
       delete this.readiness[key];
     }
+    this.groupsProtocolSeen = false;
   }
 
   private handleGatewayState(change: GatewayStateChange): void {
@@ -1316,6 +1325,7 @@ export class HermesBotAdapter implements HermesBotEngine {
     for (const key of Object.keys(this.readiness) as Array<keyof HermesReadiness>) {
       delete this.readiness[key];
     }
+    this.groupsProtocolSeen = false;
     const reason = change.reason ?? "gateway_unavailable";
     for (const runtime of [...this.runtimes.values()]) {
       if (runtime.generation !== change.generation) continue;
@@ -1430,6 +1440,7 @@ export class HermesBotAdapter implements HermesBotEngine {
     const approvalProjection = projectHermesGatewayApprovalEvent(baseInput);
     const projection = toolProjection ?? approvalProjection;
     if (!projection) return;
+    if (projection.comm && this.onComm && !this.commReplay.remember(projection.comm.deliveryKey)) return;
     for (const event of projection.events) this.emitRuntime(runtime, event);
     if (projection.comm && this.onComm) {
       if (!this.commBudget.tryConsume(runtime.turnId)) {
@@ -1441,7 +1452,6 @@ export class HermesBotAdapter implements HermesBotEngine {
         });
         return;
       }
-      if (!this.commReplay.remember(projection.comm.deliveryKey)) return;
       this.onComm(projection.comm);
       this.readiness.messageAgent = true;
       this.emitRuntime(runtime, {
