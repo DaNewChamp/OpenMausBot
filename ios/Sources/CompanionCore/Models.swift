@@ -852,13 +852,15 @@ public struct CompanionConnectionMetadata: Decodable, Sendable {
     public var serverName: String
     public var hosts: [String]?
     public var endpoints: [CompanionEndpoint]
+    public var runtimeProfile: String?
 
-    private enum CodingKeys: String, CodingKey { case serverName, hosts, endpoints }
+    private enum CodingKeys: String, CodingKey { case serverName, hosts, endpoints, runtimeProfile }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         serverName = try container.decode(String.self, forKey: .serverName)
         hosts = try container.decodeIfPresent([String].self, forKey: .hosts)
+        runtimeProfile = try container.decodeIfPresent(String.self, forKey: .runtimeProfile)
 
         // Endpoint metadata is a replacement snapshot, not an optional hint.
         // Keep a future malformed kind from discarding valid routes beside it,

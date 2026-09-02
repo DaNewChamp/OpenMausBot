@@ -346,6 +346,12 @@ extension Connection {
             .filter { (!$0.isASCII && !$0.isNewline) || $0.asciiValue.map { $0 >= 32 && $0 != 127 } == true }
         if !cleanedName.isEmpty { name = String(cleanedName.prefix(80)) }
 
+        if let profile = metadata.runtimeProfile?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !profile.isEmpty {
+            runtimeProfile = profile
+        }
+
         if let advertisedHosts = metadata.hosts {
             hosts = Array(advertisedHostsAllowedByRoutePolicy(advertisedHosts).prefix(8))
         }

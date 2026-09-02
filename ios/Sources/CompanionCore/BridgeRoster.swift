@@ -53,7 +53,13 @@ public enum FleetPresentationPolicy: Sendable {
     }
 
     public static func friendlyNameFromHost(_ host: String) -> String {
-        let address = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let address: String
+        if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") && trimmed.count >= 2 {
+            address = String(trimmed.dropFirst().dropLast())
+        } else {
+            address = trimmed
+        }
         if address.contains(":")
             || address.range(of: #"^\d{1,3}(?:\.\d{1,3}){3}$"#, options: .regularExpression) != nil {
             return "Connected computer"
@@ -92,21 +98,30 @@ public enum FleetPresentationPolicy: Sendable {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty, !isGenericHubName(trimmed) { return trimmed }
 
-        if runtimeProfile == "headless-hub", isAddressHost(host) {
-            return "Headless V Bot hub"
-        }
-        if runtimeProfile == "desktop-client", isAddressHost(host) {
-            return "V Bot client"
-        }
+        let profileName = profileFallback(runtimeProfile)
+        if let profileName, isAddressHost(host) { return profileName }
 
         let fromHost = friendlyNameFromHost(host)
         if fromHost != "Connected computer" { return fromHost }
-        if runtimeProfile == "headless-hub" { return "Headless V Bot hub" }
-        return fromHost
+        return profileName ?? fromHost
     }
 
-    private static func isAddressHost(_ host: String) -> Bool {
-        let address = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+    private static func profileFallback(_ runtimeProfile: String?) -> String? {
+        switch runtimeProfile {
+        case "headless-hub": return "Headless V Bot hub"
+        case "desktop-client": return "V Bot client"
+        default: return nil
+        }
+    }
+
+    static func isAddressHost(_ host: String) -> Bool {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let address: String
+        if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") && trimmed.count >= 2 {
+            address = String(trimmed.dropFirst().dropLast())
+        } else {
+            address = trimmed
+        }
         return address.contains(":")
             || address.range(of: #"^\d{1,3}(?:\.\d{1,3}){3}$"#, options: .regularExpression) != nil
     }
@@ -139,16 +154,28 @@ public enum BridgePresentationPolicy: Sendable {
 
     public static func displayName(for entry: BridgeRosterEntry) -> String {
         let host = entry.hostInfo?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if FleetPresentationPolicy.isGenericHubName(entry.name), !host.isEmpty {
+        if FleetPresentationPolicy.isGenericHubName(entry.name) {
+            if !host.isEmpty {
+                let fromHost = FleetPresentationPolicy.friendlyNameFromHost(host)
+                if fromHost != "Connected computer" { return fromHost }
+            }
+            return genericBridgeFallback
+        }
+        let trimmed = entry.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        if !host.isEmpty {
             let fromHost = FleetPresentationPolicy.friendlyNameFromHost(host)
             if fromHost != "Connected computer" { return fromHost }
         }
-        let trimmed = entry.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty, !host.isEmpty {
-            return FleetPresentationPolicy.friendlyNameFromHost(host)
-        }
-        return trimmed.isEmpty ? "Connected bridge" : trimmed
+        return genericBridgeFallback
     }
+
+    public static func accessibilityLabel(for bridge: PresentedBridgeEntry) -> String {
+        let status = onlineStatus(bridge.entry.online)
+        return "\(bridge.displayName), \(bridge.roleLabel.rawValue), \(status)"
+    }
+
+    private static let genericBridgeFallback = "Connected bridge"
 
     public static func present(_ bridges: [BridgeRosterEntry]) -> [PresentedBridgeEntry] {
         var grouped: [String: [BridgeRosterEntry]] = [:]
@@ -225,8 +252,28 @@ public enum BridgePresentationPolicy: Sendable {
     }
 
     private static func normalizedHostIdentity(_ hostInfo: String?) -> String? {
-        let trimmed = hostInfo?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+        let trimmed = hostInfo?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+
+        let stripped: String
+        if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") && trimmed.count >= 2 {
+            stripped = String(trimmed.dropFirst().dropLast())
+        } else {
+            stripped = trimmed
+        }
+        let lowered = stripped.lowercased()
+        guard !lowered.isEmpty else { return nil }
+
+        if FleetPresentationPolicy.isAddressHost(lowered) { return lowered }
+
+        let dotIndex = lowered.firstIndex(of: ".")
+        if dotIndex == nil { return lowered }
+
+        let suffix = lowered[lowered.index(after: dotIndex!)...]
+        if suffix == "local" || suffix == "lan" {
+            return String(lowered[..<dotIndex!])
+        }
+        return lowered
     }
 
     private static func pickCanonicalIndex(_ group: [BridgeRosterEntry]) -> Int {

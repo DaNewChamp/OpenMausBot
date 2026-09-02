@@ -139,4 +139,19 @@ describe("fleet presentation", () => {
 
     expect(presented[0]?.displayName).toBe("Mac mini");
   });
+
+  it("labels generic bridges without host evidence as Connected bridge", () => {
+    const presented = presentBridgeRoster([
+      {
+        id: "br-generic",
+        name: "OpenMausBot",
+        hostInfo: null,
+        online: true,
+        createdAt: 1,
+        lastSeenAt: 2,
+      },
+    ]);
+
+    expect(presented[0]?.displayName).toBe("Connected bridge");
+  });
 });

@@ -1,0 +1,259 @@
+{
+  "hubDisplay": [
+    {
+      "id": "alias-wins",
+      "input": {
+        "name": "OpenMausBot",
+        "host": "macmini.local",
+        "alias": "Home Mac"
+      },
+      "expected": "Home Mac"
+    },
+    {
+      "id": "custom-name-preserved",
+      "input": {
+        "name": "Studio Mac",
+        "host": "macmini.local"
+      },
+      "expected": "Studio Mac"
+    },
+    {
+      "id": "generic-host-derived",
+      "input": {
+        "name": "OpenMausBot",
+        "host": "macmini.local"
+      },
+      "expected": "Mac mini"
+    },
+    {
+      "id": "headless-ip",
+      "input": {
+        "name": "OpenMausBot",
+        "host": "192.168.1.10",
+        "runtimeProfile": "headless-hub"
+      },
+      "expected": "Headless V Bot hub"
+    },
+    {
+      "id": "desktop-client-ip",
+      "input": {
+        "name": "OpenMausBot",
+        "host": "192.168.1.10",
+        "runtimeProfile": "desktop-client"
+      },
+      "expected": "V Bot client"
+    },
+    {
+      "id": "desktop-client-empty-host",
+      "input": {
+        "name": "OpenMausBot",
+        "host": "",
+        "runtimeProfile": "desktop-client"
+      },
+      "expected": "V Bot client"
+    },
+    {
+      "id": "headless-empty-host",
+      "input": {
+        "name": "OpenMausBot",
+        "host": "",
+        "runtimeProfile": "headless-hub"
+      },
+      "expected": "Headless V Bot hub"
+    },
+    {
+      "id": "ipv4-generic-no-profile",
+      "input": {
+        "name": "OpenMausBot",
+        "host": "192.168.112.112"
+      },
+      "expected": "Connected computer"
+    },
+    {
+      "id": "ipv6-generic-no-profile",
+      "input": {
+        "name": "OpenMausBot",
+        "host": "fd00::1234"
+      },
+      "expected": "Connected computer"
+    },
+    {
+      "id": "macbook-lan-desktop-hub",
+      "input": {
+        "name": "OpenMaus",
+        "host": "macbook.lan",
+        "runtimeProfile": "desktop-hub"
+      },
+      "expected": "MacBook"
+    },
+    {
+      "id": "bracketed-ipv6-desktop-client",
+      "input": {
+        "name": "OpenMausBot",
+        "host": "[fe80::1]",
+        "runtimeProfile": "desktop-client"
+      },
+      "expected": "V Bot client"
+    },
+    {
+      "id": "v-bot-generic-host",
+      "input": {
+        "name": "V Bot",
+        "host": "macbook.lan"
+      },
+      "expected": "MacBook"
+    }
+  ],
+  "friendlyHost": [
+    {
+      "id": "macmini-local",
+      "host": "macmini.local",
+      "expected": "Mac mini"
+    },
+    {
+      "id": "bracketed-ipv6",
+      "host": "[fe80::1]",
+      "expected": "Connected computer"
+    },
+    {
+      "id": "ipv4",
+      "host": "192.168.112.112",
+      "expected": "Connected computer"
+    },
+    {
+      "id": "partial-brackets-not-stripped",
+      "host": "host[test]",
+      "expected": "Host[test]"
+    }
+  ],
+  "bridgeRoster": [
+    {
+      "id": "stale-same-host-identity",
+      "bridges": [
+        {
+          "id": "br-old",
+          "name": "mini",
+          "hostInfo": "macmini.local",
+          "online": false,
+          "createdAt": 1,
+          "lastSeenAt": 2
+        },
+        {
+          "id": "br-new",
+          "name": "mini",
+          "hostInfo": "macmini.local",
+          "online": true,
+          "createdAt": 10,
+          "lastSeenAt": 20
+        }
+      ],
+      "expectedIds": ["br-new", "br-old"],
+      "expectedStale": [false, true],
+      "expectedDisplayNames": ["mini", "mini"]
+    },
+    {
+      "id": "short-fqdn-merge",
+      "bridges": [
+        {
+          "id": "br-short",
+          "name": "mini",
+          "hostInfo": "macmini",
+          "online": false,
+          "createdAt": 1,
+          "lastSeenAt": 2
+        },
+        {
+          "id": "br-fqdn",
+          "name": "mini",
+          "hostInfo": "macmini.local",
+          "online": true,
+          "createdAt": 10,
+          "lastSeenAt": 20
+        }
+      ],
+      "expectedIds": ["br-fqdn", "br-short"],
+      "expectedStale": [false, true],
+      "expectedDisplayNames": ["mini", "mini"]
+    },
+    {
+      "id": "different-hosts-stay-separate",
+      "bridges": [
+        {
+          "id": "br-a",
+          "name": "mini",
+          "hostInfo": "macmini.local",
+          "online": true,
+          "createdAt": 1,
+          "lastSeenAt": 2
+        },
+        {
+          "id": "br-b",
+          "name": "mini",
+          "hostInfo": "other-mac.local",
+          "online": false,
+          "createdAt": 3,
+          "lastSeenAt": 4
+        }
+      ],
+      "expectedIds": ["br-a", "br-b"],
+      "expectedStale": [false, false],
+      "expectedDisplayNames": ["mini", "mini"]
+    },
+    {
+      "id": "generic-no-hostinfo",
+      "bridges": [
+        {
+          "id": "br-generic",
+          "name": "OpenMausBot",
+          "hostInfo": null,
+          "online": true,
+          "createdAt": 1,
+          "lastSeenAt": 2
+        }
+      ],
+      "expectedIds": ["br-generic"],
+      "expectedStale": [false],
+      "expectedDisplayNames": ["Connected bridge"]
+    },
+    {
+      "id": "generic-with-hostinfo",
+      "bridges": [
+        {
+          "id": "br-mini",
+          "name": "OpenMausBot",
+          "hostInfo": "macmini.local",
+          "online": true,
+          "createdAt": 1,
+          "lastSeenAt": 2
+        }
+      ],
+      "expectedIds": ["br-mini"],
+      "expectedStale": [false],
+      "expectedDisplayNames": ["Mac mini"]
+    },
+    {
+      "id": "never-merge-by-display-name",
+      "bridges": [
+        {
+          "id": "br-a",
+          "name": "mini",
+          "hostInfo": "macmini.local",
+          "online": true,
+          "createdAt": 1,
+          "lastSeenAt": 2
+        },
+        {
+          "id": "br-b",
+          "name": "mini",
+          "hostInfo": "oracle.example.com",
+          "online": false,
+          "createdAt": 3,
+          "lastSeenAt": 4
+        }
+      ],
+      "expectedIds": ["br-a", "br-b"],
+      "expectedStale": [false, false],
+      "expectedDisplayNames": ["mini", "mini"]
+    }
+  ]
+}

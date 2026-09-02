@@ -31,12 +31,21 @@ public enum ConnectionPresentationPolicy: Sendable {
         FleetPresentationPolicy.resolveHubDisplayName(
             name: connection.name,
             host: connection.host,
-            alias: connection.alias
+            alias: connection.alias,
+            runtimeProfile: connection.runtimeProfile
         )
     }
 
-    public static func displayName(name: String, host: String) -> String {
-        FleetPresentationPolicy.resolveHubDisplayName(name: name, host: host)
+    public static func displayName(
+        name: String,
+        host: String,
+        runtimeProfile: String? = nil
+    ) -> String {
+        FleetPresentationPolicy.resolveHubDisplayName(
+            name: name,
+            host: host,
+            runtimeProfile: runtimeProfile
+        )
     }
 
     public static func fleetSummary(count: Int) -> String {

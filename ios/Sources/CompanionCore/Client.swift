@@ -434,6 +434,9 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
     public var endpoints: [CompanionEndpoint]?
     /// A phone-local friendly name. Does not change pairing id or Keychain token.
     public var alias: String?
+    /// Hub runtime profile when the sidecar publishes it. Optional so older saved
+    /// connections decode without migration.
+    public var runtimeProfile: String?
     /// The route kinds this pairing explicitly authorized. `nil` is reserved
     /// for connections saved by older app versions and retains their legacy
     /// failover behavior. New pairings always persist a non-nil policy, with
@@ -455,7 +458,8 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
         endpoints: [CompanionEndpoint]? = nil,
         allowedRouteKinds: Set<CompanionEndpointKind>? = nil,
         allowedLocalRouteURLs: Set<String>? = nil,
-        alias: String? = nil
+        alias: String? = nil,
+        runtimeProfile: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -467,6 +471,7 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
         self.allowedRouteKinds = allowedRouteKinds
         self.allowedLocalRouteURLs = allowedLocalRouteURLs
         self.alias = alias
+        self.runtimeProfile = runtimeProfile
     }
 
     /// The representation `URLComponents.host` accepts for a literal IPv6

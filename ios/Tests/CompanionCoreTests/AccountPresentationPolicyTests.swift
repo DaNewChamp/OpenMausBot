@@ -58,6 +58,32 @@ final class AccountPresentationPolicyTests: XCTestCase {
         )
     }
 
+    func testRuntimeProfileOnConnectionDrivesHeadlessLabel() {
+        let connection = Connection(
+            id: "headless",
+            name: "OpenMausBot",
+            host: "192.168.112.112",
+            port: 8810,
+            runtimeProfile: "headless-hub"
+        )
+        XCTAssertEqual(
+            ConnectionPresentationPolicy.displayName(for: connection),
+            "Headless V Bot hub"
+        )
+    }
+
+    func testSavedConnectionWithoutRuntimeProfileStillDecodes() throws {
+        let data = Data(
+            #"{"id":"legacy","name":"OpenMausBot","host":"macmini.local","port":8810}"#.utf8
+        )
+        let connection = try JSONDecoder().decode(Connection.self, from: data)
+        XCTAssertNil(connection.runtimeProfile)
+        XCTAssertEqual(
+            ConnectionPresentationPolicy.displayName(for: connection),
+            "Mac mini"
+        )
+    }
+
     func testFleetSummaryDescribesPhonePairings() {
         XCTAssertEqual(ConnectionPresentationPolicy.fleetSummary(count: 0), "No computers paired")
         XCTAssertEqual(ConnectionPresentationPolicy.fleetSummary(count: 1), "1 computer paired")

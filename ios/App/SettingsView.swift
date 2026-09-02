@@ -691,6 +691,7 @@ struct ConnectedComputersView: View {
                                 Circle()
                                     .fill(bridge.entry.online ? Color.green : Color.secondary)
                                     .frame(width: 7, height: 7)
+                                    .accessibilityHidden(true)
                                 Text(BridgePresentationPolicy.onlineStatus(bridge.entry.online))
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
@@ -705,6 +706,8 @@ struct ConnectedComputersView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 2)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(BridgePresentationPolicy.accessibilityLabel(for: bridge))
                     }
                 } header: {
                     Text(ConnectionPresentationPolicy.bridgeSectionTitle)

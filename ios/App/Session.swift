@@ -450,6 +450,7 @@ final class Session: ObservableObject {
         if let existing = registry.matchingConnection(for: stored) {
             stored.id = existing.id
             stored.alias = existing.alias
+            stored.runtimeProfile = existing.runtimeProfile
         }
 
         try Keychain.save(paired.token, for: stored.id)

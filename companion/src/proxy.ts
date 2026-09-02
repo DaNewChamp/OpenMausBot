@@ -101,6 +101,8 @@ export interface ProxyOptions {
   /** Complete connection URLs for current mobile clients. `hosts` remains
    * alongside this field for builds that predate typed endpoints. */
   endpoints?: () => CompanionEndpoint[];
+  /** Presentation-only hub profile for saved phone labels. */
+  runtimeProfile?: () => string;
   /** Register one authenticated, live event stream. The tracker can terminate
    * it synchronously when that device is revoked; the returned disposer is
    * called exactly once when either side closes it. */
@@ -122,6 +124,7 @@ export interface ProxyOptions {
 export interface CompanionEndpointSnapshot {
   serverName: string;
   endpoints: CompanionEndpoint[];
+  runtimeProfile?: string;
 }
 
 /** The harness has this long to send a status line and headers.
@@ -264,6 +267,7 @@ const endpointSnapshot = (options: ProxyOptions): CompanionEndpointSnapshot => {
   return {
     serverName: [...options.serverName()].slice(0, 200).join(""),
     endpoints,
+    runtimeProfile: options.runtimeProfile?.(),
   };
 };
 

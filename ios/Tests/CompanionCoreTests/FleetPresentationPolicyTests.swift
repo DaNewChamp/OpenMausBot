@@ -95,4 +95,49 @@ final class BridgePresentationPolicyTests: XCTestCase {
 
         XCTAssertEqual(presented.first?.displayName, "Mac mini")
     }
+
+    func testGenericBridgeWithoutHostInfoUsesConnectedBridge() {
+        let presented = BridgePresentationPolicy.present([
+            BridgeRosterEntry(
+                id: "br-generic",
+                name: "OpenMausBot",
+                capabilities: [],
+                grantedCapabilities: [],
+                createdAt: 1,
+                lastSeenAt: 2,
+                hostInfo: nil,
+                online: true
+            ),
+        ])
+
+        XCTAssertEqual(presented.first?.displayName, "Connected bridge")
+    }
+
+    func testShortAndFqdnHostIdentityMergeForStaleLabeling() {
+        let presented = BridgePresentationPolicy.present([
+            BridgeRosterEntry(
+                id: "br-short",
+                name: "mini",
+                capabilities: [],
+                grantedCapabilities: [],
+                createdAt: 1,
+                lastSeenAt: 2,
+                hostInfo: "macmini",
+                online: false
+            ),
+            BridgeRosterEntry(
+                id: "br-fqdn",
+                name: "mini",
+                capabilities: [],
+                grantedCapabilities: [],
+                createdAt: 10,
+                lastSeenAt: 20,
+                hostInfo: "macmini.local",
+                online: true
+            ),
+        ])
+
+        XCTAssertEqual(presented.map(\.id), ["br-fqdn", "br-short"])
+        XCTAssertTrue(presented[1].stale)
+    }
 }

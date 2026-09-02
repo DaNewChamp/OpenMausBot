@@ -111,7 +111,7 @@ async function refreshMachineName(): Promise<void> {
     const owner = config.profile?.name?.trim();
     if (owner) cachedName = `${owner}'s computer`;
   } catch {
-    /* not up, or no profile — "OpenMausBot" is a fine thing to be called */
+    /* harness not up or profile missing — keep the host-derived label */
   }
 }
 
@@ -157,6 +157,7 @@ const proxy = createProxyHandler({
     // list has to be right.
     hosts: () => hostCandidates(),
     endpoints: () => companionEndpointCandidates(COMPANION_PORT, undefined, undefined, hostedUrl),
+    runtimeProfile: () => "desktop-hub",
     connected: connectedDevices.open,
     grantLocalVmAccess: (id) => devices.setLocalVmAccess(id, true),
     deviceById: (id) => devices.find(id),

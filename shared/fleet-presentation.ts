@@ -110,18 +110,40 @@ export function resolveHubDisplayName(input: HubDisplayInput): string {
 }
 
 function normalizeHostIdentity(hostInfo?: string | null): string | null {
-  const trimmed = hostInfo?.trim().toLowerCase();
-  return trimmed ? trimmed : null;
+  const trimmed = hostInfo?.trim();
+  if (!trimmed) return null;
+  const stripped = stripHostBrackets(trimmed).toLowerCase();
+  if (!stripped) return null;
+  if (isAddressHost(stripped)) return stripped;
+
+  const dotIndex = stripped.indexOf(".");
+  if (dotIndex === -1) return stripped;
+
+  const suffix = stripped.slice(dotIndex + 1);
+  if (suffix === "local" || suffix === "lan") {
+    return stripped.slice(0, dotIndex);
+  }
+  return stripped;
 }
+
+const GENERIC_BRIDGE_FALLBACK = "Connected bridge";
 
 function bridgeDisplayName(entry: BridgeRosterEntryLike): string {
   const host = entry.hostInfo?.trim() ?? "";
-  if (isGenericHubName(entry.name) && host) {
+  if (isGenericHubName(entry.name)) {
+    if (host) {
+      const fromHost = friendlyNameFromHost(host);
+      if (fromHost !== "Connected computer") return fromHost;
+    }
+    return GENERIC_BRIDGE_FALLBACK;
+  }
+  const trimmed = entry.name.trim();
+  if (trimmed) return trimmed;
+  if (host) {
     const fromHost = friendlyNameFromHost(host);
     if (fromHost !== "Connected computer") return fromHost;
   }
-  const trimmed = entry.name.trim();
-  return trimmed || friendlyNameFromHost(host);
+  return GENERIC_BRIDGE_FALLBACK;
 }
 
 function pickCanonicalIndex<T extends BridgeRosterEntryLike>(group: T[]): number {
@@ -142,7 +164,7 @@ function pickCanonicalIndex<T extends BridgeRosterEntryLike>(group: T[]): number
   return best;
 }
 
-/** Collapse or label stale bridge rows using host identity only. */
+/** Label stale bridge rows using host identity only; never merge by display name. */
 export function presentBridgeRoster<T extends BridgeRosterEntryLike>(
   bridges: readonly T[],
 ): PresentedBridgeEntry<T>[] {
