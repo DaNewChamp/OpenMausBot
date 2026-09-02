@@ -470,6 +470,10 @@ final class Session: ObservableObject {
         } saveConnection: {
             UserDefaults.standard.set(try? JSONEncoder().encode(updatedRegistry), forKey: Self.connectionsKey)
         }
+        UserDefaults.standard.set(
+            true,
+            forKey: CompanionOnboardingPreferences.pendingHermesConnectionCardKey
+        )
 
         pairingInvite = CompanionPairingInvitePolicy.nextInvite(
             current: pairingInvite,
@@ -635,6 +639,7 @@ final class Session: ObservableObject {
         }
         if connections.isEmpty {
             UserDefaults.standard.removeObject(forKey: CompanionOnboardingPreferences.pendingNotificationOnboardingKey)
+            UserDefaults.standard.removeObject(forKey: CompanionOnboardingPreferences.pendingHermesConnectionCardKey)
         }
     }
 
@@ -664,6 +669,9 @@ final class Session: ObservableObject {
         UserDefaults.standard.removeObject(forKey: Self.pinnedOverridesKey)
         UserDefaults.standard.removeObject(
             forKey: CompanionOnboardingPreferences.pendingNotificationOnboardingKey
+        )
+        UserDefaults.standard.removeObject(
+            forKey: CompanionOnboardingPreferences.pendingHermesConnectionCardKey
         )
         connection = nil
         client = nil

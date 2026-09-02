@@ -11,6 +11,8 @@ import UIKit
 struct ChatListView: View {
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage(CompanionOnboardingPreferences.pendingHermesConnectionCardKey)
+    private var hermesCardPending = false
     @State private var query = ""
     /// Driven so that making a bot can open it. Value-based navigation alone
     /// cannot push without a tap, and a new bot appearing silently at the
@@ -26,6 +28,9 @@ struct ChatListView: View {
     @State private var pinnedShelfCollapseReserve = false
     @State private var activityExpanded = false
     @State private var needsYouIslandExpanded = false
+    @State private var hermesStatus: HermesSetupStatus?
+    @State private var hermesStatusLoading = false
+    @State private var connectingHermesCard = false
     @FocusState private var searchFocused: Bool
 
     private var needsYouUpdate: ChatUpdate? {
@@ -50,6 +55,18 @@ struct ChatListView: View {
             VStack(spacing: 0) {
                 header
                 StatusBanner()
+
+                if query.isEmpty, showsHermesConnectionCard {
+                    HermesConnectionCard(
+                        presentation: HermesConnectionCardPolicy.presentation(
+                            status: hermesStatus,
+                            isLoading: hermesStatusLoading
+                        ),
+                        connecting: connectingHermesCard,
+                        onConnect: { Task { await connectHermesFromCard() } },
+                        onDismiss: dismissHermesConnectionCard
+                    )
+                }
 
                 if query.isEmpty,
                    CalmSurfacePolicy.reservesPinnedShelfRegion(
@@ -274,7 +291,79 @@ struct ChatListView: View {
                 searchHits = await session.search(expected)
                 searching = false
             }
+            .task(id: hermesCardRefreshToken) {
+                await refreshHermesConnectionCardStatus()
+            }
+            .onChange(of: hermesStatus) { _, _ in
+                reconcileHermesConnectionCardPending()
+            }
+            .onChange(of: hermesStatusLoading) { _, _ in
+                reconcileHermesConnectionCardPending()
+            }
         }
+    }
+
+    private var hermesCardRefreshToken: String {
+        "\(session.connection?.id ?? "none")|\(hermesCardPending)"
+    }
+
+    private var hermesCardDismissed: Bool {
+        guard let connectionID = session.connection?.id else { return true }
+        return UserDefaults.standard.bool(
+            forKey: CompanionOnboardingPreferences.dismissedHermesConnectionCardKey(connectionID: connectionID)
+        )
+    }
+
+    private var hermesConnectionCardContext: HermesConnectionCardContext {
+        HermesConnectionCardContext(
+            isPending: hermesCardPending,
+            isDismissed: hermesCardDismissed,
+            hermesStatus: hermesStatus,
+            isLoading: hermesStatusLoading
+        )
+    }
+
+    private var showsHermesConnectionCard: Bool {
+        HermesConnectionCardPolicy.shouldShow(hermesConnectionCardContext)
+    }
+
+    private func refreshHermesConnectionCardStatus() async {
+        guard session.connection != nil, hermesCardPending, !hermesCardDismissed else { return }
+        hermesStatusLoading = true
+        defer { hermesStatusLoading = false }
+        hermesStatus = await session.hermesSetupStatus()
+        reconcileHermesConnectionCardPending()
+    }
+
+    private func reconcileHermesConnectionCardPending() {
+        hermesCardPending = HermesConnectionCardPolicy.shouldKeepPending(hermesConnectionCardContext)
+    }
+
+    private func dismissHermesConnectionCard() {
+        guard let connectionID = session.connection?.id else {
+            hermesCardPending = false
+            return
+        }
+        UserDefaults.standard.set(
+            true,
+            forKey: CompanionOnboardingPreferences.dismissedHermesConnectionCardKey(connectionID: connectionID)
+        )
+        hermesCardPending = false
+    }
+
+    private func connectHermesFromCard() async {
+        connectingHermesCard = true
+        defer { connectingHermesCard = false }
+        guard let result = await session.connectHermes() else { return }
+        guard let chat = session.hermesChat(forBotID: result.botId) else { return }
+        if let connectionID = session.connection?.id {
+            UserDefaults.standard.set(
+                true,
+                forKey: CompanionOnboardingPreferences.dismissedHermesConnectionCardKey(connectionID: connectionID)
+            )
+        }
+        hermesCardPending = false
+        openHermesChat(chat)
     }
 
     // MARK: - Header
