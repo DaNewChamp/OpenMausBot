@@ -272,6 +272,31 @@ public enum HermesConversionApplyPolicy: Sendable {
     }
 }
 
+public enum HermesConversionSheetPolicy: Sendable {
+    /// The conversion sheet only opens when a connected profile already owns a
+    /// bot id. Picking a default runtime must not mint a new bot.
+    public static func pendingConversion(
+        selected: HermesEndpointOption,
+        connectedProfiles: [HermesSetupProfile]
+    ) -> HermesEndpointOption? {
+        connectedProfiles.contains { profile in
+            let id = profile.botId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return !id.isEmpty
+        } ? selected : nil
+    }
+
+    public static func applyRequests(
+        endpoint: HermesEndpointOption,
+        botIds: [String]
+    ) -> [(botId: String, request: HermesRuntimeRebindRequest)] {
+        let request = HermesConversionApplyPolicy.request(from: endpoint)
+        return botIds
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { ($0, request) }
+    }
+}
+
 public struct HermesRuntimeRebindRequest: Encodable, Hashable, Sendable, Equatable {
     public var kind: String
     public var instanceId: String?

@@ -77,5 +77,17 @@ final class HomeActivityRailLayoutPolicyTests: XCTestCase {
     func testCompactPillSitsImmediatelyAboveTheComposer() {
         XCTAssertEqual(HomeActivityRailLayoutPolicy.composerAnchor, .immediatelyAboveComposer)
         XCTAssertFalse(HomeActivityRailLayoutPolicy.showsRail(for: .quiet))
+        XCTAssertEqual(
+            HomeActivityRailLayoutPolicy.composerPillPlacement(presentationState: .quiet),
+            .hidden
+        )
+        XCTAssertEqual(
+            HomeActivityRailLayoutPolicy.composerPillPlacement(presentationState: .active),
+            .immediatelyAboveComposer
+        )
+        XCTAssertEqual(
+            HomeActivityRailLayoutPolicy.composerPillPlacement(presentationState: .needsAttention),
+            .immediatelyAboveComposer
+        )
     }
 }

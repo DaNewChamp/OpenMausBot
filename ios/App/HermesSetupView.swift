@@ -202,9 +202,10 @@ struct HermesSetupView: View {
                 ForEach(hermesEndpoints) { endpoint in
                     Button(endpoint.label) {
                         session.setDefaultHermesEndpoint(endpoint)
-                        if !connectedProfiles.isEmpty {
-                            pendingConversion = endpoint
-                        }
+                        pendingConversion = HermesConversionSheetPolicy.pendingConversion(
+                            selected: endpoint,
+                            connectedProfiles: connectedProfiles
+                        )
                     }
                     .disabled(session.defaultHermesEndpoint()?.id == endpoint.id && pendingConversion == nil)
                 }
@@ -252,10 +253,12 @@ struct HermesSetupView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Convert") {
-                    let request = HermesConversionApplyPolicy.request(from: endpoint)
-                    for profile in connectedProfiles {
-                        guard let botId = profile.botId, !botId.isEmpty else { continue }
-                        session.configureHermesRuntime(botId: botId, request: request)
+                    let requests = HermesConversionSheetPolicy.applyRequests(
+                        endpoint: endpoint,
+                        botIds: connectedProfiles.compactMap(\.botId)
+                    )
+                    for item in requests {
+                        session.configureHermesRuntime(botId: item.botId, request: item.request)
                     }
                     session.setDefaultHermesEndpoint(endpoint)
                     pendingConversion = nil

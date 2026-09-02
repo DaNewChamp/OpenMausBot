@@ -400,6 +400,40 @@ final class HermesSetupTests: XCTestCase {
         XCTAssertFalse(json.contains("token"))
     }
 
+    func testConversionSheetApplyUsesTheEndpointRequestForConnectedBots() throws {
+        let local = HermesEndpointOption(id: "local:coder", computerName: "This computer", profile: "coder")
+        let unconnected = HermesSetupProfile(
+            profile: "coder",
+            handle: "hermes",
+            displayName: "Coder",
+            description: "Profile"
+        )
+        XCTAssertNil(
+            HermesConversionSheetPolicy.pendingConversion(selected: local, connectedProfiles: [unconnected])
+        )
+        let connected = HermesSetupProfile(
+            profile: "coder",
+            handle: "hermes",
+            displayName: "Coder",
+            description: "Profile",
+            botId: "bot-chief"
+        )
+        XCTAssertEqual(
+            HermesConversionSheetPolicy.pendingConversion(selected: local, connectedProfiles: [connected])?.id,
+            local.id
+        )
+        let requests = HermesConversionSheetPolicy.applyRequests(
+            endpoint: HermesEndpointOption(id: "bridge:mac mini:default", computerName: "Mac mini", profile: "default"),
+            botIds: ["bot-chief", "", "bot-specialist"]
+        )
+        XCTAssertEqual(requests.map(\.botId), ["bot-chief", "bot-specialist"])
+        XCTAssertEqual(requests.first?.request.kind, "bridge")
+        XCTAssertEqual(requests.first?.request.bridgeId, "mac mini")
+        XCTAssertEqual(requests.first?.request.profile, "default")
+        XCTAssertTrue(requests.first?.request.userRequested ?? false)
+        XCTAssertEqual(requests.last?.request.bridgeId, "mac mini")
+    }
+
     func testHydratesTemporaryAgentsFromTheExistingFleetSnapshot() throws {
         let data = Data(
             #"{"bots":[],"groups":[],"hermesSubagents":[{"activityId":"act-1","parentThreadId":"parent-thread","title":"Draft review","status":"started","transcriptThreadId":"thread-temp-1","promoteEligible":false}]}"#.utf8

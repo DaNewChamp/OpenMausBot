@@ -290,13 +290,14 @@ struct ChatView: View {
                     session.reconcileQueueReceipts(forThread: threadId, transcript: transcript)
                 }
             )
-            if HomeActivityRailLayoutPolicy.composerAnchor == .immediatelyAboveComposer,
-               HomeActivityRailLayoutPolicy.showsRail(for: session.state.homeActivityPresentation(
-                queuedReceipts: [],
-                subagents: session.state.hermesSubagents.filter {
-                    $0.parentThreadId == threadId || $0.transcriptThreadId == threadId
-                }
-               ).state) {
+            if HomeActivityRailLayoutPolicy.composerPillPlacement(
+                presentationState: session.state.homeActivityPresentation(
+                    queuedReceipts: [],
+                    subagents: session.state.hermesSubagents.filter {
+                        $0.parentThreadId == threadId || $0.transcriptThreadId == threadId
+                    }
+                ).state
+            ) == .immediatelyAboveComposer {
                 HomeActivityPill(
                     open: { chat in
                         session.beginOpeningFromHome(chat)

@@ -58,7 +58,24 @@ public enum HomeActivityRailLayoutPolicy: Sendable {
         case immediatelyAboveComposer
     }
 
+    public enum ComposerPillPlacement: String, Sendable {
+        case immediatelyAboveComposer
+        case hidden
+    }
+
     /// In an open chat the compact pill sits immediately above the composer,
     /// not only on the home roster rail.
     public static let composerAnchor: ComposerAnchor = .immediatelyAboveComposer
+
+    /// Quiet still hides the rail. Active/needs-attention place the compact
+    /// pill immediately above the composer — the same decision ChatView uses.
+    public static func composerPillPlacement(
+        presentationState: HomeActivityPresentation.State
+    ) -> ComposerPillPlacement {
+        guard showsRail(for: presentationState) else { return .hidden }
+        switch composerAnchor {
+        case .immediatelyAboveComposer:
+            return .immediatelyAboveComposer
+        }
+    }
 }
