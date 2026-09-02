@@ -56,6 +56,8 @@ import { ReactionBar, ReactionChips } from "./Reactions";
 import { SpeakButton } from "./SpeakButton";
 import { CallButton, CallOverlay } from "./CallView";
 import { cn } from "@/lib/cn";
+import { commChipOpenIntent, openBotChannelFromPerspective, type BotChannelOpenIntent } from "@/lib/bot-channel-open";
+import { BotChannelChooser } from "./BotChannelChooser";
 import { COMPACT_SQUARE } from "@/lib/compact-chip";
 import { useFocusMessage } from "@/lib/focus-message";
 import { groupActivityRuns } from "@/lib/activity-runs";
@@ -553,7 +555,15 @@ function Bubble({
 }
 
 /** A tool run: spinner while live, check/cross once settled. */
-function ActivityChip({ message }: { message: Message }) {
+function ActivityChip({
+  message,
+  invokingBotId,
+  onOpenComm,
+}: {
+  message: Message;
+  invokingBotId?: string;
+  onOpenComm: (intent: BotChannelOpenIntent) => void;
+}) {
   const { state, dispatch } = useStore();
   const tool = message.tool;
   if (!tool) return null;
@@ -564,11 +574,19 @@ function ActivityChip({ message }: { message: Message }) {
       <div className="flex justify-center py-1">
         <button
           onClick={() => {
-            dispatch({ type: "select", id: comm.groupId });
             const group = state.groups.find((candidate) => candidate.id === comm.groupId);
-            if (group && comm.messageId) {
-              dispatch({ type: "focusMessage", threadId: group.threadId, messageId: comm.messageId });
+            const intent = commChipOpenIntent(comm, group, invokingBotId);
+            if (intent) {
+              onOpenComm(intent);
+              return;
             }
+            if (!group) return;
+            openBotChannelFromPerspective(
+              dispatch,
+              group,
+              group.memberIds[0] ?? comm.withBotId,
+              comm.messageId,
+            );
           }}
           title={`Open the conversation with ${comm.withName}`}
           className="flex items-center gap-2 text-[12.5px] text-ink-secondary hover:text-ink"
@@ -664,6 +682,7 @@ const MessagesList = memo(function MessagesList({
   onSubmitEdit,
   onRegenerate,
   onReply,
+  onOpenComm,
 }: {
   bot: Bot;
   messages: Message[];
@@ -679,6 +698,7 @@ const MessagesList = memo(function MessagesList({
   onSubmitEdit: (id: string, text: string) => void;
   onRegenerate: () => void;
   onReply: (message: Message) => void;
+  onOpenComm: (intent: BotChannelOpenIntent) => void;
 }) {
   const { state, dispatch } = useStore();
   // Fold finished tool chips into runs, so a stretch of them cannot bury
@@ -716,7 +736,7 @@ const MessagesList = memo(function MessagesList({
               <ActivityRun messages={item.messages} forceOpen={item.messages.some((step) => step.id === focusedId)}>
                 {item.messages.map((step) => (
                   <div key={step.id} className="contents" data-mid={step.id}>
-                    <ActivityChip message={step} />
+                    <ActivityChip message={step} invokingBotId={bot.id} onOpenComm={onOpenComm} />
                   </div>
                 ))}
               </ActivityRun>
@@ -747,7 +767,7 @@ const MessagesList = memo(function MessagesList({
                   setupInstance={m.tool.setup ? engine : undefined}
                 />
               ) : (
-                <ActivityChip message={m} />
+                <ActivityChip message={m} invokingBotId={bot.id} onOpenComm={onOpenComm} />
               );
             case "screen":
               return m.png ? <ScreenFrame png={m.png} mime={m.mime} /> : null;
@@ -975,6 +995,7 @@ export function ChatView({ bot }: { bot: Bot }) {
   const [findOpen, setFindOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [pendingBotChannelOpen, setPendingBotChannelOpen] = useState<BotChannelOpenIntent | null>(null);
   useEffect(() => setFindOpen(false), [bot.threadId]);
   useEffect(() => setTimelineOpen(false), [bot.threadId]);
   useEffect(() => setReplyTo(null), [bot.threadId]);
@@ -1279,6 +1300,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             onSubmitEdit={submitEdit}
             onRegenerate={regenerate}
             onReply={setReplyTo}
+            onOpenComm={setPendingBotChannelOpen}
           />
           {laterCount > 0 && (
             <div className="flex justify-center">
@@ -1341,6 +1363,22 @@ export function ChatView({ bot }: { bot: Bot }) {
         onClearReply={() => setReplyTo(null)}
         onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
       />
+      {pendingBotChannelOpen && (
+        <BotChannelChooser
+          group={pendingBotChannelOpen.group}
+          invokingBotId={pendingBotChannelOpen.invokingBotId}
+          onClose={() => setPendingBotChannelOpen(null)}
+          onSelect={(perspectiveBotId) => {
+            openBotChannelFromPerspective(
+              dispatch,
+              pendingBotChannelOpen.group,
+              perspectiveBotId,
+              pendingBotChannelOpen.focusMessageId,
+            );
+            setPendingBotChannelOpen(null);
+          }}
+        />
+      )}
 
     </main>
   );

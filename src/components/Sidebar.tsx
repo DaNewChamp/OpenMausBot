@@ -29,6 +29,7 @@ import {
   Sparkles,
   Trash2,
   Users,
+  Eye,
   X,
 } from "lucide-react";
 import { api, useStore, formatTime, visibleMessages, type Bot, type Group } from "@/state/store";
@@ -52,7 +53,7 @@ import {
 } from "@/lib/sidebar-preferences";
 import { conversationTitle, modelSuffix } from "@/lib/model-suffix";
 import { unreadAfterSelected } from "@/lib/shell-layout";
-import { loadShowBotChannels, rosterGroups, saveShowBotChannels } from "@/lib/bot-channel";
+import { rosterGroups } from "@/lib/bot-channel";
 import { phoneSettingsAction, SidebarPhoneButton, SidebarPhonePrompt } from "./SidebarPhoneButton";
 
 /** "Milind Soni" → "MS", "milind" → "M", "you@x.dev" → "Y", unset → "?" */
@@ -1071,7 +1072,7 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
   const [teamInstallUrl, setTeamInstallUrl] = useState<string | null>(null);
   const [archivedBotsOpen, setArchivedBotsOpen] = useState(false);
-  const [showBotChannels, setShowBotChannels] = useState(() => loadShowBotChannels());
+  const showBotChannels = state.showBotChannels;
   const [exportingTeam, setExportingTeam] = useState(false);
   const [teamFeedback, setTeamFeedback] = useState<{
     error: boolean;
@@ -1380,13 +1381,15 @@ export function Sidebar({ open, onClose, overlay = false }: { open: boolean; onC
                 </button>
                 <button
                   onClick={() => {
-                    const next = !showBotChannels;
-                    setShowBotChannels(next);
-                    saveShowBotChannels(next);
+                    dispatch({ type: "setShowBotChannels", show: !showBotChannels });
                   }}
                   className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
                 >
-                  {showBotChannels ? <Check size={16} className="text-accent" /> : <Users size={16} className="text-ink-secondary" />}
+                  {showBotChannels ? (
+                    <Check size={16} className="text-accent" />
+                  ) : (
+                    <Eye size={16} className="text-ink-secondary" />
+                  )}
                   {showBotChannels ? "Hide bot channels" : "Show bot channels"}
                 </button>
                 <button

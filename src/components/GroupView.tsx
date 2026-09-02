@@ -32,7 +32,10 @@ import { groupActivityRuns } from "@/lib/activity-runs";
 import { ActivityRun } from "./ActivityRun";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { cn } from "@/lib/cn";
+import { perspectiveTitle } from "@/lib/bot-channel";
+import { commChipOpenIntent, openBotChannelFromPerspective, type BotChannelOpenIntent } from "@/lib/bot-channel-open";
 import { useFocusMessage } from "@/lib/focus-message";
+import { BotChannelChooser } from "./BotChannelChooser";
 import { shortPath } from "@/lib/short-path";
 import { BOTTOM_FOLLOW_THRESHOLD, shouldResumeBottomFollow } from "@/lib/bottom-follow";
 import { showWorkingDots } from "@/lib/turn-tail";
@@ -57,21 +60,35 @@ function dayLabel(at: number): string {
 
 /** One finished tool step in a room. Same pill the 1:1 chat uses, minus the
  * status glyph — a room reads as a conversation, not a build log. */
-function RoomToolChip({ message }: { message: Message }) {
+function RoomToolChip({
+  message,
+  onOpenComm,
+}: {
+  message: Message;
+  onOpenComm: (intent: BotChannelOpenIntent) => void;
+}) {
   const { state, dispatch } = useStore();
   const tool = message.tool;
   if (!tool) return null;
   if (message.comm) {
+    const comm = message.comm;
     return (
       <div className="flex justify-start">
         <button
           onClick={() => {
-            if (!message.comm) return;
-            dispatch({ type: "select", id: message.comm.groupId });
-            const group = state.groups.find((candidate) => candidate.id === message.comm!.groupId);
-            if (group && message.comm.messageId) {
-              dispatch({ type: "focusMessage", threadId: group.threadId, messageId: message.comm.messageId });
+            const group = state.groups.find((candidate) => candidate.id === comm.groupId);
+            const intent = commChipOpenIntent(comm, group);
+            if (intent) {
+              onOpenComm(intent);
+              return;
             }
+            if (!group) return;
+            openBotChannelFromPerspective(
+              dispatch,
+              group,
+              group.memberIds[0] ?? comm.withBotId,
+              comm.messageId,
+            );
           }}
           title={`Open the conversation with ${message.comm.withName}`}
           className="flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
@@ -142,6 +159,7 @@ const Transcript = memo(function Transcript({
   messages,
   transcript,
   onReply,
+  onOpenComm,
 }: {
   group: Group;
   members: Bot[];
@@ -150,6 +168,7 @@ const Transcript = memo(function Transcript({
   /** Full room transcript, used to resolve quoted messages outside the mounted window. */
   transcript: Message[];
   onReply: (message: Message) => void;
+  onOpenComm: (intent: BotChannelOpenIntent) => void;
 }) {
   const { state, dispatch } = useStore();
   const memberOf = (id?: string) => members.find((b) => b.id === id);
@@ -180,7 +199,7 @@ const Transcript = memo(function Transcript({
               <ActivityRun messages={item.messages} forceOpen={item.messages.some((step) => step.id === focusedId)}>
                 {item.messages.map((step) => (
                   <div key={step.id} className="contents" data-mid={step.id}>
-                    <RoomToolChip message={step} />
+                    <RoomToolChip message={step} onOpenComm={onOpenComm} />
                   </div>
                 ))}
               </ActivityRun>
@@ -206,7 +225,7 @@ const Transcript = memo(function Transcript({
               <ApprovalCard bot={memberOf(m.from?.botId)} message={m} />
             </div>
           ) : m.kind === "activity" && m.tool ? (
-            <RoomToolChip message={m} />
+            <RoomToolChip message={m} onOpenComm={onOpenComm} />
           ) : m.kind === "text" && m.text ? (
             <div className={cn("group flex w-full flex-col", user ? "items-end" : "items-start")}>
               <div className={cn("flex w-full items-end gap-1.5", user ? "justify-end" : "justify-start")}>
@@ -820,6 +839,7 @@ export function GroupView({ group }: { group: Group }) {
   const [membersOpen, setMembersOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [pendingBotChannelOpen, setPendingBotChannelOpen] = useState<BotChannelOpenIntent | null>(null);
   const membersTriggerRef = useRef<HTMLButtonElement>(null);
   const closeMembers = useCallback(() => setMembersOpen(false), []);
   useEffect(() => setFindOpen(false), [group.threadId]);
@@ -841,6 +861,9 @@ export function GroupView({ group }: { group: Group }) {
   );
   const speaker = members.find((b) => b.id === group.busyBotId);
   const setupPending = roomNeedsSetup(group);
+  const headerTitle =
+    perspectiveTitle(group, state.botChannelPerspective, (id) => state.bots.find((bot) => bot.id === id)?.name) ??
+    group.name;
 
   // Windowed transcript, mirroring ChatView: only a tail of the room mounts;
   // the anchored boundary re-tails on a render-phase reset when the room (or
@@ -979,7 +1002,7 @@ export function GroupView({ group }: { group: Group }) {
         )}
         style={drag}
       >
-        <span className="text-[15px] font-semibold text-ink">{group.name}</span>
+        <span className="text-[15px] font-semibold text-ink">{headerTitle}</span>
         <div className="flex items-center gap-1.5" style={noDrag}>
           <button
             type="button"
@@ -1172,6 +1195,7 @@ export function GroupView({ group }: { group: Group }) {
             messages={windowedMessages}
             transcript={group.messages}
             onReply={setReplyTo}
+            onOpenComm={setPendingBotChannelOpen}
           />
           {laterCount > 0 && (
             <div className="flex justify-center">
@@ -1229,6 +1253,22 @@ export function GroupView({ group }: { group: Group }) {
         replyTo={replyTo}
         onClearReply={() => setReplyTo(null)}
       />
+      {pendingBotChannelOpen && (
+        <BotChannelChooser
+          group={pendingBotChannelOpen.group}
+          invokingBotId={pendingBotChannelOpen.invokingBotId}
+          onClose={() => setPendingBotChannelOpen(null)}
+          onSelect={(perspectiveBotId) => {
+            openBotChannelFromPerspective(
+              dispatch,
+              pendingBotChannelOpen.group,
+              perspectiveBotId,
+              pendingBotChannelOpen.focusMessageId,
+            );
+            setPendingBotChannelOpen(null);
+          }}
+        />
+      )}
     </main>
   );
 }

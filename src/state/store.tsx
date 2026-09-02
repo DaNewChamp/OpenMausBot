@@ -25,6 +25,7 @@ import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import { skillRecorderEnabled } from "@/lib/feature-flags";
 import { desktopDemoFixture, isDesktopDemoMode } from "@/lib/desktop-demo";
 import { loadRightRailOpen } from "@/lib/shell-layout";
+import { loadShowBotChannels, saveShowBotChannels } from "@/lib/bot-channel";
 import {
   foldVBotEngineSync,
   parseVBotEngineSync,
@@ -430,6 +431,10 @@ export interface AppState {
   /** a search hit to scroll to once its thread is on screen; nonce lets the
    * same message be focused twice in a row */
   focusMessage: { threadId: string; messageId: string; nonce: number; consumed: boolean } | null;
+  /** Roster preference: show auto-created bot⇄bot channels. */
+  showBotChannels: boolean;
+  /** Scoped chrome title for an open bot channel. */
+  botChannelPerspective: { roomId: string; botId: string } | null;
   connected: boolean;
   error: string | null;
   mascotMotion: {
@@ -544,6 +549,13 @@ export type Action =
   | { type: "toggleInspector"; open?: boolean }
   | { type: "focusMessage"; threadId: string; messageId: string }
   | { type: "focusMessageConsumed"; nonce: number }
+  | { type: "setShowBotChannels"; show: boolean }
+  | {
+      type: "openBotChannel";
+      groupId: string;
+      perspectiveBotId: string;
+      focusMessageId?: string;
+    }
   | { type: "toggleAppSettings"; open?: boolean; section?: AppSettingsSection }
   | {
       type: "updateBot";
@@ -751,6 +763,7 @@ export function reducer(state: AppState, action: Action): AppState {
           activeView: "chat",
           selectedId: action.id,
           groups: state.groups.map((g) => (g.id === action.id ? { ...g, unread: false } : g)),
+          botChannelPerspective: null,
         };
       }
       return updateBot(
@@ -972,6 +985,28 @@ export function reducer(state: AppState, action: Action): AppState {
     case "focusMessageConsumed":
       if (!state.focusMessage || state.focusMessage.nonce !== action.nonce) return state;
       return { ...state, focusMessage: { ...state.focusMessage, consumed: true } };
+    case "setShowBotChannels":
+      saveShowBotChannels(action.show);
+      return { ...state, showBotChannels: action.show };
+    case "openBotChannel": {
+      const group = state.groups.find((candidate) => candidate.id === action.groupId);
+      if (!group) return state;
+      return {
+        ...state,
+        activeView: "chat",
+        selectedId: action.groupId,
+        groups: state.groups.map((g) => (g.id === action.groupId ? { ...g, unread: false } : g)),
+        botChannelPerspective: { roomId: action.groupId, botId: action.perspectiveBotId },
+        focusMessage: action.focusMessageId
+          ? {
+              threadId: group.threadId,
+              messageId: action.focusMessageId,
+              nonce: (state.focusMessage?.nonce ?? 0) + 1,
+              consumed: false,
+            }
+          : state.focusMessage,
+      };
+    }
     case "toggleComputer": {
       const open = action.open ?? !state.computerOpen;
       return {
@@ -1158,6 +1193,8 @@ export const initialState: AppState = {
   provisioning: {},
   computerControl: {},
   focusMessage: null,
+  showBotChannels: loadShowBotChannels(),
+  botChannelPerspective: null,
   connected: false,
   error: null,
   mascotMotion: null,
