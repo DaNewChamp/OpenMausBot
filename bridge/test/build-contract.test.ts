@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -132,7 +133,10 @@ describe("bridge build contract", () => {
     const orphans = [
       join(dist, "stale-orphan.js"),
       join(dist, "shared", "stale-shared-orphan.js"),
+      join(dist, "server", "stale-server-orphan.js"),
+      join(dist, "server", "engines", "stale-nested-orphan.js"),
     ];
+    mkdirSync(join(dist, "server", "engines"), { recursive: true });
     for (const orphan of orphans) {
       writeFileSync(orphan, "throw new Error('stale');\n");
     }
