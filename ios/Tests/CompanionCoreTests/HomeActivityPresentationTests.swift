@@ -97,20 +97,18 @@ struct HomeActivityPresentationTests {
     }
 
     @Test
-    func temporaryAgentsAppearAsCompactCountAndNavigateToTranscript() throws {
-        var state = try fixtureState()
-        let bot = try #require(state.bots.first)
+    func temporaryAgentsAppearAsCompactCountAndNavigateToTranscript() {
         let activity = HermesSubagentActivity(
             activityId: "act-1",
-            parentThreadId: bot.threadId,
+            parentThreadId: "parent-thread",
             title: "Draft review",
             status: .started,
             transcriptThreadId: "thread-temp-1",
             promoteEligible: false
         )
-        let presentation = HomeActivityPresentation(state: state, subagents: [activity])
+        let presentation = HomeActivityPresentation(state: CompanionState(), subagents: [activity])
         #expect(presentation.temporaryAgentCount == 1)
-        #expect(presentation.collapsedTitle == "1 agents" || presentation.collapsedTitle.contains("agent"))
+        #expect(presentation.collapsedTitle == "1 agent")
         #expect(HomeActivityRailLayoutPolicy.showsRail(for: presentation.state))
         #expect(HermesSubagentPresentationPolicy.navigationThreadId(for: activity) == "thread-temp-1")
         #expect(!HermesSubagentPresentationPolicy.showsPromote(for: activity))
