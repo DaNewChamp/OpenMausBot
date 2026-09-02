@@ -723,15 +723,9 @@ struct AgentProfileView: View {
                     let endpoint = selectedHermesEndpoint ?? session.defaultHermesEndpoint()
                     showingHermesConversion = false
                     guard let endpoint else { return }
-                    let kind = endpoint.id.hasPrefix("bridge:") ? "bridge" : "local"
-                    let bridgeId = kind == "bridge" ? endpoint.id.split(separator: ":").dropFirst().first.map(String.init) : nil
                     session.configureHermesRuntime(
                         botId: current.id,
-                        request: HermesRuntimeRebindRequest(
-                            kind: kind,
-                            profile: endpoint.profile,
-                            bridgeId: bridgeId
-                        )
+                        request: HermesConversionApplyPolicy.request(from: endpoint)
                     )
                 }
                 .buttonStyle(.borderedProminent)
@@ -834,6 +828,12 @@ struct AgentProfileView: View {
                             pickedEffort = nil
                         }
                         scheduleModelSave()
+                    },
+                    hermesEndpoints: session.hermesEndpointOptions,
+                    selectedHermesId: selectedHermesEndpoint?.id ?? session.defaultHermesEndpoint()?.id,
+                    onSelectHermes: { endpoint in
+                        selectedHermesEndpoint = endpoint
+                        session.setDefaultHermesEndpoint(endpoint)
                     }
                 )
                 .padding(20)

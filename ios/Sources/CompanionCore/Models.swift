@@ -753,18 +753,21 @@ private struct Lossy<Element: Decodable>: Decodable {
 public struct Fleet: Decodable, Sendable {
     public var bots: [Bot]
     public var groups: [Room]
+    public var hermesSubagents: [HermesSubagentActivity]
 
-    private enum CodingKeys: String, CodingKey { case bots, groups }
+    private enum CodingKeys: String, CodingKey { case bots, groups, hermesSubagents }
 
-    public init(bots: [Bot], groups: [Room]) {
+    public init(bots: [Bot], groups: [Room], hermesSubagents: [HermesSubagentActivity] = []) {
         self.bots = bots
         self.groups = groups
+        self.hermesSubagents = hermesSubagents
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         bots = try container.decodeIfPresent([Lossy<Bot>].self, forKey: .bots)?.compactMap(\.value) ?? []
         groups = try container.decodeIfPresent([Lossy<Room>].self, forKey: .groups)?.compactMap(\.value) ?? []
+        hermesSubagents = try container.decodeIfPresent([Lossy<HermesSubagentActivity>].self, forKey: .hermesSubagents)?.compactMap(\.value) ?? []
     }
 }
 

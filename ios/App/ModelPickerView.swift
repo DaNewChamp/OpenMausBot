@@ -527,6 +527,9 @@ struct ModelPickerCatalogHost: View {
     var hostWide: Bool = false
     var onRetry: () -> Void
     var onSelectionChange: () -> Void
+    var hermesEndpoints: [HermesEndpointOption] = []
+    var selectedHermesId: String? = nil
+    var onSelectHermes: ((HermesEndpointOption) -> Void)? = nil
 
     private var currentSelection: ModelSelection {
         ModelSelection(instanceId: selectedInstanceId, model: selectedModelId)
@@ -589,6 +592,14 @@ struct ModelPickerCatalogHost: View {
                     footerHint: footer
                 ) {
                     onSelectionChange()
+                }
+
+                if !hermesEndpoints.isEmpty {
+                    HermesRuntimePickerRows(
+                        endpoints: hermesEndpoints,
+                        selectedId: selectedHermesId,
+                        onSelect: { endpoint in onSelectHermes?(endpoint) }
+                    )
                 }
 
                 if canEdit, !loading {
@@ -688,6 +699,38 @@ struct ReconstructedProviderPicker: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+/// Compact Hermes endpoint rows for the model/runtime picker. Labels stay
+/// `Computer / profile`; subscription model ids stay the model id only.
+struct HermesRuntimePickerRows: View {
+    let endpoints: [HermesEndpointOption]
+    let selectedId: String?
+    var onSelect: (HermesEndpointOption) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(endpoints) { endpoint in
+                Button {
+                    onSelect(endpoint)
+                } label: {
+                    HStack {
+                        Text(ModelSelectionPolicy.hermesRuntimeLabel(endpoint))
+                            .font(.body)
+                        Spacer()
+                        if selectedId == endpoint.id {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .background(ModelPickerStyle.listSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
@@ -797,38 +840,6 @@ private enum ModelPickerPreviewData {
     ) {}
     .padding()
     .vbotCanvas()
-}
-
-/// Compact Hermes endpoint rows for the model/runtime picker. Labels stay
-/// `Computer / profile`; subscription model ids stay the model id only.
-struct HermesRuntimePickerRows: View {
-    let endpoints: [HermesEndpointOption]
-    let selectedId: String?
-    var onSelect: (HermesEndpointOption) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(endpoints) { endpoint in
-                Button {
-                    onSelect(endpoint)
-                } label: {
-                    HStack {
-                        Text(ModelSelectionPolicy.hermesRuntimeLabel(endpoint))
-                            .font(.body)
-                        Spacer()
-                        if selectedId == endpoint.id {
-                            Image(systemName: "checkmark")
-                                .foregroundStyle(Color.accentColor)
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 44)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .background(ModelPickerStyle.listSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
 }
 
 #Preview("Catalog offline cached") {

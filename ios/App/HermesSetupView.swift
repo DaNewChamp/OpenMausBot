@@ -202,8 +202,11 @@ struct HermesSetupView: View {
                 ForEach(hermesEndpoints) { endpoint in
                     Button(endpoint.label) {
                         session.setDefaultHermesEndpoint(endpoint)
+                        if !connectedProfiles.isEmpty {
+                            pendingConversion = endpoint
+                        }
                     }
-                    .disabled(session.defaultHermesEndpoint()?.id == endpoint.id)
+                    .disabled(session.defaultHermesEndpoint()?.id == endpoint.id && pendingConversion == nil)
                 }
             }
             .padding(16)
@@ -240,7 +243,7 @@ struct HermesSetupView: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
                 Text(HermesRuntimePresentationPolicy.conversionSummary(
-                    botName: "This bot",
+                    botName: connectedProfiles.first?.displayName ?? "This bot",
                     sourceLabel: "Current runtime",
                     destinationLabel: endpoint.label
                 ))
@@ -248,6 +251,17 @@ struct HermesSetupView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
+                Button("Convert") {
+                    let request = HermesConversionApplyPolicy.request(from: endpoint)
+                    for profile in connectedProfiles {
+                        guard let botId = profile.botId, !botId.isEmpty else { continue }
+                        session.configureHermesRuntime(botId: botId, request: request)
+                    }
+                    session.setDefaultHermesEndpoint(endpoint)
+                    pendingConversion = nil
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(connectedProfiles.allSatisfy { ($0.botId ?? "").isEmpty })
             }
             .padding()
             .navigationTitle("Convert runtime")
@@ -393,6 +407,22 @@ struct HermesSetupView: View {
         guard !Task.isCancelled else { return }
         status = next
         loading = false
+        if let next {
+            let computer = session.connection?.name ?? "This computer"
+            session.rememberHermesEndpoints(
+                HermesSetupPresentationPolicy.availableProfiles(next).map { profile in
+                    let placement = profile.placement
+                    let name: String
+                    if placement?.kind == .bridge {
+                        let bridge = placement?.bridge?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        name = bridge.isEmpty ? "Remote computer" : bridge
+                    } else {
+                        name = computer
+                    }
+                    return HermesEndpointOption(id: profile.id, computerName: name, profile: profile.profile)
+                }
+            )
+        }
     }
 
     private var iconName: String {

@@ -101,7 +101,7 @@ public struct HermesRuntimePickerRow: Hashable, Sendable, Equatable {
     public var label: String
 }
 
-public struct HermesSubagentActivity: Hashable, Identifiable, Sendable, Equatable {
+public struct HermesSubagentActivity: Hashable, Identifiable, Sendable, Equatable, Codable {
     public enum Status: String, Codable, Sendable, Equatable {
         case started
         case updated
@@ -112,6 +112,11 @@ public struct HermesSubagentActivity: Hashable, Identifiable, Sendable, Equatabl
         public init(from decoder: Decoder) throws {
             let value = try decoder.singleValueContainer().decode(String.self)
             self = Self(rawValue: value) ?? .unknown
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
         }
     }
 
@@ -175,7 +180,7 @@ public struct HermesBotProvenance: Codable, Hashable, Sendable, Equatable {
     }
 }
 
-public struct BotRuntimeBinding: Codable, Hashable, Sendable, Equatable {
+public struct BotRuntimeBinding: Hashable, Sendable, Equatable {
     public var kind: String
     public var instanceId: String?
     public var model: String?
@@ -197,6 +202,73 @@ public struct BotRuntimeBinding: Codable, Hashable, Sendable, Equatable {
         self.profile = profile
         self.bridgeId = bridgeId
         self.placementKind = placementKind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, instanceId, model, placement, bindingVersion, profile, bridgeId, placementKind
+    }
+    private enum PlacementKeys: String, CodingKey { case kind, profile, bridgeId }
+}
+
+extension BotRuntimeBinding: Codable {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? ""
+        if container.contains(.placement),
+           let placement = try? container.nestedContainer(keyedBy: PlacementKeys.self, forKey: .placement) {
+            self.init(
+                kind: kind,
+                instanceId: try container.decodeIfPresent(String.self, forKey: .instanceId),
+                model: try container.decodeIfPresent(String.self, forKey: .model),
+                profile: try placement.decodeIfPresent(String.self, forKey: .profile),
+                bridgeId: try placement.decodeIfPresent(String.self, forKey: .bridgeId),
+                placementKind: try placement.decodeIfPresent(String.self, forKey: .kind)
+            )
+            return
+        }
+        self.init(
+            kind: kind,
+            instanceId: try container.decodeIfPresent(String.self, forKey: .instanceId),
+            model: try container.decodeIfPresent(String.self, forKey: .model),
+            profile: try container.decodeIfPresent(String.self, forKey: .profile),
+            bridgeId: try container.decodeIfPresent(String.self, forKey: .bridgeId),
+            placementKind: try container.decodeIfPresent(String.self, forKey: .placementKind)
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(kind, forKey: .kind)
+        try container.encodeIfPresent(instanceId, forKey: .instanceId)
+        try container.encodeIfPresent(model, forKey: .model)
+        if kind == "hermes" {
+            var placement = container.nestedContainer(keyedBy: PlacementKeys.self, forKey: .placement)
+            try placement.encode(placementKind ?? "local", forKey: .kind)
+            try placement.encodeIfPresent(profile, forKey: .profile)
+            try placement.encodeIfPresent(bridgeId, forKey: .bridgeId)
+            try container.encode(2, forKey: .bindingVersion)
+        } else {
+            try container.encodeIfPresent(profile, forKey: .profile)
+            try container.encodeIfPresent(bridgeId, forKey: .bridgeId)
+            try container.encodeIfPresent(placementKind, forKey: .placementKind)
+        }
+    }
+}
+
+public enum HermesConversionApplyPolicy: Sendable {
+    public static func request(from endpoint: HermesEndpointOption) -> HermesRuntimeRebindRequest {
+        let parts = endpoint.id.split(separator: ":").map(String.init)
+        if parts.first == "bridge", parts.count >= 3 {
+            return HermesRuntimeRebindRequest(
+                kind: "bridge",
+                profile: endpoint.profile,
+                bridgeId: parts[1]
+            )
+        }
+        return HermesRuntimeRebindRequest(
+            kind: "local",
+            profile: endpoint.profile
+        )
     }
 }
 

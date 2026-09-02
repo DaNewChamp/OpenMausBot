@@ -199,6 +199,7 @@ public struct CompanionState: Sendable {
         for room in rooms where room.busyBotId == nil {
             streamSealed.insert(room.threadId)
         }
+        hermesSubagents = fleet.hermesSubagents
     }
 
     /// Prepend an older page fetched for scrollback.

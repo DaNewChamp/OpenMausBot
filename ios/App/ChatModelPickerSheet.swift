@@ -62,7 +62,17 @@ struct ChatModelPickerSheet: View {
                     showsEffort: showsEffortPicker,
                     hostWide: hostWide,
                     onRetry: { Task { await loadInstances() } },
-                    onSelectionChange: { Task { await saveModel() } }
+                    onSelectionChange: { Task { await saveModel() } },
+                    hermesEndpoints: session.hermesEndpointOptions,
+                    selectedHermesId: session.defaultHermesEndpoint()?.id,
+                    onSelectHermes: { endpoint in
+                        session.setDefaultHermesEndpoint(endpoint)
+                        session.configureHermesRuntime(
+                            botId: current.id,
+                            request: HermesConversionApplyPolicy.request(from: endpoint)
+                        )
+                        dismiss()
+                    }
                 )
                 .padding(20)
             }

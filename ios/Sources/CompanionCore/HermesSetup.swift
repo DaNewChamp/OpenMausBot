@@ -167,16 +167,18 @@ public struct HermesSetupProfile: Codable, Hashable, Identifiable, Sendable, Equ
     public var botId: String?
 
     public var id: String {
-        guard let placement else { return profile }
-        switch placement.kind {
-        case .local:
-            return "local:\(placement.profile)"
-        case .bridge:
-            let bridge = placement.bridge?.lowercased() ?? "bridge"
-            return "bridge:\(bridge):\(placement.profile)"
-        case .unknown:
-            return profile
+        if let placement {
+            switch placement.kind {
+            case .local:
+                return "local:\(placement.profile.isEmpty ? profile : placement.profile)"
+            case .bridge:
+                let bridge = placement.bridge?.lowercased() ?? "bridge"
+                return "bridge:\(bridge):\(placement.profile)"
+            case .unknown:
+                return "local:\(profile)"
+            }
         }
+        return "local:\(profile)"
     }
 
     public init(

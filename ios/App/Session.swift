@@ -79,6 +79,8 @@ final class Session: ObservableObject {
             }
         }
     }
+    /// Last discovered Hermes endpoints for the runtime picker. Not a second agent model.
+    @Published var hermesEndpointOptions: [HermesEndpointOption] = []
     /// One exact message the next opened chat should reveal.
     @Published private(set) var focusedMessageId: String?
     /// Scoped perspective for a bot⇄bot channel chrome title.
@@ -864,6 +866,13 @@ final class Session: ObservableObject {
         UserDefaults.standard.set(endpoint.id, forKey: "vbot.defaultHermesEndpoint")
         UserDefaults.standard.set(endpoint.computerName, forKey: "vbot.defaultHermesComputer")
         UserDefaults.standard.set(endpoint.profile, forKey: "vbot.defaultHermesProfile")
+        if !hermesEndpointOptions.contains(where: { $0.id == endpoint.id }) {
+            hermesEndpointOptions.append(endpoint)
+        }
+    }
+
+    func rememberHermesEndpoints(_ endpoints: [HermesEndpointOption]) {
+        hermesEndpointOptions = endpoints
     }
 
     func defaultHermesEndpoint() -> HermesEndpointOption? {

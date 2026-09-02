@@ -73,4 +73,9 @@ final class HomeActivityRailLayoutPolicyTests: XCTestCase {
         XCTAssertFalse(HomeActivityRailLayoutPolicy.expandsSideways)
         XCTAssertEqual(HomeActivityRailLayoutPolicy.expandedPanelAnchor, .aboveCollapsedPill)
     }
+
+    func testCompactPillSitsImmediatelyAboveTheComposer() {
+        XCTAssertEqual(HomeActivityRailLayoutPolicy.composerAnchor, .immediatelyAboveComposer)
+        XCTAssertFalse(HomeActivityRailLayoutPolicy.showsRail(for: .quiet))
+    }
 }

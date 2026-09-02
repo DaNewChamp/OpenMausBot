@@ -53,4 +53,12 @@ public enum HomeActivityRailLayoutPolicy: Sendable {
     public static let expansionDirection: ExpansionDirection = .upward
     public static let expandsSideways = false
     public static let expandedPanelAnchor: ExpandedPanelAnchor = .aboveCollapsedPill
+
+    public enum ComposerAnchor: String, Sendable {
+        case immediatelyAboveComposer
+    }
+
+    /// In an open chat the compact pill sits immediately above the composer,
+    /// not only on the home roster rail.
+    public static let composerAnchor: ComposerAnchor = .immediatelyAboveComposer
 }

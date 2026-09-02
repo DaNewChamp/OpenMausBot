@@ -69,6 +69,7 @@ struct ChatView: View {
     /// SwiftUI can retain the destination's keyboard-safe-area transaction,
     /// leaving a focused field behind the keyboard on the next appearance.
     @State private var composerLayoutRevision = 0
+    @State private var activityExpanded = false
 
     /// The live chat record, so busy/unread stay current as frames land.
     private var current: Chat {
@@ -289,6 +290,22 @@ struct ChatView: View {
                     session.reconcileQueueReceipts(forThread: threadId, transcript: transcript)
                 }
             )
+            if HomeActivityRailLayoutPolicy.composerAnchor == .immediatelyAboveComposer,
+               HomeActivityRailLayoutPolicy.showsRail(for: session.state.homeActivityPresentation(
+                queuedReceipts: [],
+                subagents: session.state.hermesSubagents.filter {
+                    $0.parentThreadId == threadId || $0.transcriptThreadId == threadId
+                }
+               ).state) {
+                HomeActivityPill(
+                    open: { chat in
+                        session.beginOpeningFromHome(chat)
+                    },
+                    expanded: $activityExpanded,
+                    parentThreadId: threadId
+                )
+                .environmentObject(session)
+            }
             ChatComposerView(
                 chat: current,
                 plusActions: plusActions,

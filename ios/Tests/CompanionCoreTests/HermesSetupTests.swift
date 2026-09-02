@@ -172,6 +172,8 @@ final class HermesSetupTests: XCTestCase {
             availability: .available,
             placement: HermesSetupPlacement(kind: .bridge, profile: "default", bridge: "mini")
         )
+        XCTAssertEqual(local.id, "local:default")
+        XCTAssertEqual(remote.id, "bridge:mini:default")
         XCTAssertNotEqual(local.id, remote.id)
     }
 
@@ -341,6 +343,77 @@ final class HermesSetupTests: XCTestCase {
             HermesRuntimePresentationPolicy.pickerRows(endpoints).map(\.label),
             ["MacBook Pro / default", "Mac mini / research"]
         )
+    }
+
+    func testDecodesNestedHermesRuntimeBindingFromTheServer() throws {
+        let nested = Data(
+            #"{"kind":"hermes","placement":{"kind":"local","profile":"coder"},"bindingVersion":2}"#.utf8
+        )
+        let local = try JSONDecoder().decode(BotRuntimeBinding.self, from: nested)
+        XCTAssertEqual(local.kind, "hermes")
+        XCTAssertEqual(local.placementKind, "local")
+        XCTAssertEqual(local.profile, "coder")
+        XCTAssertNil(local.bridgeId)
+
+        let bridge = try JSONDecoder().decode(
+            BotRuntimeBinding.self,
+            from: Data(
+                #"{"kind":"hermes","placement":{"kind":"bridge","bridgeId":"bridge-mini","profile":"research"},"bindingVersion":2}"#.utf8
+            )
+        )
+        XCTAssertEqual(bridge.placementKind, "bridge")
+        XCTAssertEqual(bridge.bridgeId, "bridge-mini")
+        XCTAssertEqual(bridge.profile, "research")
+
+        let provider = try JSONDecoder().decode(
+            BotRuntimeBinding.self,
+            from: Data(#"{"kind":"provider","instanceId":"claude","model":"claude-sonnet-5"}"#.utf8)
+        )
+        XCTAssertEqual(provider.kind, "provider")
+        XCTAssertEqual(provider.instanceId, "claude")
+        XCTAssertEqual(provider.model, "claude-sonnet-5")
+    }
+
+    func testConversionRequestHonorsLocalAndBridgeEndpointIds() throws {
+        let local = HermesConversionApplyPolicy.request(
+            from: HermesEndpointOption(id: "local:coder", computerName: "This computer", profile: "coder")
+        )
+        XCTAssertEqual(local.kind, "local")
+        XCTAssertEqual(local.profile, "coder")
+        XCTAssertNil(local.bridgeId)
+        XCTAssertTrue(local.userRequested)
+
+        let bridge = HermesConversionApplyPolicy.request(
+            from: HermesEndpointOption(id: "bridge:bridge-mini:research", computerName: "Mac mini", profile: "research")
+        )
+        XCTAssertEqual(bridge.kind, "bridge")
+        XCTAssertEqual(bridge.bridgeId, "bridge-mini")
+        XCTAssertEqual(bridge.profile, "research")
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let encoded = try encoder.encode(local)
+        let json = String(data: encoded, encoding: .utf8) ?? ""
+        XCTAssertTrue(json.contains("\"kind\":\"hermes\""))
+        XCTAssertTrue(json.contains("\"kind\":\"local\""))
+        XCTAssertTrue(json.contains("coder"))
+        XCTAssertFalse(json.contains("token"))
+    }
+
+    func testHydratesTemporaryAgentsFromTheExistingFleetSnapshot() throws {
+        let data = Data(
+            #"{"bots":[],"groups":[],"hermesSubagents":[{"activityId":"act-1","parentThreadId":"parent-thread","title":"Draft review","status":"started","transcriptThreadId":"thread-temp-1","promoteEligible":false}]}"#.utf8
+        )
+        let fleet = try JSONDecoder().decode(Fleet.self, from: data)
+        XCTAssertEqual(fleet.hermesSubagents.count, 1)
+        XCTAssertEqual(fleet.hermesSubagents.first?.activityId, "act-1")
+        var state = CompanionState()
+        state.hydrate(fleet)
+        XCTAssertEqual(state.hermesSubagents.count, 1)
+        XCTAssertEqual(state.hermesSubagents.first?.transcriptThreadId, "thread-temp-1")
+        let presentation = state.homeActivityPresentation(subagents: state.hermesSubagents)
+        XCTAssertEqual(presentation.temporaryAgentCount, 1)
+        XCTAssertTrue(HomeActivityRailLayoutPolicy.showsRail(for: presentation.state))
     }
 
     private func profile(_ id: String, handle: String) -> HermesSetupProfile {

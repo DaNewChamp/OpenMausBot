@@ -10,15 +10,24 @@ struct HomeActivityPill: View {
     let open: (Chat) -> Void
     @Binding var expanded: Bool
     var queuedReceipts: [HomeActivityQueueReceipt] = []
+    var parentThreadId: String? = nil
 
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var presentation: HomeActivityPresentation {
-        session.state.homeActivityPresentation(
-            queuedReceipts: queuedReceipts,
-            subagents: session.state.hermesSubagents
+        let subagents: [HermesSubagentActivity]
+        if let parentThreadId {
+            subagents = session.state.hermesSubagents.filter {
+                $0.parentThreadId == parentThreadId || $0.transcriptThreadId == parentThreadId
+            }
+        } else {
+            subagents = session.state.hermesSubagents
+        }
+        return session.state.homeActivityPresentation(
+            queuedReceipts: parentThreadId == nil ? queuedReceipts : [],
+            subagents: subagents
         )
     }
 
