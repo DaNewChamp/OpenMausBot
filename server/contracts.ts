@@ -49,6 +49,16 @@ export interface ModelSelection {
   effort?: EffortLevel;
 }
 
+export type RuntimeBindingContextMode = "summary" | "none";
+
+/** Wire contract for converting a bot between provider and Hermes runtimes. */
+export interface RuntimeRebindWireRequest {
+  targetBotId: string;
+  binding: unknown;
+  contextMode: RuntimeBindingContextMode;
+  userRequested: boolean;
+}
+
 // ── instance configuration envelope ────────────────────────────────────
 // `driver` is any slug — NOT validated against known drivers; unknown
 // drivers round-trip and surface as unavailable shadow snapshots so a

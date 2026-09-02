@@ -127,6 +127,24 @@ const TOOLS = [
     },
   },
   {
+    name: "configure_bot_runtime",
+    description:
+      "Convert a teammate between a provider engine and a native Hermes profile on a paired computer. Autonomous calls wait for the user's approval. Never include tokens, secret paths, or session ids.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        bot_id: { type: "string", description: "The teammate's id (from list_bots)." },
+        placement: { type: "string", enum: ["provider", "local", "bridge"], description: "Destination runtime kind." },
+        instance_id: { type: "string", description: "Provider instance id when placement is provider." },
+        model: { type: "string", description: "Optional provider model id." },
+        profile: { type: "string", description: "Hermes profile slug when placement is local or bridge." },
+        bridge_id: { type: "string", description: "Paired computer/bridge id when placement is bridge." },
+        context_mode: { type: "string", enum: ["summary", "none"], description: "Whether to send a sanitized handoff summary." },
+      },
+      required: ["bot_id", "placement"],
+    },
+  },
+  {
     name: "run_on_bridge",
     description:
       "Run a shell command on a registered home bridge (Mac mini, Pi, etc.) through the cloud harness. Use bridge name when you know it (for example Mac mini); omit to use the freshest online bridge. For Local VM status/actions, use the bot local-computer API (relayed automatically when configured). Returns stdout, stderr, and exit code.",
@@ -419,6 +437,46 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     return {
       text: `Updated @${r.name ?? "bot"} [id: ${r.id}] to engine ${r.engine ?? "unknown"}, model ${r.model}${effort}${role}.`,
     };
+  }
+  if (name === "configure_bot_runtime") {
+    const botId = String(args.bot_id ?? "").trim();
+    const placement = String(args.placement ?? "").trim();
+    if (!botId) return { text: "configure_bot_runtime needs bot_id.", isError: true };
+    if (placement !== "provider" && placement !== "local" && placement !== "bridge") {
+      return { text: "configure_bot_runtime needs placement of provider, local, or bridge.", isError: true };
+    }
+    let binding: Record<string, unknown>;
+    if (placement === "provider") {
+      const instanceId = String(args.instance_id ?? args.engine ?? "").trim();
+      if (!instanceId) return { text: "configure_bot_runtime needs instance_id for a provider runtime.", isError: true };
+      binding = { kind: "provider", instanceId };
+      if (args.model) binding.model = String(args.model);
+    } else if (placement === "local") {
+      const profile = String(args.profile ?? "").trim();
+      if (!profile) return { text: "configure_bot_runtime needs profile for a local Hermes runtime.", isError: true };
+      binding = { kind: "hermes", placement: { kind: "local", profile }, bindingVersion: 2 };
+    } else {
+      const profile = String(args.profile ?? "").trim();
+      const bridgeId = String(args.bridge_id ?? "").trim();
+      if (!profile || !bridgeId) {
+        return { text: "configure_bot_runtime needs bridge_id and profile for a bridge Hermes runtime.", isError: true };
+      }
+      binding = { kind: "hermes", placement: { kind: "bridge", bridgeId, profile }, bindingVersion: 2 };
+    }
+    const r = await api(`/api/internal/bots/${encodeURIComponent(botId)}/runtime-binding`, {
+      method: "POST",
+      body: JSON.stringify({
+        fromBotId: BOT_ID,
+        fromThreadId: THREAD_ID,
+        targetBotId: botId,
+        binding,
+        contextMode: args.context_mode === "summary" ? "summary" : "none",
+        userRequested: false,
+      }),
+    });
+    const text = typeof r.summary === "string" && r.summary.trim() ? r.summary : "Runtime conversion submitted.";
+    if (r.status === "error") return { text, isError: true };
+    return { text };
   }
   if (name === "run_on_bridge") {
     const command = String(args.command ?? "").trim();

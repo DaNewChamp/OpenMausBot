@@ -22,6 +22,14 @@ let lastDelegateBody: any = null;
 let delegateResponse: unknown = { queued: true, message: "Delegation queued." };
 let lastCreateBody: any = null;
 let lastConfigureBody: any = null;
+let lastRuntimeBindingBody: any = null;
+let lastRuntimeBindingPath: string | undefined;
+let runtimeBindingResponse: unknown = {
+  status: "pending_approval",
+  requestId: "req-runtime-1",
+  summary: "Convert Helper from Claude to Mac mini / research. Name, rooms, and history stay. A restart is required.",
+  restartRequired: true,
+};
 let lastCredentialBody: any = null;
 let lastCreateRoomBody: any = null;
 let lastCreateRoutineBody: any = null;
@@ -104,6 +112,17 @@ beforeAll(async () => {
         lastConfigureBody = JSON.parse(data);
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ id: "bot-helper", name: "Helper", engine: "claude", model: "sonnet", effort: "medium", title: "Senior helper" }));
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url?.includes("/runtime-binding")) {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        lastRuntimeBindingPath = req.url;
+        lastRuntimeBindingBody = JSON.parse(data);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(runtimeBindingResponse));
       });
       return;
     }
@@ -223,6 +242,7 @@ describe("agents-proxy MCP surface", () => {
       "delegate_bot",
       "create_bot",
       "configure_bot",
+      "configure_bot_runtime",
       "run_on_bridge",
       "run_on_ssh_target",
       "list_rooms",
@@ -292,6 +312,35 @@ describe("agents-proxy MCP surface", () => {
       role: "Senior helper",
       instructions: "Handle escalations.",
     });
+  });
+
+  it("requests an approval-gated Hermes runtime conversion in plain language", async () => {
+    const res = await callTool("configure_bot_runtime", {
+      bot_id: "bot-helper",
+      placement: "bridge",
+      bridge_id: "bridge-mini",
+      profile: "research",
+      context_mode: "none",
+    });
+    const text = res.result.content[0].text as string;
+    expect(text).toContain("Helper");
+    expect(text).toContain("Mac mini / research");
+    expect(text).toMatch(/approval|restart/i);
+    expect(text).not.toMatch(/token|HERMES_HOME|session-/i);
+    expect(lastRuntimeBindingPath).toBe("/api/internal/bots/bot-helper/runtime-binding");
+    expect(lastRuntimeBindingBody).toMatchObject({
+      fromBotId: "bot-asker",
+      fromThreadId: "thread-asker-routine",
+      targetBotId: "bot-helper",
+      contextMode: "none",
+      userRequested: false,
+      binding: {
+        kind: "hermes",
+        placement: { kind: "bridge", bridgeId: "bridge-mini", profile: "research" },
+        bindingVersion: 2,
+      },
+    });
+    expect(JSON.stringify(lastRuntimeBindingBody)).not.toMatch(/test-comms-token|OMB_COMMS_TOKEN/);
   });
 
   it("ask_bot forwards sender + depth and returns the reply", async () => {

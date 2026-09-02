@@ -185,6 +185,14 @@ import {
 } from "./bridge-approval.ts";
 import { cancelPeerApprovalsFor, cancelPeerApprovalsForThread, dismissStalePeerCards, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import {
+  isBotRuntimeBinding,
+  type RuntimeRebindRequest,
+} from "./bot-runtime-binding.ts";
+import {
+  requestBotRuntimeRebind,
+  resolveRuntimeRebind,
+} from "./bot-runtime-rebind.ts";
+import {
   mentionedBots,
   roomResponders,
   sectionKey,
@@ -4940,6 +4948,41 @@ const server = createServer(async (req, res) => {
           reportsToBotId: bot.reportsToBotId ?? null,
         });
       }
+      {
+        const runtimeBindingMatch = path.match(/^\/api\/internal\/bots\/([\w-]+)\/runtime-binding$/);
+        if (method === "POST" && runtimeBindingMatch) {
+          const body = await readBody(req);
+          const targetBotId = runtimeBindingMatch[1]!;
+          const actor = store.bot(String(body.fromBotId ?? ""));
+          const fromThreadId = String(body.fromThreadId ?? actor?.threadId ?? "");
+          if (actor && fromThreadId && !store.taskByThread(actor.id, fromThreadId)) {
+            return json(res, 403, { error: "source thread does not belong to sender" });
+          }
+          if (!isBotRuntimeBinding(body.binding)) {
+            return json(res, 400, { error: "binding is invalid" });
+          }
+          const contextMode = body.contextMode === "summary" ? "summary" : "none";
+          const userRequested = body.userRequested === true;
+          if (!userRequested && !actor) return json(res, 403, { error: "unknown sender" });
+          const request: RuntimeRebindRequest = {
+            targetBotId,
+            binding: body.binding,
+            contextMode,
+            userRequested,
+          };
+          const result = await requestBotRuntimeRebind({
+            store,
+            request,
+            actor,
+            approval: approvalBus,
+            context: body.context && typeof body.context === "object" && !Array.isArray(body.context)
+              ? (body.context as Record<string, unknown>)
+              : undefined,
+          });
+          const status = result.status === "error" ? (result.code === "bot_active" ? 409 : 400) : 200;
+          return json(res, status, result);
+        }
+      }
       if (method === "POST" && path === "/api/internal/request-credential") {
         const body = await readBody(req);
         const fromBotId = String(body.fromBotId ?? "");
@@ -7054,6 +7097,9 @@ const server = createServer(async (req, res) => {
       if (resolvePeerComms(approvalBus, String(body.requestId), behavior)) {
         return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
+      if (resolveRuntimeRebind(approvalBus, String(body.requestId), behavior)) {
+        return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
+      }
       {
         const resolved = resolveBridgeApproval(approvalBus, String(body.requestId), behavior, {
           botId: bot.id,
@@ -7089,6 +7135,9 @@ const server = createServer(async (req, res) => {
       // belongs to the bus rather than to a speaker, so resolve it before we go
       // looking for one — a room between turns has no speaker to find.
       if (resolvePeerComms(approvalBus, requestId, behavior)) {
+        return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
+      }
+      if (resolveRuntimeRebind(approvalBus, requestId, behavior)) {
         return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
       {
