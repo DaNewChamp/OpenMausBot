@@ -7770,7 +7770,9 @@ const server = createServer(async (req, res) => {
         if (explicitInstances && (!configured || configured.driver !== "hermesAgent")) {
           return json(res, 409, hermesSetupJson(new HermesEngineError("state_unavailable")));
         }
-        const needsEnable = cfg.vbot?.hermes?.enabled !== true || configured?.enabled === false;
+        const isBridgeConnect = parsed.placement?.kind === "bridge";
+        const needsEnable = !isBridgeConnect
+          && (cfg.vbot?.hermes?.enabled !== true || configured?.enabled === false);
         if (needsEnable) {
           const patch: Parameters<typeof saveConfig>[0] = {
             vbot: { hermes: { enabled: true, instanceId } },
