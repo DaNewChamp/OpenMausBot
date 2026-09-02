@@ -295,6 +295,12 @@ process.stdin.on("data", (chunk) => {
           },
         });
       }, 10);
+      return;
+    }
+
+    if (request.method === "approval.respond") {
+      out({ jsonrpc: "2.0", id: request.id, result: { ok: true } });
+      return;
     }
   }
 });
