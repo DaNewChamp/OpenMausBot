@@ -24,7 +24,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 
 export function asCapabilities(value: unknown): BridgeCapability[] {
   if (!Array.isArray(value)) return [];
-  const allowed = new Set<BridgeCapability>(["shell", "local-vm", "ssh-forward"]);
+  const allowed = new Set<BridgeCapability>(["shell", "local-vm", "ssh-forward", "hermes"]);
   return value.filter((entry): entry is BridgeCapability => typeof entry === "string" && allowed.has(entry as BridgeCapability));
 }
 

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 
-export type BridgeCapability = "shell" | "local-vm" | "ssh-forward";
+export type BridgeCapability = "shell" | "local-vm" | "ssh-forward" | "hermes";
 
 export interface BridgeRecord {
   id: string;
@@ -21,6 +21,31 @@ export interface BridgeRecord {
 export type BridgeJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 export type LocalVmBridgeJobKind = "local-vm-status" | "local-vm-action" | "local-vm-screenshot";
+
+export type HermesBridgeJobKind =
+  | "hermes-discover"
+  | "hermes-ensure-canonical"
+  | "hermes-send"
+  | "hermes-interrupt";
+
+export interface HermesBridgeDiscoverPayload {}
+
+export interface HermesBridgeEnsureCanonicalPayload {
+  profile: string;
+}
+
+export interface HermesBridgeSendPayload {
+  profile: string;
+  text: string;
+  threadId: string;
+  turnId: string;
+  model?: string;
+}
+
+export interface HermesBridgeInterruptPayload {
+  profile: string;
+  turnId?: string;
+}
 
 export interface LocalVmJobPayload {
   botId: string;
@@ -53,7 +78,34 @@ export interface SshBridgeJob extends BridgeJobBase {
   cwd?: string;
 }
 
-export type BridgeJob = ShellBridgeJob | LocalVmBridgeJob | SshBridgeJob;
+export interface HermesDiscoverBridgeJob extends BridgeJobBase {
+  kind: "hermes-discover";
+  payload: HermesBridgeDiscoverPayload;
+}
+
+export interface HermesEnsureCanonicalBridgeJob extends BridgeJobBase {
+  kind: "hermes-ensure-canonical";
+  payload: HermesBridgeEnsureCanonicalPayload;
+}
+
+export interface HermesSendBridgeJob extends BridgeJobBase {
+  kind: "hermes-send";
+  payload: HermesBridgeSendPayload;
+}
+
+export interface HermesInterruptBridgeJob extends BridgeJobBase {
+  kind: "hermes-interrupt";
+  payload: HermesBridgeInterruptPayload;
+}
+
+export type BridgeJob =
+  | ShellBridgeJob
+  | LocalVmBridgeJob
+  | SshBridgeJob
+  | HermesDiscoverBridgeJob
+  | HermesEnsureCanonicalBridgeJob
+  | HermesSendBridgeJob
+  | HermesInterruptBridgeJob;
 
 export interface BridgeJobResult {
   jobId: string;
@@ -182,6 +234,14 @@ export class IdempotencyConflictError extends Error {
 export function jobFingerprint(job: BridgeJob): string {
   if (job.kind === "shell") return `shell\0${job.command}\0${job.cwd ?? ""}`;
   if (job.kind === "ssh-exec") return `ssh-exec\0${job.alias}\0${job.command}\0${job.cwd ?? ""}`;
+  if (job.kind === "hermes-discover") return "hermes-discover";
+  if (job.kind === "hermes-ensure-canonical") return `hermes-ensure-canonical\0${job.payload.profile}`;
+  if (job.kind === "hermes-send") {
+    return `hermes-send\0${job.payload.profile}\0${job.payload.threadId}\0${job.payload.turnId}\0${job.payload.text}\0${job.payload.model ?? ""}`;
+  }
+  if (job.kind === "hermes-interrupt") {
+    return `hermes-interrupt\0${job.payload.profile}\0${job.payload.turnId ?? ""}`;
+  }
   return `${job.kind}\0${job.payload.botId}\0${job.payload.action ?? ""}`;
 }
 
@@ -536,6 +596,97 @@ export class BridgeRegistry {
     if (opts.idempotencyKey) {
       const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
       if (existing) return existing.job as SshBridgeJob;
+    }
+    this.enqueueRecord(bridgeId, job, opts);
+    return job;
+  }
+
+  enqueueHermesDiscover(
+    bridgeId: string,
+    timeoutMs = 45_000,
+    opts: EnqueueBridgeJobOpts = {},
+  ): HermesDiscoverBridgeJob {
+    requireCapability(bridgeId, "hermes");
+    const job: HermesDiscoverBridgeJob = {
+      id: randomUUID(),
+      bridgeId,
+      kind: "hermes-discover",
+      payload: {},
+      timeoutMs,
+      createdAt: Date.now(),
+    };
+    if (opts.idempotencyKey) {
+      const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
+      if (existing) return existing.job as HermesDiscoverBridgeJob;
+    }
+    this.enqueueRecord(bridgeId, job, opts);
+    return job;
+  }
+
+  enqueueHermesEnsureCanonical(
+    bridgeId: string,
+    profile: string,
+    timeoutMs = 60_000,
+    opts: EnqueueBridgeJobOpts = {},
+  ): HermesEnsureCanonicalBridgeJob {
+    requireCapability(bridgeId, "hermes");
+    const job: HermesEnsureCanonicalBridgeJob = {
+      id: randomUUID(),
+      bridgeId,
+      kind: "hermes-ensure-canonical",
+      payload: { profile },
+      timeoutMs,
+      createdAt: Date.now(),
+    };
+    if (opts.idempotencyKey) {
+      const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
+      if (existing) return existing.job as HermesEnsureCanonicalBridgeJob;
+    }
+    this.enqueueRecord(bridgeId, job, opts);
+    return job;
+  }
+
+  enqueueHermesSend(
+    bridgeId: string,
+    payload: HermesBridgeSendPayload,
+    timeoutMs = 180_000,
+    opts: EnqueueBridgeJobOpts = {},
+  ): HermesSendBridgeJob {
+    requireCapability(bridgeId, "hermes");
+    const job: HermesSendBridgeJob = {
+      id: randomUUID(),
+      bridgeId,
+      kind: "hermes-send",
+      payload,
+      timeoutMs,
+      createdAt: Date.now(),
+    };
+    if (opts.idempotencyKey) {
+      const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
+      if (existing) return existing.job as HermesSendBridgeJob;
+    }
+    this.enqueueRecord(bridgeId, job, opts);
+    return job;
+  }
+
+  enqueueHermesInterrupt(
+    bridgeId: string,
+    payload: HermesBridgeInterruptPayload,
+    timeoutMs = 30_000,
+    opts: EnqueueBridgeJobOpts = {},
+  ): HermesInterruptBridgeJob {
+    requireCapability(bridgeId, "hermes");
+    const job: HermesInterruptBridgeJob = {
+      id: randomUUID(),
+      bridgeId,
+      kind: "hermes-interrupt",
+      payload,
+      timeoutMs,
+      createdAt: Date.now(),
+    };
+    if (opts.idempotencyKey) {
+      const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
+      if (existing) return existing.job as HermesInterruptBridgeJob;
     }
     this.enqueueRecord(bridgeId, job, opts);
     return job;
