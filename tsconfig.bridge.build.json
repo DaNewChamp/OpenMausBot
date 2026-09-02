@@ -13,7 +13,7 @@
     "shared/bridge-hermes-contract.ts",
     "server/contracts.ts",
     "server/atomic.ts",
-    "server/config.ts",
+    "server/data-dir.ts",
     "server/engines/contracts.ts",
     "server/engines/discovery.ts",
     "server/engines/bindings.ts",

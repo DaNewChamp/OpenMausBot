@@ -9,7 +9,7 @@ import {
 import { isAbsolute, dirname, resolve } from "node:path";
 
 import { writeFileAtomic } from "../atomic.ts";
-import { DATA_DIR } from "../config.ts";
+import { DATA_DIR } from "../data-dir.ts";
 import {
   HermesEngineError,
   type HermesBotBinding,

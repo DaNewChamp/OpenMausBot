@@ -8,7 +8,10 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
+import { DATA_DIR } from "./data-dir.ts";
 import { parseJson, schemaIssue, type JsonObject, type JsonValue } from "./schema.ts";
+
+export { DATA_DIR } from "./data-dir.ts";
 
 const optionalText = z.string().optional();
 const SSH_ALIAS = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -238,12 +241,6 @@ export function hermesBotInstanceId(cfg: AppConfig): string {
     : "hermes";
 }
 
-// OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.
-// OMB_USER_DATA is what hosted/cloud launch scripts set (Electron userData on Mac).
-export const DATA_DIR =
-  process.env.OMB_DATA_DIR ??
-  process.env.OMB_USER_DATA ??
-  join(homedir(), ".openmausbot");
 const LEGACY_DATA_DIR = join(homedir(), ".opengrokbot");
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");

@@ -1,13 +1,12 @@
 import {
   existsSync,
-  globSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -15,42 +14,6 @@ const out = join(root, "dist-bridge");
 const nested = join(out, "bridge", "src");
 const serverDir = join(out, "server");
 const sharedDir = join(out, "shared");
-const tsconfig = JSON.parse(
-  readFileSync(join(root, "tsconfig.bridge.build.json"), "utf8"),
-);
-
-function expectedSubdirJs(subdir) {
-  const names = new Set();
-  for (const pattern of tsconfig.include ?? []) {
-    if (!pattern.startsWith(`${subdir}/`) || !pattern.endsWith(".ts")) continue;
-    names.add(`${pattern.slice(subdir.length + 1, -3)}.js`);
-  }
-  return names;
-}
-
-function expandIncludes() {
-  const files = new Set();
-  for (const pattern of tsconfig.include ?? []) {
-    if (pattern.includes("*")) {
-      for (const match of globSync(pattern, { cwd: root })) {
-        if (match.endsWith(".ts")) files.add(match);
-      }
-      continue;
-    }
-    if (pattern.endsWith(".ts")) files.add(pattern);
-  }
-
-  const excluded = new Set();
-  for (const pattern of tsconfig.exclude ?? []) {
-    if (pattern.includes("*")) {
-      for (const match of globSync(pattern, { cwd: root })) excluded.add(match);
-      continue;
-    }
-    excluded.add(pattern);
-  }
-
-  return [...files].filter((file) => !excluded.has(file));
-}
 
 function collectRelativeImports(source) {
   const imports = [];
@@ -61,41 +24,44 @@ function collectRelativeImports(source) {
   return imports;
 }
 
-function resolveTsImport(fromFile, specifier) {
-  const base = join(dirname(fromFile), specifier);
+function resolveJsImport(fromFile, specifier) {
+  const base = resolve(dirname(fromFile), specifier);
   if (existsSync(base) && statSync(base).isFile()) return base;
-  if (existsSync(`${base}.ts`)) return `${base}.ts`;
-  if (existsSync(join(base, "index.ts"))) return join(base, "index.ts");
+  if (existsSync(`${base}.js`)) return `${base}.js`;
+  if (existsSync(join(base, "index.js"))) return join(base, "index.js");
   return null;
 }
 
-function expectedEmittedServerJs() {
-  const queue = expandIncludes();
+function runtimeRelativeJs(entry) {
+  const queue = [entry];
   const visited = new Set();
+  const rootJs = new Set();
   const serverJs = new Set();
+  const sharedJs = new Set();
 
   while (queue.length > 0) {
-    const rel = queue.pop();
-    if (visited.has(rel)) continue;
-    visited.add(rel);
+    const abs = queue.pop();
+    if (visited.has(abs)) continue;
+    visited.add(abs);
 
-    if (rel.startsWith("server/") && rel.endsWith(".ts")) {
-      serverJs.add(`${rel.slice("server/".length, -3)}.js`);
+    const rel = relative(out, abs);
+    if (!rel.includes("/") && rel.endsWith(".js")) {
+      rootJs.add(rel);
+    } else if (rel.startsWith("server/") && rel.endsWith(".js")) {
+      serverJs.add(rel.slice("server/".length));
+    } else if (rel.startsWith("shared/") && rel.endsWith(".js")) {
+      sharedJs.add(rel.slice("shared/".length));
     }
 
-    const abs = join(root, rel);
     if (!existsSync(abs)) continue;
-
     const source = readFileSync(abs, "utf8");
     for (const specifier of collectRelativeImports(source)) {
-      const resolved = resolveTsImport(abs, specifier);
-      if (!resolved) continue;
-      const resolvedRel = relative(root, resolved);
-      if (!visited.has(resolvedRel)) queue.push(resolvedRel);
+      const resolved = resolveJsImport(abs, specifier);
+      if (resolved && !visited.has(resolved)) queue.push(resolved);
     }
   }
 
-  return serverJs;
+  return { rootJs, serverJs, sharedJs };
 }
 
 function rewriteBridgeImports(source) {
@@ -132,35 +98,33 @@ if (!existsSync(nested)) {
 }
 
 const bridgeJs = listDir(nested).filter((name) => name.endsWith(".js"));
-const expectedRoot = new Set(bridgeJs);
-const expectedShared = expectedSubdirJs("shared");
-const expectedServer = expectedEmittedServerJs();
-
-for (const name of listDir(out)) {
-  const path = join(out, name);
-  if (!statSync(path).isFile() || !name.endsWith(".js") || expectedRoot.has(name)) continue;
-  rmSync(path);
-}
-
 for (const name of bridgeJs) {
   const from = join(nested, name);
   const to = join(out, name);
   writeFileSync(to, rewriteBridgeImports(readFileSync(from, "utf8")));
 }
 
-for (const name of listDir(sharedDir)) {
-  if (expectedShared.has(name)) continue;
-  rmSync(join(sharedDir, name));
-}
-
-pruneServerDir(serverDir, expectedServer);
-
-rmSync(join(out, "bridge"), { recursive: true, force: true });
-
 const entry = join(out, "index.js");
 if (!existsSync(entry)) {
   console.error(`bridge entry missing: ${entry}`);
   process.exit(1);
 }
+
+const runtime = runtimeRelativeJs(entry);
+
+for (const name of listDir(out)) {
+  const path = join(out, name);
+  if (!statSync(path).isFile() || !name.endsWith(".js") || runtime.rootJs.has(name)) continue;
+  rmSync(path);
+}
+
+for (const name of listDir(sharedDir)) {
+  if (runtime.sharedJs.has(name)) continue;
+  rmSync(join(sharedDir, name));
+}
+
+pruneServerDir(serverDir, runtime.serverJs);
+
+rmSync(join(out, "bridge"), { recursive: true, force: true });
 
 console.log(`bridge layout ready: ${entry}`);

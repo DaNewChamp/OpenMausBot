@@ -3,6 +3,7 @@
 // repo checkout. Copying dist-bridge out of the repo is load-bearing: inside the
 // checkout, ../../shared still resolves and hides broken deploy layouts.
 import { spawnSync } from "node:child_process";
+import { builtinModules } from "node:module";
 import {
   cpSync,
   existsSync,
@@ -11,7 +12,6 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +21,36 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const dist = join(root, "dist-bridge");
+const nodeBuiltins = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));
+
+function isNodeOrRelativeSpecifier(specifier: string): boolean {
+  if (specifier.startsWith(".") || specifier.startsWith("/")) return true;
+  if (nodeBuiltins.has(specifier)) return true;
+  const base = specifier.startsWith("node:") ? specifier.slice(5).split("/")[0] : specifier.split("/")[0];
+  return builtinModules.includes(base) || builtinModules.includes(`${base}/promises`);
+}
+
+function collectBareImports(filePath: string): string[] {
+  const source = readFileSync(filePath, "utf8");
+  const imports: string[] = [];
+  const pattern = /(?:from|import)\s+["']([^"']+)["']/g;
+  for (const match of source.matchAll(pattern)) {
+    imports.push(match[1]);
+  }
+  return imports;
+}
+
+function assertNoBarePackageImports(treeRoot: string): void {
+  const violations: string[] = [];
+  for (const filePath of listJsFiles(treeRoot)) {
+    for (const specifier of collectBareImports(filePath)) {
+      if (!isNodeOrRelativeSpecifier(specifier)) {
+        violations.push(`${filePath}: ${specifier}`);
+      }
+    }
+  }
+  expect(violations, violations.join("\n")).toEqual([]);
+}
 
 function runBridgeBuild(): void {
   const tsc = spawnSync(
@@ -162,16 +192,16 @@ describe("bridge build contract", () => {
     assertRelativeImportsResolve(dist);
   });
 
-  it("runs help and connect validation from an isolated copied tree", () => {
+  it("has no bare non-node package imports in dist-bridge", () => {
+    assertNoBarePackageImports(dist);
+  });
+
+  it("runs help and connect validation from an isolated copied tree with no node_modules", () => {
     const staging = mkdtempSync(join(tmpdir(), "omb-bridge-smoke-"));
     try {
       cpSync(dist, join(staging, "bridge"), { recursive: true });
       assertRelativeImportsResolve(join(staging, "bridge"));
-
-      // Vendored server modules still import npm packages (for example zod). The
-      // layout contract covers only dist-bridge relative paths; host machines
-      // must still resolve normal package imports from an installed node_modules.
-      symlinkSync(join(root, "node_modules"), join(staging, "node_modules"));
+      assertNoBarePackageImports(join(staging, "bridge"));
 
       const help = spawnSync(process.execPath, [join(staging, "bridge", "index.js")], {
         cwd: staging,

@@ -30,7 +30,7 @@ const SENSITIVE = [
   /\bcredentials?\.json\b|\bserviceaccount\b/i,
 ];
 
-import type { PermissionMode } from "./config.ts";
+type PermissionMode = "ask" | "allow" | "deny";
 
 /** First matching pattern's source, so a verdict can NAME the rule that
  * made it — the decision log's whole value is "which rule", and deriving
