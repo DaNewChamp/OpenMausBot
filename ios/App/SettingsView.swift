@@ -32,7 +32,7 @@ struct SettingsView: View {
                 notificationsSection
                 hapticsSection
                 if session.connection != nil {
-                    hermesSection
+                    integrationsSection
                     workspaceSection
                     appearanceSection
                     chatPreferencesSection
@@ -152,6 +152,27 @@ struct SettingsView: View {
         }
     }
 
+    private var integrationsSection: some View {
+        VBotSurfaceGroup(
+            title: "Integrations",
+            footer: "Connect Hermes and workspace apps on this computer. For another machine, pair that V Bot first."
+        ) {
+            workspaceLink(
+                title: "Hermes",
+                symbol: "sparkles",
+                color: .mint,
+                destination: HermesSetupView(onOpenChat: onOpenChat)
+            )
+            VBotHairline().padding(.leading, 56)
+            workspaceLink(
+                title: "Connected Apps",
+                symbol: "link",
+                color: .blue,
+                destination: ConnectedAppsView()
+            )
+        }
+    }
+
     private var workspaceSection: some View {
         VBotSurfaceGroup(title: "Workspace") {
             workspaceLink(
@@ -169,31 +190,10 @@ struct SettingsView: View {
             )
             VBotHairline().padding(.leading, 56)
             workspaceLink(
-                title: "Connected Apps",
-                symbol: "link",
-                color: .blue,
-                destination: ConnectedAppsView()
-            )
-            VBotHairline().padding(.leading, 56)
-            workspaceLink(
                 title: "Desktop engine",
                 symbol: "cpu",
                 color: .purple,
                 destination: EngineSelectionView()
-            )
-        }
-    }
-
-    private var hermesSection: some View {
-        VBotSurfaceGroup(
-            title: "Integrations",
-            footer: "Connect Hermes on this computer. To use Hermes on another machine, pair that V Bot first, then connect Hermes there."
-        ) {
-            workspaceLink(
-                title: "Hermes",
-                symbol: "sparkles",
-                color: .mint,
-                destination: HermesSetupView(onOpenChat: onOpenChat)
             )
         }
     }

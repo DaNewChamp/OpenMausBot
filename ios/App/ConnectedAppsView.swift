@@ -20,12 +20,12 @@ struct ConnectedAppsView: View {
     @State private var refreshing = false
 
     private var cards: [ConnectorCard] {
-        let values = catalog?.cards ?? []
-        guard !query.isEmpty else { return values }
-        return values.filter {
-            $0.label.localizedCaseInsensitiveContains(query) ||
-                $0.slug.localizedCaseInsensitiveContains(query)
-        }
+        guard let catalog else { return [] }
+        return ConnectedAppsPresentationPolicy.orderedCards(
+            catalog: catalog,
+            statuses: statuses,
+            query: query
+        )
     }
 
     var body: some View {
