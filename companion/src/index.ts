@@ -20,6 +20,7 @@
 // inside a process you chose to start would be ceremony: stopping it is the
 // off switch, and it is a more honest one than a flag in a file.
 import { createServer, request as httpRequest } from "node:http";
+import { hostname } from "node:os";
 
 import { createAddressWatcher } from "./advertise-watch.ts";
 import { createControlServer, hostCandidates } from "./control.ts";
@@ -27,6 +28,7 @@ import { createConnectedDeviceTracker } from "./connected-devices.ts";
 import { DeviceRegistry } from "./devices.ts";
 import { companionEndpointCandidates, hostedCompanionUrl } from "./endpoints.ts";
 import { lanAddresses, refreshTailnetName, tailnetName, tailscaleAddress } from "./listener.ts";
+import { resolveHubDisplayName } from "./fleet-presentation.ts";
 import {
   advertisableAddresses,
   clampBytes,
@@ -88,7 +90,13 @@ const conflict = (name: string, port: number): string | null => {
 let cachedName = process.env.OMB_COMPANION_NAME?.trim() || "";
 
 /** What this computer is called on the phone. Never empty. */
-const machineName = (): string => cachedName || "OpenMausBot";
+const machineName = (): string =>
+  cachedName ||
+  resolveHubDisplayName({
+    name: "",
+    host: hostname(),
+    runtimeProfile: "desktop-hub",
+  });
 
 /** Ask the harness whose computer this is, once, at startup. Every failure
  * is survivable: the name is a label, and no part of pairing depends on it. */
