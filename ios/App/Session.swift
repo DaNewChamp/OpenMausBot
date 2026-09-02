@@ -791,6 +791,18 @@ final class Session: ObservableObject {
     /// alert containing provider diagnostics; cancellation simply leaves the
     /// current screen alone.
     func hermesSetupStatus() async -> HermesSetupStatus? {
+#if DEBUG
+        if HermesSetupPreviewPolicy.isEnabled(arguments: ProcessInfo.processInfo.arguments) {
+            rememberHermesEndpoints(HermesSetupPreviewPolicy.status.profiles.map { profile in
+                HermesEndpointOption(
+                    id: profile.id,
+                    computerName: profile.placement?.bridge ?? connection?.name ?? "This computer",
+                    profile: profile.profile
+                )
+            })
+            return HermesSetupPreviewPolicy.status
+        }
+#endif
         guard let client else {
             return HermesSetupStatus(state: .unavailable, reason: .stateUnavailable)
         }

@@ -269,6 +269,60 @@ public struct HermesSetupStatus: Codable, Hashable, Sendable, Equatable {
     }
 }
 
+#if DEBUG
+public enum HermesSetupPreviewPolicy {
+    public static func isEnabled(arguments: [String]) -> Bool {
+        arguments.contains("-store-preview") && arguments.contains("-open-hermes-settings")
+    }
+
+    public static let status = HermesSetupStatus(
+        state: .connected,
+        profiles: [
+            HermesSetupProfile(
+                profile: "chief",
+                handle: "chief",
+                displayName: "Hermes Chief",
+                description: "Primary Hermes chief of staff",
+                model: "GPT-5.6",
+                provider: "OpenAI",
+                canonicalChat: .present,
+                availability: .available,
+                placement: HermesSetupPlacement(kind: .local, profile: "chief"),
+                botId: "preview-chief"
+            ),
+            HermesSetupProfile(
+                profile: "research",
+                handle: "research",
+                displayName: "Hermes Research",
+                description: "Research profile on a connected computer",
+                model: "Claude Opus",
+                provider: "Claude",
+                canonicalChat: .present,
+                availability: .available,
+                placement: HermesSetupPlacement(
+                    kind: .bridge,
+                    profile: "research",
+                    bridge: "Mac mini M4",
+                    bridgeId: "bridge-mac-mini"
+                ),
+                botId: "preview-scout"
+            ),
+        ],
+        capabilities: HermesSetupCapabilities(
+            roster: true,
+            canonicalChat: true,
+            send: true,
+            finalResponse: true,
+            events: true,
+            stop: true,
+            routinesRead: true,
+            messageAgent: true,
+            crossMachine: true
+        )
+    )
+}
+#endif
+
 public struct HermesSetupConnectionResponse: Codable, Hashable, Sendable, Equatable {
     public var botId: String
     public var profile: HermesSetupProfile

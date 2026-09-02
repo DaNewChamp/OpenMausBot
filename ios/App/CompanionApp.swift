@@ -63,6 +63,8 @@ struct RootView: View {
 #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-open-provider-settings") {
                 ProviderSettingsPreviewHost()
+            } else if HermesSetupPreviewPolicy.isEnabled(arguments: ProcessInfo.processInfo.arguments) {
+                NavigationStack { HermesSetupView() }
             } else {
                 routedRoot
             }

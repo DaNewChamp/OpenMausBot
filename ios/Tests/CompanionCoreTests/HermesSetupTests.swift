@@ -45,6 +45,31 @@ private final class HermesSetupRequestStub: URLProtocol {
 }
 
 final class HermesSetupTests: XCTestCase {
+    func testHermesSetupPreviewRequiresExplicitDebugRoute() {
+        XCTAssertTrue(HermesSetupPreviewPolicy.isEnabled(arguments: [
+            "V Bot", "-store-preview", "-open-hermes-settings",
+        ]))
+        XCTAssertFalse(HermesSetupPreviewPolicy.isEnabled(arguments: ["V Bot", "-store-preview"]))
+        XCTAssertFalse(HermesSetupPreviewPolicy.isEnabled(arguments: ["V Bot", "-open-hermes-settings"]))
+    }
+
+    func testHermesSetupPreviewProvidesSafeMultiComputerConversionFixture() throws {
+        let status = HermesSetupPreviewPolicy.status
+
+        XCTAssertEqual(status.state, .connected)
+        XCTAssertEqual(status.profiles.compactMap(\.botId), ["preview-chief", "preview-scout"])
+        XCTAssertEqual(status.profiles.map(\.id), [
+            "local:chief",
+            "bridge:bridge-mac-mini:research",
+        ])
+        XCTAssertEqual(status.profiles.last?.placement?.bridge, "Mac mini M4")
+
+        let encoded = String(decoding: try JSONEncoder().encode(status), as: UTF8.self).lowercased()
+        XCTAssertFalse(encoded.contains("token"))
+        XCTAssertFalse(encoded.contains("secret"))
+        XCTAssertFalse(encoded.contains("api_key"))
+    }
+
     private var session: URLSession!
     private var client: CompanionClient!
 
