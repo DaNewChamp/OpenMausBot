@@ -11,6 +11,7 @@ import UIKit
 struct ChatListView: View {
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("companion.showBotChannels") private var showBotChannels = false
     @State private var query = ""
     /// Driven so that making a bot can open it. Value-based navigation alone
     /// cannot push without a tap, and a new bot appearing silently at the
@@ -234,7 +235,7 @@ struct ChatListView: View {
                 if ProcessInfo.processInfo.arguments.contains("-open-first"),
                    path.isEmpty {
                     let arguments = ProcessInfo.processInfo.arguments
-                    let all = session.state.chatSummaries
+                    let all = session.state.chatSummaries(showBotChannels: showBotChannels)(showBotChannels: showBotChannels)
                     if let spec = arguments.first(where: { $0.hasPrefix("-preview-bot=") }) {
                         let id = String(spec.dropFirst("-preview-bot=".count))
                         if let match = all.first(where: { $0.chat.id == id }) {
@@ -560,7 +561,7 @@ struct ChatListView: View {
     // MARK: - Data
 
     private var chats: [ChatSummary] {
-        let all = session.state.chatSummaries
+        let all = session.state.chatSummaries(showBotChannels: showBotChannels)
         guard !query.isEmpty else {
             // Pinned chats live in the hero shelf; the list below is one
             // unified stream of every remaining bot and room.
@@ -575,7 +576,7 @@ struct ChatListView: View {
 
     private var pinnedChats: [ChatSummary] {
         guard query.isEmpty else { return [] }
-        return session.state.chatSummaries.filter(\.pinned)
+        return session.state.chatSummaries(showBotChannels: showBotChannels).filter(\.pinned)
     }
 
     private var waitingChats: Set<String> {

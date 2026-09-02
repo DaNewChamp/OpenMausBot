@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage("busySendDefault") private var busySendDefault = BusySendDefault.steer.rawValue
     @AppStorage(CompanionPreferences.hapticsKey) private var hapticsEnabled = true
     @AppStorage(CompanionPreferences.soundsKey) private var soundsEnabled = true
+    @AppStorage("companion.showBotChannels") private var showBotChannels = false
     @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.reduced.rawValue
     @AppStorage(PrefKey.islandIntro) private var islandIntro = IslandIntro.oncePerBot.rawValue
     @State private var permissionDefault: PermissionMode = .ask
@@ -175,6 +176,21 @@ struct SettingsView: View {
 
     private var workspaceSection: some View {
         VBotSurfaceGroup(title: "Workspace") {
+            Toggle(isOn: $showBotChannels) {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show bot channels")
+                        Text("Bot-to-bot conversations in the chat list")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    SettingsIcon(symbol: "bubble.left.and.bubble.right", color: .teal)
+                }
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: VBotSurface.Hit.row)
+            VBotHairline().padding(.leading, 56)
             workspaceLink(
                 title: "Hidden chats",
                 symbol: "eye.slash",

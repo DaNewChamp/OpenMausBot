@@ -671,7 +671,7 @@ struct MessageRow: View {
     /// Last bubble of a run from the same side: the one that gets the tail.
     var endsRun = true
     var showsSpeaker = false
-    var onOpenComm: (String) -> Void = { _ in }
+    var onOpenComm: (CommChip) -> Void = { _ in }
     var onReply: (Message) -> Void = { _ in }
     @EnvironmentObject private var session: Session
     @Environment(\.conversationTypography) private var typography
@@ -1553,7 +1553,7 @@ struct ToolRunDisclosure: View {
 struct CommActivityRow: View {
     let presentation: CommActivityPresentation
     let comm: CommChip
-    let onOpen: (String) -> Void
+    let onOpen: (CommChip) -> Void
 
     @EnvironmentObject private var session: Session
     @Environment(\.conversationTypography) private var typography
@@ -1570,7 +1570,7 @@ struct CommActivityRow: View {
     @ViewBuilder
     private var rowContent: some View {
         if presentation.destinationAvailable {
-            Button { onOpen(presentation.groupId) } label: {
+            Button { onOpen(comm) } label: {
                 contentLabel
             }
             .buttonStyle(.plain)

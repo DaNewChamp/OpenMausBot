@@ -25,6 +25,7 @@ struct ChatTranscriptView: View {
     @AppStorage(PrefKey.activityDetailOverrides) private var activityDetailOverrides = "{}"
 
     @State private var lastAnnouncedSettledId: String?
+    @State private var pendingBotChannelOpen: BotChannelOpenIntent?
 
     static let liveBubbleId = "companion.live"
 
@@ -103,6 +104,21 @@ struct ChatTranscriptView: View {
         }
         .id(threadId)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(item: $pendingBotChannelOpen) { intent in
+            BotChannelChooserSheet(
+                room: intent.room,
+                focusMessageId: intent.focusMessageId,
+                invokingBotId: intent.invokingBotId
+            ) { perspectiveBotId in
+                session.openBotChannel(
+                    room: intent.room,
+                    perspectiveBotId: perspectiveBotId,
+                    focusMessageId: intent.focusMessageId
+                )
+                commRoom = intent.room
+            }
+            .environmentObject(session)
+        }
     }
 
     @ViewBuilder
@@ -268,8 +284,28 @@ struct ChatTranscriptView: View {
                             startsSpeakerRun: message.role != .user
                                 && startsSpeakerRun(at: row.startIndex, in: transcript)
                         ),
-                        onOpenComm: { groupId in
-                            commRoom = session.state.rooms.first { $0.id == groupId }
+                        onOpenComm: { comm in
+                            guard let room = session.state.rooms.first(where: { $0.id == comm.groupId }) else {
+                                return
+                            }
+                            if BotChannelPolicy.isBotChannel(room), room.memberIds.count == 2 {
+                                let invokingBotId: String? = {
+                                    if case let .bot(bot) = current { return bot.id }
+                                    return nil
+                                }()
+                                pendingBotChannelOpen = BotChannelOpenIntent(
+                                    room: room,
+                                    focusMessageId: comm.messageId,
+                                    invokingBotId: invokingBotId
+                                )
+                            } else {
+                                session.openBotChannel(
+                                    room: room,
+                                    perspectiveBotId: room.memberIds.first ?? comm.withBotId,
+                                    focusMessageId: comm.messageId
+                                )
+                                commRoom = room
+                            }
                         },
                         onReply: { message in
                             replyingTo = message
