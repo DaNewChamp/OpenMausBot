@@ -9,6 +9,7 @@ User=root
 Environment=OMB_RUNTIME_ROOT=/opt/openmausbot/runtime
 Environment=OMB_COMPANION_DIR=/var/lib/openmausbot-companion
 Environment=OMB_COMPANION_HOSTED_URL=https://openmaus.posival.com
+Environment=OMB_WEB_CLIENT_ORIGINS=https://vbot.posival.com
 Environment=OMB_COMPANION_PORT=28810
 Environment=OMB_CONTROL_PORT=28811
 Environment=OMB_ORIGIN_DIR=/var/lib/openmausbot/omb-hosted/omb-companion-origin-main
