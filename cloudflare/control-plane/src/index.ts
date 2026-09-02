@@ -21,7 +21,7 @@ import {
   rotateInstallationCredential,
 } from "./installations";
 import { listFleet, updateInstallationPresence } from "./fleet";
-import { completeWebClientAuth } from "./web-client-auth";
+import { completeWebClientAuth, exchangeWebClientAuth } from "./web-client-auth";
 
 const ROTATE_ROUTE = /^\/v1\/installations\/([^/]+)\/credentials\/rotate$/;
 const INSTALLATION_ROUTE = /^\/v1\/installations\/([^/]+)$/;
@@ -83,7 +83,10 @@ async function route(
 
   const auth = createAuth(env, ctx, config, requestId);
   if (request.method === "GET" && url.pathname === "/web-client/complete") {
-    return completeWebClientAuth(request, auth, config.allowedOrigins);
+    return completeWebClientAuth(request, auth, config.allowedOrigins, env.DB);
+  }
+  if (request.method === "POST" && url.pathname === "/web-client/exchange") {
+    return exchangeWebClientAuth(request, config.allowedOrigins, env.DB);
   }
   if (request.method === "GET" && url.pathname === "/v1/me") {
     const session = await accountSession(request, auth);

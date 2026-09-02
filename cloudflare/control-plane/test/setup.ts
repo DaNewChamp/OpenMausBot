@@ -27,5 +27,6 @@ afterEach(async () => {
     env.DB.prepare('DELETE FROM "verification"'),
     env.DB.prepare('DELETE FROM "rateLimit"'),
     env.DB.prepare('DELETE FROM "user"'),
+    env.DB.prepare("DELETE FROM web_client_auth_exchanges"),
   ]);
 });
