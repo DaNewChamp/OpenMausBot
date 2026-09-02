@@ -29,7 +29,7 @@ const PLACEMENT_KINDS = new Set<HermesSetupPlacementKind>(["local", "bridge"]);
 function safeBridgeName(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length === 0 || value.length > 80) return undefined;
   const trimmed = value.trim();
-  if (!trimmed || trimmed !== value.trim()) return undefined;
+  if (!trimmed) return undefined;
   if (/[\u0000-\u001f]/.test(trimmed)) return undefined;
   return trimmed.toLowerCase();
 }
@@ -76,7 +76,10 @@ export function parseHermesSetupConnectInput(body: unknown):
 }
 
 export function placementKey(placement: HermesSetupPlacement): string {
-  return `${placement.kind}:${placement.bridge ?? "hub"}:${placement.profile}`;
+  const bridge = placement.kind === "bridge" && placement.bridge
+    ? placement.bridge.toLowerCase()
+    : "hub";
+  return `${placement.kind}:${bridge}:${placement.profile}`;
 }
 
 function publicBridgeProfile(
@@ -257,7 +260,7 @@ export function annotateBridgeConnectedProfiles(
     if (!botExists(botId)) continue;
     const target = resolveBridgeBindingTarget(registry, binding);
     if (!target) continue;
-    byPlacement.set(placementKey({ kind: "bridge", bridge: target.bridge.toLowerCase(), profile: target.profile }), botId);
+    byPlacement.set(placementKey({ kind: "bridge", bridge: target.bridge, profile: target.profile }), botId);
   }
   return profiles.map((profile) => {
     if (!profile.placement || profile.placement.kind !== "bridge" || !profile.placement.bridge) return profile;

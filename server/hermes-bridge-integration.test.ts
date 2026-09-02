@@ -6,20 +6,27 @@ import type { RuntimeEvent } from "./contracts.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
 import { DATA_DIR } from "./config.ts";
 import { encodeHermesBridgeResult } from "../shared/bridge-hermes-contract.ts";
+import type { HermesEngineDescription } from "./engines/index.ts";
 import {
+  annotateBridgeConnectedProfiles,
   discoverBridgeHermesPlacements,
   dispatchHermesBridgeSend,
   dispatchHermesBridgeInterrupt,
   mergeHermesSetupProfiles,
   normalizeHermesSetupPlacement,
   parseHermesSetupConnectInput,
+  placementKey,
   replayScrubbedHermesEvents,
   resolveBridgeBindingTarget,
 } from "./hermes-bridge-integration.ts";
 import {
   setHermesBridgeBinding,
 } from "./bridge-hermes-bindings.ts";
-import type { HermesSetupProfile } from "./hermes-setup.ts";
+import {
+  connectHermesProfile,
+  type HermesSetupProfile,
+  type HermesSetupRegistry,
+} from "./hermes-setup.ts";
 
 function resetBridgeData(): void {
   mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
@@ -67,6 +74,47 @@ function discoveryBody(profile = "default") {
       availability: "available" as const,
     }],
   };
+}
+
+function fakeHermesRegistry(): HermesSetupRegistry {
+  const description: HermesEngineDescription = {
+    state: "available",
+    instanceId: "hermes",
+    capabilities: discoveryBody().capabilities,
+    profiles: [{
+      profile: "default",
+      handle: "hermes",
+      displayName: "Hermes",
+      description: "Local assistant",
+      model: "sonnet",
+      provider: "anthropic",
+      canonicalChat: "absent",
+      availability: "available",
+    }],
+  };
+  return {
+    isEnabled: true,
+    instanceId: "hermes",
+    discover: vi.fn(async () => description),
+    describe: vi.fn(async () => description),
+    forBinding: vi.fn(() => null),
+  };
+}
+
+async function waitForBridgeJob(
+  registry: BridgeRegistry,
+  bridgeId: string,
+  kind: "hermes-discover" | "hermes-ensure-canonical",
+  timeoutMs = 5_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    registry.touch(bridgeId);
+    const [job] = registry.pollJobs(bridgeId);
+    if (job?.kind === kind) return job;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`timed out waiting for ${kind}`);
 }
 
 describe("Hermes bridge integration setup", () => {
@@ -128,6 +176,36 @@ describe("Hermes bridge integration setup", () => {
     vi.useRealTimers();
   });
 
+  it("matches placement keys case-insensitively for bridge names", () => {
+    const mixed = { kind: "bridge" as const, bridge: "Mac mini", profile: "default" };
+    const normalized = { kind: "bridge" as const, bridge: "mac mini", profile: "default" };
+    expect(placementKey(mixed)).toBe(placementKey(normalized));
+  });
+
+  it("annotates connected bridge profiles by case-insensitive placement key", () => {
+    const { registry, bridgeId } = pairedHermesBridge("Mac mini");
+    setHermesBridgeBinding("bot-1", { bridgeId, profile: "default", bindingVersion: 1 });
+    const profiles: HermesSetupProfile[] = [{
+      profile: "default",
+      handle: "hermes",
+      displayName: "Hermes",
+      description: "Remote",
+      canonicalChat: "absent",
+      availability: "available",
+      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+    }];
+    const annotated = annotateBridgeConnectedProfiles(
+      profiles,
+      new Map([["bot-1", { bridgeId, profile: "default", bindingVersion: 1 }]]),
+      registry,
+      (id) => id === "bot-1",
+    );
+    expect(annotated).toEqual([expect.objectContaining({
+      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+      botId: "bot-1",
+    })]);
+  });
+
   it("merges local and bridge profiles for setup status", () => {
     const local: HermesSetupProfile[] = [{
       profile: "default",
@@ -156,6 +234,79 @@ describe("Hermes bridge integration setup", () => {
       bridge: "office mac",
       profile: "default",
     });
+  });
+
+  it("connectHermesProfile connects mixed-case bridge placement and annotates botId in status", async () => {
+    const { registry: bridgeRegistry, bridgeId } = pairedHermesBridge("Mac mini");
+    const registry = fakeHermesRegistry();
+    const bots = new Map<string, { id: string }>();
+    let bridgeBindings = new Map<string, { bridgeId: string; profile: string; bindingVersion: 1 }>();
+    const createBot = vi.fn(() => {
+      const bot = { id: "bot-bridge-1" };
+      bots.set(bot.id, bot);
+      return bot;
+    });
+    const connectPromise = connectHermesProfile({
+      registry,
+      placement: { kind: "bridge", bridge: "mac mini", profile: "default" },
+      bridgeRegistry,
+      loadBridgeBindings: () => ({ state: "available", value: bridgeBindings }),
+      setBridgeBinding: (id, binding) => {
+        bridgeBindings = new Map(bridgeBindings).set(id, binding);
+        return { state: "available", value: undefined };
+      },
+      removeBridgeBinding: (id) => {
+        bridgeBindings = new Map([...bridgeBindings].filter(([key]) => key !== id));
+        return { state: "available", value: undefined };
+      },
+      loadBindings: () => ({ state: "available", value: new Map() }),
+      bot: (id) => bots.get(id) ?? null,
+      createBot,
+      deleteBot: (id) => bots.delete(id),
+    });
+
+    const discoverJob = await waitForBridgeJob(bridgeRegistry, bridgeId, "hermes-discover");
+    expect(bridgeRegistry.storeResult({
+      jobId: discoverJob.id,
+      bridgeId,
+      exitCode: 0,
+      stdout: encodeHermesBridgeResult({ kind: "hermes-discover", body: discoveryBody() }),
+      stderr: "",
+      truncated: false,
+      finishedAt: Date.now(),
+      generation: discoverJob.generation,
+    })).toBe(true);
+
+    const canonicalJob = await waitForBridgeJob(bridgeRegistry, bridgeId, "hermes-ensure-canonical");
+    expect(bridgeRegistry.storeResult({
+      jobId: canonicalJob.id,
+      bridgeId,
+      exitCode: 0,
+      stdout: encodeHermesBridgeResult({
+        kind: "hermes-ensure-canonical",
+        body: { state: "present", adopted: true },
+      }),
+      stderr: "",
+      truncated: false,
+      finishedAt: Date.now(),
+      generation: canonicalJob.generation,
+    })).toBe(true);
+
+    const result = await connectPromise;
+    expect(result.botId).toBe("bot-bridge-1");
+    expect(result.created).toBe(true);
+    expect(result.profile).toMatchObject({
+      profile: "default",
+      botId: "bot-bridge-1",
+      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+    });
+    expect(result.status.state).toBe("connected");
+    expect(result.status.profiles).toEqual(expect.arrayContaining([expect.objectContaining({
+      profile: "default",
+      botId: "bot-bridge-1",
+      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+    })]));
+    expect(createBot).toHaveBeenCalledTimes(1);
   });
 });
 
