@@ -4,6 +4,10 @@ import { EventEmitter } from "node:events";
 import type { RuntimeEvent } from "../contracts.ts";
 import { newEventId } from "../contracts.ts";
 import {
+  isHermesGatewayLaunchError,
+  resolveHermesGatewayLaunch,
+} from "./hermes-gateway-launch.ts";
+import {
   normalizeCanonicalLookup,
   normalizeProfileRowsResult,
   projectHermesCapabilities,
@@ -57,6 +61,11 @@ const HERMES_CHILD_ENV_KEYS = new Set([
   "USERPROFILE",
   "PATH",
   "HERMES_HOME",
+  "HERMES_PYTHON",
+  "HERMES_PYTHON_SRC_ROOT",
+  "HERMES_CWD",
+  "PYTHONPATH",
+  "VIRTUAL_ENV",
   "LANG",
   "LANGUAGE",
   "LC_ALL",
@@ -226,10 +235,11 @@ interface GatewayGeneration {
 }
 
 /**
- * A deliberately small JSON-RPC-over-stdio client for `hermes --tui`.
+ * A deliberately small JSON-RPC-over-stdio client for Hermes' Python
+ * `tui_gateway.entry` module.
  *
- * The gateway emits terminal/Ink output nowhere on stdout; stdout is treated
- * as newline-delimited JSON only. Every frame is validated as a JSON-RPC 2.0
+ * Hermes TUI wraps Ink UI around this gateway; stdout must remain
+ * newline-delimited JSON only. Every frame is validated as a JSON-RPC 2.0
  * envelope; malformed protocol or event data fails the generation closed.
  * A missing ready frame is a bounded startup failure, and a child is never
  * restarted implicitly after it exits.
@@ -351,11 +361,21 @@ export class HermesGatewayClient extends EventEmitter {
 
   private async startGeneration(): Promise<void> {
     const generationId = ++this.generationCounter;
+    const launch = resolveHermesGatewayLaunch({
+      cli: this.options.cli,
+      ...(this.options.cwd ? { cwd: this.options.cwd } : {}),
+      environment: this.options.environment,
+    });
+    if (isHermesGatewayLaunchError(launch)) {
+      this.unavailable = "missing_cli";
+      throw new HermesEngineError("missing_cli");
+    }
+
     let child: HermesProcess;
     try {
-      child = this.options.spawn(this.options.cli, ["--tui"], {
-        ...(this.options.cwd ? { cwd: this.options.cwd } : {}),
-        env: this.options.environment,
+      child = this.options.spawn(launch.command, [...launch.args], {
+        cwd: launch.cwd,
+        env: launch.env,
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch {

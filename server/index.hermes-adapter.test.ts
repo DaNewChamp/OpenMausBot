@@ -29,7 +29,8 @@ const log = process.env.HERMES_HOME ? process.env.HERMES_HOME + "/requests.ndjso
 const writeLog = (value) => { if (log) fs.appendFileSync(log, JSON.stringify(value) + "\\n"); };
 const out = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 if (process.argv[2] === "--version") { process.stdout.write("0.21.0 (fixture)\\n"); process.exit(0); }
-if (process.argv[2] !== "--tui") { process.exit(2); }
+const args = process.argv.slice(2);
+if (!(args.length === 0 || (args[0] === "-m" && args[1] === "tui_gateway.entry") || args[0] === "--tui")) { process.exit(2); }
 let prompts = 0;
 setTimeout(() => out({ jsonrpc: "2.0", method: "event", params: { type: "gateway.ready", payload: { version: "0.21.0" } } }), 20);
 let buffer = "";
@@ -96,12 +97,40 @@ beforeAll(async () => {
   fakeHermes = join(home, "fake-hermes.cjs");
   hermesHome = join(home, "hermes-home");
   hermesLog = join(hermesHome, "requests.ndjson");
+  const fakeSrcRoot = join(home, "fake-hermes-src");
+  mkdirSync(join(fakeSrcRoot, "tui_gateway"), { recursive: true });
+  writeFileSync(join(fakeSrcRoot, "tui_gateway", "entry.py"), "# fixture marker\\n");
+  const fakePython = join(home, "fake-python.cjs");
+  writeFileSync(fakePython, `#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+const gateway = ${JSON.stringify(fakeHermes)};
+const args = process.argv.slice(2);
+if (!(args[0] === "-m" && args[1] === "tui_gateway.entry")) process.exit(2);
+const child = spawn(process.execPath, [gateway], { env: process.env, stdio: ["pipe", "pipe", "pipe"] });
+child.stdout.on("data", (chunk) => process.stdout.write(chunk));
+child.stderr.on("data", (chunk) => process.stderr.write(chunk));
+process.stdin.on("data", (chunk) => child.stdin.write(chunk));
+process.stdin.on("end", () => child.stdin.end());
+child.on("exit", (code, signal) => {
+  if (signal) process.kill(process.pid, signal);
+  process.exit(code ?? 1);
+});
+`, { mode: 0o700 });
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   mkdirSync(hermesHome, { recursive: true, mode: 0o700 });
   writeFileSync(fakeHermes, FAKE_HERMES_SOURCE, { mode: 0o700 });
   writeFileSync(join(dataDir, "config.json"), JSON.stringify({
     vbot: { hermes: { enabled: true } },
-    instances: { hermes: { driver: "hermesAgent", config: { cli: fakeHermes } } },
+    instances: {
+      hermes: {
+        driver: "hermesAgent",
+        config: { cli: fakeHermes },
+        environment: {
+          HERMES_PYTHON: fakePython,
+          HERMES_PYTHON_SRC_ROOT: fakeSrcRoot,
+        },
+      },
+    },
   }));
 
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
@@ -114,6 +143,8 @@ beforeAll(async () => {
       OMB_PORT: String(PORT),
       OMB_WEBHOOK_PORT: String(WEBHOOK_PORT),
       HERMES_HOME: hermesHome,
+      HERMES_PYTHON: fakePython,
+      HERMES_PYTHON_SRC_ROOT: fakeSrcRoot,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

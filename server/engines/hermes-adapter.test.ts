@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -15,6 +15,34 @@ import {
 } from "./hermes.ts";
 import { HermesCommBudget } from "./hermes-comms.ts";
 import type { RuntimeEvent } from "../contracts.ts";
+
+let gatewayRoot = "";
+
+beforeAll(() => {
+  gatewayRoot = mkdtempSync(join(tmpdir(), "vbot-hermes-adapter-gateway-"));
+  mkdirSync(join(gatewayRoot, "tui_gateway"), { recursive: true });
+  writeFileSync(join(gatewayRoot, "tui_gateway", "entry.py"), "# marker\n");
+});
+
+afterAll(() => {
+  if (gatewayRoot) rmSync(gatewayRoot, { recursive: true, force: true });
+});
+
+function gatewayEnvironment(extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
+  return {
+    HERMES_PYTHON_SRC_ROOT: gatewayRoot,
+    HERMES_PYTHON: "/opt/hermes-venv/bin/python3",
+    ...extra,
+  };
+}
+
+function createTestHermesEngine(options: Parameters<typeof createHermesBotEngine>[0] = {}) {
+  return createHermesBotEngine({
+    cli: "/opt/hermes/bin/hermes",
+    ...options,
+    environment: gatewayEnvironment(options.environment),
+  });
+}
 
 class FakeStream extends EventEmitter {
   setEncoding(): void {
@@ -83,15 +111,20 @@ async function settle(): Promise<void> {
 afterEach(() => vi.useRealTimers());
 
 describe("Hermes Bot Chat loopback transport", () => {
-  it("uses --tui, strips V Bot credentials, waits for gateway.ready, and correlates RPC ids", async () => {
+  it("launches the python gateway module, strips V Bot credentials, waits for gateway.ready, and correlates RPC ids", async () => {
+    const fakeRoot = mkdtempSync(join(tmpdir(), "vbot-hermes-adapter-root-"));
+    mkdirSync(join(fakeRoot, "tui_gateway"), { recursive: true });
+    writeFileSync(join(fakeRoot, "tui_gateway", "entry.py"), "# marker\n");
     const { child, spawn } = harness();
-    const engine = createHermesBotEngine({
-      cli: "/opt/hermes",
+    const engine = createTestHermesEngine({
+      cli: "/opt/hermes/bin/hermes",
       cwd: "/work",
       environment: {
         V_BOT_TOKEN: "must-not-cross",
         OPENMAUSBOT_SECRET: "must-not-cross",
         HERMES_HOME: "/private/hermes",
+        HERMES_PYTHON_SRC_ROOT: fakeRoot,
+        HERMES_PYTHON: "/opt/hermes-venv/bin/python3",
       },
       spawn,
     });
@@ -114,8 +147,8 @@ describe("Hermes Bot Chat loopback transport", () => {
     });
     expect(discoveryResult.authenticated).not.toBe(true);
     expect(spawn).toHaveBeenCalledWith(
-      "/opt/hermes",
-      ["--tui"],
+      "/opt/hermes-venv/bin/python3",
+      ["-m", "tui_gateway.entry"],
       expect.objectContaining({ cwd: "/work", stdio: ["pipe", "pipe", "pipe"] }),
     );
     const env = spawn.mock.calls[0]?.[2]?.env;
@@ -128,7 +161,7 @@ describe("Hermes Bot Chat loopback transport", () => {
   it("calls gateway.capabilities after gateway.ready and refuses exclusiveSubmit when omitted", async () => {
     const child = new FakeProcess();
     child.capabilitiesMode = "omit";
-    const engine = createHermesBotEngine({ spawn: () => child });
+    const engine = createTestHermesEngine({ spawn: () => child });
     const discover = engine.discover();
     await settle();
     ready(child);
@@ -145,7 +178,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("fails startup when the gateway closes before ready instead of waiting for the init timeout", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({
+    const engine = createTestHermesEngine({
       spawn: vi.fn<HermesSpawn>(() => child),
       timeouts: { initializationMs: 1_000 },
     });
@@ -161,7 +194,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it.each(["ENOENT", "EACCES"])("maps an asynchronous child %s error to fixed missing_cli diagnostics", async (code) => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn<HermesSpawn>(() => child) });
+    const engine = createTestHermesEngine({ spawn: vi.fn<HermesSpawn>(() => child) });
     const discovery = engine.discover();
     await settle();
     child.emit("error", Object.assign(new Error("/private/hermes/bin/hermes"), { code }));
@@ -173,7 +206,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("projects an exact hidden Bot Chat, resumes the resolved id, streams deltas, and completes once", async () => {
     const { child } = harness();
-    const engine = new HermesBotAdapter({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const engine = new HermesBotAdapter({ environment: gatewayEnvironment(), spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
     const events: unknown[] = [];
     engine.onEvent((event) => events.push(event));
     const send = engine.send({ profile: "coder", text: "hello", threadId: "thread-1", turnId: "turn-1" });
@@ -218,7 +251,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("accepts empty session ids on global watcher events without ending an active runtime", async () => {
     const { child } = harness();
-    const engine = new HermesBotAdapter({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const engine = new HermesBotAdapter({ environment: gatewayEnvironment(), spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
     const events: RuntimeEvent[] = [];
     engine.onEvent((event) => events.push(event));
 
@@ -261,7 +294,7 @@ describe("Hermes Bot Chat loopback transport", () => {
     ["canonical-first", "default", "hermes"],
   ])("serializes concurrent default/alias sends ($0) without overwriting the runtime", async (_label, firstProfile, secondProfile) => {
     const { child } = harness();
-    const engine = new HermesBotAdapter({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const engine = new HermesBotAdapter({ environment: gatewayEnvironment(), spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
     const events: RuntimeEvent[] = [];
     engine.onEvent((event) => events.push(event));
 
@@ -311,7 +344,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("distinguishes absent canonical chats from unknown lookup failures without minting on lookup alone", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
     const absent = engine.lookupCanonical("coder");
     await settle();
     ready(child);
@@ -328,7 +361,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("mints Bot Chat only after a successful empty hidden lookup, then re-resolves", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
     const send = engine.send({ profile: "coder", text: "hello", threadId: "thr", turnId: "turn-1" });
     await settle();
     ready(child);
@@ -382,7 +415,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("does not mint when hidden lookup fails", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
     const send = engine.send({ profile: "coder", text: "hello", threadId: "t", turnId: "u" });
     await settle();
     ready(child);
@@ -399,7 +432,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("does not mint a second chat when post-create lookup is unknown", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
     const send = engine.send({ profile: "coder", text: "hello", threadId: "t", turnId: "u" });
     await settle();
     ready(child);
@@ -429,7 +462,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("adopts before minting a missing Bot Chat and confirms the created row", async () => {
     const { child } = harness();
-    const engine = new HermesBotAdapter({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const engine = new HermesBotAdapter({ environment: gatewayEnvironment(), spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
     const ensure = engine.ensureCanonical("coder");
     await settle();
     ready(child);
@@ -470,6 +503,7 @@ describe("Hermes Bot Chat loopback transport", () => {
     const pendingPath = join(pendingDir, "pending.json");
     const { child } = harness();
     const engine = new HermesBotAdapter({
+      environment: gatewayEnvironment(),
       spawn: vi.fn(() => child),
       pendingPath,
       timeouts: { requestMs: 100 },
@@ -528,6 +562,7 @@ describe("Hermes Bot Chat loopback transport", () => {
     const pendingPath = join(pendingDir, "pending.json");
     const { child } = harness();
     const engine = new HermesBotAdapter({
+      environment: gatewayEnvironment(),
       spawn: vi.fn(() => child),
       pendingPath,
       timeouts: { requestMs: 100 },
@@ -571,6 +606,7 @@ describe("Hermes Bot Chat loopback transport", () => {
     const pendingPath = join(pendingDir, "pending.json");
     const { child } = harness();
     const engine = new HermesBotAdapter({
+      environment: gatewayEnvironment(),
       spawn: vi.fn(() => child),
       pendingPath,
       timeouts: { requestMs: 100 },
@@ -626,6 +662,7 @@ describe("Hermes Bot Chat loopback transport", () => {
     const pendingDir = mkdtempSync(join(tmpdir(), "hermes-pending-"));
     const { child } = harness();
     const engine = new HermesBotAdapter({
+      environment: gatewayEnvironment(),
       spawn: vi.fn(() => child),
       pendingPath: join(pendingDir, "pending.json"),
       timeouts: { requestMs: 100 },
@@ -655,7 +692,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("fails closed when session.create does not return a durable id", async () => {
     const { child } = harness();
-    const engine = new HermesBotAdapter({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const engine = new HermesBotAdapter({ environment: gatewayEnvironment(), spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
     const ensure = engine.ensureCanonical("coder");
     await settle();
     ready(child);
@@ -677,7 +714,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("maps interrupt to one cancellation terminal and clears the runtime", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
     const events: RuntimeEvent[] = [];
     engine.onEvent((event) => events.push(event));
     const send = engine.send({ profile: "coder", text: "wait", threadId: "t", turnId: "turn" });
@@ -726,7 +763,7 @@ describe("Hermes Bot Chat loopback transport", () => {
     },
   ])("keeps a runtime started through the hermes alias interruptible after roster $label", async ({ expectedState, response }) => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
     const events: RuntimeEvent[] = [];
     engine.onEvent((event) => events.push(event));
 
@@ -773,7 +810,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("requires a fresh, unique discovered profile before canonical lookup", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
     const lookup = engine.lookupCanonical("deleted");
     await settle();
     ready(child);
@@ -787,7 +824,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("refuses ambiguous handles and retains no guessed default session", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
     const send = engine.send({ profile: "hermes", text: "do not guess", threadId: "t", turnId: "u" });
     await settle();
     ready(child);
@@ -805,7 +842,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("requires the ephemeral session_id and never falls back to session_key", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
     const send = engine.send({ profile: "coder", text: "hello", threadId: "t", turnId: "u" });
     await settle();
     ready(child);
@@ -825,7 +862,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("maps an empty final text to a safe malformed terminal without guessed content", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
     const events: RuntimeEvent[] = [];
     engine.onEvent((event) => events.push(event));
     const send = engine.send({ profile: "coder", text: "prompt with /private path", threadId: "t", turnId: "u" });
@@ -854,7 +891,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("emits one safe runtime error before one terminal event for an upstream prompt failure", async () => {
     const { child } = harness();
-    const engine = new HermesBotAdapter({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const engine = new HermesBotAdapter({ environment: gatewayEnvironment(), spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
     const events: RuntimeEvent[] = [];
     engine.onEvent((event) => events.push(event));
     const send = engine.send({ profile: "coder", text: "hello", threadId: "t", turnId: "u" });
@@ -897,6 +934,7 @@ describe("Hermes Bot Chat loopback transport", () => {
       clearTimeout: vi.fn(),
     };
     const engine = new HermesBotAdapter({
+      environment: gatewayEnvironment(),
       spawn: vi.fn(() => child),
       clock,
       timeouts: { requestMs: 100, turnMs: 20 },
@@ -936,7 +974,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("classifies authentication errors without exposing their message", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
     const discovery = engine.discover();
     await settle();
     ready(child);
@@ -953,8 +991,8 @@ describe("Hermes Bot Chat loopback transport", () => {
   ])("fails closed when JSON-RPC error.code is not an integer ($1)", async (code, _label) => {
     const { child } = harness();
     const client = new HermesGatewayClient({
-      cli: "hermes",
-      environment: {},
+      cli: "/opt/hermes/bin/hermes",
+      environment: gatewayEnvironment(),
       spawn: vi.fn(() => child),
       clock: { now: Date.now, setTimeout, clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) },
       timeouts: { initializationMs: 500, requestMs: 500, turnMs: 500, reconnectMs: 500 },
@@ -975,7 +1013,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("marks a nonzero child exit unavailable and rejects pending calls", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 500 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 500 } });
     const discovery = engine.discover();
     await settle();
     ready(child);
@@ -993,7 +1031,7 @@ describe("Hermes Bot Chat loopback transport", () => {
     const spawn = vi.fn<HermesSpawn>()
       .mockReturnValueOnce(firstChild)
       .mockReturnValueOnce(secondChild);
-    const engine = createHermesBotEngine({ spawn, timeouts: { requestMs: 100, turnMs: 500, reconnectMs: 500 } });
+    const engine = createTestHermesEngine({ spawn, timeouts: { requestMs: 100, turnMs: 500, reconnectMs: 500 } });
 
     const first = engine.discover();
     await settle();
@@ -1036,7 +1074,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("demotes capabilities and marks a previous roster stale on a roster RPC error", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100 } });
     const first = engine.discover();
     await settle();
     ready(child);
@@ -1057,7 +1095,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("answers through approval.respond with once|deny", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
     const send = engine.send({ profile: "coder", text: "run", threadId: "t", turnId: "turn-a" });
     await settle();
     ready(child);
@@ -1087,7 +1125,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("denies through approval.respond with deny", async () => {
     const { child } = harness();
-    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
     const send = engine.send({ profile: "coder", text: "run", threadId: "t", turnId: "turn-deny" });
     await settle();
     ready(child);
@@ -1116,7 +1154,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("records groupsProtocolSeen without enabling groups capability", async () => {
     const { child, spawn } = harness();
-    const engine = createHermesBotEngine({ spawn });
+    const engine = createTestHermesEngine({ spawn });
     const discover = engine.discover();
     await settle();
     ready(child);
@@ -1131,7 +1169,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
   it("projects request.opened without paths or tokens in the summary", async () => {
     const { child } = harness();
-    const engine = new HermesBotAdapter({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const engine = new HermesBotAdapter({ environment: gatewayEnvironment(), spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
     const events: RuntimeEvent[] = [];
     engine.onEvent((event) => events.push(event));
     const send = engine.send({ profile: "coder", text: "run", threadId: "t", turnId: "turn-opened" });
@@ -1213,6 +1251,7 @@ describe("Hermes Bot Chat loopback transport", () => {
     const budget = new HermesCommBudget(1);
     const delivered: unknown[] = [];
     const engine = new HermesBotAdapter({
+      environment: gatewayEnvironment(),
       spawn: vi.fn(() => child),
       timeouts: { requestMs: 100, turnMs: 500 },
       handleToBotId: new Map([["researcher", "bot-b"]]),
@@ -1255,8 +1294,8 @@ describe("Hermes Bot Chat loopback transport", () => {
     for (const frame of malformedFrames) {
       const { child } = harness();
       const client = new HermesGatewayClient({
-        cli: "hermes",
-        environment: {},
+        cli: "/opt/hermes/bin/hermes",
+        environment: gatewayEnvironment(),
         spawn: vi.fn(() => child),
         clock: { now: Date.now, setTimeout, clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) },
         timeouts: { initializationMs: 500, requestMs: 500, turnMs: 500, reconnectMs: 500 },
@@ -1275,8 +1314,8 @@ describe("Hermes Bot Chat loopback transport", () => {
 describe("Hermes gateway protocol ordering and timeouts", () => {
   function directClient(child: FakeProcess, initializationMs = 500): HermesGatewayClient {
     return new HermesGatewayClient({
-      cli: "hermes",
-      environment: {},
+      cli: "/opt/hermes/bin/hermes",
+      environment: gatewayEnvironment(),
       spawn: vi.fn(() => child),
       clock: { now: Date.now, setTimeout, clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) },
       timeouts: { initializationMs, requestMs: 500, turnMs: 500, reconnectMs: 500 },

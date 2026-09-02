@@ -46,17 +46,27 @@ const SECRET_MARKERS = [
   "must-not-leak",
 ];
 
-function writeFixtureLauncher(home: string): string {
+function writeFixtureLauncher(home: string, fixtureSource: string): string {
   const launcher = join(home, "fake-hermes-launcher.cjs");
   writeFileSync(
     launcher,
     `#!/usr/bin/env node
 const { spawn } = require("node:child_process");
-const fixture = ${JSON.stringify(FIXTURE_SOURCE)};
-const child = spawn(process.execPath, ["--experimental-strip-types", fixture, ...process.argv.slice(2)], {
-  env: process.env,
-  stdio: ["pipe", "pipe", "pipe"],
-});
+const fixture = ${JSON.stringify(fixtureSource)};
+const args = process.argv.slice(2);
+if (args[0] === "-m" && args[1] === "tui_gateway.entry") {
+  var child = spawn(process.execPath, ["--experimental-strip-types", fixture], {
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+} else if (args[0] === "--tui") {
+  var child = spawn(process.execPath, ["--experimental-strip-types", fixture, ...args], {
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+} else {
+  process.exit(2);
+}
 child.stdout.on("data", (chunk) => process.stdout.write(chunk));
 child.stderr.on("data", (chunk) => process.stderr.write(chunk));
 process.stdin.on("data", (chunk) => child.stdin.write(chunk));
@@ -71,12 +81,22 @@ child.on("exit", (code, signal) => {
   return launcher;
 }
 
+function ensureFixtureSourceRoot(home: string): string {
+  const sourceRoot = join(home, "fake-hermes-src");
+  const gatewayDir = join(sourceRoot, "tui_gateway");
+  mkdirSync(gatewayDir, { recursive: true });
+  writeFileSync(join(gatewayDir, "entry.py"), "# fixture marker\\n");
+  return sourceRoot;
+}
+
 function fixtureEnv(home: string, hermesHome: string, extra: Record<string, string> = {}): Record<string, string> {
+  const sourceRoot = ensureFixtureSourceRoot(home);
   return {
     ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
     HOME: home,
     USERPROFILE: home,
     HERMES_HOME: hermesHome,
+    HERMES_PYTHON_SRC_ROOT: sourceRoot,
     ...extra,
   };
 }
@@ -236,7 +256,7 @@ describe("Hermes live loopback fixture", () => {
       home = mkdtempSync(join(tmpdir(), "vbot-hermes-live-adapter-"));
       hermesHome = join(home, "hermes-home");
       mkdirSync(hermesHome, { recursive: true, mode: 0o700 });
-      launcher = writeFixtureLauncher(home);
+      launcher = writeFixtureLauncher(home, FIXTURE_SOURCE);
       rpcLog = join(hermesHome, "rpc.ndjson");
       setFixtureMode(hermesHome, "happy");
     });
@@ -255,7 +275,10 @@ describe("Hermes live loopback fixture", () => {
       enableFixtureDeltas(hermesHome);
       engine = createHermesBotEngine({
         cli: launcher,
-        environment: fixtureEnv(home, hermesHome),
+        environment: {
+          ...fixtureEnv(home, hermesHome),
+          HERMES_PYTHON: launcher,
+        },
         timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
       }) as HermesBotAdapter;
       const discovery = await engine.discover();
@@ -278,7 +301,7 @@ describe("Hermes live loopback fixture", () => {
         },
       });
       const dump = JSON.parse(readFileSync(join(hermesHome, "spawn-dump.json"), "utf8"));
-      expect(dump.argv).toEqual(["--tui"]);
+      expect(dump.argv).toEqual(["-m", "tui_gateway.entry"]);
       expect(JSON.stringify(dump)).not.toContain("session-root");
       expect(JSON.stringify(dump)).not.toContain("session-tip");
       expect(JSON.stringify(dump)).not.toContain("must-not-leak");
@@ -288,7 +311,10 @@ describe("Hermes live loopback fixture", () => {
       enableFixtureDeltas(hermesHome);
       engine = createHermesBotEngine({
         cli: launcher,
-        environment: fixtureEnv(home, hermesHome),
+        environment: {
+          ...fixtureEnv(home, hermesHome),
+          HERMES_PYTHON: launcher,
+        },
         timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
       }) as HermesBotAdapter;
       const events: unknown[] = [];
@@ -312,7 +338,10 @@ describe("Hermes live loopback fixture", () => {
       setFixtureMode(hermesHome, "hang");
       engine = createHermesBotEngine({
         cli: launcher,
-        environment: fixtureEnv(home, hermesHome),
+        environment: {
+          ...fixtureEnv(home, hermesHome),
+          HERMES_PYTHON: launcher,
+        },
         timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
       }) as HermesBotAdapter;
       const events: unknown[] = [];
@@ -332,7 +361,10 @@ describe("Hermes live loopback fixture", () => {
       setFixtureMode(hermesHome, "hang");
       engine = createHermesBotEngine({
         cli: launcher,
-        environment: fixtureEnv(home, hermesHome),
+        environment: {
+          ...fixtureEnv(home, hermesHome),
+          HERMES_PYTHON: launcher,
+        },
         timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
       }) as HermesBotAdapter;
       const events: unknown[] = [];
@@ -365,7 +397,10 @@ describe("Hermes live loopback fixture", () => {
     it("reconnects with a fresh title lookup and resumes the compression tip", async () => {
       engine = createHermesBotEngine({
         cli: launcher,
-        environment: fixtureEnv(home, hermesHome),
+        environment: {
+          ...fixtureEnv(home, hermesHome),
+          HERMES_PYTHON: launcher,
+        },
         timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
       }) as HermesBotAdapter;
       await engine.discover();
@@ -406,7 +441,10 @@ describe("Hermes live loopback fixture", () => {
       setFixtureMode(hermesHome, fixtureMode);
       engine = createHermesBotEngine({
         cli: launcher,
-        environment: fixtureEnv(home, hermesHome),
+        environment: {
+          ...fixtureEnv(home, hermesHome),
+          HERMES_PYTHON: launcher,
+        },
         timeouts: { initializationMs: 500, requestMs: 500, turnMs: 500, reconnectMs: 500 },
       }) as HermesBotAdapter;
       if (phase === "turn") {
@@ -443,7 +481,10 @@ describe("Hermes live loopback fixture", () => {
       setFixtureMode(hermesHome, "happy");
       engine = createHermesBotEngine({
         cli: launcher,
-        environment: fixtureEnv(home, hermesHome),
+        environment: {
+          ...fixtureEnv(home, hermesHome),
+          HERMES_PYTHON: launcher,
+        },
         timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
       }) as HermesBotAdapter;
       await engine.discover();
@@ -460,7 +501,12 @@ describe("Hermes live loopback fixture", () => {
     it("maps missing CLI spawn to fixed missing_cli diagnostics", async () => {
       engine = createHermesBotEngine({
         cli: join(home, "missing-hermes-cli"),
-        environment: fixtureEnv(home, hermesHome),
+        environment: {
+          HOME: home,
+          USERPROFILE: home,
+          HERMES_HOME: hermesHome,
+          ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+        },
         timeouts: { initializationMs: 500, requestMs: 500, turnMs: 500, reconnectMs: 500 },
       }) as HermesBotAdapter;
       const discovery = await engine.discover();
@@ -479,7 +525,10 @@ describe("Hermes live loopback fixture", () => {
       setFixtureMode(hermesHome, seedMode);
       engine = createHermesBotEngine({
         cli: launcher,
-        environment: fixtureEnv(home, hermesHome),
+        environment: {
+          ...fixtureEnv(home, hermesHome),
+          HERMES_PYTHON: launcher,
+        },
         timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
       }) as HermesBotAdapter;
       await engine.discover();
@@ -499,7 +548,10 @@ describe("Hermes live loopback fixture", () => {
     it("preserves stale safe roster rows when discovery fails after a successful read", async () => {
       engine = createHermesBotEngine({
         cli: launcher,
-        environment: fixtureEnv(home, hermesHome),
+        environment: {
+          ...fixtureEnv(home, hermesHome),
+          HERMES_PYTHON: launcher,
+        },
         timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
       }) as HermesBotAdapter;
       const first = await engine.discover();
@@ -522,7 +574,10 @@ describe("Hermes live loopback fixture", () => {
     it("ignores global gateway events with empty session ids", async () => {
       engine = createHermesBotEngine({
         cli: launcher,
-        environment: fixtureEnv(home, hermesHome),
+        environment: {
+          ...fixtureEnv(home, hermesHome),
+          HERMES_PYTHON: launcher,
+        },
         timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
       }) as HermesBotAdapter;
       const events: unknown[] = [];
@@ -537,7 +592,7 @@ describe("Hermes live loopback fixture", () => {
       const registry = createHermesEngineRegistry({
         enabled: true,
         instanceConfigs: {
-          hermes: { driver: "hermesAgent", config: { cli: launcher }, environment: fixtureEnv(home, hermesHome) },
+          hermes: { driver: "hermesAgent", config: { cli: launcher }, environment: fixtureEnv(home, hermesHome, { HERMES_PYTHON: launcher }) },
         },
         createEngine: (options) => createHermesBotEngine(options) as HermesBotAdapter,
       });
@@ -551,7 +606,10 @@ describe("Hermes live loopback fixture", () => {
       setFixtureMode(hermesHome, "mint-on-absent");
       engine = createHermesBotEngine({
         cli: launcher,
-        environment: fixtureEnv(home, hermesHome),
+        environment: {
+          ...fixtureEnv(home, hermesHome),
+          HERMES_PYTHON: launcher,
+        },
         timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
       }) as HermesBotAdapter;
       await engine.discover();
@@ -571,7 +629,10 @@ describe("Hermes live loopback fixture", () => {
     it("probes groups.capabilities without enabling groups", async () => {
       engine = createHermesBotEngine({
         cli: launcher,
-        environment: fixtureEnv(home, hermesHome),
+        environment: {
+          ...fixtureEnv(home, hermesHome),
+          HERMES_PYTHON: launcher,
+        },
         timeouts: { initializationMs: 5_000, requestMs: 5_000, turnMs: 10_000, reconnectMs: 5_000 },
       }) as HermesBotAdapter;
       const discovery = await engine.discover();
@@ -594,7 +655,7 @@ describe("Hermes live loopback fixture", () => {
       home = mkdtempSync(join(tmpdir(), "vbot-hermes-live-hub-"));
       dataDir = join(home, "data");
       hermesHome = join(home, "hermes-home");
-      launcher = writeFixtureLauncher(home);
+      launcher = writeFixtureLauncher(home, FIXTURE_SOURCE);
       rpcLog = join(hermesHome, "rpc.ndjson");
       bindingPath = join(dataDir, "hermes-bindings.json");
       mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -602,13 +663,13 @@ describe("Hermes live loopback fixture", () => {
       setFixtureMode(hermesHome, "happy");
       writeFileSync(join(dataDir, "config.json"), JSON.stringify({
         vbot: { hermes: { enabled: true } },
-        instances: { hermes: { driver: "hermesAgent", config: { cli: launcher } } },
+        instances: { hermes: { driver: "hermesAgent", config: { cli: launcher }, environment: fixtureEnv(home, hermesHome, { HERMES_PYTHON: launcher }) } },
       }));
 
       child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
         cwd: ROOT,
         env: {
-          ...fixtureEnv(home, hermesHome),
+          ...fixtureEnv(home, hermesHome, { HERMES_PYTHON: launcher }),
           OMB_DATA_DIR: dataDir,
           OMB_PORT: String(PORT),
           OMB_WEBHOOK_PORT: String(WEBHOOK_PORT),

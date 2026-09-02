@@ -72,6 +72,11 @@ const allowedEnvKeys = [
   "HOME",
   "USERPROFILE",
   "HERMES_HOME",
+  "HERMES_PYTHON",
+  "HERMES_PYTHON_SRC_ROOT",
+  "HERMES_CWD",
+  "PYTHONPATH",
+  "VIRTUAL_ENV",
   "FAKE_HERMES_MODE",
   "FAKE_HERMES_DELTAS",
   "FAKE_HERMES_DUMP",
@@ -88,8 +93,14 @@ const dumpEnv = Object.fromEntries(
 const dumpPath = process.env.FAKE_HERMES_DUMP ?? (HERMES_HOME ? `${HERMES_HOME}/spawn-dump.json` : undefined);
 const rpcLogPath = process.env.FAKE_HERMES_RPC_LOG ?? (HERMES_HOME ? `${HERMES_HOME}/rpc.ndjson` : undefined);
 
+const isGatewayModule = argv.length === 0 || (argv[0] === "-m" && argv[1] === "tui_gateway.entry");
+const isLegacyTui = argv[0] === "--tui";
+const dumpArgv = isGatewayModule
+  ? (argv.length === 0 ? ["-m", "tui_gateway.entry"] : argv)
+  : argv;
+
 if (dumpPath) {
-  writeFileSync(dumpPath, JSON.stringify({ argv, env: dumpEnv, pid: process.pid }, null, 2));
+  writeFileSync(dumpPath, JSON.stringify({ argv: dumpArgv, env: dumpEnv, pid: process.pid }, null, 2));
 }
 
 if (argv.includes("--version")) {
@@ -97,7 +108,8 @@ if (argv.includes("--version")) {
   process.exit(0);
 }
 
-if (argv[0] !== "--tui") {
+
+if (!isGatewayModule && !isLegacyTui) {
   process.exit(2);
 }
 
