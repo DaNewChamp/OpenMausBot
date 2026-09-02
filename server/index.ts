@@ -7926,6 +7926,7 @@ const server = createServer(async (req, res) => {
           bot: (id) => store.bot(id),
           createBot: (profile, opts) => store.createBot(profile, opts),
           deleteBot: (id) => store.deleteBot(id),
+          patchBot: (id, patch) => store.patchBot(id, patch),
         });
         return json(res, result.created ? 201 : 200, {
           botId: result.botId,

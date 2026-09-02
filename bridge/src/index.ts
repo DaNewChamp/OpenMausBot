@@ -15,8 +15,8 @@ import {
   type HermesEndpointDescriptor,
 } from "./hermes-endpoints.ts";
 import {
+  createHermesDaemonToolExecutor,
   createHermesVbotDaemonHandler,
-  createHermesVbotEnvToolExecutor,
   hermesVbotMcpLaunchSpec,
   installHermesVbotConnector,
   parseInstalledHermesVbotConnector,
@@ -126,7 +126,7 @@ async function runDaemon(credentials = loadCredentials()) {
       botScope: installed?.botScope ?? credentials.bridgeId,
     }),
     handler: createHermesVbotDaemonHandler({
-      executeTool: createHermesVbotEnvToolExecutor(),
+      executeTool: createHermesDaemonToolExecutor(credentials),
     }),
   });
   const inFlight = new Map<string, InFlightJob>();
