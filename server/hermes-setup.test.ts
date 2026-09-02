@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { HermesRuntimeBinding } from "./bot-runtime-binding.ts";
 import type { HermesBotBinding, HermesCanonicalChat } from "./engines/contracts.ts";
 import type { HermesEngineDescription } from "./engines/index.ts";
 import type { HermesBotEngine } from "./engines/hermes.ts";
+import { resolveHermesBotDispatch } from "./hermes-bridge-integration.ts";
 import {
   connectHermesProfile,
   projectHermesSetupStatus,
@@ -377,6 +379,192 @@ describe("Hermes profile connect", () => {
     expect(bindings.get("bot-keep")).toMatchObject({ profile: "work" });
     expect(createBot).not.toHaveBeenCalled();
     expect(ensureCanonical).toHaveBeenCalledWith("work");
+  });
+
+  it("persists one canonical Hermes runtime identity on connect so sidecar, runtimeBinding, and dispatch cannot drift", async () => {
+    const ensureCanonical = vi.fn(async () => canonical);
+    const registry = fakeRegistry({ ensureCanonical });
+    const bots = new Map<string, { id: string; runtimeBinding?: HermesRuntimeBinding }>();
+    let bindings = new Map<string, HermesBotBinding>();
+    let nextId = 0;
+    const result = await connectHermesProfile({
+      registry,
+      profile: "default",
+      loadBindings: () => ({ state: "available", value: bindings }),
+      setBinding: (id, binding) => {
+        bindings = new Map(bindings).set(id, binding);
+        return { state: "available", value: undefined };
+      },
+      deleteBot: (id) => bots.delete(id),
+      bot: (id) => bots.get(id) ?? null,
+      patchBot: (id, patch) => {
+        const bot = bots.get(id);
+        if (!bot) return null;
+        bot.runtimeBinding = patch.runtimeBinding;
+        return bot;
+      },
+      createBot: () => {
+        const bot = { id: `bot-${++nextId}` };
+        bots.set(bot.id, bot);
+        return bot;
+      },
+    });
+    const expected: HermesRuntimeBinding = {
+      kind: "hermes",
+      placement: { kind: "local", profile: "default" },
+      bindingVersion: 2,
+    };
+    expect(result.botId).toBe("bot-1");
+    expect(result.runtimeBinding).toEqual(expected);
+    expect(bots.get("bot-1")?.runtimeBinding).toEqual(expected);
+    expect(bindings.get("bot-1")).toEqual({
+      adapter: "hermesBot",
+      profile: "default",
+      canonicalTitle: "Bot Chat",
+      bindingVersion: 1,
+    });
+    expect(resolveHermesBotDispatch("bot-1", {
+      localBindings: { state: "available", value: bindings },
+      bridgeBindings: { state: "available", value: new Map() },
+      bridgeCandidate: false,
+      runtimeBinding: bots.get("bot-1")?.runtimeBinding,
+    })).toEqual({
+      route: "local",
+      binding: bindings.get("bot-1"),
+    });
+  });
+
+  it("rebinds with botId by writing the same canonical identity to sidecar and runtimeBinding", async () => {
+    const ensureCanonical = vi.fn(async () => canonical);
+    const registry: HermesSetupRegistry = {
+      isEnabled: true,
+      instanceId: "hermes",
+      discover: vi.fn(async () => description({
+        profiles: [
+          {
+            profile: "default",
+            handle: "hermes",
+            displayName: "Hermes",
+            description: "Local assistant",
+            model: "sonnet",
+            provider: "anthropic",
+            canonicalChat: "present",
+            availability: "available",
+          },
+          {
+            profile: "work",
+            handle: "work",
+            displayName: "Work",
+            description: "Work profile",
+            model: "sonnet",
+            provider: "anthropic",
+            canonicalChat: "absent",
+            availability: "available",
+          },
+        ],
+      })),
+      describe: vi.fn(async () => description()),
+      forBinding: vi.fn((_binding: HermesBotBinding) => ({
+        ensureCanonical,
+      }) as unknown as HermesBotEngine),
+    };
+    const bots = new Map<string, { id: string; runtimeBinding?: HermesRuntimeBinding }>([[
+      "bot-keep",
+      {
+        id: "bot-keep",
+        runtimeBinding: {
+          kind: "hermes",
+          placement: { kind: "local", profile: "default" },
+          bindingVersion: 2,
+        },
+      },
+    ]]);
+    let bindings = new Map<string, HermesBotBinding>([[
+      "bot-keep",
+      { adapter: "hermesBot", profile: "default", canonicalTitle: "Bot Chat", bindingVersion: 1 },
+    ]]);
+    const result = await connectHermesProfile({
+      registry,
+      botId: "bot-keep",
+      placement: { kind: "local", profile: "work" },
+      loadBindings: () => ({ state: "available", value: bindings }),
+      setBinding: (id, binding) => {
+        bindings = new Map(bindings).set(id, binding);
+        return { state: "available", value: undefined };
+      },
+      removeBinding: (id) => {
+        const next = new Map(bindings);
+        next.delete(id);
+        bindings = next;
+        return { state: "available", value: undefined };
+      },
+      deleteBot: () => false,
+      bot: (id) => bots.get(id) ?? null,
+      patchBot: (id, patch) => {
+        const bot = bots.get(id);
+        if (!bot) return null;
+        bot.runtimeBinding = patch.runtimeBinding;
+        return bot;
+      },
+      createBot: () => {
+        throw new Error("must not mint another bot");
+      },
+    });
+    const expected: HermesRuntimeBinding = {
+      kind: "hermes",
+      placement: { kind: "local", profile: "work" },
+      bindingVersion: 2,
+    };
+    expect(result.botId).toBe("bot-keep");
+    expect(result.created).toBe(false);
+    expect(result.runtimeBinding).toEqual(expected);
+    expect(bots.get("bot-keep")?.runtimeBinding).toEqual(expected);
+    expect(bindings.get("bot-keep")).toMatchObject({ profile: "work" });
+    expect(resolveHermesBotDispatch("bot-keep", {
+      localBindings: { state: "available", value: bindings },
+      bridgeBindings: { state: "available", value: new Map() },
+      bridgeCandidate: false,
+      runtimeBinding: bots.get("bot-keep")?.runtimeBinding,
+    })).toEqual({
+      route: "local",
+      binding: bindings.get("bot-keep"),
+    });
+  });
+
+  it("heals a missing runtimeBinding onto the existing bot on repeat connect", async () => {
+    const registry = fakeRegistry({ ensureCanonical: vi.fn(async () => canonical) });
+    const bots = new Map<string, { id: string; runtimeBinding?: HermesRuntimeBinding }>([
+      ["bot-1", { id: "bot-1" }],
+    ]);
+    const bindings = new Map<string, HermesBotBinding>([[
+      "bot-1",
+      { adapter: "hermesBot", profile: "default", canonicalTitle: "Bot Chat", bindingVersion: 1 },
+    ]]);
+    const result = await connectHermesProfile({
+      registry,
+      profile: "default",
+      loadBindings: () => ({ state: "available", value: bindings }),
+      setBinding: () => ({ state: "available", value: undefined }),
+      deleteBot: () => false,
+      bot: (id) => bots.get(id) ?? null,
+      patchBot: (id, patch) => {
+        const bot = bots.get(id);
+        if (!bot) return null;
+        bot.runtimeBinding = patch.runtimeBinding;
+        return bot;
+      },
+      createBot: () => {
+        throw new Error("must not mint another bot");
+      },
+    });
+    expect(result.created).toBe(false);
+    expect(result.botId).toBe("bot-1");
+    expect(result.runtimeBinding).toEqual({
+      kind: "hermes",
+      placement: { kind: "local", profile: "default" },
+      bindingVersion: 2,
+    });
+    expect(bots.get("bot-1")?.runtimeBinding).toEqual(result.runtimeBinding);
   });
 
   it("does not rebind a bot that is not already Hermes-bound", async () => {

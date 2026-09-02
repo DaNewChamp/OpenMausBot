@@ -1,5 +1,6 @@
 import type { ModelSelection } from "./contracts.ts";
 import { createHash } from "node:crypto";
+import type { HermesRuntimeBinding } from "./bot-runtime-binding.ts";
 import type { BotRecord } from "./store.ts";
 import {
   loadHermesBindings,
@@ -116,6 +117,10 @@ export interface ConnectHermesProfileOptions {
   bot: (id: string) => Pick<BotRecord, "id"> | null;
   createBot: HermesSetupConnectStore["createBot"];
   deleteBot: (id: string) => boolean;
+  patchBot?: (
+    id: string,
+    patch: { runtimeBinding: HermesRuntimeBinding },
+  ) => Pick<BotRecord, "id"> | null;
 }
 
 export interface ConnectedHermesProfile {
@@ -123,6 +128,7 @@ export interface ConnectedHermesProfile {
   profile: HermesSetupProfile;
   status: HermesSetupStatus;
   created: boolean;
+  runtimeBinding: HermesRuntimeBinding;
 }
 
 const EMPTY_CAPABILITIES: HermesCapabilityFlags = {
@@ -202,6 +208,28 @@ function setupError(code: HermesSetupReason | HermesEngineError["code"]): Hermes
     default:
       return new HermesEngineError("state_unavailable");
   }
+}
+
+function canonicalHermesRuntimeIdentity(
+  placement: HermesRuntimeBinding["placement"],
+): HermesRuntimeBinding {
+  return { kind: "hermes", placement, bindingVersion: 2 };
+}
+
+function persistCanonicalRuntimeIdentity(
+  options: ConnectHermesProfileOptions,
+  botId: string,
+  identity: HermesRuntimeBinding,
+): HermesRuntimeBinding {
+  if (!options.patchBot) return identity;
+  try {
+    const patched = options.patchBot(botId, { runtimeBinding: identity });
+    if (!patched) throw setupError("state_unavailable");
+  } catch (error) {
+    if (error instanceof HermesEngineError) throw error;
+    throw setupError("state_unavailable");
+  }
+  return identity;
 }
 
 function unavailableReason(
@@ -707,11 +735,17 @@ async function connectBridgeHermesProfile(options: ConnectHermesProfileOptions):
     const connectedProfile = statusBase.profiles.find((candidate) =>
       candidate.placement && placementsMatch(candidate.placement, placement));
     if (!connectedProfile?.botId) throw setupError("state_unavailable");
+    const runtimeBinding = persistCanonicalRuntimeIdentity(
+      options,
+      existingBotId,
+      canonicalHermesRuntimeIdentity({ kind: "bridge", bridgeId, profile }),
+    );
     return {
       botId: existingBotId,
       profile: connectedProfile,
       status: { ...statusBase, state: "connected" },
       created: false,
+      runtimeBinding,
     };
   }
 
@@ -765,7 +799,12 @@ async function connectBridgeHermesProfile(options: ConnectHermesProfileOptions):
     const connectedProfile = status.profiles.find((candidate) =>
       candidate.placement && placementsMatch(candidate.placement, placement));
     if (!connectedProfile) throw setupError("state_unavailable");
-    return { botId: created.id, profile: connectedProfile, status, created: true };
+    const runtimeBinding = persistCanonicalRuntimeIdentity(
+      options,
+      created.id,
+      canonicalHermesRuntimeIdentity({ kind: "bridge", bridgeId, profile }),
+    );
+    return { botId: created.id, profile: connectedProfile, status, created: true, runtimeBinding };
   } catch (error) {
     if (!rollback()) throw setupError("state_unavailable");
     if (error instanceof HermesEngineError) throw error;
@@ -852,7 +891,12 @@ async function rebindLocalHermesProfile(options: ConnectHermesProfileOptions): P
   const connectedProfile = status.profiles.find((candidate) =>
     candidate.placement?.kind === "local" && candidate.profile === profile);
   if (!connectedProfile) throw setupError("state_unavailable");
-  return { botId, profile: connectedProfile, status, created: false };
+  const runtimeBinding = persistCanonicalRuntimeIdentity(
+    options,
+    botId,
+    canonicalHermesRuntimeIdentity({ kind: "local", profile }),
+  );
+  return { botId, profile: connectedProfile, status, created: false, runtimeBinding };
 }
 
 async function rebindBridgeHermesProfile(options: ConnectHermesProfileOptions): Promise<ConnectedHermesProfile> {
@@ -936,7 +980,12 @@ async function rebindBridgeHermesProfile(options: ConnectHermesProfileOptions): 
   const connectedProfile = status.profiles.find((candidate) =>
     candidate.placement && placementsMatch(candidate.placement, placement));
   if (!connectedProfile) throw setupError("state_unavailable");
-  return { botId, profile: connectedProfile, status, created: false };
+  const runtimeBinding = persistCanonicalRuntimeIdentity(
+    options,
+    botId,
+    canonicalHermesRuntimeIdentity({ kind: "bridge", bridgeId, profile }),
+  );
+  return { botId, profile: connectedProfile, status, created: false, runtimeBinding };
 }
 
 async function connectHermesProfileUnlocked(options: ConnectHermesProfileOptions): Promise<ConnectedHermesProfile> {
@@ -1002,11 +1051,17 @@ async function connectHermesProfileUnlocked(options: ConnectHermesProfileOptions
     const connectedProfile = status.profiles.find((candidate) =>
       candidate.placement?.kind === "local" && candidate.profile === profile);
     if (!connectedProfile) throw setupError("state_unavailable");
+    const runtimeBinding = persistCanonicalRuntimeIdentity(
+      options,
+      existingBotId,
+      canonicalHermesRuntimeIdentity({ kind: "local", profile }),
+    );
     return {
       botId: existingBotId,
       profile: connectedProfile,
       status,
       created: false,
+      runtimeBinding,
     };
   }
 
@@ -1072,7 +1127,12 @@ async function connectHermesProfileUnlocked(options: ConnectHermesProfileOptions
     const connectedProfile = status.profiles.find((candidate) =>
       candidate.placement?.kind === "local" && candidate.profile === profile);
     if (!connectedProfile) throw setupError("state_unavailable");
-    return { botId: created.id, profile: connectedProfile, status, created: true };
+    const runtimeBinding = persistCanonicalRuntimeIdentity(
+      options,
+      created.id,
+      canonicalHermesRuntimeIdentity({ kind: "local", profile }),
+    );
+    return { botId: created.id, profile: connectedProfile, status, created: true, runtimeBinding };
   } catch (error) {
     if (!rollback()) throw setupError("state_unavailable");
     if (error instanceof HermesEngineError) throw error;
