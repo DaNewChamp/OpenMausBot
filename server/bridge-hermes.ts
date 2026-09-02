@@ -16,6 +16,61 @@ import {
   type HermesBridgeSendWire,
 } from "../shared/bridge-hermes-contract.ts";
 import type { HermesFailureCode } from "./engines/contracts.ts";
+import { rememberHermesEndpoint } from "./bot-runtime-rebind.ts";
+
+const lastKnownHermesEndpoints = new Map<string, HermesEndpointDescriptor[]>();
+
+export interface HermesEndpointDescriptor {
+  endpointId: string;
+  bridgeId: string;
+  profile?: string;
+  displayName: string;
+  capabilities: Record<string, boolean>;
+  capabilityRevision: string;
+  status: "available" | "unavailable" | "unreadable";
+}
+
+const ENDPOINT_ID = /^bridge:[A-Za-z0-9._-]+:[a-z0-9][a-z0-9_-]{0,63}$/;
+const PROFILE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+function isDescriptor(value: unknown): value is HermesEndpointDescriptor {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (typeof record.endpointId !== "string" || !ENDPOINT_ID.test(record.endpointId)) return false;
+  if (typeof record.bridgeId !== "string" || record.bridgeId.length === 0) return false;
+  if (typeof record.displayName !== "string" || record.displayName.length === 0 || record.displayName.length > 160) return false;
+  if (record.status !== "available" && record.status !== "unavailable" && record.status !== "unreadable") return false;
+  if (typeof record.capabilityRevision !== "string" || !/^[a-f0-9]{16,64}$/.test(record.capabilityRevision)) return false;
+  if (record.profile !== undefined && (typeof record.profile !== "string" || !PROFILE.test(record.profile))) return false;
+  if (!record.capabilities || typeof record.capabilities !== "object" || Array.isArray(record.capabilities)) return false;
+  for (const [key, flag] of Object.entries(record.capabilities as Record<string, unknown>)) {
+    if (typeof key !== "string" || typeof flag !== "boolean") return false;
+    if (/token|secret|password|path|session/i.test(key)) return false;
+  }
+  const json = JSON.stringify(record);
+  if (/token|HERMES_HOME|\/Users\/|sk-|session-/i.test(json)) return false;
+  return true;
+}
+
+export function ingestHermesEndpointDescriptors(bridgeId: string, raw: unknown): HermesEndpointDescriptor[] {
+  if (!Array.isArray(raw)) return lastKnownHermesEndpoints.get(bridgeId) ?? [];
+  const parsed = raw.filter(isDescriptor).filter((row) => row.bridgeId === bridgeId);
+  if (parsed.some((row) => row.status === "unreadable" || row.status === "unavailable")) {
+    lastKnownHermesEndpoints.delete(bridgeId);
+    return parsed;
+  }
+  lastKnownHermesEndpoints.set(bridgeId, parsed);
+  for (const row of parsed) {
+    if (row.status === "available" && row.profile) {
+      rememberHermesEndpoint(row.endpointId, row.capabilityRevision);
+    }
+  }
+  return parsed;
+}
+
+export function lastKnownHermesEndpointsFor(bridgeId: string): HermesEndpointDescriptor[] {
+  return lastKnownHermesEndpoints.get(bridgeId) ?? [];
+}
 
 export class HermesBridgeUnavailableError extends Error {
   readonly code: HermesFailureCode | "bridge_unavailable";

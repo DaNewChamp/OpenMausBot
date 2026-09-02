@@ -106,6 +106,31 @@ describe("typed Hermes bridge transport", () => {
     vi.useRealTimers();
   });
 
+  it("retains last known Hermes descriptors only while the identity store is readable", async () => {
+    const { ingestHermesEndpointDescriptors, lastKnownHermesEndpointsFor } = await import("./bridge-hermes.ts");
+    const available = [{
+      endpointId: "bridge:bridge-mini:default",
+      bridgeId: "bridge-mini",
+      profile: "default",
+      displayName: "Mac mini / default",
+      capabilities: { roster: true },
+      capabilityRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      status: "available" as const,
+    }];
+    expect(ingestHermesEndpointDescriptors("bridge-mini", available)).toEqual(available);
+    expect(lastKnownHermesEndpointsFor("bridge-mini")).toEqual(available);
+    const unreadable = [{
+      endpointId: "bridge:bridge-mini:unreadable",
+      bridgeId: "bridge-mini",
+      displayName: "Mac mini",
+      capabilities: {},
+      capabilityRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      status: "unreadable" as const,
+    }];
+    ingestHermesEndpointDescriptors("bridge-mini", unreadable);
+    expect(lastKnownHermesEndpointsFor("bridge-mini")).toEqual([]);
+  });
+
   it("adopts canonical chat before mint through ensure-canonical job", async () => {
     vi.useFakeTimers();
     const { registry, bridgeId } = pairedHermesBridge();

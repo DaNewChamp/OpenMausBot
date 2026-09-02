@@ -38,6 +38,7 @@ export async function heartbeat(
   credentials: BridgeCredentials,
   hostInfo?: string,
   capabilities?: string[],
+  metadata?: { hermesEndpoints?: unknown[] },
 ): Promise<{ jobs: BridgeJob[]; cancelJobIds: string[] }> {
   const res = await fetch(`${credentials.url}/api/bridge/heartbeat`, {
     method: "POST",
@@ -45,7 +46,12 @@ export async function heartbeat(
       authorization: `Bearer ${credentials.bridgeToken}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ bridgeId: credentials.bridgeId, hostInfo, capabilities }),
+    body: JSON.stringify({
+      bridgeId: credentials.bridgeId,
+      hostInfo,
+      capabilities,
+      ...(metadata?.hermesEndpoints ? { hermesEndpoints: metadata.hermesEndpoints } : {}),
+    }),
   });
   const body = (await res.json()) as { jobs?: BridgeJob[]; cancelJobIds?: string[]; error?: string };
   if (!res.ok) throw new Error(body.error ?? `heartbeat failed (${res.status})`);

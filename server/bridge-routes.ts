@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { BridgeCapability, BridgeRegistry } from "./bridge-registry.ts";
 import { IdempotencyConflictError } from "./bridge-registry.ts";
 import { runShellOnBridge } from "./bridge-exec.ts";
+import { ingestHermesEndpointDescriptors } from "./bridge-hermes.ts";
 
 type JsonFn = (res: ServerResponse, status: number, body: unknown) => void;
 
@@ -138,6 +139,9 @@ export async function handleBridgeRoutes(
       hostInfo: body.hostInfo ? String(body.hostInfo) : undefined,
       capabilities: caps,
     });
+    if (body.hermesEndpoints !== undefined) {
+      ingestHermesEndpointDescriptors(bridgeId, body.hermesEndpoints);
+    }
     return json(res, 200, { jobs: bridges.pollJobs(bridgeId), cancelJobIds: bridges.cancelRequests(bridgeId) }), true;
   }
 

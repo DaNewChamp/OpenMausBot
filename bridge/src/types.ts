@@ -64,6 +64,8 @@ export type BridgeJob =
       payload: { profile: string; turnId?: string };
     });
 
+export type { HermesEndpointDescriptor } from "./hermes-endpoints.ts";
+
 export type LocalVmBridgeJob = Extract<
   BridgeJob,
   { kind: "local-vm-status" | "local-vm-action" | "local-vm-screenshot" }

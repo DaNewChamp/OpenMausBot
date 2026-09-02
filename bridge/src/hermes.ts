@@ -9,6 +9,21 @@ import {
   type ScrubbedRuntimeEvent,
 } from "../../shared/bridge-hermes-contract.ts";
 import type { BridgeJobResult } from "./types.ts";
+import { discoverLocalHermesEndpoints, type HermesEndpointDescriptor } from "./hermes-endpoints.ts";
+
+export function hermesEndpointsFromDiscovery(
+  discovery: HermesBridgeDiscoveryWire,
+  identity: { bridgeId: string; computerName: string; hostInfo?: string },
+): HermesEndpointDescriptor[] {
+  return discoverLocalHermesEndpoints({
+    bridgeId: identity.bridgeId,
+    computerName: identity.computerName,
+    hostInfo: identity.hostInfo,
+    capabilities: { ...discovery.capabilities },
+    profiles: discovery.profiles.map((row) => ({ name: row.profile })),
+    profileStore: discovery.state === "unavailable" ? "unavailable" : "readable",
+  });
+}
 
 export type HermesBridgeJob =
   | {

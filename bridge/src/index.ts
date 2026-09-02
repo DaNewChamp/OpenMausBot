@@ -9,10 +9,15 @@ import { runHermesBridgeJob, type HermesBridgeJob } from "./hermes.ts";
 import { defaultHermesBridgeRuntimeFactory } from "./hermes-runtime.ts";
 import { runHermesJobSerialized } from "./hermes-queue.ts";
 import {
+  discoverLocalHermesEndpoints,
+  type HermesEndpointDescriptor,
+} from "./hermes-endpoints.ts";
+import {
   bridgeHeartbeatIntervalMs,
   bridgeHermesExecutionEnabled,
 } from "./daemon-timing.ts";
-import type { BridgeJob } from "./types.ts";
+import type { BridgeJob, BridgeJobResult, BridgeCredentials } from "./types.ts";
+import { parseHermesBridgeResult } from "../../shared/bridge-hermes-contract.ts";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -32,6 +37,31 @@ function bridgeCapabilities(): string[] {
 }
 
 const hermesRuntimeFactory = defaultHermesBridgeRuntimeFactory();
+let publishedHermesEndpoints: HermesEndpointDescriptor[] = [];
+
+function cacheHermesEndpointsFromDiscover(result: BridgeJobResult, credentials: BridgeCredentials) {
+  const identity = {
+    bridgeId: credentials.bridgeId,
+    computerName: credentials.name,
+    hostInfo: hostname(),
+  };
+  if (result.exitCode !== 0) {
+    publishedHermesEndpoints = discoverLocalHermesEndpoints({ ...identity, profileStore: "unavailable" });
+    return;
+  }
+  try {
+    const wire = parseHermesBridgeResult(result.stdout);
+    if (wire.kind !== "hermes-discover") return;
+    publishedHermesEndpoints = discoverLocalHermesEndpoints({
+      ...identity,
+      capabilities: { ...wire.body.capabilities },
+      profiles: wire.body.profiles.map((row) => ({ name: row.profile })),
+      profileStore: wire.body.state === "unavailable" ? "unavailable" : "readable",
+    });
+  } catch {
+    publishedHermesEndpoints = discoverLocalHermesEndpoints({ ...identity, profileStore: "unreadable" });
+  }
+}
 
 function isHermesJob(job: BridgeJob): job is BridgeJob & HermesBridgeJob {
   return job.kind === "hermes-discover"
@@ -72,7 +102,12 @@ async function runDaemon(credentials = loadCredentials()) {
   const inFlight = new Map<string, InFlightJob>();
   for (;;) {
     try {
-      const { jobs, cancelJobIds } = await heartbeat(credentials, hostname(), bridgeCapabilities());
+      const { jobs, cancelJobIds } = await heartbeat(
+        credentials,
+        hostname(),
+        bridgeCapabilities(),
+        { hermesEndpoints: publishedHermesEndpoints },
+      );
       for (const jobId of cancelJobIds) {
         inFlight.get(jobId)?.abort.abort();
       }
@@ -99,7 +134,10 @@ async function runDaemon(credentials = loadCredentials()) {
                 : `${job.kind} ${"botId" in job.payload ? job.payload.botId : ""}`;
         console.log(`job ${job.id}: ${label}`);
         const run = () => handleJob(job, abort.signal)
-          .then((result) => submitResult(credentials, job.id, result, job.generation))
+          .then((result) => {
+            if (job.kind === "hermes-discover") cacheHermesEndpointsFromDiscover(result, credentials);
+            return submitResult(credentials, job.id, result, job.generation);
+          })
           .catch((error) => {
             console.warn(`job ${job.id}: ${error instanceof Error ? error.message : String(error)}`);
           })
