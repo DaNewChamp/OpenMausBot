@@ -10,9 +10,11 @@ supportedArchitectures:
     - arm64
     - x64
 allowBuilds:
+  core-js: false # informational funding postinstall only
   electron: true # postinstall downloads the Electron dist
   esbuild: true # postinstall validates the platform binary
   electron-winstaller: false # unused — Windows builds ship NSIS
+  workerd: true # validates the platform binary used by Wrangler tests
 onlyBuiltDependencies:
   - electron
   - esbuild
