@@ -114,6 +114,8 @@ describe("what the app may do", () => {
     ["PATCH", "/api/bots/bot_123/profile"],
     ["PATCH", "/api/bots/bot_123/permission-mode"],
     ["PATCH", "/api/bots/bot_123/model"],
+    ["POST", "/api/bots/bot_123/runtime-binding"],
+    ["POST", "/api/hermes/subagents/act_1/promote"],
     ["PATCH", "/api/bots/bot_123/computer-destination"],
     ["POST", "/api/bots/bot_123/avatar/generate"],
     ["POST", "/api/bots/bot_123/computer/join"],

@@ -44,6 +44,8 @@ public struct CompanionState: Sendable {
     public var appearanceOverrides = BotAppearanceOverrides()
     /// Last read assistant revision per conversation, persisted on the phone.
     public var readReceipts = ConversationReadReceipts()
+    /// Temporary Hermes/MoA agents nested under a parent chat.
+    public var hermesSubagents: [HermesSubagentActivity] = []
     /// Threads whose live tail has been replaced by a settled message or a
     /// terminal turn. Late deltas are ignored until a new turn starts.
     var streamSealed: Set<String> = []

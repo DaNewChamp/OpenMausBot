@@ -85,6 +85,53 @@ struct HomeActivityPresentationTests {
         #expect(HomeActivityQueueReceipt(receipt: receipt) == nil)
     }
 
+    @Test
+    func quietPillHidesWhenTemporaryAgentsAreIdle() {
+        let presentation = HomeActivityPresentation(
+            state: CompanionState(),
+            subagents: []
+        )
+        #expect(presentation.state == .quiet)
+        #expect(!HomeActivityRailLayoutPolicy.showsRail(for: presentation.state))
+        #expect(presentation.temporaryAgentCount == 0)
+    }
+
+    @Test
+    func temporaryAgentsAppearAsCompactCountAndNavigateToTranscript() throws {
+        var state = try fixtureState()
+        let bot = try #require(state.bots.first)
+        let activity = HermesSubagentActivity(
+            activityId: "act-1",
+            parentThreadId: bot.threadId,
+            title: "Draft review",
+            status: .started,
+            transcriptThreadId: "thread-temp-1",
+            promoteEligible: false
+        )
+        let presentation = HomeActivityPresentation(state: state, subagents: [activity])
+        #expect(presentation.temporaryAgentCount == 1)
+        #expect(presentation.collapsedTitle == "1 agents" || presentation.collapsedTitle.contains("agent"))
+        #expect(HomeActivityRailLayoutPolicy.showsRail(for: presentation.state))
+        #expect(HermesSubagentPresentationPolicy.navigationThreadId(for: activity) == "thread-temp-1")
+        #expect(!HermesSubagentPresentationPolicy.showsPromote(for: activity))
+    }
+
+    @Test
+    func completedTemporaryAgentKeepsTranscriptAndPromote() {
+        let activity = HermesSubagentActivity(
+            activityId: "act-2",
+            parentThreadId: "parent-thread",
+            title: "Draft review",
+            status: .completed,
+            transcriptThreadId: "thread-temp-2",
+            promoteEligible: true
+        )
+        #expect(HermesSubagentPresentationPolicy.navigationThreadId(for: activity) == "thread-temp-2")
+        #expect(HermesSubagentPresentationPolicy.showsPromote(for: activity))
+        #expect(HermesSubagentPresentationPolicy.promoteTitle == "Promote to Bot")
+        #expect(activity.status != .promoted)
+    }
+
     private func fixtureState() throws -> CompanionState {
         let url = try #require(
             Bundle.module.url(forResource: "bots-paged", withExtension: "json", subdirectory: "Fixtures")

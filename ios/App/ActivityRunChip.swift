@@ -12,6 +12,8 @@ import CompanionCore
 
 struct ActivityRunChip: View {
     let items: [Message]
+    var promoteEligible: Bool = false
+    var onPromote: (() -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
     @State private var expanded = false
 
@@ -62,7 +64,12 @@ struct ActivityRunChip: View {
                         ActivityChip(tool: item.tool)
                     }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+            if let onPromote, promoteEligible {
+                Button(HermesSubagentPresentationPolicy.promoteTitle, action: onPromote)
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.bordered)
             }
         }
         .padding(.leading, 2)

@@ -192,6 +192,7 @@ import {
   requestBotRuntimeRebind,
   resolveRuntimeRebind,
 } from "./bot-runtime-rebind.ts";
+import { promoteHermesAgent } from "./hermes-agent-projection.ts";
 import {
   mentionedBots,
   roomResponders,
@@ -6519,6 +6520,35 @@ const server = createServer(async (req, res) => {
       const visible = wireBot(switched.bot);
       broadcast({ kind: "bot", bot: visible });
       return json(res, 200, { bot: visible });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/runtime-binding$/);
+    if (m && method === "POST") {
+      const body = await readBody(req);
+      if (!isBotRuntimeBinding(body.binding)) return json(res, 400, { error: "binding is invalid" });
+      const contextMode = body.contextMode === "summary" ? "summary" : "none";
+      const result = await requestBotRuntimeRebind({
+        store,
+        request: {
+          targetBotId: m[1]!,
+          binding: body.binding,
+          contextMode,
+          userRequested: true,
+        },
+        actor: null,
+        approval: approvalBus,
+      });
+      const status = result.status === "error" ? (result.code === "bot_active" ? 409 : 400) : 200;
+      return json(res, status, result);
+    }
+    m = path.match(/^\/api\/hermes\/subagents\/([\w-]+)\/promote$/);
+    if (m && method === "POST") {
+      try {
+        const promoted = promoteHermesAgent(store, { activityId: m[1] });
+        const bot = store.bot(promoted.botId);
+        return json(res, 200, { botId: promoted.botId, activityId: promoted.activityId, bot: bot ? wireBot(bot) : undefined });
+      } catch {
+        return json(res, 409, { error: "Hermes agent is unavailable" });
+      }
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/read$/);
     if (m && method === "POST") {

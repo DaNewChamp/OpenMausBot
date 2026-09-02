@@ -847,6 +847,46 @@ final class Session: ObservableObject {
         return .bot(bot)
     }
 
+    /// Persist a Hermes default or per-bot runtime without blocking Back.
+    func configureHermesRuntime(botId: String, request: HermesRuntimeRebindRequest) {
+        guard HermesRuntimePresentationPolicy.persistsAsynchronouslyBeforeBack else { return }
+        Task { @MainActor in
+            do {
+                try await client?.configureBotRuntime(botId: botId, request: request)
+            } catch {
+                if error.isCancellation { return }
+                actionError = error.localizedDescription
+            }
+        }
+    }
+
+    func setDefaultHermesEndpoint(_ endpoint: HermesEndpointOption) {
+        UserDefaults.standard.set(endpoint.id, forKey: "vbot.defaultHermesEndpoint")
+        UserDefaults.standard.set(endpoint.computerName, forKey: "vbot.defaultHermesComputer")
+        UserDefaults.standard.set(endpoint.profile, forKey: "vbot.defaultHermesProfile")
+    }
+
+    func defaultHermesEndpoint() -> HermesEndpointOption? {
+        guard let id = UserDefaults.standard.string(forKey: "vbot.defaultHermesEndpoint"),
+              let computer = UserDefaults.standard.string(forKey: "vbot.defaultHermesComputer"),
+              let profile = UserDefaults.standard.string(forKey: "vbot.defaultHermesProfile")
+        else { return nil }
+        return HermesEndpointOption(id: id, computerName: computer, profile: profile)
+    }
+
+    func promoteHermesSubagent(_ activity: HermesSubagentActivity) {
+        Task { @MainActor in
+            do {
+                try await client?.promoteHermesSubagent(activityId: activity.activityId)
+                state.hermesSubagents.removeAll { $0.activityId == activity.activityId }
+                _ = try? await hydrate()
+            } catch {
+                if error.isCancellation { return }
+                actionError = error.localizedDescription
+            }
+        }
+    }
+
     private func persistRegistry() {
         if registry.connections.isEmpty {
             UserDefaults.standard.removeObject(forKey: Self.connectionsKey)

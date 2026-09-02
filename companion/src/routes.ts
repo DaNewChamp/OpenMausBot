@@ -676,6 +676,8 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // Paired-safe model switch. Instance and model are validated against the
   // advertised catalog on the harness; the broad bot PATCH stays closed.
   { method: "PATCH", path: /^\/api\/bots\/[\w-]+\/model$/ },
+  { method: "POST", path: /^\/api\/bots\/[\w-]+\/runtime-binding$/ },
+  { method: "POST", path: /^\/api\/hermes\/subagents\/[\w-]+\/promote$/ },
   COMPUTER_DESTINATION_ROUTE,
   { method: "POST", path: /^\/api\/bots\/[\w-]+\/avatar\/generate$/ },
   // Full cloud desktop access. The route is narrow and the proxy applies a

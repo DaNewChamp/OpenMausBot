@@ -53,6 +53,8 @@ struct AgentProfileView: View {
     @State private var routinesLoading = true
     @State private var showingMedia = false
     @State private var showingModelPicker = false
+    @State private var showingHermesConversion = false
+    @State private var selectedHermesEndpoint: HermesEndpointOption?
 
     init(bot: Bot) {
         self.bot = bot
@@ -139,6 +141,7 @@ struct AgentProfileView: View {
                         routinesSection
                         notificationsRow
                         toolActivitySection
+                        hermesRuntimeSection
                         modelAndVoiceSection
                         secondaryControls
                     }
@@ -219,6 +222,9 @@ struct AgentProfileView: View {
             }
             .sheet(isPresented: $showingModelPicker) {
                 profileModelPickerSheet
+            }
+            .sheet(isPresented: $showingHermesConversion) {
+                hermesConversionSheet
             }
             .sheet(isPresented: $showingInstructions) {
                 instructionsEditor
@@ -668,6 +674,78 @@ struct AgentProfileView: View {
                 .profileCard()
         }
         .padding(.top, 18)
+    }
+
+    private var hermesRuntimeSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            profileSectionLabel("Hermes runtime")
+            VStack(alignment: .leading, spacing: 12) {
+                Text(selectedHermesEndpoint?.label ?? "Provider runtime")
+                    .font(.body.weight(.medium))
+                Text("Converts this bot in place. Name, rooms, and history stay.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button("Convert to Hermes…") {
+                    showingHermesConversion = true
+                }
+                .disabled(!canEdit || !ModelSelectionPolicy.allowsHermesRuntimeSwitch(working: current.busy == true))
+                Button("Use provider runtime") {
+                    session.configureHermesRuntime(
+                        botId: current.id,
+                        request: HermesRuntimeRebindRequest(
+                            kind: "provider",
+                            instanceId: current.modelSelection.instanceId,
+                            model: current.modelSelection.model
+                        )
+                    )
+                }
+                .disabled(!canEdit || current.busy == true)
+            }
+            .padding(18)
+            .profileCard()
+        }
+        .padding(.top, 18)
+    }
+
+    private var hermesConversionSheet: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(HermesRuntimePresentationPolicy.conversionSummary(
+                    botName: current.name,
+                    sourceLabel: ModelSelectionPolicy.subscriptionModelLabel(current.modelSelection.model),
+                    destinationLabel: selectedHermesEndpoint?.label ?? session.defaultHermesEndpoint()?.label ?? "Hermes"
+                ))
+                Text("Avatar, hierarchy, rooms, transcript, unread state, pins, policies, and fleet grants stay.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Convert") {
+                    let endpoint = selectedHermesEndpoint ?? session.defaultHermesEndpoint()
+                    showingHermesConversion = false
+                    guard let endpoint else { return }
+                    let kind = endpoint.id.hasPrefix("bridge:") ? "bridge" : "local"
+                    let bridgeId = kind == "bridge" ? endpoint.id.split(separator: ":").dropFirst().first.map(String.init) : nil
+                    session.configureHermesRuntime(
+                        botId: current.id,
+                        request: HermesRuntimeRebindRequest(
+                            kind: kind,
+                            profile: endpoint.profile,
+                            bridgeId: bridgeId
+                        )
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedHermesEndpoint == nil && session.defaultHermesEndpoint() == nil)
+            }
+            .padding()
+            .navigationTitle("Convert runtime")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showingHermesConversion = false }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 
     @ViewBuilder

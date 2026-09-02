@@ -290,6 +290,59 @@ final class HermesSetupTests: XCTestCase {
         )
     }
 
+    func testEndpointLabelsUseComputerNameAndProfile() {
+        XCTAssertEqual(
+            HermesRuntimePresentationPolicy.endpointLabel(computerName: "Mac mini", profile: "research"),
+            "Mac mini / research"
+        )
+        XCTAssertEqual(
+            HermesRuntimePresentationPolicy.endpointLabel(computerName: "MacBook Pro", profile: "default"),
+            "MacBook Pro / default"
+        )
+        XCTAssertFalse(
+            HermesRuntimePresentationPolicy.endpointLabel(computerName: "Mac mini", profile: "research")
+                .localizedCaseInsensitiveContains("openmaus")
+        )
+    }
+
+    func testUnavailableNativeCapabilitiesStayDisabled() {
+        let manifest = HermesNativeCapabilityManifest()
+        XCTAssertFalse(HermesRuntimePresentationPolicy.isEnabled("groups", in: manifest))
+        XCTAssertFalse(HermesRuntimePresentationPolicy.isEnabled("moa", in: manifest))
+        XCTAssertFalse(HermesRuntimePresentationPolicy.isEnabled("computerTools", in: manifest))
+        XCTAssertEqual(HermesRuntimePresentationPolicy.availabilityLabel(for: "groups", in: manifest), "Unavailable")
+        let proven = HermesNativeCapabilityManifest(events: .available, finalResponse: .available)
+        XCTAssertTrue(HermesRuntimePresentationPolicy.isEnabled("events", in: proven))
+        XCTAssertFalse(HermesRuntimePresentationPolicy.isEnabled("learning", in: proven))
+    }
+
+    func testConversionSummaryPreservesIdentityAndOmitsSecrets() {
+        let summary = HermesRuntimePresentationPolicy.conversionSummary(
+            botName: "Helper",
+            sourceLabel: "Claude",
+            destinationLabel: "Mac mini / research"
+        )
+        XCTAssertTrue(summary.contains("Helper"))
+        XCTAssertTrue(summary.contains("Mac mini / research"))
+        XCTAssertTrue(summary.localizedCaseInsensitiveContains("name"))
+        XCTAssertTrue(summary.localizedCaseInsensitiveContains("history") || summary.localizedCaseInsensitiveContains("rooms"))
+        XCTAssertFalse(summary.contains("token"))
+        XCTAssertFalse(summary.contains("HERMES_HOME"))
+        XCTAssertFalse(summary.contains("/Users/"))
+        XCTAssertTrue(HermesRuntimePresentationPolicy.persistsAsynchronouslyBeforeBack)
+    }
+
+    func testGlobalDefaultAndPerBotPickerUseTheSameEndpointLabel() {
+        let endpoints = [
+            HermesEndpointOption(id: "local:default", computerName: "MacBook Pro", profile: "default"),
+            HermesEndpointOption(id: "bridge:mini:research", computerName: "Mac mini", profile: "research"),
+        ]
+        XCTAssertEqual(
+            HermesRuntimePresentationPolicy.pickerRows(endpoints).map(\.label),
+            ["MacBook Pro / default", "Mac mini / research"]
+        )
+    }
+
     private func profile(_ id: String, handle: String) -> HermesSetupProfile {
         HermesSetupProfile(
             profile: id,

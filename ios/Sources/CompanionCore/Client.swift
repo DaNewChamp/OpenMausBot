@@ -1119,6 +1119,20 @@ public struct CompanionClient: Sendable {
         )
     }
 
+    /// User-initiated runtime conversion. The phone always sends
+    /// `userRequested: true`; autonomous Hermes changes still require hub approval.
+    public func configureBotRuntime(botId: String, request: HermesRuntimeRebindRequest) async throws {
+        _ = try await send(
+            try makeRequest("POST", "/api/bots/\(botId)/runtime-binding", encodedBody: request)
+        )
+    }
+
+    public func promoteHermesSubagent(activityId: String) async throws {
+        _ = try await send(
+            try makeRequest("POST", "/api/hermes/subagents/\(activityId)/promote", body: [:])
+        )
+    }
+
     /// Hydrate. `messages` opts into the paged shape — the newest n per
     /// thread, with screen captures reduced to a flag.
     public func fleet(messages: Int? = 50) async throws -> Fleet {

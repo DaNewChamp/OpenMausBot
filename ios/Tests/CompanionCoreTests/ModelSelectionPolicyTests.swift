@@ -257,6 +257,15 @@ final class ModelSelectionPolicyTests: XCTestCase {
         XCTAssertTrue(ModelSelectionPolicy.showsEffortPicker(levels: ["low"], hostWideEngine: false))
     }
 
+    func testHermesRuntimeRowsStayComputerAndProfileAndKeepProviderModelsConcise() {
+        let hermes = HermesEndpointOption(id: "bridge:mini:research", computerName: "Mac mini", profile: "research")
+        XCTAssertEqual(ModelSelectionPolicy.hermesRuntimeLabel(hermes), "Mac mini / research")
+        XCTAssertEqual(ModelSelectionPolicy.subscriptionModelLabel("claude-sonnet-5"), "claude-sonnet-5")
+        XCTAssertFalse(ModelSelectionPolicy.subscriptionModelLabel("claude-sonnet-5").contains("/"))
+        XCTAssertTrue(ModelSelectionPolicy.allowsHermesRuntimeSwitch(working: false))
+        XCTAssertFalse(ModelSelectionPolicy.allowsHermesRuntimeSwitch(working: true))
+    }
+
     private static func sampleInstance(id: String, models: [String]) -> Instance {
         Instance(
             instanceId: id,

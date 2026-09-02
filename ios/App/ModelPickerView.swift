@@ -799,6 +799,38 @@ private enum ModelPickerPreviewData {
     .vbotCanvas()
 }
 
+/// Compact Hermes endpoint rows for the model/runtime picker. Labels stay
+/// `Computer / profile`; subscription model ids stay the model id only.
+struct HermesRuntimePickerRows: View {
+    let endpoints: [HermesEndpointOption]
+    let selectedId: String?
+    var onSelect: (HermesEndpointOption) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(endpoints) { endpoint in
+                Button {
+                    onSelect(endpoint)
+                } label: {
+                    HStack {
+                        Text(ModelSelectionPolicy.hermesRuntimeLabel(endpoint))
+                            .font(.body)
+                        Spacer()
+                        if selectedId == endpoint.id {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .background(ModelPickerStyle.listSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
 #Preview("Catalog offline cached") {
     ModelPickerView(
         instances: ModelPickerPreviewData.instances,

@@ -67,4 +67,10 @@ final class HomeActivityRailLayoutPolicyTests: XCTestCase {
             HomeActivityRailLayoutPolicy.collapsedMinimumHeight(isAccessibilitySize: false)
         )
     }
+
+    func testExpansionIsUpwardOnly() {
+        XCTAssertEqual(HomeActivityRailLayoutPolicy.expansionDirection, .upward)
+        XCTAssertFalse(HomeActivityRailLayoutPolicy.expandsSideways)
+        XCTAssertEqual(HomeActivityRailLayoutPolicy.expandedPanelAnchor, .aboveCollapsedPill)
+    }
 }

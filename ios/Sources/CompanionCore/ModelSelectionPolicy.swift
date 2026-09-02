@@ -53,6 +53,21 @@ public enum ModelSelectionPolicy: Sendable {
         return !instance.allowsModelChange
     }
 
+    public static func hermesRuntimeLabel(_ endpoint: HermesEndpointOption) -> String {
+        HermesRuntimePresentationPolicy.endpointLabel(
+            computerName: endpoint.computerName,
+            profile: endpoint.profile
+        )
+    }
+
+    public static func subscriptionModelLabel(_ modelId: String) -> String {
+        modelId.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    public static func allowsHermesRuntimeSwitch(working: Bool) -> Bool {
+        allowsSwitch(working: working)
+    }
+
     /// Revert unsaved picker values when a turn starts; keep them when it ends.
     public static func shouldRevertDraft(wasWorking: Bool, isWorking: Bool) -> Bool {
         !wasWorking && isWorking

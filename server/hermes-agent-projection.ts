@@ -189,10 +189,12 @@ export function completeHermesAgent(
 
 export function promoteHermesAgent(
   store: Store,
-  input: { hermesAgentId: string },
+  input: { hermesAgentId?: string; activityId?: string },
 ): { botId: string; activityId: string; event: HermesSubagentEvent } {
   const file = requireStore();
-  const record = file.agents[input.hermesAgentId];
+  const record = input.hermesAgentId
+    ? file.agents[input.hermesAgentId]
+    : Object.values(file.agents).find((row) => row.activityId === input.activityId);
   if (!record) throw new Error("Hermes agent projection store is unavailable");
   if (record.botId) {
     record.status = "promoted";

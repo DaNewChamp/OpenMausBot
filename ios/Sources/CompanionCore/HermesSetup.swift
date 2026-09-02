@@ -229,20 +229,23 @@ public struct HermesSetupStatus: Codable, Hashable, Sendable, Equatable {
     public var reason: HermesSetupReason?
     public var profiles: [HermesSetupProfile]
     public var capabilities: HermesSetupCapabilities
+    public var nativeCapabilities: HermesNativeCapabilityManifest?
 
     public init(
         state: HermesSetupState = .ready,
         reason: HermesSetupReason? = nil,
         profiles: [HermesSetupProfile] = [],
-        capabilities: HermesSetupCapabilities = HermesSetupCapabilities()
+        capabilities: HermesSetupCapabilities = HermesSetupCapabilities(),
+        nativeCapabilities: HermesNativeCapabilityManifest? = nil
     ) {
         self.state = state
         self.reason = reason
         self.profiles = profiles
         self.capabilities = capabilities
+        self.nativeCapabilities = nativeCapabilities
     }
 
-    private enum CodingKeys: String, CodingKey { case state, reason, profiles, capabilities }
+    private enum CodingKeys: String, CodingKey { case state, reason, profiles, capabilities, nativeCapabilities }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -250,7 +253,8 @@ public struct HermesSetupStatus: Codable, Hashable, Sendable, Equatable {
             state: try container.decodeIfPresent(HermesSetupState.self, forKey: .state) ?? .unknown,
             reason: try container.decodeIfPresent(HermesSetupReason.self, forKey: .reason),
             profiles: try container.decodeIfPresent([HermesSetupProfile].self, forKey: .profiles) ?? [],
-            capabilities: try container.decodeIfPresent(HermesSetupCapabilities.self, forKey: .capabilities) ?? HermesSetupCapabilities()
+            capabilities: try container.decodeIfPresent(HermesSetupCapabilities.self, forKey: .capabilities) ?? HermesSetupCapabilities(),
+            nativeCapabilities: try container.decodeIfPresent(HermesNativeCapabilityManifest.self, forKey: .nativeCapabilities)
         )
     }
 }

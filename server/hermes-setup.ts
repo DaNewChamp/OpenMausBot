@@ -30,6 +30,7 @@ import {
   projectSetupSafeRemoteCapabilities,
   type HermesSetupPlacement,
 } from "./hermes-bridge-integration.ts";
+import { negotiateHermesCapabilities } from "./hermes-capabilities.ts";
 import type { HermesBotEngine } from "./engines/hermes.ts";
 import type { HermesEngineDescription } from "./engines/index.ts";
 
@@ -50,6 +51,7 @@ export interface HermesSetupStatus {
   reason?: HermesSetupReason;
   profiles: HermesSetupProfile[];
   capabilities: HermesCapabilityFlags;
+  nativeCapabilities?: ReturnType<typeof negotiateHermesCapabilities>;
 }
 
 export interface HermesSetupRegistry {
@@ -460,7 +462,7 @@ export async function readHermesSetupStatus(
       remoteDiscovery = { profiles: [], capabilities: { ...EMPTY_CAPABILITIES } };
     }
   }
-  return projectHermesSetupStatus({
+  const status = projectHermesSetupStatus({
     enabled: registry.isEnabled,
     description,
     bindings,
@@ -470,6 +472,12 @@ export async function readHermesSetupStatus(
     remoteCapabilities: remoteDiscovery.capabilities,
     botExists: options.botExists,
   });
+  return {
+    ...status,
+    nativeCapabilities: negotiateHermesCapabilities({
+      observed: { ...status.capabilities },
+    }),
+  };
 }
 
 function safeBotName(row: HermesRosterRow): string {

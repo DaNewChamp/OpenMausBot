@@ -13,6 +13,7 @@ struct HermesSetupView: View {
     @State private var loading = true
     @State private var connecting = false
     @State private var connectTask: Task<Void, Never>?
+    @State private var pendingConversion: HermesEndpointOption?
 
     init(onOpenChat: ((Chat) -> Void)? = nil) {
         self.onOpenChat = onOpenChat
@@ -42,6 +43,8 @@ struct HermesSetupView: View {
                     profileContent
                 }
                 placementCard
+                defaultRuntimeCard
+                capabilitiesCard
             }
             .padding(.horizontal, VBotSurface.Space.page)
             .padding(.top, VBotSurface.Space.section)
@@ -54,6 +57,9 @@ struct HermesSetupView: View {
         .onDisappear {
             connectTask?.cancel()
             connectTask = nil
+        }
+        .sheet(item: $pendingConversion) { endpoint in
+            conversionSheet(endpoint)
         }
     }
 
@@ -158,6 +164,100 @@ struct HermesSetupView: View {
                     .padding(.horizontal, 4)
             }
         }
+    }
+
+    private var hermesEndpoints: [HermesEndpointOption] {
+        guard let status else { return [] }
+        let computer = session.connection?.name ?? "This computer"
+        return HermesSetupPresentationPolicy.availableProfiles(status).map { profile in
+            let placement = profile.placement
+            let name: String
+            if placement?.kind == .bridge {
+                name = {
+                    let bridge = placement?.bridge?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    return bridge.isEmpty ? "Remote computer" : bridge
+                }()
+            } else {
+                name = computer
+            }
+            return HermesEndpointOption(
+                id: profile.id,
+                computerName: name,
+                profile: profile.profile
+            )
+        }
+    }
+
+    private var defaultRuntimeCard: some View {
+        VBotSurfaceGroup(title: "Default Hermes runtime") {
+            VStack(alignment: .leading, spacing: 10) {
+                if let current = session.defaultHermesEndpoint() {
+                    Text(current.label)
+                        .font(.body.weight(.medium))
+                } else {
+                    Text("No default selected")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(hermesEndpoints) { endpoint in
+                    Button(endpoint.label) {
+                        session.setDefaultHermesEndpoint(endpoint)
+                    }
+                    .disabled(session.defaultHermesEndpoint()?.id == endpoint.id)
+                }
+            }
+            .padding(16)
+        }
+    }
+
+    private var capabilitiesCard: some View {
+        let manifest = status?.nativeCapabilities ?? HermesNativeCapabilityManifest()
+        return VBotSurfaceGroup(title: "Hermes capabilities") {
+            VStack(alignment: .leading, spacing: 8) {
+                capabilityRow("Memory", key: "memory", manifest: manifest)
+                capabilityRow("Learning", key: "learning", manifest: manifest)
+                capabilityRow("Skills", key: "skills", manifest: manifest)
+                capabilityRow("MoA", key: "moa", manifest: manifest)
+                capabilityRow("Groups", key: "groups", manifest: manifest)
+                capabilityRow("Computer tools", key: "computerTools", manifest: manifest)
+            }
+            .padding(16)
+        }
+    }
+
+    private func capabilityRow(_ title: String, key: String, manifest: HermesNativeCapabilityManifest) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(HermesRuntimePresentationPolicy.availabilityLabel(for: key, in: manifest))
+                .foregroundStyle(HermesRuntimePresentationPolicy.isEnabled(key, in: manifest) ? Color.secondary : Color.orange)
+        }
+        .font(.subheadline)
+        .disabled(!HermesRuntimePresentationPolicy.isEnabled(key, in: manifest))
+    }
+
+    private func conversionSheet(_ endpoint: HermesEndpointOption) -> some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(HermesRuntimePresentationPolicy.conversionSummary(
+                    botName: "This bot",
+                    sourceLabel: "Current runtime",
+                    destinationLabel: endpoint.label
+                ))
+                Text("Name, avatar, rooms, history, and fleet grants stay. A restart may be required.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("Convert runtime")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { pendingConversion = nil }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 
     private func profileRow(

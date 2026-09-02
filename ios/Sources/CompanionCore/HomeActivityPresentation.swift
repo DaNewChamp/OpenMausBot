@@ -100,12 +100,14 @@ public struct HomeActivityPresentation: Equatable, Sendable {
     public let state: State
     public let sections: [Section]
     public let items: [Item]
+    public let temporaryAgentCount: Int
 
     public init(
         state: CompanionState,
-        queuedReceipts: [HomeActivityQueueReceipt] = []
+        queuedReceipts: [HomeActivityQueueReceipt] = [],
+        subagents: [HermesSubagentActivity] = []
     ) {
-        self.init(projecting: state, queuedReceipts: queuedReceipts)
+        self.init(projecting: state, queuedReceipts: queuedReceipts, subagents: subagents)
     }
 
     public init(
@@ -114,7 +116,8 @@ public struct HomeActivityPresentation: Equatable, Sendable {
     ) {
         self.init(
             projecting: state,
-            queuedReceipts: queuedReceipts.compactMap { HomeActivityQueueReceipt(receipt: $0) }
+            queuedReceipts: queuedReceipts.compactMap { HomeActivityQueueReceipt(receipt: $0) },
+            subagents: []
         )
     }
 
@@ -151,6 +154,12 @@ public struct HomeActivityPresentation: Equatable, Sendable {
         case .needsAttention:
             return "\(needsYou.count) needs you"
         case .active:
+            if temporaryAgentCount > 0, needsYou.isEmpty, queued.isEmpty {
+                let remaining = totalActivityCount - temporaryAgentCount
+                if remaining == 0 {
+                    return temporaryAgentCount == 1 ? "1 agent" : "\(temporaryAgentCount) agents"
+                }
+            }
             return "\(totalActivityCount) active"
         }
     }
@@ -183,7 +192,8 @@ public struct HomeActivityPresentation: Equatable, Sendable {
 
     private init(
         projecting state: CompanionState,
-        queuedReceipts: [HomeActivityQueueReceipt]
+        queuedReceipts: [HomeActivityQueueReceipt],
+        subagents: [HermesSubagentActivity]
     ) {
         let hiddenBotIDs = Set(state.bots.filter { $0.hidden == true }.map(\.threadId))
         let chats: [(threadId: String, title: String, active: Bool, unread: Bool)] =
@@ -270,11 +280,33 @@ public struct HomeActivityPresentation: Equatable, Sendable {
             }
             .sorted(by: Self.itemOrder)
 
+        let liveSubagents = subagents.filter { $0.status == .started || $0.status == .updated }
+        let completedSubagents = subagents.filter { $0.status == .completed }
+        self.temporaryAgentCount = liveSubagents.count
+        let subagentActive = liveSubagents.map { activity in
+            Item(
+                threadId: activity.transcriptThreadId,
+                group: .active,
+                title: activity.title,
+                subtitle: "Working now"
+            )
+        }
+        let subagentFinished = completedSubagents.map { activity in
+            Item(
+                threadId: activity.transcriptThreadId,
+                group: .recentlyFinished,
+                title: activity.title,
+                subtitle: HermesSubagentPresentationPolicy.showsPromote(for: activity)
+                    ? HermesSubagentPresentationPolicy.promoteTitle
+                    : "Finished"
+            )
+        }
+
         let grouped: [(Group, [Item])] = [
             (.needsYou, needs.sorted(by: Self.itemOrder)),
-            (.active, active.sorted(by: Self.itemOrder)),
+            (.active, (active + subagentActive).sorted(by: Self.itemOrder)),
             (.queued, queued),
-            (.recentlyFinished, recentlyFinished)
+            (.recentlyFinished, (recentlyFinished + subagentFinished).sorted(by: Self.itemOrder))
         ]
         self.sections = grouped.map { Section(kind: $0.0, items: $0.1) }
         self.items = grouped.flatMap(\.1)
@@ -312,8 +344,9 @@ public struct HomeActivityPresentation: Equatable, Sendable {
 
 public extension CompanionState {
     func homeActivityPresentation(
-        queuedReceipts: [HomeActivityQueueReceipt] = []
+        queuedReceipts: [HomeActivityQueueReceipt] = [],
+        subagents: [HermesSubagentActivity] = []
     ) -> HomeActivityPresentation {
-        HomeActivityPresentation(state: self, queuedReceipts: queuedReceipts)
+        HomeActivityPresentation(state: self, queuedReceipts: queuedReceipts, subagents: subagents)
     }
 }

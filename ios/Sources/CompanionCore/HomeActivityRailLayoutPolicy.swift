@@ -39,4 +39,18 @@ public enum HomeActivityRailLayoutPolicy: Sendable {
     public static func collapsedVerticalPadding(isAccessibilitySize: Bool) -> CGFloat {
         isAccessibilitySize ? 8 : 0
     }
+
+    public enum ExpansionDirection: String, Sendable {
+        case upward
+    }
+
+    public enum ExpandedPanelAnchor: String, Sendable {
+        case aboveCollapsedPill
+    }
+
+    /// Temporary-agent and home activity controls fan upward only. Text may
+    /// widen; the control cluster never fans sideways.
+    public static let expansionDirection: ExpansionDirection = .upward
+    public static let expandsSideways = false
+    public static let expandedPanelAnchor: ExpandedPanelAnchor = .aboveCollapsedPill
 }

@@ -16,7 +16,10 @@ struct HomeActivityPill: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var presentation: HomeActivityPresentation {
-        session.state.homeActivityPresentation(queuedReceipts: queuedReceipts)
+        session.state.homeActivityPresentation(
+            queuedReceipts: queuedReceipts,
+            subagents: session.state.hermesSubagents
+        )
     }
 
     var body: some View {
@@ -142,8 +145,13 @@ struct HomeActivityPill: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(presentation.sections) { section in
                     let rows = section.items.compactMap { item -> (HomeActivityPresentation.Item, Chat)? in
-                        guard let chat = session.state.chat(forThread: item.threadId) else { return nil }
-                        return (item, chat)
+                        if let chat = session.state.chat(forThread: item.threadId) {
+                            return (item, chat)
+                        }
+                        if let activity = session.state.hermesSubagents.first(where: { $0.transcriptThreadId == item.threadId }) {
+                            return (item, .bot(activity.placeholderBot()))
+                        }
+                        return nil
                     }
                     if !rows.isEmpty {
                         Text(section.title.uppercased())
@@ -155,10 +163,21 @@ struct HomeActivityPill: View {
                             .padding(.bottom, 3)
 
                         ForEach(rows, id: \.0.id) { item, chat in
-                            HomeActivityRow(item: item, chat: chat) {
-                                Haptics.selection()
-                                expanded = false
-                                open(chat)
+                            VStack(alignment: .leading, spacing: 6) {
+                                HomeActivityRow(item: item, chat: chat) {
+                                    Haptics.selection()
+                                    expanded = false
+                                    open(chat)
+                                }
+                                if let activity = session.state.hermesSubagents.first(where: {
+                                    $0.transcriptThreadId == item.threadId
+                                }), HermesSubagentPresentationPolicy.showsPromote(for: activity) {
+                                    Button(HermesSubagentPresentationPolicy.promoteTitle) {
+                                        session.promoteHermesSubagent(activity)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .padding(.horizontal, 16)
+                                }
                             }
                         }
                     }
@@ -204,6 +223,9 @@ struct HomeActivityPill: View {
         case .needsAttention:
             return "\(presentation.needsYou.count) waiting"
         case .active:
+            if presentation.temporaryAgentCount > 0, presentation.needsYou.isEmpty, presentation.queued.isEmpty {
+                return presentation.collapsedTitle
+            }
             return "\(presentation.totalActivityCount) active"
         }
     }

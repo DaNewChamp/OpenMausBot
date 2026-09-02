@@ -636,6 +636,9 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
     /// Paged responses only: there is more transcript above what you got.
     public var hasMore: Bool?
     public var composer: BotComposerCapabilities? = nil
+    /// Versioned runtime binding. Older hubs omit it; the phone then uses modelSelection.
+    public var runtimeBinding: BotRuntimeBinding? = nil
+    public var hermesProvenance: HermesBotProvenance? = nil
 }
 
 public enum AvatarCrop: String, Codable, CaseIterable, Hashable, Sendable {
