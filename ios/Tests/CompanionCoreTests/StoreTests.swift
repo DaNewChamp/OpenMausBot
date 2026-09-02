@@ -230,7 +230,7 @@ final class StoreTests: XCTestCase {
             recentBot.threadId: [message("recent-bot-message", at: 1_000)],
         ]
 
-        let summaries = state.conversationSummaries
+        let summaries = state.conversationSummaries()
 
         XCTAssertEqual(
             summaries.map(\.name),
@@ -252,6 +252,38 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(summaries.map(\.id), ["bot:a", "room:z"])
     }
 
+    func testConversationSummariesHideBotChannelsByDefault() {
+        var team = Room(
+            id: "team",
+            threadId: "thread-team",
+            name: "Team",
+            memberIds: ["a", "b"],
+            defaultResponder: GroupResponder(kind: "member", botId: "a"),
+            bulletin: "",
+            unread: false,
+            createdAt: 0
+        )
+        var channel = team
+        channel.id = "dm"
+        channel.threadId = "thread-dm"
+        channel.name = "Alpha ⇄ Beta"
+        channel.memberIds = ["a", "b"]
+        channel.dm = true
+
+        var state = CompanionState()
+        state.rooms = [team, channel]
+        state.messages = [
+            team.threadId: [message("team-msg", at: 10)],
+            channel.threadId: [message("dm-msg", at: 20)],
+        ]
+
+        XCTAssertEqual(state.conversationSummaries(showBotChannels: false).map(\.id), ["room:team"])
+        XCTAssertEqual(
+            state.conversationSummaries(showBotChannels: true).map(\.id),
+            ["room:dm", "room:team"]
+        )
+    }
+
     func testLocalPinAndUnpinAffectBotAndRoomOrdering() throws {
         var source = try hydrated()
         var bot = try XCTUnwrap(source.bots.first)
@@ -263,11 +295,11 @@ final class StoreTests: XCTestCase {
 
         source.setLocalPinned(true, for: "bot:\(bot.id)")
         source.setLocalPinned(true, for: "room:\(room.id)")
-        XCTAssertEqual(source.conversationSummaries.filter(\.pinned).count, 2)
+        XCTAssertEqual(source.conversationSummaries().filter(\.pinned).count, 2)
 
         source.setLocalPinned(false, for: "bot:\(bot.id)")
-        XCTAssertFalse(source.conversationSummaries.first { $0.id == "bot:\(bot.id)" }?.pinned ?? true)
-        XCTAssertTrue(source.conversationSummaries.first { $0.id == "room:\(room.id)" }?.pinned ?? false)
+        XCTAssertFalse(source.conversationSummaries().first { $0.id == "bot:\(bot.id)" }?.pinned ?? true)
+        XCTAssertTrue(source.conversationSummaries().first { $0.id == "room:\(room.id)" }?.pinned ?? false)
     }
 
     func testLocalPinOverridesSurviveEncodingAndHydrationWhenServerOmitsPin() throws {
@@ -306,7 +338,7 @@ final class StoreTests: XCTestCase {
         state.apply(.bot(bot))
         XCTAssertNil(state.pinnedOverrides.value(for: "bot:\(bot.id)"))
         XCTAssertEqual(state.bot(bot.id)?.pinned, false)
-        XCTAssertFalse(state.conversationSummaries.first?.pinned ?? true)
+        XCTAssertFalse(state.conversationSummaries().first?.pinned ?? true)
     }
 
     func testLocalAppearanceOverrideSurvivesHydrationWhenServerOmitsIt() throws {

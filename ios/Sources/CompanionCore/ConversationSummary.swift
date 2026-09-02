@@ -183,9 +183,8 @@ public struct ConversationSummary: Identifiable, Hashable, Sendable {
 
 public extension CompanionState {
     /// Every visible bot and room, projected once and sorted by the shared
-    /// roster policy. Views can map these records to their own presentation
-    /// types without reimplementing filtering or ordering.
-    var conversationSummaries: [ConversationSummary] {
+    /// roster policy. Bot⇄bot channels stay hidden unless `showBotChannels`.
+    func conversationSummaries(showBotChannels: Bool = false) -> [ConversationSummary] {
         let botSummaries = bots
             .filter { $0.hidden != true }
             .map { bot in
@@ -201,7 +200,7 @@ public extension CompanionState {
                 )
             }
 
-        let roomSummaries = rooms.map { room in
+        let roomSummaries = BotChannelPolicy.rosterRooms(rooms, showBotChannels: showBotChannels).map { room in
             let last = visibleTranscript(forThread: room.threadId).last
             return ConversationSummary(
                 id: "room:\(room.id)",

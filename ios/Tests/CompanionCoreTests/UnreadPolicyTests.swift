@@ -148,7 +148,7 @@ final class UnreadPolicyTests: XCTestCase {
         )
         state.reconcileUnreadIndicators(visibleThreadId: nil)
 
-        let summaries = state.conversationSummaries
+        let summaries = state.conversationSummaries()
         XCTAssertTrue(summaries.first { $0.id == "bot:pinned" }?.unread == true)
         XCTAssertTrue(summaries.first { $0.id == "bot:plain" }?.unread == true)
     }

@@ -81,6 +81,8 @@ final class Session: ObservableObject {
     }
     /// One exact message the next opened chat should reveal.
     @Published private(set) var focusedMessageId: String?
+    /// Which bot's perspective to emphasize when viewing a bot⇄bot channel.
+    @Published var botChannelPerspectiveBotId: String?
     @Published private(set) var notificationAuthorization: UNAuthorizationStatus = .notDetermined
     /// Distinguishes a real `.notDetermined` result from the in-memory value
     /// used while notification settings are still loading at launch.
@@ -2145,6 +2147,15 @@ final class Session: ObservableObject {
         if focusedMessageId == messageId { focusedMessageId = nil }
     }
 
+    func openBotChannel(
+        room: Room,
+        perspectiveBotId: String,
+        focusMessageId: String? = nil
+    ) {
+        botChannelPerspectiveBotId = perspectiveBotId
+        if let focusMessageId { focusedMessageId = focusMessageId }
+    }
+
     func createTask(for bot: Bot, title: String?) async {
         guard let client else { return }
         do { state.apply(.bot(try await client.createTask(botId: bot.id, title: title))) }
@@ -3653,10 +3664,11 @@ struct ChatSummary: Identifiable, Hashable {
 extension CompanionState {
     /// Everything worth showing in the chat list, mapped to the app's chat
     /// enum after CompanionCore has applied the shared projection and order.
-    var chatSummaries: [ChatSummary] {
-        let chats = bots.filter { $0.hidden != true }.map(Chat.bot) + rooms.map(Chat.room)
+    func chatSummaries(showBotChannels: Bool = false) -> [ChatSummary] {
+        let chats = bots.filter { $0.hidden != true }.map(Chat.bot)
+            + BotChannelPolicy.rosterRooms(rooms, showBotChannels: showBotChannels).map(Chat.room)
         let chatsByID = Dictionary(uniqueKeysWithValues: chats.map { ($0.stableID, $0) })
-        return conversationSummaries.compactMap { projection in
+        return conversationSummaries(showBotChannels: showBotChannels).compactMap { projection in
             guard let chat = chatsByID[projection.id] else { return nil }
             return ChatSummary(projection: projection, chat: chat)
         }

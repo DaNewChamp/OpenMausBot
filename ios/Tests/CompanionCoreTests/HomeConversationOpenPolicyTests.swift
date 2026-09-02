@@ -88,6 +88,6 @@ final class HomeConversationOpenPolicyTests: XCTestCase {
             threadId: "thread-room"
         )
 
-        XCTAssertFalse(state.conversationSummaries.first { $0.id == "room:room-1" }?.unread ?? true)
+        XCTAssertFalse(state.conversationSummaries().first { $0.id == "room:room-1" }?.unread ?? true)
     }
 }
