@@ -403,7 +403,8 @@ export function createControlPlaneClient({
       };
       if (body !== undefined) init.body = JSON.stringify(body);
       response = await fetchImpl(`${origin}${path}`, init);
-    } catch {
+    } catch (error) {
+      if (error instanceof ControlPlaneError) throw error;
       throw new ControlPlaneError("network_unavailable");
     }
 

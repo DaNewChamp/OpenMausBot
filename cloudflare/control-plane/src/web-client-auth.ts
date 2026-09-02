@@ -39,8 +39,41 @@ export async function completeWebClientAuth(
     return Response.redirect(target.toString(), 302);
   }
   const exchange = await createWebClientAuthExchange(db, accountToken);
-  target.searchParams.set("web_auth_code", exchange.code);
-  return Response.redirect(target.toString(), 302);
+  return renderWebClientAuthHandoff(exchange.code, redirect, allowedOrigins);
+}
+
+export function renderWebClientAuthHandoff(
+  code: string,
+  redirect: string,
+  allowedOrigins: ReadonlySet<string>,
+): Response {
+  if (!allowedWebClientRedirect(redirect, allowedOrigins)) {
+    return errorResponse(400, "invalid_request");
+  }
+  const targetOrigin = new URL(redirect).origin;
+  const html = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Finishing sign-in</title></head>
+<body><p id="status">Finishing sign-in…</p><script>
+(function () {
+  var code = ${JSON.stringify(code)};
+  var targetOrigin = ${JSON.stringify(targetOrigin)};
+  var status = document.getElementById("status");
+  if (!window.opener || window.opener.closed) {
+    status.textContent = "Sign-in must finish from the app window.";
+    return;
+  }
+  window.opener.postMessage({ type: "omb_web_auth_code", code: code }, targetOrigin);
+  window.close();
+  status.textContent = "You can close this window.";
+})();
+</script></body></html>`;
+  return new Response(html, {
+    status: 200,
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "text/html; charset=utf-8",
+    },
+  });
 }
 
 export async function exchangeWebClientAuth(

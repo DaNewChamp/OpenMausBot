@@ -117,7 +117,7 @@ export function assertHubApiReady(): void {
 export function assertAccountDiscoveryOnly(path: string, search = webClientSearch()): void {
   if (!isWebClientMode(search)) return;
   if (!accountDiscoveryOnly(path, search)) {
-    throw new Error("Complete hub pairing before using the hub API.");
+    throw new ControlPlaneError("hub_pairing_required", 403);
   }
 }
 
@@ -167,25 +167,59 @@ export function pocketIdCallbackURL(controlPlaneUrl: string, returnTo: string): 
   return `${base}/web-client/complete?redirect=${encodeURIComponent(returnTo)}`;
 }
 
-export function consumeWebAuthCodeFromLocation(): string | null {
+const WEB_AUTH_HANDOFF_TYPE = "omb_web_auth_code";
+
+export function isWebAuthHandoffMessage(
+  data: unknown,
+  origin: string,
+  controlPlaneOrigin: string,
+): data is { type: typeof WEB_AUTH_HANDOFF_TYPE; code: string } {
+  if (origin !== controlPlaneOrigin) return false;
+  if (typeof data !== "object" || data === null) return false;
+  const record = data as { type?: unknown; code?: unknown };
+  return record.type === WEB_AUTH_HANDOFF_TYPE && typeof record.code === "string" && record.code.length >= 32;
+}
+
+export function waitForWebAuthHandoff(
+  controlPlaneUrl: string,
+  appOrigin: string,
+  timeoutMs = 120_000,
+): Promise<string> {
+  const controlPlaneOrigin = controlPlaneUrl.replace(/\/$/, "");
+  let appOriginNormalized: string;
   try {
-    const search = globalThis.location?.search ?? "";
-    const params = new URLSearchParams(search);
-    const code = params.get("web_auth_code");
-    if (!code) return null;
-    params.delete("web_auth_code");
-    params.delete("auth_error");
-    const nextSearch = params.toString();
-    const next = `${globalThis.location?.pathname ?? "/"}${nextSearch ? `?${nextSearch}` : ""}`;
-    globalThis.history?.replaceState?.(null, "", next);
-    return code;
+    appOriginNormalized = new URL(appOrigin).origin;
   } catch {
-    return null;
+    return Promise.reject(new Error("Sign-in could not finish."));
   }
+  return new Promise((resolve, reject) => {
+    const timer = globalThis.setTimeout(() => {
+      cleanup();
+      reject(new Error("Sign-in timed out."));
+    }, timeoutMs);
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== controlPlaneOrigin) return;
+      if (!isWebAuthHandoffMessage(event.data, event.origin, controlPlaneOrigin)) return;
+      cleanup();
+      resolve(event.data.code);
+    };
+    const cleanup = () => {
+      globalThis.clearTimeout(timer);
+      globalThis.removeEventListener("message", onMessage);
+    };
+    if (globalThis.location?.origin !== appOriginNormalized) {
+      cleanup();
+      reject(new Error("Sign-in could not finish."));
+      return;
+    }
+    globalThis.addEventListener("message", onMessage);
+  });
 }
 
 export async function exchangeWebAuthCode(baseURL: string, code: string): Promise<string> {
-  const response = await fetch(`${baseURL.replace(/\/$/, "")}/web-client/exchange`, {
+  const path = "/web-client/exchange";
+  assertAccountDiscoveryOnly(path);
+  const response = await fetch(`${baseURL.replace(/\/$/, "")}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json", origin: globalThis.location?.origin ?? baseURL },
     body: JSON.stringify({ code }),
@@ -198,10 +232,12 @@ export async function exchangeWebAuthCode(baseURL: string, code: string): Promis
   return payload.accountToken;
 }
 
-export async function bootstrapWebClientAuth(baseURL: string) {
-  const code = consumeWebAuthCodeFromLocation();
-  if (!code) return null;
+export async function completeWebAuthHandoff(baseURL: string, code: string): Promise<string> {
   return exchangeWebAuthCode(baseURL, code);
+}
+
+export async function bootstrapWebClientAuth(_baseURL: string) {
+  return null;
 }
 
 export function loadWebClientSession(search = globalThis.location?.search ?? ""): WebClientSessionSnapshot {
@@ -226,7 +262,14 @@ export function loadWebClientSession(search = globalThis.location?.search ?? "")
 }
 
 export function createWebControlPlaneClient(baseURL: string) {
-  return createControlPlaneClient({ baseURL });
+  return createControlPlaneClient({
+    baseURL,
+    fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      assertAccountDiscoveryOnly(new URL(url).pathname);
+      return fetch(input, init);
+    },
+  });
 }
 
 export async function requestAccountOtp(baseURL: string, email: string) {
@@ -283,8 +326,10 @@ export async function fetchFleet(baseURL: string, accountToken: string): Promise
 }
 
 export async function probePocketId(baseURL: string): Promise<boolean> {
+  const path = "/api/auth/sign-in/social";
+  assertAccountDiscoveryOnly(path);
   try {
-    const response = await fetch(`${baseURL.replace(/\/$/, "")}/api/auth/sign-in/social`, {
+    const response = await fetch(`${baseURL.replace(/\/$/, "")}${path}`, {
       method: "POST",
       headers: { "content-type": "application/json", origin: baseURL },
       body: JSON.stringify({ provider: "pocketid", callbackURL: globalThis.location?.origin ?? baseURL }),
@@ -298,7 +343,9 @@ export async function probePocketId(baseURL: string): Promise<boolean> {
 }
 
 export async function startPocketIdSignIn(baseURL: string, callbackURL: string): Promise<string> {
-  const response = await fetch(`${baseURL.replace(/\/$/, "")}/api/auth/sign-in/social`, {
+  const path = "/api/auth/sign-in/social";
+  assertAccountDiscoveryOnly(path);
+  const response = await fetch(`${baseURL.replace(/\/$/, "")}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json", origin: baseURL },
     body: JSON.stringify({ provider: "pocketid", callbackURL }),

@@ -20,10 +20,10 @@ import { SettingsPanel } from "@/components/SettingsPanel";
 import { Sidebar } from "@/components/Sidebar";
 import { StoreProvider, useStore, type Bot as BotRecord } from "@/state/store";
 import {
-  bootstrapWebClientAuth,
   canCallHubApi,
   clearAccountSession,
   clearHubConnection,
+  completeWebAuthHandoff,
   fetchAccountUser,
   fetchFleet,
   loadWebClientSession,
@@ -34,6 +34,7 @@ import {
   requestAccountOtp,
   startPocketIdSignIn,
   verifyAccountOtp,
+  waitForWebAuthHandoff,
   type WebClientSessionSnapshot,
   type WebFleetInstallation,
 } from "@/lib/web-client-session";
@@ -119,9 +120,22 @@ export function WebClientGate({
       const returnTo = `${globalThis.location?.origin ?? ""}${globalThis.location?.pathname ?? "/"}${globalThis.location?.search || "?client=web"}`;
       const callbackURL = pocketIdCallbackURL(session.controlPlaneUrl, returnTo);
       const url = await startPocketIdSignIn(session.controlPlaneUrl, callbackURL);
-      globalThis.location.assign(url);
-    } catch {
-      setError("PocketID sign-in is not available right now. Use email instead.");
+      const appOrigin = globalThis.location?.origin ?? "";
+      const handoff = waitForWebAuthHandoff(session.controlPlaneUrl, appOrigin);
+      const popup = globalThis.open("", "omb_pocketid", "width=520,height=720");
+      if (!popup) {
+        throw new Error("Allow pop-ups to finish PocketID sign-in.");
+      }
+      popup.location.href = url;
+      const code = await handoff;
+      popup.close();
+      const token = await completeWebAuthHandoff(session.controlPlaneUrl, code);
+      persistAccountSession(token);
+      await refreshAccount(token);
+      setMode("account");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "PocketID sign-in is not available right now. Use email instead.");
+    } finally {
       setBusy(false);
     }
   };
@@ -505,26 +519,7 @@ export function WebClientShell() {
 
 export function WebClientApp() {
   const [session, setSession] = useState(() => loadWebClientSession());
-  const [bootstrapping, setBootstrapping] = useState(
-    () => new URLSearchParams(globalThis.location?.search ?? "").has("web_auth_code"),
-  );
 
-  useEffect(() => {
-    void bootstrapWebClientAuth(session.controlPlaneUrl)
-      .then((token) => {
-        if (token) setSession((prev) => ({ ...prev, accountToken: token }));
-      })
-      .catch(() => {})
-      .finally(() => setBootstrapping(false));
-  }, [session.controlPlaneUrl]);
-
-  if (bootstrapping) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-app text-ink-secondary">
-        Finishing sign-in…
-      </main>
-    );
-  }
   if (!canCallHubApi()) {
     return <WebClientGate session={session} onSessionChange={setSession} />;
   }

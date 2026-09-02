@@ -35,15 +35,11 @@ export async function consumeWebClientAuthExchange(
   }
   const row = await db
     .prepare(
-      "SELECT account_token AS accountToken, expires_at AS expiresAt, consumed_at AS consumedAt " +
-        "FROM web_client_auth_exchanges WHERE code = ?1",
+      "UPDATE web_client_auth_exchanges SET consumed_at = ?1 " +
+        "WHERE code = ?2 AND consumed_at IS NULL AND expires_at > ?1 " +
+        "RETURNING account_token AS accountToken",
     )
-    .bind(normalized)
-    .first<{ accountToken: string; expiresAt: number; consumedAt: number | null }>();
-  if (!row || row.consumedAt !== null || row.expiresAt <= now) return null;
-  await db
-    .prepare("UPDATE web_client_auth_exchanges SET consumed_at = ?1 WHERE code = ?2 AND consumed_at IS NULL")
     .bind(now, normalized)
-    .run();
-  return row.accountToken.length >= 20 ? row.accountToken : null;
+    .first<{ accountToken: string }>();
+  return row && row.accountToken.length >= 20 ? row.accountToken : null;
 }

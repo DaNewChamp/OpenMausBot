@@ -12,10 +12,10 @@ import {
 
 const dirs: string[] = [];
 
-function registry() {
-  const dir = mkdtempSync(join(tmpdir(), "omb-pair-invite-"));
-  dirs.push(dir);
-  return new PairingInvitationRegistry(dir);
+function registry(dir?: string) {
+  const dataDir = dir ?? mkdtempSync(join(tmpdir(), "omb-pair-invite-"));
+  if (!dir) dirs.push(dataDir);
+  return new PairingInvitationRegistry(dataDir);
 }
 
 afterEach(() => {
@@ -116,5 +116,20 @@ describe("PairingInvitationRegistry", () => {
     expect(store.listPublic().find((entry) => entry.id === second.id)?.attemptsLeft).toBe(
       MAX_PAIRING_INVITATION_ATTEMPTS,
     );
+  });
+
+  it("keeps a reservation durable across restart so a second redeem cannot start", () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-pair-invite-restart-"));
+    dirs.push(dir);
+    const beforeRestart = registry(dir);
+    const invitation = beforeRestart.create("hub-1", "device-owner");
+    expect("invitation" in beforeRestart.prepareRedeem(invitation.challenge, "hub-1")).toBe(true);
+
+    const afterRestart = registry(dir);
+    expect(afterRestart.prepareRedeem(invitation.challenge, "hub-1")).toEqual({
+      error: "that pairing invitation is not valid",
+    });
+    expect(afterRestart.abortRedeem(invitation.challenge));
+    expect("invitation" in afterRestart.prepareRedeem(invitation.challenge, "hub-1")).toBe(true);
   });
 });

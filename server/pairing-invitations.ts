@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 
 export const PAIRING_INVITATION_TTL_MS = 120_000;
+export const PAIRING_INVITATION_RESERVATION_TTL_MS = 60_000;
 export const MAX_PAIRING_INVITATION_ATTEMPTS = 5;
 export const PAIRING_INVITATION_CHALLENGE_PATTERN = /^omb_invite_[A-Za-z0-9_-]{43}$/;
 
@@ -16,6 +17,7 @@ export interface PairingInvitation {
   expiresAt: number;
   attemptsLeft: number;
   consumedAt?: number;
+  reservedAt?: number;
 }
 
 export type PublicPairingInvitation = Omit<PairingInvitation, "challenge"> & {
@@ -64,6 +66,10 @@ function normalizeInvitation(raw: Partial<PairingInvitation>): PairingInvitation
     if (typeof raw.consumedAt !== "number" || !Number.isFinite(raw.consumedAt)) return null;
     invitation.consumedAt = raw.consumedAt;
   }
+  if (raw.reservedAt !== undefined) {
+    if (typeof raw.reservedAt !== "number" || !Number.isFinite(raw.reservedAt)) return null;
+    invitation.reservedAt = raw.reservedAt;
+  }
   return invitation;
 }
 
@@ -71,7 +77,6 @@ export class PairingInvitationRegistry {
   private invitations: PairingInvitation[] = [];
   private readonly file: string;
   private readonly challengeLocks = new Map<string, Promise<void>>();
-  private readonly pendingChallenges = new Set<string>();
 
   constructor(dataDir: string, fileName = "pairing-invitations.json") {
     this.file = join(dataDir, fileName);
@@ -92,7 +97,18 @@ export class PairingInvitationRegistry {
   }
 
   private prune(now = Date.now()) {
+    this.releaseStaleReservations(now);
     this.invitations = this.invitations.filter((invitation) => !isExpired(invitation, now));
+  }
+
+  private releaseStaleReservations(now = Date.now()) {
+    for (const invitation of this.invitations) {
+      if (invitation.reservedAt === undefined || invitation.consumedAt !== undefined) continue;
+      if (now - invitation.reservedAt > PAIRING_INVITATION_RESERVATION_TTL_MS) {
+        invitation.consumedAt = now;
+        invitation.reservedAt = undefined;
+      }
+    }
   }
 
   private activeInvitations(now = Date.now()): PairingInvitation[] {
@@ -173,8 +189,9 @@ export class PairingInvitationRegistry {
       }
       if (isExpired(invitation, now)) return { error: "that pairing invitation expired" };
       if (invitation.hubId !== hubId) return { error: "that pairing invitation is not valid" };
-      if (this.pendingChallenges.has(presented)) return { error: "that pairing invitation is not valid" };
-      this.pendingChallenges.add(presented);
+      if (invitation.reservedAt !== undefined) return { error: "that pairing invitation is not valid" };
+      invitation.reservedAt = now;
+      this.persist();
       return { invitation };
     });
   }
@@ -183,7 +200,10 @@ export class PairingInvitationRegistry {
   abortRedeem(challenge: string) {
     const presented = String(challenge ?? "");
     this.withChallengeLock(presented, () => {
-      this.pendingChallenges.delete(presented);
+      const invitation = this.invitations.find((entry) => sameChallenge(entry.challenge, presented));
+      if (!invitation || invitation.consumedAt !== undefined) return;
+      invitation.reservedAt = undefined;
+      this.persist();
     });
   }
 
@@ -195,15 +215,15 @@ export class PairingInvitationRegistry {
       this.prune(now);
       const invitation = this.invitations.find((entry) => sameChallenge(entry.challenge, presented));
       if (!invitation) {
-        this.pendingChallenges.delete(presented);
         return { error: "that pairing invitation is not valid" };
       }
       if (isExpired(invitation, now)) {
-        this.pendingChallenges.delete(presented);
+        invitation.reservedAt = undefined;
+        this.persist();
         return { error: "that pairing invitation expired" };
       }
-      if (!this.pendingChallenges.has(presented)) return { error: "that pairing invitation is not valid" };
-      this.pendingChallenges.delete(presented);
+      if (invitation.reservedAt === undefined) return { error: "that pairing invitation is not valid" };
+      invitation.reservedAt = undefined;
       invitation.consumedAt = now;
       this.persist();
       return { ok: true };
