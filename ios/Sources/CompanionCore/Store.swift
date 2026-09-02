@@ -133,9 +133,10 @@ public struct CompanionState: Sendable {
         return out.sorted { $0.message.at > $1.message.at }
     }
 
-    /// Chats worth a badge.
-    public var unreadCount: Int {
-        bots.filter { $0.unread && $0.hidden != true }.count + rooms.filter(\.unread).count
+    /// Chats worth a badge. Hidden bot⇄bot channels count only when shown.
+    public func unreadCount(showBotChannels: Bool = false) -> Int {
+        let visibleRooms = BotChannelPolicy.rosterRooms(rooms, showBotChannels: showBotChannels)
+        return bots.filter { $0.unread && $0.hidden != true }.count + visibleRooms.filter(\.unread).count
     }
 
     // MARK: - Hydrating

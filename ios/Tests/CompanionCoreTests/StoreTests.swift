@@ -284,6 +284,32 @@ final class StoreTests: XCTestCase {
         )
     }
 
+    func testUnreadCountExcludesHiddenBotChannels() {
+        var team = Room(
+            id: "team",
+            threadId: "thread-team",
+            name: "Team",
+            memberIds: ["a", "b"],
+            defaultResponder: GroupResponder(kind: "member", botId: "a"),
+            bulletin: "",
+            unread: true,
+            createdAt: 0
+        )
+        var channel = team
+        channel.id = "dm"
+        channel.threadId = "thread-dm"
+        channel.name = "Alpha ⇄ Beta"
+        channel.memberIds = ["a", "b"]
+        channel.dm = true
+        channel.unread = true
+
+        var state = CompanionState()
+        state.rooms = [team, channel]
+
+        XCTAssertEqual(state.unreadCount(showBotChannels: false), 1)
+        XCTAssertEqual(state.unreadCount(showBotChannels: true), 2)
+    }
+
     func testLocalPinAndUnpinAffectBotAndRoomOrdering() throws {
         var source = try hydrated()
         var bot = try XCTUnwrap(source.bots.first)

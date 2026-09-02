@@ -235,7 +235,7 @@ struct ChatListView: View {
                 if ProcessInfo.processInfo.arguments.contains("-open-first"),
                    path.isEmpty {
                     let arguments = ProcessInfo.processInfo.arguments
-                    let all = session.state.chatSummaries(showBotChannels: showBotChannels)(showBotChannels: showBotChannels)
+                    let all = session.state.chatSummaries(showBotChannels: showBotChannels)
                     if let spec = arguments.first(where: { $0.hasPrefix("-preview-bot=") }) {
                         let id = String(spec.dropFirst("-preview-bot=".count))
                         if let match = all.first(where: { $0.chat.id == id }) {

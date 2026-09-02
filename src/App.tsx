@@ -41,7 +41,7 @@ function useViewportWidth() {
 
 function Shell() {
   const { state, dispatch } = useStore();
-  const unreadCount = unreadConversationCount(state.bots, state.groups);
+  const unreadCount = unreadConversationCount(state.bots, state.groups, state.showBotChannels);
   const viewportWidth = useViewportWidth();
   const [leftDensity] = useState(() => loadSidebarDensity());
   const layout = shellColumnVisibility(viewportWidth, {

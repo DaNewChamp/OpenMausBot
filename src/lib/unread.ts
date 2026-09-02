@@ -1,6 +1,12 @@
+import { rosterGroups } from "./bot-channel";
+
 export function unreadConversationCount(
   bots: Array<{ hidden?: boolean; unread?: boolean }>,
-  groups: Array<{ unread?: boolean }>,
+  groups: Array<{ unread?: boolean; dm?: boolean }>,
+  showBotChannels = false,
 ): number {
-  return bots.filter((bot) => !bot.hidden && bot.unread).length + groups.filter((group) => group.unread).length;
+  const visibleGroups = rosterGroups(groups, showBotChannels);
+  return (
+    bots.filter((bot) => !bot.hidden && bot.unread).length + visibleGroups.filter((group) => group.unread).length
+  );
 }

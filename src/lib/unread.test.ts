@@ -11,4 +11,13 @@ describe("unreadConversationCount", () => {
       ),
     ).toBe(2);
   });
+
+  it("excludes hidden bot channels from the badge unless they are shown", () => {
+    const groups = [
+      { unread: true, dm: false },
+      { unread: true, dm: true },
+    ];
+    expect(unreadConversationCount([], groups, false)).toBe(1);
+    expect(unreadConversationCount([], groups, true)).toBe(2);
+  });
 });

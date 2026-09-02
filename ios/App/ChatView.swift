@@ -39,6 +39,7 @@ struct ChatView: View {
     @State private var shareFile: ShareFile?
     @State private var commRoom: Room?
     @State private var groupProfileRoom: Room?
+    @AppStorage("companion.showBotChannels") private var showBotChannels = false
     @FocusState private var composerFocused: Bool
     @StateObject private var dictation = SpeechDictation()
     /// Manual disclosure state, keyed by the run's first message id. Failures
@@ -90,7 +91,7 @@ struct ChatView: View {
     /// Unread elsewhere — what the back pill's badge counts, like Messages.
     private var unreadElsewhere: Int {
         let mine = current.unread ? 1 : 0
-        return max(0, session.state.unreadCount - mine)
+        return max(0, session.state.unreadCount(showBotChannels: showBotChannels) - mine)
     }
 
     var body: some View {

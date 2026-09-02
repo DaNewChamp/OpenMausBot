@@ -81,11 +81,20 @@ final class Session: ObservableObject {
     }
     /// One exact message the next opened chat should reveal.
     @Published private(set) var focusedMessageId: String?
-    /// Which bot's perspective to emphasize when viewing a bot⇄bot channel.
-    @Published var botChannelPerspectiveBotId: String?
-    @Published private(set) var notificationAuthorization: UNAuthorizationStatus = .notDetermined
+    /// Scoped perspective for a bot⇄bot channel chrome title.
+    @Published private(set) var botChannelPerspective: BotChannelPolicy.Perspective?
+    private var showBotChannelsPreference: Bool {
+        UserDefaults.standard.bool(forKey: "companion.showBotChannels")
+    }
+
+    private func syncBadge() {
+        NotificationCoordinator.shared.setBadge(
+            state.unreadCount(showBotChannels: showBotChannelsPreference)
+        )
+    }
     /// Distinguishes a real `.notDetermined` result from the in-memory value
     /// used while notification settings are still loading at launch.
+    @Published private(set) var notificationAuthorization: UNAuthorizationStatus = .notDetermined
     @Published private(set) var notificationAuthorizationResolved = false
     /// A short-lived desktop handoff waiting for PairingView to present it.
     @Published private(set) var pairingInvite: PairingInvite?
@@ -1195,7 +1204,7 @@ final class Session: ObservableObject {
             currentGeneration: streamGeneration
         )
         guard commit.shouldApply, streamAllows(authority) else { return }
-        NotificationCoordinator.shared.setBadge(state.unreadCount)
+        syncBadge()
         if commit.refreshEngineCatalog {
             await refreshEngineSync(quietly: true, authority: authority)
             guard streamAllows(authority) else { return }
@@ -1300,7 +1309,7 @@ final class Session: ObservableObject {
         bufferedStreamSeq = nil
         reconcileQueueReceipts()
         state.reconcileUnreadIndicators(visibleThreadId: visibleThreadId)
-        NotificationCoordinator.shared.setBadge(state.unreadCount)
+        syncBadge()
     }
 
     private func foldAndPublish(_ frame: Frame, seq: Int?) {
@@ -1328,7 +1337,7 @@ final class Session: ObservableObject {
                 )
             }
         }
-        NotificationCoordinator.shared.setBadge(state.unreadCount)
+        syncBadge()
     }
 
     private func cancelStreamFlush() {
@@ -1948,7 +1957,7 @@ final class Session: ObservableObject {
         state.markConversationRead(stableID: chat.stableID, threadId: chat.threadId)
         state.reconcileUnreadIndicators(visibleThreadId: visibleThreadId)
         persistReadReceipts()
-        NotificationCoordinator.shared.setBadge(state.unreadCount)
+        syncBadge()
         await perform(quietly: true) {
             switch chat {
             case let .bot(bot): try await $0.markRead(botId: bot.id)
@@ -1958,6 +1967,7 @@ final class Session: ObservableObject {
     }
 
     func beginOpeningFromHome(_ chat: Chat) {
+        botChannelPerspective = nil
         let live = resolvedChat(chat)
         HomeConversationOpenPolicy.applyImmediateRead(
             state: &state,
@@ -1965,7 +1975,7 @@ final class Session: ObservableObject {
             threadId: live.threadId
         )
         persistReadReceipts()
-        NotificationCoordinator.shared.setBadge(state.unreadCount)
+        syncBadge()
         setForegroundThread(live.threadId)
     }
 
@@ -2137,6 +2147,7 @@ final class Session: ObservableObject {
                     transcript: state.visibleTranscript(forThread: hit.threadId)
                 )
                 focusedMessageId = hit.messageId
+                botChannelPerspective = nil
                 return .room(room)
             }
         } catch { actionError = error.localizedDescription }
@@ -2152,7 +2163,7 @@ final class Session: ObservableObject {
         perspectiveBotId: String,
         focusMessageId: String? = nil
     ) {
-        botChannelPerspectiveBotId = perspectiveBotId
+        botChannelPerspective = BotChannelPolicy.Perspective(roomId: room.id, botId: perspectiveBotId)
         if let focusMessageId { focusedMessageId = focusMessageId }
     }
 
@@ -2953,7 +2964,7 @@ final class Session: ObservableObject {
     func setForegroundThread(_ threadId: String?) {
         NotificationCoordinator.shared.foregroundThreadId = threadId
         state.reconcileUnreadIndicators(visibleThreadId: threadId)
-        NotificationCoordinator.shared.setBadge(state.unreadCount)
+        syncBadge()
     }
 
     private func shouldSuppressNotification(for threadId: String) -> Bool {
@@ -3229,7 +3240,7 @@ final class Session: ObservableObject {
         }
         _ = await NotificationCoordinator.shared.requestAuthorization()
         await refreshNotificationAuthorization()
-        NotificationCoordinator.shared.setBadge(state.unreadCount)
+        syncBadge()
     }
 
     var notificationStatusText: String {
