@@ -191,6 +191,7 @@ import {
 import { cancelPeerApprovalsFor, cancelPeerApprovalsForThread, dismissStalePeerCards, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import {
   isBotRuntimeBinding,
+  parseRuntimeHandoffInput,
   type RuntimeRebindRequest,
 } from "./bot-runtime-binding.ts";
 import {
@@ -6566,17 +6567,19 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const binding = canonicalizeBotRuntimeBinding(body.binding);
       if (!isBotRuntimeBinding(binding)) return json(res, 400, { error: "binding is invalid" });
-      const contextMode = body.contextMode === "summary" ? "summary" : "none";
+      const handoff = parseRuntimeHandoffInput(body);
+      if (!handoff.ok) return json(res, 400, { error: handoff.message, code: handoff.code });
       const result = await requestBotRuntimeRebind({
         store,
         request: {
           targetBotId: m[1]!,
           binding,
-          contextMode,
+          contextMode: handoff.contextMode,
           userRequested: true,
         },
         actor: null,
         approval: approvalBus,
+        context: handoff.context,
       });
       const status = result.status === "error" ? (result.code === "bot_active" ? 409 : 400) : 200;
       if (result.status === "applied") {

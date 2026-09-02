@@ -231,6 +231,32 @@ function buildHandoffSummary(
   return { ok: true, summary: combined.slice(0, MAX_HANDOFF_LENGTH) };
 }
 
+export function parseRuntimeHandoffInput(body: unknown):
+  | { ok: true; contextMode: "summary" | "none"; context?: Record<string, unknown> }
+  | { ok: false; code: "invalid_handoff"; message: string } {
+  if (!isRecord(body)) return { ok: true, contextMode: "none" };
+  const contextMode = body.contextMode === "summary" ? "summary" : "none";
+  if (contextMode === "none") return { ok: true, contextMode: "none" };
+  if (body.context === undefined) return { ok: true, contextMode: "summary", context: {} };
+  if (!isRecord(body.context)) {
+    return { ok: false, code: "invalid_handoff", message: "Context handoff rejected a secret-shaped field" };
+  }
+  for (const key of Object.keys(body.context)) {
+    if (key !== "summary" || isSecretName(key) || FORBIDDEN_HANDOFF_KEYS.test(key)) {
+      return { ok: false, code: "invalid_handoff", message: "Context handoff rejected a secret-shaped field" };
+    }
+  }
+  const summary = body.context.summary;
+  if (summary !== undefined && typeof summary !== "string") {
+    return { ok: false, code: "invalid_handoff", message: "Context handoff rejected a secret-shaped field" };
+  }
+  return {
+    ok: true,
+    contextMode: "summary",
+    context: { summary: typeof summary === "string" ? summary : "" },
+  };
+}
+
 export function planBotRuntimeRebind(input: PlanBotRuntimeRebindInput): PlanBotRuntimeRebindResult {
   if (!isBotRuntimeBinding(input.requested)) {
     return failure("invalid_binding", "Runtime binding is invalid");

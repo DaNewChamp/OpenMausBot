@@ -1195,6 +1195,31 @@ describe("harness HTTP API", () => {
         },
       });
       expect(frame.bot).not.toHaveProperty("resumeCursors");
+
+      const secretHandoff = await api("POST", `/api/bots/${bot.id}/runtime-binding`, {
+        binding: {
+          kind: "provider",
+          instanceId: "claude",
+          model: "claude-opus-4",
+        },
+        contextMode: "summary",
+        context: { summary: "keep this", token: "sk-handoff-secret" },
+      });
+      expect(secretHandoff.status).toBe(400);
+      expect(secretHandoff.body).toMatchObject({ code: "invalid_handoff" });
+      expect(JSON.stringify(secretHandoff.body)).not.toMatch(/sk-handoff-secret/i);
+
+      const summaryHandoff = await api("POST", `/api/bots/${bot.id}/runtime-binding`, {
+        binding: {
+          kind: "provider",
+          instanceId: "claude",
+          model: "claude-sonnet-5",
+        },
+        contextMode: "summary",
+        context: { summary: "weekly briefing" },
+      });
+      expect(summaryHandoff.status).toBe(200);
+      expect(summaryHandoff.body).toMatchObject({ status: "applied" });
     } finally {
       stream.close();
       await api("DELETE", `/api/bots/${bot.id}`);

@@ -201,6 +201,24 @@ describe("bot runtime binding domain", () => {
     expect(result.plan.handoffSummary).not.toMatch(/session|token|secret|api[_-]?key/i);
   });
 
+  it("parses public runtime-binding handoff fields and defaults contextMode to none", async () => {
+    const { parseRuntimeHandoffInput } = await import("./bot-runtime-binding.ts");
+    expect(parseRuntimeHandoffInput({})).toEqual({ ok: true, contextMode: "none" });
+    expect(parseRuntimeHandoffInput({ contextMode: "summary", context: { summary: "keep this" } })).toEqual({
+      ok: true,
+      contextMode: "summary",
+      context: { summary: "keep this" },
+    });
+    expect(parseRuntimeHandoffInput({
+      contextMode: "summary",
+      context: { summary: "keep this", token: "sk-secret", sessionId: "sess-1" },
+    })).toMatchObject({ ok: false, code: "invalid_handoff" });
+    expect(JSON.stringify(parseRuntimeHandoffInput({
+      contextMode: "summary",
+      context: { api_key: "sk-secret" },
+    }))).not.toMatch(/sk-secret/i);
+  });
+
   it("applies a rebind without deleting identity, hierarchy, transcript, or grants", async () => {
     const { planBotRuntimeRebind, applyBotRuntimeRebind, resolveBotRuntimeBinding } = await import(
       "./bot-runtime-binding.ts"
