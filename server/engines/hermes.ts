@@ -738,6 +738,50 @@ function safeOpaqueId(value: unknown, maxLength = 256): value is string {
     && !/[\s\u0000-\u001f\u007f\u0080-\u009f]/.test(value);
 }
 
+const SUBAGENT_PAYLOAD_KEYS = new Set([
+  "id",
+  "agent_id",
+  "agentId",
+  "name",
+  "title",
+  "persistent",
+  "kind",
+  "named",
+  "text",
+  "message",
+  "tool",
+  "arguments",
+]);
+
+function safeSubagentField(key: string, value: unknown): unknown {
+  if (/token|secret|password|path|session|HERMES_HOME|authorization/i.test(key)) return undefined;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    if (value.length > 240 || /token|HERMES_HOME|\/Users\/|sk-/i.test(value)) return undefined;
+    return value;
+  }
+  if (isRecord(value)) {
+    const nested: Record<string, unknown> = {};
+    for (const [nestedKey, nestedValue] of Object.entries(value)) {
+      if (!SUBAGENT_PAYLOAD_KEYS.has(nestedKey) && nestedKey !== "id" && nestedKey !== "name") continue;
+      const copied = safeSubagentField(nestedKey, nestedValue);
+      if (copied !== undefined) nested[nestedKey] = copied;
+    }
+    return nested;
+  }
+  return undefined;
+}
+
+function safeSubagentPayload(payload: Record<string, unknown>): Record<string, unknown> | undefined {
+  const output: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (!SUBAGENT_PAYLOAD_KEYS.has(key)) continue;
+    const copied = safeSubagentField(key, value);
+    if (copied !== undefined) output[key] = copied;
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
 function safeReadyPayload(value: unknown): Record<string, unknown> | undefined {
   if (!isRecord(value)) return undefined;
   const output: Record<string, unknown> = {};
@@ -858,6 +902,13 @@ function sanitizeGatewayEvent(value: unknown): Record<string, unknown> | undefin
   if (type.startsWith("approval.")) {
     if (!hasOwn(value, "payload") || !isRecord(value.payload)) return undefined;
     output.payload = value.payload;
+    return output;
+  }
+  if (type.startsWith("agent.") || type.startsWith("subagent.")) {
+    if (!hasOwn(value, "payload") || !isRecord(value.payload)) return undefined;
+    const payload = safeSubagentPayload(value.payload);
+    if (!payload) return undefined;
+    output.payload = payload;
     return output;
   }
   // For status/unknown event kinds, retain only the bounded type/session

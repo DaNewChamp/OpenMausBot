@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 
-import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -15,6 +15,13 @@ import {
 } from "./hermes.ts";
 import { HermesCommBudget } from "./hermes-comms.ts";
 import type { RuntimeEvent } from "../contracts.ts";
+import { DATA_DIR } from "../config.ts";
+import { Store } from "../store.ts";
+import {
+  applyLiveHermesSubagent,
+  listProjectedHermesActivities,
+  resetHermesProjectionStoreForTests,
+} from "../hermes-agent-projection.ts";
 
 let gatewayRoot = "";
 
@@ -1576,6 +1583,124 @@ describe("Hermes gateway protocol ordering and timeouts", () => {
     child.close(7);
     await expect(pending).rejects.toMatchObject({ code: "gateway_unavailable" });
     await client.close();
+  });
+});
+
+describe("live Hermes gateway subagent projection", () => {
+  beforeEach(() => {
+    resetHermesProjectionStoreForTests();
+    rmSync(DATA_DIR, { recursive: true, force: true });
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  });
+  afterEach(() => {
+    resetHermesProjectionStoreForTests();
+    rmSync(DATA_DIR, { recursive: true, force: true });
+  });
+
+  async function submitPrompt(child: FakeProcess, engine: HermesBotAdapter, input: {
+    fromBotId: string;
+    threadId: string;
+  }): Promise<void> {
+    const send = engine.send({
+      profile: "coder",
+      text: "hello",
+      threadId: input.threadId,
+      turnId: "turn-live-1",
+      fromBotId: input.fromBotId,
+    });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(roster.method).toBe("profiles.list");
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(list.method).toBe("session.list");
+    child.frame({
+      jsonrpc: "2.0",
+      id: list.id,
+      result: { sessions: [{ id: "root", resolved_id: "tip", title: "Bot Chat", hidden: true, source: "tui", message_count: 4 }] },
+    });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(resume.method).toBe("session.resume");
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "runtime-only", session_key: "also-runtime-only" } });
+    await settle();
+    const prompt = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(prompt.method).toBe("prompt.submit");
+    child.frame({ jsonrpc: "2.0", id: prompt.id, result: { accepted: true } });
+    expect(await send).toEqual({ turnId: "turn-live-1" });
+  }
+
+  it("projects a live gateway agent.started event into GET /api/bots hermesSubagents", async () => {
+    const { child } = harness();
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const parent = store.createBot({ name: "Chief" }, { seedMessages: false });
+    const engine = new HermesBotAdapter({
+      environment: gatewayEnvironment(),
+      spawn: vi.fn(() => child),
+      timeouts: { requestMs: 100, turnMs: 500 },
+      fromBotId: parent.id,
+      onSubagent: (event) => applyLiveHermesSubagent(store, event),
+    });
+    await submitPrompt(child, engine, { fromBotId: parent.id, threadId: parent.threadId });
+    expect(listProjectedHermesActivities()).toEqual([]);
+    child.frame({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "agent.started",
+        session_id: "runtime-only",
+        payload: { id: "moa-temp-live", name: "Draft review" },
+      },
+    });
+    await settle();
+    const fleet = { hermesSubagents: listProjectedHermesActivities() };
+    expect(fleet.hermesSubagents).not.toEqual([]);
+    expect(fleet.hermesSubagents).toEqual([
+      expect.objectContaining({
+        title: "Draft review",
+        status: "started",
+        parentThreadId: parent.threadId,
+        promoteEligible: false,
+      }),
+    ]);
+    expect(store.bots.some((bot) => bot.name === "Draft review")).toBe(false);
+    await engine.close();
+  });
+
+  it("keeps a persistent live subagent on one bot instead of the temporary rail", async () => {
+    const { child } = harness();
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const parent = store.createBot({ name: "Chief" }, { seedMessages: false });
+    const engine = new HermesBotAdapter({
+      environment: gatewayEnvironment(),
+      spawn: vi.fn(() => child),
+      timeouts: { requestMs: 100, turnMs: 500 },
+      fromBotId: parent.id,
+      onSubagent: (event) => applyLiveHermesSubagent(store, event),
+    });
+    await submitPrompt(child, engine, { fromBotId: parent.id, threadId: parent.threadId });
+    child.frame({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "subagent.started",
+        session_id: "runtime-only",
+        payload: { id: "hermes-researcher", name: "Researcher", persistent: true },
+      },
+    });
+    await settle();
+    expect(listProjectedHermesActivities()).toEqual([]);
+    const bot = store.bots.find((row) => row.name === "Researcher");
+    expect(bot?.reportsToBotId).toBe(parent.id);
+    expect(bot?.hermesProvenance).toMatchObject({
+      hermesAgentId: "hermes-researcher",
+      kind: "persistent",
+      parentBotId: parent.id,
+    });
+    await engine.close();
   });
 });
 
