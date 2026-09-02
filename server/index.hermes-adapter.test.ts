@@ -133,7 +133,7 @@ child.on("exit", (code, signal) => {
     },
   }));
 
-  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+  child = spawn(process.execPath, ["--experimental-strip-types", join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env: {
       ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
