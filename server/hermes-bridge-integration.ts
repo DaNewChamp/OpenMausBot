@@ -20,6 +20,7 @@ import {
   type HermesBotBinding,
   type HermesCapabilityFlags,
 } from "./engines/contracts.ts";
+import type { BotRuntimeBinding } from "./bot-runtime-binding.ts";
 import type { HermesSetupProfile } from "./hermes-setup.ts";
 import { normalizeHermesSetupProfile } from "./hermes-setup.ts";
 import { negotiateHermesCapabilities, type HermesCapabilityManifest } from "./hermes-capabilities.ts";
@@ -49,8 +50,44 @@ export function resolveHermesBotDispatch(
     localBindings: BindingStoreResult<ReadonlyMap<string, HermesBotBinding>>;
     bridgeBindings: HermesBridgeBindingStoreResult<ReadonlyMap<string, HermesBridgeBinding>>;
     bridgeCandidate: boolean;
+    runtimeBinding?: BotRuntimeBinding | null;
   },
 ): HermesBotDispatchResolution {
+  if (options.runtimeBinding?.kind === "provider") {
+    return { route: "none" };
+  }
+
+  const hermesBinding = options.runtimeBinding?.kind === "hermes" ? options.runtimeBinding : null;
+  if (hermesBinding?.placement.kind === "local") {
+    if (options.localBindings.state === "unavailable") {
+      return { route: "local-unavailable", code: options.localBindings.code };
+    }
+    const sidecar = options.localBindings.value.get(botId);
+    return {
+      route: "local",
+      binding: sidecar ?? {
+        adapter: "hermesBot",
+        profile: hermesBinding.placement.profile,
+        canonicalTitle: "Bot Chat",
+        bindingVersion: 1,
+      },
+    };
+  }
+  if (hermesBinding?.placement.kind === "bridge") {
+    if (options.bridgeBindings.state === "available") {
+      const sidecar = options.bridgeBindings.value.get(botId);
+      return {
+        route: "bridge",
+        binding: sidecar ?? {
+          bridgeId: hermesBinding.placement.bridgeId,
+          profile: hermesBinding.placement.profile,
+          bindingVersion: 1,
+        },
+      };
+    }
+    return { route: "bridge-unavailable", code: options.bridgeBindings.code };
+  }
+
   if (options.localBindings.state === "unavailable") {
     return { route: "local-unavailable", code: options.localBindings.code };
   }

@@ -640,4 +640,34 @@ describe("resolveHermesBotDispatch", () => {
       bridgeCandidate: true,
     })).toEqual({ route: "bridge", binding: bridgeBinding });
   });
+
+  it("honors a Hermes runtimeBinding even when modelSelection still names a provider", () => {
+    expect(resolveHermesBotDispatch("bot-1", {
+      localBindings: { state: "available", value: new Map() },
+      bridgeBindings: { state: "available", value: new Map() },
+      bridgeCandidate: false,
+      runtimeBinding: {
+        kind: "hermes",
+        placement: { kind: "local", profile: "coder" },
+        bindingVersion: 2,
+      },
+    })).toEqual({
+      route: "local",
+      binding: {
+        adapter: "hermesBot",
+        profile: "coder",
+        canonicalTitle: "Bot Chat",
+        bindingVersion: 1,
+      },
+    });
+  });
+
+  it("keeps a provider runtimeBinding on the provider path even if a leftover Hermes sidecar exists", () => {
+    expect(resolveHermesBotDispatch("bot-1", {
+      localBindings: { state: "available", value: new Map([["bot-1", localBinding]]) },
+      bridgeBindings: { state: "available", value: new Map() },
+      bridgeCandidate: false,
+      runtimeBinding: { kind: "provider", instanceId: "claude", model: "claude-sonnet-5" },
+    })).toEqual({ route: "none" });
+  });
 });

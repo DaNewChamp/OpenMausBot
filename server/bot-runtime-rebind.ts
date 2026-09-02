@@ -77,6 +77,21 @@ export function rememberHermesEndpoint(
   endpoints.set(endpointId, { revision: capabilityRevision, status });
 }
 
+export function rememberLocalHermesProfiles(
+  profiles: Array<{ profile?: string; availability?: string }>,
+  capabilityRevision: string,
+): void {
+  for (const row of profiles) {
+    const profile = typeof row.profile === "string" ? row.profile.trim().toLowerCase() : "";
+    if (!profile || row.availability === "unavailable" || row.availability === "unreadable") continue;
+    rememberHermesEndpoint(`local:${profile}`, capabilityRevision);
+  }
+}
+
+export function resetRememberedHermesEndpointsForTests(): void {
+  endpoints.clear();
+}
+
 export function lookupHermesEndpoint(binding: BotRuntimeBinding): RuntimeEndpointState {
   if (binding.kind === "provider") {
     return { state: "available", endpointId: hermesEndpointId(binding), capabilityRevision: "provider" };

@@ -192,7 +192,7 @@ import {
   requestBotRuntimeRebind,
   resolveRuntimeRebind,
 } from "./bot-runtime-rebind.ts";
-import { promoteHermesAgent } from "./hermes-agent-projection.ts";
+import { applyLiveHermesSubagent, isProjectedHermesTranscript, listProjectedHermesActivities, promoteHermesAgent } from "./hermes-agent-projection.ts";
 import {
   mentionedBots,
   roomResponders,
@@ -353,6 +353,7 @@ let hermesRegistry: HermesEngineRegistry = createHermesEngineRegistry({
   onEvent: (event, instanceId) => publishHermesEvent(event, instanceId),
   handleToBotId: () => buildHermesHandleToBotId(),
   onComm: (candidate) => projectHermesComm(candidate),
+  onSubagent: (event) => projectHermesSubagentLive(event),
 });
 await hermesRegistry.discover();
 
@@ -878,6 +879,7 @@ async function interruptBotTurn(
       loadBridgeBindings: loadHermesBridgeBindings,
       bridgeRegistry: bridges,
       hermesRegistry,
+      runtimeBinding: store.bot(botId)?.runtimeBinding,
       mightBeBridgeBound: (targetBotId) => {
         const candidate = store.bot(targetBotId);
         return Boolean(candidate && isBridgeHermesBotCandidate(candidate, hermesBotInstanceId(cfg)));
@@ -2196,6 +2198,7 @@ async function startTurn(
     localBindings: hermesBindings,
     bridgeBindings: hermesBridgeBindings,
     bridgeCandidate: isBridgeHermesBotCandidate(bot, hermesBotInstanceId(cfg)),
+    runtimeBinding: bot.runtimeBinding,
   });
   const hermesBinding = hermesDispatchResolution.route === "local"
     ? hermesDispatchResolution.binding
@@ -4253,6 +4256,12 @@ function projectHermesComm(candidate: HermesCommCandidate): void {
   mirrorExchange({ store, broadcast }, from, to, candidate.text, channel, from.threadId, candidate.plane);
 }
 
+function projectHermesSubagentLive(
+  event: Parameters<typeof applyLiveHermesSubagent>[1],
+): void {
+  applyLiveHermesSubagent(store, event);
+}
+
 function projectBotComposer(botId: string): { queueing: false; steer: false; stop: true } | undefined {
   const bindings = loadHermesBindings();
   if (bindings.state === "available" && bindings.value.has(botId)) {
@@ -4369,6 +4378,7 @@ async function reloadProviders() {
     onEvent: (event, instanceId) => publishHermesEvent(event, instanceId),
     handleToBotId: () => buildHermesHandleToBotId(),
     onComm: (candidate) => projectHermesComm(candidate),
+    onSubagent: (event) => projectHermesSubagentLive(event),
   });
   await hermesRegistry.discover();
   // A killed turn's terminal events can die with the old fleet (dispose is
@@ -5621,6 +5631,7 @@ const server = createServer(async (req, res) => {
       return json(res, 200, {
         bots: store.bots.map((bot) => ({ ...publicBot(bot), ...messagePage(bot.threadId, limit) })),
         groups: store.groups.map((g) => ({ ...g, ...messagePage(g.threadId, limit) })),
+        hermesSubagents: listProjectedHermesActivities(),
         computerControl: Object.fromEntries(
           store.bots.map((bot) => {
             const snapshot = computerControl.snapshot(bot.id);
@@ -5634,7 +5645,7 @@ const server = createServer(async (req, res) => {
     m = path.match(/^\/api\/threads\/([\w-]+)\/messages$/);
     if (m && method === "GET") {
       const threadId = m[1];
-      if (!store.botByThread(threadId) && !store.groupByThread(threadId)) {
+      if (!store.botByThread(threadId) && !store.groupByThread(threadId) && !isProjectedHermesTranscript(threadId)) {
         return json(res, 404, { error: "no such conversation" });
       }
       const limit = pageSize(url.searchParams.get("limit"));

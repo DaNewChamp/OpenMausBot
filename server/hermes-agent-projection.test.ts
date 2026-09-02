@@ -94,6 +94,34 @@ describe("Hermes agent projection", () => {
     expect(store.messagesFor(bot!.threadId).some((message) => message.text === "draft notes")).toBe(true);
   });
 
+  it("lists temporary activities for existing fleet hydrate without minting a second agent model", async () => {
+    const { projectHermesAgent, completeHermesAgent, listProjectedHermesActivities } = await import(
+      "./hermes-agent-projection.ts"
+    );
+    const store = new Store(selection);
+    const parent = store.createBot({ name: "Chief" }, { seedMessages: false });
+    const started = projectHermesAgent(store, {
+      hermesAgentId: "moa-temp-live",
+      kind: "temporary",
+      name: "Draft review",
+      parentBotId: parent.id,
+      parentThreadId: parent.threadId,
+    });
+    store.appendMessage(started.transcriptThreadId, { role: "bot", kind: "text", text: "live notes" });
+    completeHermesAgent(store, { hermesAgentId: "moa-temp-live" });
+    const listed = listProjectedHermesActivities();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({
+      activityId: started.activityId,
+      parentThreadId: parent.threadId,
+      title: "Draft review",
+      status: "completed",
+      transcriptThreadId: started.transcriptThreadId,
+      promoteEligible: true,
+    });
+    expect(JSON.stringify(listed)).not.toMatch(/token|HERMES_HOME|\/Users\/|sk-/i);
+  });
+
   it("does not mint a new identity when the projection store is unreadable", async () => {
     const { projectHermesAgent, markHermesProjectionStoreUnreadable } = await import("./hermes-agent-projection.ts");
     const store = new Store(selection);

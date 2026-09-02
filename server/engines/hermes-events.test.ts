@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { projectHermesGatewayToolEvent, projectHermesMessageAgent } from "./hermes-events.ts";
+import { projectHermesGatewayToolEvent, projectHermesMessageAgent, projectHermesSubagentGatewayEvent } from "./hermes-events.ts";
 
 const baseInput = {
   sessionId: "runtime",
@@ -52,5 +52,55 @@ describe("hermes-events", () => {
       payload: { name: "message_agent", arguments: args, ok: true, status: "complete" },
     });
     expect(complete).toBeNull();
+  });
+
+  it("projects live Hermes agent and spawn_agent events into the existing subagent types", () => {
+    const started = projectHermesSubagentGatewayEvent({
+      ...baseInput,
+      type: "agent.started",
+      payload: { id: "moa-temp-1", name: "Draft review", kind: "temporary" },
+    });
+    expect(started).toMatchObject({
+      action: "start",
+      hermesAgentId: "moa-temp-1",
+      kind: "temporary",
+      name: "Draft review",
+    });
+
+    const persistent = projectHermesSubagentGatewayEvent({
+      ...baseInput,
+      type: "subagent.started",
+      payload: { agent_id: "hermes-researcher", title: "Researcher", persistent: true },
+    });
+    expect(persistent).toMatchObject({
+      action: "start",
+      hermesAgentId: "hermes-researcher",
+      kind: "persistent",
+      name: "Researcher",
+    });
+
+    const spawned = projectHermesSubagentGatewayEvent({
+      ...baseInput,
+      type: "tool.start",
+      payload: { name: "spawn_agent", arguments: { id: "moa-temp-2", name: "Reviewer" } },
+    });
+    expect(spawned).toMatchObject({
+      action: "start",
+      hermesAgentId: "moa-temp-2",
+      kind: "temporary",
+      name: "Reviewer",
+    });
+
+    const completed = projectHermesSubagentGatewayEvent({
+      ...baseInput,
+      type: "agent.completed",
+      payload: { id: "moa-temp-1", text: "draft notes" },
+    });
+    expect(completed).toMatchObject({
+      action: "complete",
+      hermesAgentId: "moa-temp-1",
+      text: "draft notes",
+    });
+    expect(JSON.stringify(started)).not.toMatch(/token|HERMES_HOME|\/Users\/|sk-/i);
   });
 });

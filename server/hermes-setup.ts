@@ -1,4 +1,5 @@
 import type { ModelSelection } from "./contracts.ts";
+import { createHash } from "node:crypto";
 import type { BotRecord } from "./store.ts";
 import {
   loadHermesBindings,
@@ -31,6 +32,7 @@ import {
   type HermesSetupPlacement,
 } from "./hermes-bridge-integration.ts";
 import { negotiateHermesCapabilities } from "./hermes-capabilities.ts";
+import { rememberLocalHermesProfiles } from "./bot-runtime-rebind.ts";
 import type { HermesBotEngine } from "./engines/hermes.ts";
 import type { HermesEngineDescription } from "./engines/index.ts";
 
@@ -402,15 +404,23 @@ export function projectHermesSetupStatus(options: ProjectHermesSetupStatusOption
   const connected = safeProfiles.some((profile) => profile.botId !== undefined);
   const canonicalChatProven = description.capabilities.canonicalChat
     && safeProfiles.some((profile) => profile.canonicalChat === "present");
+  const capabilities = {
+    ...description.capabilities,
+    canonicalChat: canonicalChatProven,
+  };
+  rememberLocalHermesProfiles(
+    safeProfiles.filter((profile) => !profile.placement || profile.placement.kind === "local"),
+    createHash("sha256")
+      .update(JSON.stringify(Object.entries(capabilities).filter(([, value]) => value).map(([key]) => key).sort()))
+      .digest("hex")
+      .slice(0, 32),
+  );
   return {
     state: connected ? "connected" : "ready",
     profiles: safeProfiles.map((profile) => profile.botId
       ? { ...profile, ...(canonicalChatProven && profile.canonicalChat === "present" ? { canonicalChat: "present" as const } : {}) }
       : profile),
-    capabilities: {
-      ...description.capabilities,
-      canonicalChat: canonicalChatProven,
-    },
+    capabilities,
   };
 }
 

@@ -22,6 +22,8 @@ import {
 import {
   projectHermesGatewayApprovalEvent,
   projectHermesGatewayToolEvent,
+  projectHermesSubagentGatewayEvent,
+  type HermesSubagentGatewayProjection,
 } from "./hermes-events.ts";
 import {
   clearHermesPendingProfile,
@@ -170,6 +172,7 @@ export interface HermesBotEngineOptions {
   senderHandle?: string;
   handleToBotId?: ReadonlyMap<string, string> | (() => ReadonlyMap<string, string>);
   onComm?: (candidate: HermesCommCandidate) => void;
+  onSubagent?: (event: HermesSubagentGatewayProjection & { parentBotId: string; parentThreadId: string }) => void;
   commBudget?: HermesCommBudget;
   commReplay?: HermesCommReplay;
 }
@@ -924,6 +927,7 @@ export class HermesBotAdapter implements HermesBotEngine {
   private readonly handleToBotId: ReadonlyMap<string, string>;
   private readonly resolveHandleToBotId?: () => ReadonlyMap<string, string>;
   private readonly onComm?: (candidate: HermesCommCandidate) => void;
+  private readonly onSubagent?: HermesBotEngineOptions["onSubagent"];
   private readonly commBudget: HermesCommBudget;
   private readonly commReplay: HermesCommReplay;
   private readonly locks = new Map<string, AsyncLock>();
@@ -947,6 +951,7 @@ export class HermesBotAdapter implements HermesBotEngine {
       this.handleToBotId = options.handleToBotId ?? new Map();
     }
     this.onComm = options.onComm;
+    this.onSubagent = options.onSubagent;
     this.commBudget = options.commBudget ?? new HermesCommBudget();
     this.commReplay = options.commReplay ?? new HermesCommReplay();
     this.clock = normalizeClock(options.clock);
@@ -1520,7 +1525,7 @@ export class HermesBotAdapter implements HermesBotEngine {
       if (delta) this.emitRuntime(runtime, { type: "content.delta", streamKind: "assistant_text", delta });
       return;
     }
-    if (type.startsWith("tool") || type.startsWith("approval.")) {
+    if (type.startsWith("tool") || type.startsWith("approval.") || type.startsWith("agent") || type.startsWith("subagent")) {
       this.projectExtendedEvent(runtime, type, params);
       return;
     }
@@ -1613,6 +1618,14 @@ export class HermesBotAdapter implements HermesBotEngine {
     };
     const toolProjection = projectHermesGatewayToolEvent(baseInput);
     const approvalProjection = projectHermesGatewayApprovalEvent(baseInput);
+    const subagent = projectHermesSubagentGatewayEvent(baseInput);
+    if (subagent && this.onSubagent) {
+      this.onSubagent({
+        ...subagent,
+        parentBotId: baseInput.fromBotId,
+        parentThreadId: runtime.threadId,
+      });
+    }
     const projection = toolProjection ?? approvalProjection;
     if (!projection) return;
     if (projection.comm && this.onComm && !this.commReplay.remember(projection.comm.deliveryKey)) return;

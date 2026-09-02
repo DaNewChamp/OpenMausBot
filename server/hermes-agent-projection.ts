@@ -237,3 +237,63 @@ export function projectedHermesBot(store: Store, hermesAgentId: string): BotReco
   if (!record?.botId) return null;
   return store.bot(record.botId);
 }
+
+export function listProjectedHermesActivities(): Array<{
+  activityId: string;
+  parentThreadId: string;
+  title: string;
+  status: ProjectionRecord["status"];
+  transcriptThreadId: string;
+  promoteEligible: boolean;
+}> {
+  const loaded = loadProjectionFile();
+  if (loaded.state === "unavailable") return [];
+  return Object.values(loaded.value.agents)
+    .filter((record) => record.kind === "temporary" && record.status !== "promoted")
+    .map((record) => ({
+      activityId: record.activityId,
+      parentThreadId: record.parentThreadId,
+      title: record.name,
+      status: record.status,
+      transcriptThreadId: record.transcriptThreadId,
+      promoteEligible: record.status === "completed",
+    }));
+}
+
+export function applyLiveHermesSubagent(
+  store: Store,
+  input: {
+    action: "start" | "complete";
+    hermesAgentId: string;
+    kind: "persistent" | "temporary";
+    name: string;
+    parentBotId: string;
+    parentThreadId: string;
+    text?: string;
+  },
+): { activityId: string; transcriptThreadId: string } {
+  const started = projectHermesAgent(store, {
+    hermesAgentId: input.hermesAgentId,
+    kind: input.kind,
+    name: input.name,
+    parentBotId: input.parentBotId,
+    parentThreadId: input.parentThreadId,
+  });
+  if (input.action === "complete") {
+    const completed = completeHermesAgent(store, { hermesAgentId: input.hermesAgentId });
+    if (input.text) {
+      store.appendMessage(completed.transcriptThreadId, { role: "bot", kind: "text", text: input.text });
+    }
+    return { activityId: completed.activityId, transcriptThreadId: completed.transcriptThreadId };
+  }
+  if (input.text) {
+    store.appendMessage(started.transcriptThreadId, { role: "bot", kind: "text", text: input.text });
+  }
+  return { activityId: started.activityId, transcriptThreadId: started.transcriptThreadId };
+}
+
+export function isProjectedHermesTranscript(threadId: string): boolean {
+  const loaded = loadProjectionFile();
+  if (loaded.state === "unavailable") return false;
+  return Object.values(loaded.value.agents).some((record) => record.transcriptThreadId === threadId);
+}

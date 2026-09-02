@@ -6,6 +6,7 @@ import {
   type HermesBotBinding,
 } from "./engines/contracts.ts";
 import type { HermesBridgeBinding } from "../shared/bridge-hermes-contract.ts";
+import type { BotRuntimeBinding } from "./bot-runtime-binding.ts";
 import {
   bridgeBindingUnavailableError,
   dispatchHermesBridgeInterrupt,
@@ -41,6 +42,7 @@ export interface HermesInterruptDependencies {
   hermesRegistry: HermesInterruptRegistry;
   resolveProvider: (target: HermesInterruptTarget) => HermesInterruptProvider | null;
   mightBeBridgeBound?: (botId: string) => boolean;
+  runtimeBinding?: BotRuntimeBinding | null;
 }
 
 export type HermesInterruptRoute = "hermes" | "hermes-bridge" | "provider" | "none";
@@ -69,6 +71,7 @@ export async function dispatchHermesInterrupt(
     localBindings: dependencies.loadBindings(),
     bridgeBindings: (dependencies.loadBridgeBindings ?? loadHermesBridgeBindings)(),
     bridgeCandidate: dependencies.mightBeBridgeBound?.(target.botId) ?? false,
+    runtimeBinding: dependencies.runtimeBinding,
   });
 
   if (resolution.route === "local-unavailable" || resolution.route === "bridge-unavailable") {

@@ -35,6 +35,7 @@ export interface HermesEngineRegistryOptions {
   onEvent?: (event: RuntimeEvent, instanceId: string) => void;
   handleToBotId?: () => ReadonlyMap<string, string>;
   onComm?: (candidate: HermesCommCandidate) => void;
+  onSubagent?: HermesBotEngineOptions["onSubagent"];
   /** Test-friendly shorthand for the disabled-by-default metadata. */
   enabled?: boolean;
   instanceId?: string;
@@ -133,6 +134,7 @@ export class HermesEngineRegistry {
   private readonly onEvent?: HermesEngineRegistryOptions["onEvent"];
   private readonly handleToBotId?: HermesEngineRegistryOptions["handleToBotId"];
   private readonly onComm?: HermesEngineRegistryOptions["onComm"];
+  private readonly onSubagent?: HermesEngineRegistryOptions["onSubagent"];
   private disposed = false;
 
   constructor(options: HermesEngineRegistryOptions = {}) {
@@ -144,6 +146,7 @@ export class HermesEngineRegistry {
     this.onEvent = options.onEvent;
     this.handleToBotId = options.handleToBotId;
     this.onComm = options.onComm;
+    this.onSubagent = options.onSubagent;
     if (!this.enabled) return;
 
     const configs = options.instanceConfigs ?? this.configuredInstances(options.config);
@@ -159,6 +162,7 @@ export class HermesEngineRegistry {
           ...rawHermesOptions(entry),
           ...(this.handleToBotId ? { handleToBotId: this.handleToBotId } : {}),
           ...(this.onComm ? { onComm: this.onComm } : {}),
+          ...(this.onSubagent ? { onSubagent: this.onSubagent } : {}),
         });
       } catch {
         continue;

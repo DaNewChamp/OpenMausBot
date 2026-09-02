@@ -20,9 +20,11 @@ const providerClaude = {
 };
 
 describe("approved runtime conversion", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     rmSync(DATA_DIR, { recursive: true, force: true });
     mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    const { resetRememberedHermesEndpointsForTests } = await import("./bot-runtime-rebind.ts");
+    resetRememberedHermesEndpointsForTests();
   });
   afterEach(() => {
     rmSync(DATA_DIR, { recursive: true, force: true });
@@ -199,5 +201,34 @@ describe("approved runtime conversion", () => {
       value: providerClaude,
     });
     expect(store.bot(bot.id)?.modelSelection).toEqual(selection());
+  });
+
+  it("resolves convert-to-Hermes on this computer from local:{profile} discovery", async () => {
+    const { requestBotRuntimeRebind, rememberLocalHermesProfiles, lookupHermesEndpoint } = await import(
+      "./bot-runtime-rebind.ts"
+    );
+    rememberLocalHermesProfiles(
+      [{ profile: "coder", availability: "available" }],
+      "rev-local-1",
+    );
+    expect(lookupHermesEndpoint(localHermes)).toEqual({
+      state: "available",
+      endpointId: "local:coder",
+      capabilityRevision: "rev-local-1",
+    });
+    const store = new Store(selection);
+    const bot = store.createBot({ name: "Specialist" });
+    const result = await requestBotRuntimeRebind({
+      store,
+      request: {
+        targetBotId: bot.id,
+        binding: localHermes,
+        contextMode: "none",
+        userRequested: true,
+      },
+    });
+    expect(result).toMatchObject({ status: "applied" });
+    if (result.status !== "applied") return;
+    expect(result.bot.runtimeBinding).toEqual(localHermes);
   });
 });

@@ -210,3 +210,77 @@ export function projectHermesGatewayApprovalEvent(input: ProjectHermesEventInput
 export function commPlaneForMirror(plane: HermesCommPlane): HermesCommPlane {
   return plane;
 }
+
+const SPAWN_TOOLS = /^(?:spawn_agent|delegate_task|task|subagent)$/i;
+
+export type HermesSubagentGatewayProjection = {
+  action: "start" | "complete";
+  hermesAgentId: string;
+  kind: "persistent" | "temporary";
+  name: string;
+  text?: string;
+};
+
+function safeAgentId(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= 128 && value.trim() === value
+    ? value
+    : undefined;
+}
+
+function safeAgentName(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 120 ? value.trim() : fallback;
+}
+
+function agentKind(payload: Record<string, unknown> | undefined): "persistent" | "temporary" {
+  if (payload?.persistent === true || payload?.kind === "persistent" || payload?.named === true) {
+    return "persistent";
+  }
+  return "temporary";
+}
+
+export function projectHermesSubagentGatewayEvent(input: ProjectHermesEventInput): HermesSubagentGatewayProjection | null {
+  const payload = input.payload ?? {};
+  const type = input.type;
+  const toolName = safeToolName(payload.name ?? payload.tool);
+  const spawnTool = Boolean(toolName && SPAWN_TOOLS.test(toolName));
+  const args = (payload.arguments && typeof payload.arguments === "object" && !Array.isArray(payload.arguments)
+    ? payload.arguments
+    : payload) as Record<string, unknown>;
+  const hermesAgentId = safeAgentId(
+    args.id ?? args.agent_id ?? args.agentId ?? payload.id ?? payload.agent_id ?? payload.agentId,
+  );
+  if (!hermesAgentId) return null;
+
+  const name = safeAgentName(
+    args.name ?? args.title ?? payload.title ?? (spawnTool ? undefined : payload.name),
+    "Hermes agent",
+  );
+  const text = eventTextish(args.text ?? payload.text ?? payload.message);
+
+  if (
+    type === "agent.completed"
+    || type === "agent.complete"
+    || type === "subagent.completed"
+    || type === "subagent.complete"
+    || type === "agent.failed"
+    || type === "subagent.failed"
+  ) {
+    return { action: "complete", hermesAgentId, kind: agentKind(payload), name, ...(text ? { text } : {}) };
+  }
+
+  if (
+    type === "agent.started"
+    || type === "agent.start"
+    || type === "subagent.started"
+    || type === "subagent.start"
+    || ((type === "tool.start" || type === "tool.call") && spawnTool)
+  ) {
+    return { action: "start", hermesAgentId, kind: agentKind({ ...payload, ...args }), name };
+  }
+  return null;
+}
+
+function eventTextish(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.trim().length === 0) return undefined;
+  return value;
+}
