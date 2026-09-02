@@ -11,6 +11,7 @@ export default defineConfig({
       "bridge/**/*.test.ts",
       "server/**/*.test.ts",
       "runtime/**/*.test.ts",
+      "shared/**/*.test.ts",
       "electron/**/*.test.mjs",
       "src/**/*.test.ts",
       "companion/**/*.test.ts",
