@@ -2,6 +2,7 @@ import { rm } from "node:fs/promises";
 
 const generatedPaths = [
   "dist",
+  "dist-bridge",
   "dist-companion",
   "dist-electron",
   "dist-native",
