@@ -7,10 +7,33 @@ import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const dist = join(root, "dist-companion");
+
+function runCompanionBuild(): void {
+  const tsc = spawnSync(
+    process.execPath,
+    [
+      join(root, "node_modules", "typescript", "lib", "tsc.js"),
+      "-p",
+      "tsconfig.companion.build.json",
+    ],
+    { cwd: root, encoding: "utf8" },
+  );
+  if (tsc.status !== 0) {
+    throw new Error(tsc.stderr || tsc.stdout || "companion tsc failed");
+  }
+
+  const layout = spawnSync(process.execPath, ["scripts/fix-companion-layout.mjs"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  if (layout.status !== 0) {
+    throw new Error(layout.stderr || layout.stdout || "companion layout failed");
+  }
+}
 
 function sourceTreeHasEmittedJs(dir: string): boolean {
   for (const name of readdirSync(dir, { withFileTypes: true })) {
@@ -27,6 +50,10 @@ function sourceTreeHasEmittedJs(dir: string): boolean {
 }
 
 describe("companion build contract", () => {
+  beforeAll(() => {
+    runCompanionBuild();
+  });
+
   it("emits a flat runtime tree with vendored shared/server modules", () => {
     expect(existsSync(join(dist, "index.js"))).toBe(true);
     expect(existsSync(join(dist, "shared", "hub-identity.mjs"))).toBe(true);
