@@ -12,6 +12,7 @@ import {
   type BindingStoreResult,
 } from "./engines/bindings.ts";
 import type { HermesBotBinding } from "./engines/contracts.ts";
+import type { HermesBridgeBinding } from "../shared/bridge-hermes-contract.ts";
 
 const PROFILE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const MAX_PROFILE_LENGTH = 64;
@@ -296,6 +297,41 @@ function persistSidecars(botId: string, binding: BotRuntimeBinding): void {
   if (local.state === "unavailable") throw new RuntimeRebindError("state_unavailable", local.message);
 }
 
+type SidecarSnapshot = {
+  local: HermesBotBinding | undefined;
+  remote: HermesBridgeBinding | undefined;
+};
+
+function snapshotSidecars(botId: string): SidecarSnapshot {
+  const local = loadHermesBindings();
+  if (local.state === "unavailable") throw new RuntimeRebindError("state_unavailable", local.message);
+  const remote = loadHermesBridgeBindings();
+  if (remote.state === "unavailable") throw new RuntimeRebindError("state_unavailable", remote.message);
+  return { local: local.value.get(botId), remote: remote.value.get(botId) };
+}
+
+function restoreSidecars(botId: string, snapshot: SidecarSnapshot): void {
+  if (snapshot.local) {
+    const written = setHermesBinding(botId, snapshot.local);
+    if (written.state === "unavailable") throw new RuntimeRebindError("state_unavailable", written.message);
+  } else {
+    const removed = removeHermesBinding(botId);
+    if (removed.state === "unavailable") throw new RuntimeRebindError("state_unavailable", removed.message);
+  }
+  if (snapshot.remote) {
+    const written = setHermesBridgeBinding(botId, snapshot.remote);
+    if (written.state === "unavailable") throw new RuntimeRebindError("state_unavailable", written.message);
+  } else {
+    const removed = removeHermesBridgeBinding(botId);
+    if (removed.state === "unavailable") throw new RuntimeRebindError("state_unavailable", removed.message);
+  }
+}
+
+function identitiesAgree(bot: BotRecord, expected: BotRuntimeBinding): boolean {
+  const resolved = resolveBotRuntimeBinding(bot);
+  return resolved.state === "available" && JSON.stringify(resolved.value) === JSON.stringify(expected);
+}
+
 export async function applyBotRuntimeRebind(
   plan: RuntimeRebindPlan,
   deps: ApplyBotRuntimeRebindDeps,
@@ -317,16 +353,39 @@ export async function applyBotRuntimeRebind(
     }
   }
 
-  persistSidecars(bot.id, plan.next);
-
-  const patch: Partial<BotRecord> = { runtimeBinding: plan.next };
-  if (plan.next.kind === "provider") {
-    patch.modelSelection = {
-      instanceId: plan.next.instanceId,
-      model: plan.next.model ?? bot.modelSelection.model,
-    };
+  const snapshot = snapshotSidecars(bot.id);
+  const previousBinding = bot.runtimeBinding;
+  const previousModel = bot.modelSelection;
+  try {
+    persistSidecars(bot.id, plan.next);
+    const patch: Partial<BotRecord> = { runtimeBinding: plan.next };
+    if (plan.next.kind === "provider") {
+      patch.modelSelection = {
+        instanceId: plan.next.instanceId,
+        model: plan.next.model ?? bot.modelSelection.model,
+      };
+    }
+    const updated = deps.store.patchBot(bot.id, patch);
+    if (!updated) throw new RuntimeRebindError("bot_not_found", "Bot is unavailable");
+    if (!identitiesAgree(updated, plan.next)) {
+      throw new RuntimeRebindError("state_unavailable", "Runtime identity is unavailable");
+    }
+    return updated;
+  } catch (error) {
+    try {
+      restoreSidecars(bot.id, snapshot);
+      if (previousBinding) {
+        deps.store.patchBot(bot.id, { runtimeBinding: previousBinding, modelSelection: previousModel });
+      } else {
+        const current = deps.store.bot(bot.id);
+        if (current?.runtimeBinding) {
+          deps.store.patchBot(bot.id, { modelSelection: previousModel });
+        }
+      }
+    } catch {
+      throw new RuntimeRebindError("state_unavailable", "Runtime identity is unavailable");
+    }
+    if (error instanceof RuntimeRebindError) throw error;
+    throw new RuntimeRebindError("state_unavailable", "Runtime identity is unavailable");
   }
-  const updated = deps.store.patchBot(bot.id, patch);
-  if (!updated) throw new RuntimeRebindError("bot_not_found", "Bot is unavailable");
-  return updated;
 }

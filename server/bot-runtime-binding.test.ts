@@ -303,6 +303,40 @@ describe("bot runtime binding domain", () => {
     ).rejects.toMatchObject({ code: "stale_endpoint" });
   });
 
+  it("rolls back sidecar writes when the bot record cannot be patched so identities cannot drift", async () => {
+    const { planBotRuntimeRebind, applyBotRuntimeRebind, resolveBotRuntimeBinding } = await import(
+      "./bot-runtime-binding.ts"
+    );
+    const store = new Store(selection);
+    const bot = store.createBot({ name: "Specialist", modelSelection: selection() });
+    const planned = planBotRuntimeRebind({
+      bot: store.bot(bot.id)!,
+      requested: localHermes,
+      contextMode: "none",
+      endpoint: { state: "available", endpointId: "local:coder", capabilityRevision: "rev-1" },
+    });
+    expect(planned).toMatchObject({ ok: true });
+    if (planned.ok !== true) return;
+    const originalPatch = store.patchBot.bind(store);
+    store.patchBot = ((id, patch) => {
+      if (patch.runtimeBinding) return null;
+      return originalPatch(id, patch);
+    }) as typeof store.patchBot;
+    await expect(
+      applyBotRuntimeRebind(planned.plan, {
+        store,
+        endpoint: { state: "available", endpointId: "local:coder", capabilityRevision: "rev-1" },
+      }),
+    ).rejects.toMatchObject({ code: "bot_not_found" });
+    store.patchBot = originalPatch;
+    const current = store.bot(bot.id)!;
+    expect(current.runtimeBinding).toBeUndefined();
+    expect(resolveBotRuntimeBinding(current)).toEqual({ state: "available", value: providerClaude });
+    const sidecar = loadHermesBindings();
+    expect(sidecar.state).toBe("available");
+    if (sidecar.state === "available") expect(sidecar.value.has(bot.id)).toBe(false);
+  });
+
   it("reverses a Hermes binding back to the previous provider runtime", async () => {
     const { planBotRuntimeRebind, applyBotRuntimeRebind, resolveBotRuntimeBinding } = await import(
       "./bot-runtime-binding.ts"
