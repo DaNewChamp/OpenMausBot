@@ -90,7 +90,8 @@ describe("approved runtime conversion", () => {
     expect(card?.card?.requestId).toBe(result.requestId);
     expect(card?.card?.title).toMatch(/approval/i);
     expect(JSON.stringify(card)).not.toMatch(/token|sk-ant|HERMES_HOME/i);
-    expect(resolveRuntimeRebind(bus, result.requestId, "allow")).toBe(true);
+    const allowed = await resolveRuntimeRebind(bus, result.requestId, "allow");
+    expect(allowed).toMatchObject({ handled: true, ok: true });
     expect(resolveBotRuntimeBinding(store.bot(bot.id)!)).toEqual({ state: "available", value: localHermes });
   });
 
@@ -116,11 +117,102 @@ describe("approved runtime conversion", () => {
     expect(result.status).toBe("pending_approval");
     if (result.status !== "pending_approval") return;
     const tampered = `${result.requestId}-tampered`;
-    expect(resolveRuntimeRebind(bus, tampered, "allow")).toBe(false);
+    expect(await resolveRuntimeRebind(bus, tampered, "allow")).toEqual({ handled: false });
     expect(resolveBotRuntimeBinding(store.bot(bot.id)!)).toEqual({
       state: "available",
       value: providerClaude,
     });
+  });
+
+  it("keeps approval pending and reports error on an actual binding fingerprint mismatch", async () => {
+    const {
+      requestBotRuntimeRebind,
+      resolveRuntimeRebind,
+      rememberHermesEndpoint,
+      resolveBotRuntimeBinding,
+      replacePendingRuntimeRebindForTests,
+    } = await import("./bot-runtime-rebind.ts");
+    rememberHermesEndpoint("local:coder", "rev-1");
+    rememberHermesEndpoint("local:research", "rev-1");
+    const store = new Store(selection);
+    const chief = store.createBot({ name: "Chief" });
+    const bot = store.createBot({ name: "Specialist" });
+    const bus: ApprovalBus = { store, broadcast: () => {} };
+    const result = await requestBotRuntimeRebind({
+      store,
+      approval: bus,
+      actor: chief,
+      request: {
+        targetBotId: bot.id,
+        binding: localHermes,
+        contextMode: "none",
+        userRequested: false,
+      },
+    });
+    expect(result.status).toBe("pending_approval");
+    if (result.status !== "pending_approval") return;
+    expect(replacePendingRuntimeRebindForTests(result.requestId, {
+      plan: {
+        previous: providerClaude,
+        next: { kind: "hermes", placement: { kind: "local", profile: "research" }, bindingVersion: 2 },
+        preservedBotId: bot.id,
+        handoffSummary: "",
+        requiresApproval: true,
+      },
+    })).toBe(true);
+    const mismatch = await resolveRuntimeRebind(bus, result.requestId, "allow");
+    expect(mismatch).toMatchObject({ handled: true, ok: false, code: "invalid_binding" });
+    if (mismatch.handled && !mismatch.ok) {
+      expect(JSON.stringify(mismatch)).not.toMatch(/token|HERMES_HOME|\/Users\//i);
+    }
+    const card = store
+      .messagesFor(chief.threadId)
+      .find((message) => message.kind === "options" && message.card?.requestId === result.requestId);
+    expect(card?.card?.answered).toBeFalsy();
+    expect(resolveBotRuntimeBinding(store.bot(bot.id)!)).toEqual({
+      state: "available",
+      value: providerClaude,
+    });
+    const denied = await resolveRuntimeRebind(bus, result.requestId, "deny");
+    expect(denied).toMatchObject({ handled: true, ok: true });
+  });
+
+  it("does not settle Allow when apply fails and keeps the request pending", async () => {
+    const { requestBotRuntimeRebind, resolveRuntimeRebind, rememberHermesEndpoint, resolveBotRuntimeBinding } =
+      await import("./bot-runtime-rebind.ts");
+    rememberHermesEndpoint("local:coder", "rev-1");
+    const store = new Store(selection);
+    const chief = store.createBot({ name: "Chief" });
+    const bot = store.createBot({ name: "Specialist" });
+    const bus: ApprovalBus = { store, broadcast: () => {} };
+    const result = await requestBotRuntimeRebind({
+      store,
+      approval: bus,
+      actor: chief,
+      request: {
+        targetBotId: bot.id,
+        binding: localHermes,
+        contextMode: "none",
+        userRequested: false,
+      },
+    });
+    expect(result.status).toBe("pending_approval");
+    if (result.status !== "pending_approval") return;
+    store.setActivity(bot.id, "working");
+    const failed = await resolveRuntimeRebind(bus, result.requestId, "allow");
+    expect(failed).toMatchObject({ handled: true, ok: false, code: "bot_active" });
+    const card = store
+      .messagesFor(chief.threadId)
+      .find((message) => message.kind === "options" && message.card?.requestId === result.requestId);
+    expect(card?.card?.answered).toBeFalsy();
+    expect(resolveBotRuntimeBinding(store.bot(bot.id)!)).toEqual({
+      state: "available",
+      value: providerClaude,
+    });
+    store.setActivity(bot.id, "idle");
+    const retried = await resolveRuntimeRebind(bus, result.requestId, "allow");
+    expect(retried).toMatchObject({ handled: true, ok: true });
+    expect(resolveBotRuntimeBinding(store.bot(bot.id)!)).toEqual({ state: "available", value: localHermes });
   });
 
   it("rejects stale target state at apply time", async () => {

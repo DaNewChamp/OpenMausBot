@@ -258,17 +258,50 @@ export async function requestBotRuntimeRebind(input: RequestBotRuntimeRebindInpu
   }
 }
 
-export function resolveRuntimeRebind(bus: ApprovalBus, requestId: string, behavior: string | undefined): boolean {
+export type ResolveRuntimeRebindResult =
+  | { handled: false }
+  | { handled: true; ok: true }
+  | { handled: true; ok: false; code: string; message: string };
+
+export function replacePendingRuntimeRebindForTests(
+  requestId: string,
+  patch: { fingerprint?: string; plan?: RuntimeRebindPlan },
+): boolean {
   const pending = pendingRebinds.get(requestId);
   if (!pending) return false;
-  pendingRebinds.delete(requestId);
-  const allow = behavior === "allow";
-  settleCard(bus, pending.threadId, pending.messageId, allow ? "allow" : "deny");
-  if (!allow) return true;
-  if (runtimeBindingFingerprint(pending.plan.next) !== pending.fingerprint) return true;
-  const endpoint = lookupHermesEndpoint(pending.plan.next);
-  void applyBotRuntimeRebind(pending.plan, { store: bus.store, endpoint }).catch(() => {
-    // Failure stays on the bot record; the card is already settled.
-  });
+  pendingRebinds.set(requestId, { ...pending, ...patch });
   return true;
+}
+
+export async function resolveRuntimeRebind(
+  bus: ApprovalBus,
+  requestId: string,
+  behavior: string | undefined,
+): Promise<ResolveRuntimeRebindResult> {
+  const pending = pendingRebinds.get(requestId);
+  if (!pending) return { handled: false };
+  const allow = behavior === "allow";
+  if (!allow) {
+    pendingRebinds.delete(requestId);
+    settleCard(bus, pending.threadId, pending.messageId, "deny");
+    return { handled: true, ok: true };
+  }
+  if (runtimeBindingFingerprint(pending.plan.next) !== pending.fingerprint) {
+    return publicResolveError("invalid_binding", "Runtime conversion request no longer matches the approved binding");
+  }
+  const endpoint = lookupHermesEndpoint(pending.plan.next);
+  try {
+    await applyBotRuntimeRebind(pending.plan, { store: bus.store, endpoint });
+  } catch (error) {
+    const code = error instanceof RuntimeRebindError ? error.code : "state_unavailable";
+    const message = error instanceof Error ? error.message : "Runtime rebind failed";
+    return publicResolveError(code, message);
+  }
+  pendingRebinds.delete(requestId);
+  settleCard(bus, pending.threadId, pending.messageId, "allow");
+  return { handled: true, ok: true };
+}
+
+function publicResolveError(code: string, message: string): ResolveRuntimeRebindResult {
+  return { handled: true, ok: false, code, message: redactPublicText(message) };
 }

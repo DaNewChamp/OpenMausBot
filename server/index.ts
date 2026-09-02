@@ -7172,8 +7172,12 @@ const server = createServer(async (req, res) => {
       if (resolvePeerComms(approvalBus, String(body.requestId), behavior)) {
         return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
-      if (resolveRuntimeRebind(approvalBus, String(body.requestId), behavior)) {
-        return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
+      {
+        const rebind = await resolveRuntimeRebind(approvalBus, String(body.requestId), behavior);
+        if (rebind.handled) {
+          if (!rebind.ok) return json(res, 409, { error: rebind.message, code: rebind.code });
+          return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
+        }
       }
       {
         const resolved = resolveBridgeApproval(approvalBus, String(body.requestId), behavior, {
@@ -7212,8 +7216,12 @@ const server = createServer(async (req, res) => {
       if (resolvePeerComms(approvalBus, requestId, behavior)) {
         return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
-      if (resolveRuntimeRebind(approvalBus, requestId, behavior)) {
-        return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
+      {
+        const rebind = await resolveRuntimeRebind(approvalBus, requestId, behavior);
+        if (rebind.handled) {
+          if (!rebind.ok) return json(res, 409, { error: rebind.message, code: rebind.code });
+          return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
+        }
       }
       {
         const resolved = resolveBridgeApproval(approvalBus, requestId, behavior, { threadId });
