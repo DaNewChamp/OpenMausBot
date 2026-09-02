@@ -78,6 +78,17 @@ public enum HermesConnectionCardPolicy {
         }
     }
 
+    /// A status-fetch task may publish only when it was not cancelled and the
+    /// selected connection is still the one that started the fetch.
+    public static func shouldCommitStatusFetch(
+        capturedConnectionID: String,
+        activeConnectionID: String?,
+        isCancelled: Bool
+    ) -> Bool {
+        guard !isCancelled else { return false }
+        return activeConnectionID == capturedConnectionID
+    }
+
     /// Resolves the Hermes bot to open after a successful card connect action.
     public static func navigationBotID(afterConnect response: HermesSetupConnectionResponse?) -> String? {
         guard let response, !response.botId.isEmpty else { return nil }

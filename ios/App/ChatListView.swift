@@ -296,6 +296,7 @@ struct ChatListView: View {
             .onChange(of: session.connection?.id) { _, _ in
                 hermesStatus = nil
                 hermesStatusFetchAttempted = false
+                hermesStatusLoading = false
             }
             .onChange(of: hermesStatus) { _, _ in
                 reconcileHermesConnectionCardPending()
@@ -328,21 +329,29 @@ struct ChatListView: View {
         }
     }
 
-    private var hermesCardDismissed: Bool {
-        guard let connectionID = session.connection?.id else { return true }
+    private func hermesCardDismissed(for connectionID: String?) -> Bool {
+        guard let connectionID else { return true }
         return UserDefaults.standard.bool(
             forKey: CompanionOnboardingPreferences.dismissedHermesConnectionCardKey(connectionID: connectionID)
         )
     }
 
-    private var hermesConnectionCardContext: HermesConnectionCardContext {
+    private var hermesCardDismissed: Bool {
+        hermesCardDismissed(for: session.connection?.id)
+    }
+
+    private func hermesConnectionCardContext(for connectionID: String?) -> HermesConnectionCardContext {
         HermesConnectionCardContext(
-            isPending: hermesCardPending(for: session.connection?.id),
-            isDismissed: hermesCardDismissed,
+            isPending: hermesCardPending(for: connectionID),
+            isDismissed: hermesCardDismissed(for: connectionID),
             hermesStatus: hermesStatus,
             isLoading: hermesStatusLoading,
             hasAttemptedStatusFetch: hermesStatusFetchAttempted
         )
+    }
+
+    private var hermesConnectionCardContext: HermesConnectionCardContext {
+        hermesConnectionCardContext(for: session.connection?.id)
     }
 
     private var showsHermesConnectionCard: Bool {
@@ -350,22 +359,37 @@ struct ChatListView: View {
     }
 
     private func refreshHermesConnectionCardStatus() async {
-        guard session.connection != nil,
-              hermesCardPending(for: session.connection?.id),
-              !hermesCardDismissed else { return }
+        guard let connectionID = session.connection?.id,
+              hermesCardPending(for: connectionID),
+              !hermesCardDismissed(for: connectionID) else { return }
+        let capturedConnectionID = connectionID
         hermesStatusLoading = true
-        defer {
-            hermesStatusLoading = false
-            hermesStatusFetchAttempted = true
+        let status = await session.hermesSetupStatus()
+        guard HermesConnectionCardPolicy.shouldCommitStatusFetch(
+            capturedConnectionID: capturedConnectionID,
+            activeConnectionID: session.connection?.id,
+            isCancelled: Task.isCancelled
+        ) else {
+            if session.connection?.id == capturedConnectionID {
+                hermesStatusLoading = false
+            }
+            return
         }
-        hermesStatus = await session.hermesSetupStatus()
-        reconcileHermesConnectionCardPending()
+        hermesStatus = status
+        hermesStatusFetchAttempted = true
+        hermesStatusLoading = false
+        reconcileHermesConnectionCardPending(for: capturedConnectionID)
     }
 
-    private func reconcileHermesConnectionCardPending() {
+    private func reconcileHermesConnectionCardPending(for connectionID: String? = nil) {
+        let targetConnectionID = connectionID ?? session.connection?.id
+        guard let targetConnectionID,
+              session.connection?.id == targetConnectionID else { return }
         setHermesCardPending(
-            HermesConnectionCardPolicy.shouldKeepPending(hermesConnectionCardContext),
-            for: session.connection?.id
+            HermesConnectionCardPolicy.shouldKeepPending(
+                hermesConnectionCardContext(for: targetConnectionID)
+            ),
+            for: targetConnectionID
         )
     }
 

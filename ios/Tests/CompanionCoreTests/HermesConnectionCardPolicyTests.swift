@@ -115,6 +115,69 @@ final class HermesConnectionCardPolicyTests: XCTestCase {
         )
     }
 
+    func testAtoBConnectionSwitchCancellationPreservesPendingMarkers() {
+        let connectionA = "mac-a"
+        let connectionB = "mac-b"
+        let unavailable = HermesSetupStatus(state: .unavailable, reason: .missingCLI)
+
+        XCTAssertFalse(HermesConnectionCardPolicy.shouldCommitStatusFetch(
+            capturedConnectionID: connectionA,
+            activeConnectionID: connectionB,
+            isCancelled: false
+        ))
+        XCTAssertFalse(HermesConnectionCardPolicy.shouldCommitStatusFetch(
+            capturedConnectionID: connectionA,
+            activeConnectionID: connectionB,
+            isCancelled: true
+        ))
+        XCTAssertTrue(HermesConnectionCardPolicy.shouldCommitStatusFetch(
+            capturedConnectionID: connectionA,
+            activeConnectionID: connectionA,
+            isCancelled: false
+        ))
+        XCTAssertFalse(HermesConnectionCardPolicy.shouldCommitStatusFetch(
+            capturedConnectionID: connectionA,
+            activeConnectionID: connectionA,
+            isCancelled: true
+        ))
+
+        XCTAssertFalse(HermesConnectionCardPolicy.shouldKeepPending(.init(
+            isPending: true,
+            isDismissed: false,
+            hermesStatus: unavailable,
+            isLoading: false,
+            hasAttemptedStatusFetch: true
+        )))
+
+        let pendingKeyA = CompanionOnboardingPreferences.pendingHermesConnectionCardKey(connectionID: connectionA)
+        let pendingKeyB = CompanionOnboardingPreferences.pendingHermesConnectionCardKey(connectionID: connectionB)
+        UserDefaults.standard.set(true, forKey: pendingKeyA)
+        UserDefaults.standard.set(true, forKey: pendingKeyB)
+
+        if HermesConnectionCardPolicy.shouldCommitStatusFetch(
+            capturedConnectionID: connectionA,
+            activeConnectionID: connectionB,
+            isCancelled: false
+        ) {
+            let staleContext = HermesConnectionCardContext(
+                isPending: true,
+                isDismissed: false,
+                hermesStatus: unavailable,
+                isLoading: false,
+                hasAttemptedStatusFetch: true
+            )
+            if !HermesConnectionCardPolicy.shouldKeepPending(staleContext) {
+                UserDefaults.standard.removeObject(forKey: pendingKeyA)
+            }
+        }
+
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: pendingKeyA))
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: pendingKeyB))
+
+        UserDefaults.standard.removeObject(forKey: pendingKeyA)
+        UserDefaults.standard.removeObject(forKey: pendingKeyB)
+    }
+
     func testCardConnectNavigationResolvesImportedBot() {
         let response = HermesSetupConnectionResponse(
             botId: "hermes-bot",
