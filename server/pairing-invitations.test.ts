@@ -72,4 +72,49 @@ describe("PairingInvitationRegistry", () => {
     expect(store.redeem(invitation.challenge)).toEqual({ error: "that pairing invitation is not valid" });
     expect(store.listPublic()).toHaveLength(0);
   });
+
+  it("does not consume an invitation when the hub id does not match", () => {
+    const store = registry();
+    const invitation = store.create("hub-1", "device-owner");
+    expect(store.prepareRedeem(invitation.challenge, "hub-2")).toEqual({
+      error: "that pairing invitation is not valid",
+    });
+    expect("invitation" in store.prepareRedeem(invitation.challenge, "hub-1")).toBe(true);
+    expect(store.finalizeRedeem(invitation.challenge)).toEqual({ ok: true });
+    expect(store.redeem(invitation.challenge)).toEqual({ error: "that pairing invitation is not valid" });
+  });
+
+  it("allows finalize only once under concurrent redeem attempts", () => {
+    const store = registry();
+    const invitation = store.create("hub-1", "device-owner");
+    const first = store.prepareRedeem(invitation.challenge, "hub-1");
+    const second = store.prepareRedeem(invitation.challenge, "hub-1");
+    expect("invitation" in first).toBe(true);
+    expect(second).toEqual({ error: "that pairing invitation is not valid" });
+    expect(store.finalizeRedeem(invitation.challenge)).toEqual({ ok: true });
+    expect(store.finalizeRedeem(invitation.challenge)).toEqual({ error: "that pairing invitation is not valid" });
+  });
+
+  it("releases a reservation when minting fails", () => {
+    const store = registry();
+    const invitation = store.create("hub-1", "device-owner");
+    expect("invitation" in store.prepareRedeem(invitation.challenge, "hub-1")).toBe(true);
+    store.abortRedeem(invitation.challenge);
+    expect("invitation" in store.prepareRedeem(invitation.challenge, "hub-1")).toBe(true);
+  });
+
+  it("does not burn attempts on another owner's invitation when multiple are active", () => {
+    const store = registry();
+    const first = store.create("hub-1", "device-a");
+    const second = store.create("hub-2", "device-b");
+    expect(store.prepareRedeem("omb_invite_" + "x".repeat(43), "hub-1")).toEqual({
+      error: "that pairing invitation is not valid",
+    });
+    expect(store.listPublic().find((entry) => entry.id === first.id)?.attemptsLeft).toBe(
+      MAX_PAIRING_INVITATION_ATTEMPTS,
+    );
+    expect(store.listPublic().find((entry) => entry.id === second.id)?.attemptsLeft).toBe(
+      MAX_PAIRING_INVITATION_ATTEMPTS,
+    );
+  });
 });

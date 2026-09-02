@@ -42,10 +42,19 @@ describe("pairing invitations through the companion proxy", () => {
         authenticate: (token) => devices.authenticate(token),
         redeem: (credential, deviceName) => {
           if (credential.startsWith("omb_invite_")) {
-            const redeemed = invitations.redeem(credential);
-            if ("error" in redeemed) return redeemed;
-            if (redeemed.invitation.hubId !== hubId) return { error: "that pairing invitation is not valid" };
-            return devices.mintDevice(deviceName);
+            const reserved = invitations.prepareRedeem(credential, hubId);
+            if ("error" in reserved) return reserved;
+            const minted = devices.mintDevice(deviceName);
+            if ("error" in minted) {
+              invitations.abortRedeem(credential);
+              return minted;
+            }
+            const finalized = invitations.finalizeRedeem(credential);
+            if ("error" in finalized) {
+              devices.revoke(minted.device.id);
+              return finalized;
+            }
+            return minted;
           }
           return devices.redeem(credential, deviceName);
         },

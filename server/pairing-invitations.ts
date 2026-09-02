@@ -70,6 +70,8 @@ function normalizeInvitation(raw: Partial<PairingInvitation>): PairingInvitation
 export class PairingInvitationRegistry {
   private invitations: PairingInvitation[] = [];
   private readonly file: string;
+  private readonly challengeLocks = new Map<string, Promise<void>>();
+  private readonly pendingChallenges = new Set<string>();
 
   constructor(dataDir: string, fileName = "pairing-invitations.json") {
     this.file = join(dataDir, fileName);
@@ -91,6 +93,27 @@ export class PairingInvitationRegistry {
 
   private prune(now = Date.now()) {
     this.invitations = this.invitations.filter((invitation) => !isExpired(invitation, now));
+  }
+
+  private activeInvitations(now = Date.now()): PairingInvitation[] {
+    this.prune(now);
+    return this.invitations.filter((entry) => !isExpired(entry, now));
+  }
+
+  private withChallengeLock<T>(challenge: string, work: () => T): T {
+    const tail = this.challengeLocks.get(challenge) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const chain = tail.then(() => gate);
+    this.challengeLocks.set(challenge, chain);
+    try {
+      return work();
+    } finally {
+      release();
+      if (this.challengeLocks.get(challenge) === chain) this.challengeLocks.delete(challenge);
+    }
   }
 
   create(hubId: string, createdByDeviceId: string): PairingInvitation {
@@ -117,12 +140,13 @@ export class PairingInvitationRegistry {
     return this.invitations.map(({ challenge: _challenge, ...rest }) => rest);
   }
 
-  private burnAttempt(now: number): { error: string } | null {
-    const active = this.invitations.find((entry) => !isExpired(entry, now));
-    if (!active) return null;
-    active.attemptsLeft -= 1;
-    if (active.attemptsLeft <= 0) {
-      active.consumedAt = now;
+  private burnAttemptForSingleActive(now: number): { error: string } | null {
+    const active = this.activeInvitations(now);
+    if (active.length !== 1) return null;
+    const target = active[0];
+    target.attemptsLeft -= 1;
+    if (target.attemptsLeft <= 0) {
+      target.consumedAt = now;
       this.persist();
       return { error: "too many incorrect codes — start pairing again" };
     }
@@ -130,22 +154,81 @@ export class PairingInvitationRegistry {
     return { error: "that pairing credential is not right" };
   }
 
+  /** Validate hub scope and reserve the invitation without consuming it. */
+  prepareRedeem(
+    challenge: string,
+    hubId: string,
+  ): { invitation: PairingInvitation } | { error: string } {
+    const presented = String(challenge ?? "");
+    if (!PAIRING_INVITATION_CHALLENGE_PATTERN.test(presented)) {
+      return { error: "that pairing credential is not right" };
+    }
+    return this.withChallengeLock(presented, () => {
+      const now = Date.now();
+      this.prune(now);
+      const invitation = this.invitations.find((entry) => sameChallenge(entry.challenge, presented));
+      if (!invitation) {
+        const burned = this.burnAttemptForSingleActive(now);
+        return burned ?? { error: "that pairing invitation is not valid" };
+      }
+      if (isExpired(invitation, now)) return { error: "that pairing invitation expired" };
+      if (invitation.hubId !== hubId) return { error: "that pairing invitation is not valid" };
+      if (this.pendingChallenges.has(presented)) return { error: "that pairing invitation is not valid" };
+      this.pendingChallenges.add(presented);
+      return { invitation };
+    });
+  }
+
+  /** Release a reservation when minting the device token fails. */
+  abortRedeem(challenge: string) {
+    const presented = String(challenge ?? "");
+    this.withChallengeLock(presented, () => {
+      this.pendingChallenges.delete(presented);
+    });
+  }
+
+  /** Mark an invitation consumed after a device token was minted. */
+  finalizeRedeem(challenge: string): { ok: true } | { error: string } {
+    const presented = String(challenge ?? "");
+    return this.withChallengeLock(presented, () => {
+      const now = Date.now();
+      this.prune(now);
+      const invitation = this.invitations.find((entry) => sameChallenge(entry.challenge, presented));
+      if (!invitation) {
+        this.pendingChallenges.delete(presented);
+        return { error: "that pairing invitation is not valid" };
+      }
+      if (isExpired(invitation, now)) {
+        this.pendingChallenges.delete(presented);
+        return { error: "that pairing invitation expired" };
+      }
+      if (!this.pendingChallenges.has(presented)) return { error: "that pairing invitation is not valid" };
+      this.pendingChallenges.delete(presented);
+      invitation.consumedAt = now;
+      this.persist();
+      return { ok: true };
+    });
+  }
+
+  /** @deprecated Use prepareRedeem/finalizeRedeem for hub-scoped pairing flows. */
   redeem(challenge: string): { invitation: PairingInvitation } | { error: string } {
     const presented = String(challenge ?? "");
     if (!PAIRING_INVITATION_CHALLENGE_PATTERN.test(presented)) {
       return { error: "that pairing credential is not right" };
     }
-    const now = Date.now();
-    this.prune(now);
-    const invitation = this.invitations.find((entry) => sameChallenge(entry.challenge, presented));
-    if (!invitation) {
-      const burned = this.burnAttempt(now);
-      return burned ?? { error: "that pairing invitation is not valid" };
-    }
-    if (isExpired(invitation, now)) return { error: "that pairing invitation expired" };
-    invitation.consumedAt = now;
-    this.persist();
-    return { invitation };
+    return this.withChallengeLock(presented, () => {
+      const now = Date.now();
+      this.prune(now);
+      const invitation = this.invitations.find((entry) => sameChallenge(entry.challenge, presented));
+      if (!invitation) {
+        const burned = this.burnAttemptForSingleActive(now);
+        return burned ?? { error: "that pairing invitation is not valid" };
+      }
+      if (isExpired(invitation, now)) return { error: "that pairing invitation expired" };
+      invitation.consumedAt = now;
+      this.persist();
+      return { invitation };
+    });
   }
 
   invalidateForDevice(deviceId: string) {

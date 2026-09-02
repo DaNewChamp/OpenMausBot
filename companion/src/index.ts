@@ -45,6 +45,7 @@ import {
 } from "./mdns.ts";
 import { createProxyHandler } from "./proxy.ts";
 import { companionOriginSocket, listenCompanionOrigin } from "./origin.ts";
+import { parseWebClientOrigins } from "./web-client-cors.ts";
 import { bearerToken } from "./devices.ts";
 import { DATA_DIR as companionDataDir } from "./state.ts";
 import { isLocalVmViewerUpgrade, localVmViewerBotId } from "./routes.ts";
@@ -65,6 +66,7 @@ const CONTROL_PORT = num(process.env.OMB_CONTROL_PORT, 8811);
 const SERVICE_TYPE = "_openmausbot._tcp";
 let hostedUrl = hostedCompanionUrl(process.env.OMB_COMPANION_HOSTED_URL);
 const PRIVATE_ORIGIN = companionOriginSocket(process.env.OMB_COMPANION_INTERNAL_ORIGIN);
+const WEB_CLIENT_ORIGINS = parseWebClientOrigins(process.env.OMB_WEB_CLIENT_ORIGINS);
 
 /** Ports the harness takes for itself, and what it uses each for.
  *
@@ -135,10 +137,19 @@ const redeemCredential = (
   pairRequestId?: unknown,
 ) => {
   if (PAIRING_INVITATION_CHALLENGE_PATTERN.test(credential)) {
-    const invitation = pairingInvitations.redeem(credential);
-    if ("error" in invitation) return { error: invitation.error };
-    if (invitation.invitation.hubId !== hubId) return { error: "that pairing invitation is not valid" };
-    return devices.mintDevice(deviceName);
+    const reserved = pairingInvitations.prepareRedeem(credential, hubId);
+    if ("error" in reserved) return { error: reserved.error };
+    const minted = devices.mintDevice(deviceName);
+    if ("error" in minted) {
+      pairingInvitations.abortRedeem(credential);
+      return minted;
+    }
+    const finalized = pairingInvitations.finalizeRedeem(credential);
+    if ("error" in finalized) {
+      devices.revoke(minted.device.id);
+      return { error: finalized.error };
+    }
+    return minted;
   }
   return devices.redeem(credential, deviceName, pairRequestId);
 };
@@ -188,6 +199,7 @@ const proxy = createProxyHandler({
         attemptsLeft: invitation.attemptsLeft,
       };
     },
+    webClientOrigins: WEB_CLIENT_ORIGINS,
     serverName: machineName,
     // Recomputed per pairing rather than cached: addresses change when the
     // machine joins another network, and a pairing is exactly the moment the
