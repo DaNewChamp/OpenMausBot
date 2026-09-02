@@ -519,3 +519,128 @@ no activity rail or reserved inset, compact active rails remain below the last
 visible roster row, and expanded active panels reserve stack space without
 blurring or covering rows. The accessibility expanded panel keeps the enlarged
 Forge row readable; remaining roster content is reachable by scrolling.
+
+## Hermes adapter Task 4 closeout
+
+Date: 2026-09-01 (America/Chicago)
+Worktree: `/Users/Vincent/Github/.worktrees/vbot-hermes-adapter-0901`
+Branch: `feat/vbot-hermes-adapter-0901`
+Base source commit: `dda3a69e676451c80528f8044b2195a99c345ebd`
+Final source commit: `8172561761b33e21bd0f9bc5a9d2c59f2a428bee`
+Closeout status: **DONE_WITH_CONCERNS** (all source-equivalent gates passed;
+the repository `pnpm` wrapper could not run because this host rejects its
+dependency build-script approval step).
+
+### Implemented
+
+- Documented the shipped same-host flow: pair a V Bot computer, open iPhone
+  **Settings → Integrations → Hermes**, connect the default/profile, and open
+  the canonical `Bot Chat` as a V Bot bot.
+- Documented that V Bot owns device pairing, bot identity, transcripts, unread
+  state, streaming activity, approvals, and the mobile UI; Hermes remains the
+  hub-side profile/runtime adapter.
+- Documented separate-machine placement: pair that V Bot computer first and
+  connect Hermes there. Account discovery never replaces pairing.
+- Documented the current bridge roster (`shell`, `local-vm`, `ssh-forward`) and
+  the hard boundary that remote Hermes-over-bridge is not implemented. Shell
+  execution is not a Hermes streaming gateway and must not carry Hermes
+  prompts, credentials, JSON-RPC, or session state.
+- Linked the approved native iPhone voice-call plan without implementing or
+  implying voice transport in Hermes Wave 1.
+- Updated `README.md`, `docs/hermes-adapter.md`, `docs/bridge-agent.md`,
+  `docs/ios-companion.md`, `docs/v-bot-architecture.md`, and
+  `docs/VBOT_DESKTOP_ARCHITECTURE.md` in commit `8172561`.
+
+### Verification commands and results
+
+All commands were run in the worktree above unless a subdirectory is shown.
+
+```sh
+./node_modules/.bin/vitest run server/engines/hermes-live-fixture.test.ts
+# PASS: 1 file, 22 tests
+
+./node_modules/.bin/vitest run server/engines server/index.hermes-adapter.test.ts \
+  server/harness/registry.test.ts server/provider-catalog.test.ts \
+  server/vbot-engine-sync.test.ts server/routines.test.ts
+# PASS: 11 files, 188 tests
+
+node scripts/test-floor.mjs
+# PASS: 273 completed files, 2,969 passed, 18 skipped; floor 1,070
+
+(cd ios && swift test)
+# PASS: 753 XCTest cases, 0 failures; 23 Swift Testing cases in 5 suites
+
+(cd ios && xcodegen generate)
+# PASS: generated ios/OpenMausCompanion.xcodeproj
+
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Debug \
+  -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
+  -derivedDataPath /tmp/vbot-task4-debug-derived-0901 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+# PASS: BUILD SUCCEEDED
+
+xcodebuild -project ios/OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -configuration Release \
+  -destination 'platform=iOS Simulator,id=334FC58E-19DA-460C-AC2A-1D34D7CAA916' \
+  -derivedDataPath /tmp/vbot-task4-release-derived-0901 \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+# PASS: BUILD SUCCEEDED
+
+./node_modules/.bin/tsc -b && ./node_modules/.bin/tsc -p tsconfig.server.json
+# PASS: no diagnostics
+
+./node_modules/.bin/vite build
+# PASS: production frontend bundle; only existing chunk-size warnings
+
+git diff --check
+# PASS
+```
+
+The required package-manager entry points were also attempted once:
+`pnpm typecheck` and `pnpm build` both stopped before running the requested
+script because the Codex-managed pnpm wrapper tried to install dependencies and
+reported `ERR_PNPM_IGNORED_BUILDS` for `core-js` and `workerd`. No dependency
+files were intentionally changed; the wrapper's temporary `allowBuilds`
+placeholder lines were removed before commit. The direct `tsc`, `vite`, and
+Vitest invocations above provide the equivalent source checks without enabling
+unreviewed install scripts.
+
+### Security review
+
+This closeout changes documentation only. The diff contains no credentials,
+tokens, paths to private stores, prompts, runtime/session identifiers, or
+production endpoints. The documented setup routes remain the existing
+authenticated `/api/hermes/setup/status` and `/api/hermes/setup` contract with
+safe profile/bot/capability data only. Pairing remains a device-trust boundary;
+account login is discovery only. The bridge boundary is fail-closed and keeps
+remote Hermes off the shell path. No production deployment, Cloudflare/DNS,
+VPS, dependency, signing, TestFlight, or secret-store change was made.
+
+### Compatibility review
+
+Existing pairing IDs, Keychain tokens, computer records, bot-store identity,
+SSE/event contracts, and reconstructed-engine behavior are unchanged. The
+documented Hermes operation is idempotent and uses the existing canonical
+`Bot Chat` adoption/creation behavior; it does not introduce a second phone
+connection or a second transcript store. Headless hubs remain valid without a
+desktop shell. Existing `shell`, `local-vm`, and `ssh-forward` bridges retain
+their prior meanings and are not relabeled as Hermes transports.
+
+### Wave 2 dependencies
+
+- A dedicated, authenticated, versioned remote Hermes capability/stream with
+  cancellation, backpressure, identity binding, redaction, and recovery; never
+  emulate this with shell.
+- Remote profile lifecycle and cross-machine UX, if desired, behind that
+  transport; no raw SessionDB, credentials, or Hermes JSON-RPC on phone/bridge
+  surfaces.
+- Hermes-native routines, groups, attachments/computer capabilities, and
+  other deferred adapter features only after separate compatibility/security
+  review.
+- Native voice/call implementation from the linked plan (foreground
+  half-duplex first, existing chat/SSE/TTS, tap-to-interrupt, later Kokoro and
+  acoustic-echo work) remains separate from this closeout.
+- Real Hermes account and physical-device E2E coverage before release
+  preparation; simulator and deterministic fixture gates above do not prove
+  those external/device paths.
