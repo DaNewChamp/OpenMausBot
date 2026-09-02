@@ -19,6 +19,35 @@ paths, durable SessionDB ids, runtime session ids, prompts, raw stderr, or JSON-
 payloads. Hermes account login remains Hermes' own setup flow; V Bot device pairing
 remains the authorization boundary. Login never replaces pairing.
 
+## Connect Hermes from V Bot
+
+Hermes is connected to the **currently paired V Bot computer**. The iPhone does
+not sign in to Hermes or connect to its local gateway directly.
+
+1. On the computer where Hermes is installed and signed in, start the V Bot hub
+   and companion.
+2. On the iPhone, pair that computer from **Settings → Computers → Connect
+   another computer** (or scan the first computer's QR from **Connect my
+   computer**). Confirm the friendly computer name before accepting the pairing.
+3. Open **Settings → Integrations → Hermes**. V Bot checks the paired computer
+   and shows only safe profile labels and capability state.
+4. Tap **Connect Hermes** for the default profile. If more than one profile is
+   available, choose a profile first.
+5. V Bot adopts or creates exactly one canonical Hermes **Bot Chat**, wraps it in
+   one V Bot bot, and opens the normal V Bot conversation. Repeating the action
+   is idempotent.
+
+V Bot owns the pairing credential, bot identity, transcript, unread state,
+streaming activity, approvals, and mobile UI. Hermes remains the profile/runtime
+adapter behind the hub. The companion's authenticated setup routes are
+`GET /api/hermes/setup/status` and `POST /api/hermes/setup`; they return no
+credentials, paths, prompts, or runtime/session identifiers.
+
+For Hermes on another machine, install/sign in to Hermes there, run a V Bot hub
+and companion there, pair that computer, and repeat the same flow. A paired
+computer is the placement boundary; account discovery never grants access by
+itself.
+
 ## Canonical identity
 
 Each bound bot resolves the exact canonical chat:
@@ -114,6 +143,13 @@ Hermes Bot Mode is a provider/profile adapter behind the existing hub. It is **n
 a `VBotPrimaryEngine`, does not change iOS/companion contracts, and does not
 replace OpenMaus/Grok paths or generic Hermes ACP.
 
+The current bridge fleet does not change this placement rule. Bridges advertise
+only `shell`, `local-vm`, and `ssh-forward`; none is a Hermes gateway. Remote
+Hermes-over-bridge streaming is not implemented, and shell execution must never
+be presented as a Hermes transport. A future remote path needs a dedicated,
+authenticated capability and streaming protocol with explicit cancellation and
+backpressure before it can be enabled.
+
 ## Wave 1 deferrals
 
 Wave 1 explicitly does **not** include:
@@ -124,7 +160,7 @@ Wave 1 explicitly does **not** include:
 - remote/node-hosted Hermes runtimes or fleet control planes
 - routine create/edit/run/cancel or raw SessionDB/`jobs.json` reads from TypeScript
 - attachments/vision, computer/phone/composio/custom MCP, queue, steer, fork/rewind
-- automatic canonical Bot Chat creation or CLI one-shot fallback
+- CLI one-shot fallback
 - any change in the Hermes source checkout (`/Users/Vincent/Github/hermes-agent`)
 
 API gaps require a separately reviewed Hermes proposal with versioned compatibility
@@ -136,3 +172,12 @@ tests. V Bot Wave 1 ships adapter-side only.
 handshake/events for CI and release gates. It uses deterministic session ids
 (`session-root`, `session-tip`) and fixture text only. It is imported by tests,
 never by production code.
+
+## Voice/call planning
+
+Voice calls are not part of Hermes Wave 1. The approved, separate iPhone plan is
+[V Bot Native iPhone Voice Calls](./superpowers/plans/2026-09-01-vbot-native-voice-calls.md):
+foreground half-duplex capture, existing V Bot chat/SSE/TTS, tap-to-interrupt,
+and team-call sequencing. It does not add a Hermes voice transport or a bridge
+`tts` capability; implementation remains gated on its own device and safety
+review.

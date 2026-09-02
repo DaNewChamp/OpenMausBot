@@ -1,10 +1,10 @@
 # iOS companion architecture
 
-The iOS app is a thin, native client for the OpenMausBot instance running on
-your Mac. The Mac remains the only machine that owns agent processes,
+The iOS app is a thin, native client for the V Bot hub running on a paired
+computer. That computer remains the only machine that owns agent processes,
 credentials, SQLite data, transcripts, and computers. The iPhone trusts a Mac
-by scanning the QR code shown in desktop **Settings → Phone**; it does not need
-an OpenMausBot account of its own.
+or PC by scanning the QR code shown in desktop **Settings → Phone**; it does not
+need a V Bot account of its own.
 
 ## Current status
 
@@ -37,12 +37,12 @@ automation are not part of this version. The optional hosted transport connects
 to the user's own computer; it is not a cloud transcript store and cannot wake
 a terminated iOS app.
 
-Optional Grok Bot 0.18 Reconstructed compatibility is desktop-local. The
-Mac detects that app and talks to its loopback gateway itself. The phone
-still talks only to OpenMausBot's authenticated companion; reconstructed
-ports, discovery tokens, and host paths are never forwarded.
+Optional reconstructed-engine compatibility remains desktop-local. The paired
+V Bot computer talks to that loopback gateway itself; the phone still talks only
+to V Bot's authenticated companion. Reconstructed ports, discovery tokens, and
+host paths are never forwarded.
 
-The Mac must be running OpenMausBot and must not be asleep. Desktop
+The paired computer must be running the V Bot hub and must not be asleep. Desktop
 **Settings → Phone** offers an off-by-default **Keep this computer awake**
 switch that prevents system sleep while phone access is on; the display may
 still turn off. A sleeping or powered-off computer cannot receive phone
@@ -199,6 +199,25 @@ An OpenMausBot account is not required for nearby, manual, or Tailscale
 connections. Only the desktop owner signs in when enabling the optional hosted
 HTTPS route; the iPhone always uses the same QR trust flow.
 
+## Hermes on the paired computer
+
+Hermes is a first-party V Bot integration, not a second phone connection. On
+the computer where Hermes is installed and signed in, start the V Bot hub and
+companion, pair that computer from the iPhone, then open **Settings →
+Integrations → Hermes**. V Bot checks the local profile roster, offers **Connect
+Hermes** for the default profile, and shows a profile picker only when needed.
+After connecting, V Bot opens the imported **Bot Chat** as a normal V Bot bot.
+
+V Bot remains the owner of pairing, bot identity, transcripts, unread state,
+streaming activity, approvals, tool cards, and all iOS presentation. Hermes
+provides the selected profile/runtime behind the paired hub. Account login or
+Hermes credentials never replace the device pairing boundary.
+
+For Hermes on another machine, pair that V Bot computer first and repeat the
+same flow while it is selected. A bridge can expose its existing `shell`,
+`local-vm`, or `ssh-forward` capability, but it is not a Hermes stream; remote
+Hermes-over-bridge is not implemented and must not be emulated with shell.
+
 The device-facing socket rejects browser `Origin` headers before reading a
 token. Its route policy in `companion/src/routes.ts` is default-deny: a new
 harness route remains unreachable until it is deliberately added.
@@ -327,4 +346,7 @@ distribution scope:
    TestFlight, and App Store review material. Swift tests and an unsigned
    simulator build already run in the repository CI.
 5. **Optional expansion:** voice/call mode or Local VM/host-computer
-   interaction. Each requires its own threat-model review.
+   interaction. Voice/call design is tracked separately in
+   [`docs/superpowers/plans/2026-09-01-vbot-native-voice-calls.md`](superpowers/plans/2026-09-01-vbot-native-voice-calls.md)
+   and is not shipped by the Hermes integration. Each expansion requires its
+   own threat-model and device review.

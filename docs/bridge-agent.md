@@ -51,6 +51,22 @@ through a bridge (even when the VPS itself has docker). Otherwise relay activate
 automatically when the harness has no healthy local container runtime but an
 online bridge advertises `local-vm`.
 
+## Hermes boundary
+
+The bridge roster is an execution-fleet view, not a Hermes connection path.
+Current bridges expose exactly three opt-in capabilities: `shell`, `local-vm`,
+and `ssh-forward`. They do not advertise Hermes, TUI, TTS, or a generic
+streaming capability.
+
+To use Hermes on another machine, run the V Bot hub and companion on that
+machine, pair it as its own V Bot computer, then use **Settings → Integrations →
+Hermes** on the iPhone while that computer is selected. The existing bridge
+shell route cannot safely carry Hermes prompts, JSON-RPC events, credentials, or
+session state and must not be used as a substitute. Remote Hermes-over-bridge is
+therefore **not implemented**. A future implementation needs a dedicated,
+authenticated Hermes capability and streaming protocol with cancellation,
+backpressure, and fail-closed identity checks.
+
 ## Local VM relay
 
 When relay is active, companion and desktop Local VM routes hit the bridge instead

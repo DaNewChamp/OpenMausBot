@@ -103,3 +103,29 @@ only V Bot bot id, validated profile slug, literal `Bot Chat` title, and schema
 version in private hub state. Wave 1 does not expose a CLI fallback, raw SessionDB
 path, account token, or Hermes runtime/durable ids on public surfaces. See
 [hermes-adapter.md](./hermes-adapter.md) for the full Wave 1 contract and deferrals.
+
+## Native V Bot connection flow
+
+The shipped setup path is deliberately simple:
+
+1. Run the V Bot hub and companion on the computer that has the desired runtime.
+2. Pair that computer to the iPhone using the existing QR/device-trust flow.
+3. On the iPhone, open **Settings → Integrations → Hermes** and connect the
+   default profile (or choose one when multiple profiles are advertised).
+4. V Bot adopts or creates one canonical Hermes `Bot Chat`, creates/reuses the
+   corresponding V Bot bot, and opens the normal V Bot conversation.
+
+V Bot owns pairing, bot identity, transcript storage, unread state, streaming,
+approvals, activity, and UI. Hermes is an adapter selected by profile behind the
+hub; account login is never a replacement for pairing. For a second machine,
+pair that machine as another V Bot computer and connect Hermes there.
+
+The existing bridge fleet remains limited to `shell`, `local-vm`, and
+`ssh-forward`. Remote Hermes-over-bridge is not implemented: shell jobs are not
+a Hermes gateway and must not carry its prompts, credentials, or JSON-RPC stream.
+A future cross-machine Hermes feature requires a dedicated authenticated,
+versioned capability/stream transport with cancellation and backpressure.
+
+Voice calls are a separate, unshipped expansion. The reviewed design is tracked
+in [V Bot Native iPhone Voice Calls](./superpowers/plans/2026-09-01-vbot-native-voice-calls.md)
+and does not alter the Hermes adapter or bridge capabilities in Wave 1.

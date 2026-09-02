@@ -138,8 +138,34 @@ not contact a deployed control plane.
 - **Computer** view — live Box stream, Local VM status, idle VM screenshot preview
 - Local VM lifecycle (create / stop / recreate) when the device is explicitly allowed
 - On-device composer dictation (Apple speech)
+- First-party Hermes profile connection from **Settings → Integrations → Hermes**
 
-Rough edges called out upstream still apply where we have not closed them: no closed-app push, voice/calls remain desktop-first, VPS SSH viewer is desktop-only.
+Voice calls are not shipped yet. The approved foreground, half-duplex iPhone
+design (1:1 and team calls, on-device speech, existing chat/SSE/TTS, and
+tap-to-interrupt) is tracked in
+[`docs/superpowers/plans/2026-09-01-vbot-native-voice-calls.md`](docs/superpowers/plans/2026-09-01-vbot-native-voice-calls.md).
+Closed-app push and the VPS SSH viewer remain separate follow-ons.
+
+### Connect Hermes
+
+Hermes runs where its account and installation already live; V Bot provides the
+pairing, conversation, approvals, and UI:
+
+1. Start the V Bot hub and companion on the computer where Hermes is installed
+   and signed in.
+2. Pair that computer to the iPhone using the normal QR flow (**Settings →
+   Phone** on desktop, then **Connect my computer** on iPhone).
+3. On the iPhone, open **Settings → Integrations → Hermes** and tap **Connect
+   Hermes**. Choose a profile only when multiple profiles are available.
+4. V Bot opens the profile's canonical **Bot Chat** as a normal V Bot bot.
+
+For Hermes on another machine, pair that V Bot computer separately and repeat
+the flow while it is selected. Account login discovers a hub but never replaces
+device pairing. Bridges currently expose only `shell`, `local-vm`, and
+`ssh-forward`; remote Hermes-over-bridge streaming is not implemented and must
+not be faked with a shell job. See [`docs/hermes-adapter.md`](docs/hermes-adapter.md)
+and [`docs/bridge-agent.md`](docs/bridge-agent.md) for the boundary and future
+dedicated-transport requirements.
 
 ---
 

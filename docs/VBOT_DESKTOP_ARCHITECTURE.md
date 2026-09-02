@@ -51,6 +51,28 @@ The **desktop app and/or the VPS harness** own durable state:
 
 There is no second database on the phone. A send, approval, pin, or unread change hits the harness immediately. If the desktop/VPS is asleep, the client cannot read or write.
 
+## Hermes integration and computer placement
+
+Hermes is a first-party profile adapter owned by the V Bot hub. On the computer
+where Hermes is installed and signed in, pair the iPhone through **Settings →
+Phone**, then use **Settings → Integrations → Hermes** to connect the default
+profile or choose one from the safe profile list. The hub adopts or creates the
+profile's canonical `Bot Chat`, wraps it in a V Bot bot, and keeps the existing
+conversation surface.
+
+V Bot remains the system of record for pairing, bot identity, transcripts,
+unreads, streaming activity, approvals, and UI. Hermes credentials, paths,
+prompts, and runtime/session identifiers remain on the paired computer. A user
+with Hermes on a different machine pairs that V Bot computer separately and
+connects Hermes there; the optional desktop shell is not required for the
+headless hub path.
+
+The bridge fleet currently advertises only `shell`, `local-vm`, and
+`ssh-forward`. Remote Hermes-over-bridge is not implemented. In particular, a
+bridge shell job is not a Hermes streaming gateway and must never be used to
+forward Hermes prompts, credentials, or JSON-RPC frames. A future remote
+Hermes connection needs a dedicated authenticated capability/stream protocol.
+
 ## iOS as a thin client
 
 The phone stores pairing trust (Keychain) and a live view of harness state. It must never receive:
@@ -106,3 +128,8 @@ Right rail collapses first as the window narrows, then the left rail becomes an 
 ## Demo fixture
 
 `?vbotDemo=1` hydrates a deterministic in-renderer fixture (no production data, no network). Use it for layout screenshots. Do not commit reference or screenshot files.
+
+Voice/call work is intentionally separate from this desktop architecture. The
+approved iPhone half-duplex plan is
+[`docs/superpowers/plans/2026-09-01-vbot-native-voice-calls.md`](superpowers/plans/2026-09-01-vbot-native-voice-calls.md);
+it is not implemented or implied by the Hermes integration.
