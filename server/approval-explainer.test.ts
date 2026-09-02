@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { approvalGrantSummary, explainApproval, isReadOnlyShellCommand, reviewApproval } from "./approval-explainer.ts";
+import { approvalKey } from "./auto-approve.ts";
 import { approvalPresentation } from "./index.ts";
 
 describe("approval explanations", () => {
@@ -37,6 +38,14 @@ describe("approval explanations", () => {
     const presentation = approvalPresentation("terminal", "git status --short", "bridge");
     expect(presentation.alwaysAllowSummary).toBe("Always allow Terminal to run git commands on Bridge.");
     expect(approvalPresentation("terminal", "rm -rf /tmp/scratch", "bridge").alwaysAllowSummary).toBeUndefined();
+  });
+
+  it("uses the same effective program as the grant key through env and sudo wrappers", () => {
+    const command = "env NODE_ENV=test sudo apt-get install ripgrep";
+    expect(approvalKey("Bash", command)).toBe("Bash:apt-get");
+    expect(approvalGrantSummary("Terminal", command, "Mac mini")).toBe(
+      "Always allow Terminal to run apt-get commands on Mac mini.",
+    );
   });
 
   it("does not offer a misleading standing grant for broad non-command tools", () => {

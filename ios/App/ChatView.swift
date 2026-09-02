@@ -1827,10 +1827,10 @@ private struct ApprovalDetailSheet: View {
         return "This action needs your permission before the bot can continue. Nothing happens unless you approve."
     }
     private var alwaysAllowSummary: String? {
-        guard card.allowKey != nil,
-              let value = card.alwaysAllowSummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let value = card.alwaysAllowSummary?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty else { return nil }
-        return OptionCard.sanitizedPresentation(value)
+        let sanitized = OptionCard.sanitizedPresentation(value)
+        return sanitized.isEmpty ? nil : sanitized
     }
     private var executiveSummary: String? {
         guard let value = card.executiveSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
@@ -1972,7 +1972,7 @@ private struct ApprovalDetailSheet: View {
                             .buttonStyle(ApprovalActionButtonStyle(role: .allow))
                             .accessibilityHint("Allows this request once")
                     }
-                    if card.allowKey != nil, case .bot = chat {
+                    if alwaysAllowSummary != nil, card.allowKey != nil, case .bot = chat {
                         Button("Always allow") {
                             answering = true
                             Task {

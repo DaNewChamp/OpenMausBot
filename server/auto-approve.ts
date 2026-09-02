@@ -78,14 +78,66 @@ export function isNarrowApprovalTool(tool: string): boolean {
   return COMMAND_TOOLS.has(bare);
 }
 
+/** Return the executable that a narrow approval key covers. Keep this parser
+ * shared with the human-facing grant summary so the remembered scope and its
+ * explanation cannot drift apart. */
+export function approvalProgram(summary: string): string {
+  const input = String(summary ?? "");
+  const segments: string[] = [];
+  let segmentStart = 0;
+  let quote = "";
+  let escaped = false;
+  const pushSegment = (end: number) => {
+    const segment = input.slice(segmentStart, end).trim();
+    if (segment) segments.push(segment);
+  };
+  for (let index = 0; index < input.length; index += 1) {
+    const character = input[index]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (character === quote) quote = "";
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === "\n" || character === "\r" || character === ";" || character === "|" || character === "&") {
+      pushSegment(index);
+      if ((character === "|" || character === "&") && input[index + 1] === character) index += 1;
+      segmentStart = index + 1;
+    }
+  }
+  pushSegment(input.length);
+
+  for (const segment of segments) {
+    const words = segment.trim().split(/\s+/);
+    let index = 0;
+    while (index < words.length) {
+      const word = words[index]!;
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word) || word === "sudo" || word === "env") {
+        index += 1;
+        continue;
+      }
+      break;
+    }
+    const program = (words[index] ?? "").split("/").pop()?.replace(/[^\w.-]/g, "") ?? "";
+    if (program && !["cd", "pushd", "popd"].includes(program.toLowerCase())) return program;
+  }
+  return "";
+}
+
 export function approvalKey(tool: string, summary: string, scope?: "local-computer" | "bridge"): string {
   const bare = tool.replace(/^mcp__[^_]+__/, "").toLowerCase();
   if (!COMMAND_TOOLS.has(bare)) return scope ? `${scope}:${tool}` : tool;
-  // first bare word of the command, skipping env assignments and sudo
-  const words = summary.trim().split(/\s+/);
-  let i = 0;
-  while (i < words.length && (/^[A-Z_][A-Z0-9_]*=/.test(words[i]) || words[i] === "sudo")) i += 1;
-  const program = (words[i] ?? "").split("/").pop()?.replace(/[^\w.-]/g, "") ?? "";
+  const program = approvalProgram(summary);
   const key = program ? `${tool}:${program}` : tool;
   return scope ? `${scope}:${key}` : key;
 }

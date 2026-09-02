@@ -4,7 +4,7 @@
 // question is never answered by the machine.
 import { describe, expect, it } from "vitest";
 
-import { approvalGrantKey, approvalKey, autoDecision, looksDestructive, looksSensitive } from "./auto-approve.ts";
+import { approvalGrantKey, approvalKey, approvalProgram, autoDecision, looksDestructive, looksSensitive } from "./auto-approve.ts";
 
 describe("looksDestructive", () => {
   const dangerous = [
@@ -67,6 +67,7 @@ describe("approvalKey", () => {
   it("looks past env assignments and sudo to the real program", () => {
     expect(approvalKey("Bash", "NODE_ENV=test npm run build")).toBe("Bash:npm");
     expect(approvalKey("Bash", "sudo apt-get install ripgrep")).toBe("Bash:apt-get");
+    expect(approvalProgram("env NODE_ENV=test sudo apt-get install ripgrep")).toBe("apt-get");
   });
 
   it("leaves ordinary tools alone", () => {

@@ -6,7 +6,7 @@
 
 import { createHash } from "node:crypto";
 
-import { isNarrowApprovalTool, looksDestructive, looksSensitive } from "./auto-approve.ts";
+import { approvalProgram, isNarrowApprovalTool, looksDestructive, looksSensitive } from "./auto-approve.ts";
 import { sanitizeLocalVmInvokeText } from "./local-vm-invoke.ts";
 
 export type ApprovalRiskLevel = "low" | "medium" | "high";
@@ -66,11 +66,7 @@ export function approvalGrantSummary(toolLabel: string, command: string, hostLab
   if (!isNarrowApprovalTool(toolLabel)) return undefined;
   const safeTool = sanitizeExplanationText(toolLabel) || "this tool";
   const safeHost = sanitizeExplanationText(hostLabel) || "this computer";
-  const segments = shellSegments(sanitizeLocalVmInvokeText(String(command ?? "").slice(0, 16_000)));
-  const program = segments
-    .map(firstProgram)
-    .find((candidate) => candidate && !["cd", "pushd", "popd"].includes(candidate))
-    ?? firstProgram(segments[0] ?? "");
+  const program = approvalProgram(sanitizeLocalVmInvokeText(String(command ?? "").slice(0, 16_000))).toLowerCase();
   const isCommand = /terminal|shell|bash|execute|command|bridge|ssh/i.test(safeTool);
   return isCommand && program
     ? `Always allow ${safeTool} to run ${program} commands on ${safeHost}.`
