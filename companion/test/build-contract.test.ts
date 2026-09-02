@@ -3,7 +3,7 @@
 // repo checkout. Copying dist-companion out of the repo is load-bearing: inside
 // the checkout, ../../shared still resolves and hides broken deploy layouts.
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,38 @@ describe("companion build contract", () => {
     expect(existsSync(join(dist, "server", "pairing-invitations.js"))).toBe(true);
     expect(existsSync(join(dist, "server", "atomic.js"))).toBe(true);
     expect(existsSync(join(dist, "companion", "src", "index.js"))).toBe(false);
+  });
+
+  it("removes stale orphans during layout", () => {
+    const tsc = spawnSync(
+      process.execPath,
+      [
+        join(root, "node_modules", "typescript", "lib", "tsc.js"),
+        "-p",
+        "tsconfig.companion.build.json",
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(tsc.status).toBe(0);
+
+    const orphans = [
+      join(dist, "stale-orphan.js"),
+      join(dist, "shared", "stale-shared-orphan.js"),
+      join(dist, "server", "stale-server-orphan.js"),
+    ];
+    for (const orphan of orphans) {
+      writeFileSync(orphan, "throw new Error('stale');\n");
+    }
+
+    const layout = spawnSync(process.execPath, ["scripts/fix-companion-layout.mjs"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(layout.status).toBe(0);
+    expect(layout.stderr).toBe("");
+    for (const orphan of orphans) {
+      expect(existsSync(orphan)).toBe(false);
+    }
   });
 
   it("does not emit JavaScript beside the companion build inputs", () => {
