@@ -14,6 +14,24 @@ public enum HermesConversionConfirmationPolicy: Sendable {
         fromModelPicker
     }
 
+    /// Endpoint taps in chat/profile model pickers only update draft UI state.
+    public static func shouldPersistDefaultOnEndpointSelection() -> Bool { false }
+
+    /// Runtime rebind is never triggered from endpoint selection alone.
+    public static func shouldApplyRuntimeOnEndpointSelection() -> Bool { false }
+
+    /// Cancel dismisses draft selection; persisted default and bot binding stay.
+    public static func draftEndpointAfterCancel() -> HermesEndpointOption? { nil }
+
+    public static func shouldPersistDefaultOnConfirmedConversion() -> Bool { true }
+
+    public static func endpointForConfirmedConversion(
+        draft: HermesEndpointOption?,
+        persistedDefault: HermesEndpointOption?
+    ) -> HermesEndpointOption? {
+        draft ?? persistedDefault
+    }
+
     public static func applyRequest(
         endpoint: HermesEndpointOption,
         includeContextSummary: Bool

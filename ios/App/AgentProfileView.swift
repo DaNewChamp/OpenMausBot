@@ -850,9 +850,15 @@ struct AgentProfileView: View {
                 .font(.subheadline.weight(.medium))
                 Spacer()
                 Button("Convert") {
-                    let endpoint = selectedHermesEndpoint ?? session.defaultHermesEndpoint()
+                    let endpoint = HermesConversionConfirmationPolicy.endpointForConfirmedConversion(
+                        draft: selectedHermesEndpoint,
+                        persistedDefault: session.defaultHermesEndpoint()
+                    )
                     showingHermesConversion = false
                     guard let endpoint else { return }
+                    if HermesConversionConfirmationPolicy.shouldPersistDefaultOnConfirmedConversion() {
+                        session.setDefaultHermesEndpoint(endpoint)
+                    }
                     session.configureHermesRuntime(
                         botId: current.id,
                         request: HermesConversionConfirmationPolicy.applyRequest(
@@ -868,7 +874,10 @@ struct AgentProfileView: View {
             .navigationTitle("Convert runtime")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showingHermesConversion = false }
+                    Button("Cancel") {
+                        selectedHermesEndpoint = HermesConversionConfirmationPolicy.draftEndpointAfterCancel()
+                        showingHermesConversion = false
+                    }
                 }
             }
         }
@@ -966,7 +975,6 @@ struct AgentProfileView: View {
                     selectedHermesId: selectedHermesEndpoint?.id ?? session.defaultHermesEndpoint()?.id,
                     onSelectHermes: { endpoint in
                         selectedHermesEndpoint = endpoint
-                        session.setDefaultHermesEndpoint(endpoint)
                     }
                 )
                 .padding(20)

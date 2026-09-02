@@ -71,7 +71,6 @@ struct ChatModelPickerSheet: View {
                     onSelectHermes: { endpoint in
                         guard ModelSelectionPolicy.allowsHermesRuntimeSwitch(working: current.busy == true) else { return }
                         selectedHermesEndpoint = endpoint
-                        session.setDefaultHermesEndpoint(endpoint)
                         if HermesConversionConfirmationPolicy.requiresConfirmationBeforeApply(fromModelPicker: true) {
                             showingHermesConversion = true
                         }
@@ -137,9 +136,15 @@ struct ChatModelPickerSheet: View {
                 .font(.subheadline.weight(.medium))
                 Spacer()
                 Button("Convert") {
-                    let endpoint = selectedHermesEndpoint ?? session.defaultHermesEndpoint()
+                    let endpoint = HermesConversionConfirmationPolicy.endpointForConfirmedConversion(
+                        draft: selectedHermesEndpoint,
+                        persistedDefault: session.defaultHermesEndpoint()
+                    )
                     showingHermesConversion = false
                     guard let endpoint else { return }
+                    if HermesConversionConfirmationPolicy.shouldPersistDefaultOnConfirmedConversion() {
+                        session.setDefaultHermesEndpoint(endpoint)
+                    }
                     session.configureHermesRuntime(
                         botId: current.id,
                         request: HermesConversionConfirmationPolicy.applyRequest(
@@ -156,7 +161,10 @@ struct ChatModelPickerSheet: View {
             .navigationTitle("Convert runtime")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showingHermesConversion = false }
+                    Button("Cancel") {
+                        selectedHermesEndpoint = HermesConversionConfirmationPolicy.draftEndpointAfterCancel()
+                        showingHermesConversion = false
+                    }
                 }
             }
         }
