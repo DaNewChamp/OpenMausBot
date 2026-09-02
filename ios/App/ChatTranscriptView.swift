@@ -107,7 +107,6 @@ struct ChatTranscriptView: View {
         .sheet(item: $pendingBotChannelOpen) { intent in
             BotChannelChooserSheet(
                 room: intent.room,
-                focusMessageId: intent.focusMessageId,
                 invokingBotId: intent.invokingBotId
             ) { perspectiveBotId in
                 session.openBotChannel(
@@ -423,12 +422,20 @@ struct ChatTranscriptView: View {
                 }
                 session.consumeFocus(messageId)
             }
-            .task {
-                guard let messageId = session.focusedMessageId,
-                      messages.contains(where: { $0.id == messageId })
-                else { return }
-                proxy.scrollTo(messageId, anchor: .center)
-                session.consumeFocus(messageId)
+            .task(id: session.focusedMessageId) {
+                guard let messageId = session.focusedMessageId else { return }
+                for _ in 0..<20 {
+                    if messages.contains(where: { $0.id == messageId }) {
+                        if reduceMotion {
+                            proxy.scrollTo(messageId, anchor: .center)
+                        } else {
+                            withAnimation { proxy.scrollTo(messageId, anchor: .center) }
+                        }
+                        session.consumeFocus(messageId)
+                        return
+                    }
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
             }
 #if DEBUG
             .task(id: "\(threadId)|preview-not-following") {

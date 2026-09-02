@@ -56,4 +56,40 @@ struct BotChannelPolicyTests {
                 == ["alpha", "beta"]
         )
     }
+
+    @Test
+    func testPerspectiveTitleRequiresMatchingRoom() {
+        var room = Room(
+            id: "dm",
+            threadId: "t-dm",
+            name: "Alpha ⇄ Beta",
+            memberIds: ["alpha", "beta"],
+            defaultResponder: GroupResponder(kind: "mentions", botId: nil),
+            bulletin: "",
+            unread: false,
+            createdAt: 0,
+            dm: true
+        )
+        let perspective = BotChannelPolicy.Perspective(roomId: "dm", botId: "beta")
+        #expect(
+            BotChannelPolicy.perspectiveTitle(room: room, perspective: perspective, botName: { id in
+                id == "alpha" ? "Alpha" : (id == "beta" ? "Beta" : nil)
+            }) == "Beta ⇄ Alpha"
+        )
+        #expect(
+            BotChannelPolicy.perspectiveTitle(
+                room: room,
+                perspective: BotChannelPolicy.Perspective(roomId: "other", botId: "beta"),
+                botName: { _ in "Name" }
+            ) == nil
+        )
+    }
+
+    @Test
+    func testClearedPerspectiveDropsStaleRoom() {
+        let current = BotChannelPolicy.Perspective(roomId: "dm-a", botId: "alpha")
+        #expect(BotChannelPolicy.clearedPerspective(current: current, openingRoomId: "dm-a") == current)
+        #expect(BotChannelPolicy.clearedPerspective(current: current, openingRoomId: "dm-b") == nil)
+        #expect(BotChannelPolicy.clearedPerspective(current: current, openingRoomId: nil) == nil)
+    }
 }

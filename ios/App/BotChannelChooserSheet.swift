@@ -5,7 +5,6 @@ import CompanionCore
 /// opens the shared canonical transcript.
 struct BotChannelChooserSheet: View {
     let room: Room
-    let focusMessageId: String?
     let invokingBotId: String?
     let onSelect: (String) -> Void
 
@@ -45,6 +44,8 @@ struct BotChannelChooserSheet: View {
                                 .padding(.vertical, 2)
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("\(bot.name), open shared conversation")
+                            .accessibilityHint("Both bots share one transcript. Choose whose perspective to open from.")
                         }
                     }
                 } footer: {

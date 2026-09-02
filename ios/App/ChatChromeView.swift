@@ -189,12 +189,12 @@ struct ChatChromeView: View {
             return ConversationLayoutPolicy.identityTitle(name: live.name, modelLabel: model)
         case .room:
             if case let .room(room) = current,
-               room.dm == true,
-               let perspectiveId = session.botChannelPerspectiveBotId,
-               let perspective = session.state.bot(perspectiveId),
-               let otherId = room.memberIds.first(where: { $0 != perspectiveId }),
-               let other = session.state.bot(otherId) {
-                return "\(perspective.name) ⇄ \(other.name)"
+               let title = BotChannelPolicy.perspectiveTitle(
+                   room: room,
+                   perspective: session.botChannelPerspective,
+                   botName: { session.state.bot($0)?.name }
+               ) {
+                return title
             }
             return current.name
         }
