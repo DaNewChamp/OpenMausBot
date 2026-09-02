@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HermesEngineError } from "./engines/contracts.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { DATA_DIR } from "./config.ts";
-import { getOrCreateChannel } from "./comms-visibility.ts";
+import { getOrCreateChannel, mirrorExchange } from "./comms-visibility.ts";
 import { Store } from "./store.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
@@ -70,5 +70,36 @@ describe("comms-visibility Hermes peer gates", () => {
     expect(() => getOrCreateChannel(store, from, target)).toThrow(HermesEngineError);
     expect(() => getOrCreateChannel(store, from, target)).toThrow(/invalid response/);
     expect(store.groups.filter((group) => group.dm)).toHaveLength(0);
+  });
+});
+
+describe("mirrorExchange comm anchors", () => {
+  beforeEach(() => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+  });
+
+  it("links both comm chips to the canonical channel message", () => {
+    const store = new Store(selection);
+    const from = store.createBot({ name: "Alpha", section: "Work" }, { seedMessages: false });
+    const target = store.createBot({ name: "Beta", section: "Work" }, { seedMessages: false });
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(join(DATA_DIR, "hermes-bindings.json"), JSON.stringify({ version: 1, bindings: {} }), { mode: 0o600 });
+    const channel = getOrCreateChannel(store, from, target);
+    const bus = { store, broadcast: () => {} };
+
+    mirrorExchange(bus, from, target, "hello there", channel);
+
+    const channelMessages = store.messagesFor(channel.threadId);
+    expect(channelMessages).toHaveLength(1);
+    const anchorId = channelMessages[0]!.id;
+
+    const outgoing = store.messagesFor(from.threadId).find((m) => m.comm?.groupId === channel.id);
+    const incoming = store.messagesFor(target.threadId).find((m) => m.comm?.groupId === channel.id);
+    expect(outgoing?.comm?.messageId).toBe(anchorId);
+    expect(incoming?.comm?.messageId).toBe(anchorId);
   });
 });

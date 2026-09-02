@@ -1779,16 +1779,6 @@ function finalizePendingAskWatch(
   const doneName = ok ? askBotFinishedChip(name) : askBotFailedChip(name);
   store.patchMessage(watched.sourceThreadId, watched.sourceMessageId, {
     tool: { name: doneName, ok, spoken: "waiting on a teammate" },
-    ...(ok && target && channel
-      ? {
-          comm: {
-            groupId: channel.id,
-            withBotId: target.id,
-            withName: target.name,
-            withColor: target.color,
-          },
-        }
-      : {}),
   });
   store.patchMessage(watched.channelThreadId, watched.channelMessageId, {
     tool: { name: doneName, ok, spoken: "waiting on a teammate" },
@@ -1797,6 +1787,18 @@ function finalizePendingAskWatch(
   if (ok && reply.trim()) mirrorReply(commsBus, target, reply, channel);
   else if (ok) mirrorActivity(commsBus, target, channel, `${name} finished`, true);
   else mirrorActivity(commsBus, target, channel, failureName, false);
+  if (ok && target) {
+    const anchorId = store.messagesFor(channel.threadId).at(-1)?.id ?? watched.channelMessageId;
+    store.patchMessage(watched.sourceThreadId, watched.sourceMessageId, {
+      comm: {
+        groupId: channel.id,
+        withBotId: target.id,
+        withName: target.name,
+        withColor: target.color,
+        messageId: anchorId,
+      },
+    });
+  }
   return true;
 }
 

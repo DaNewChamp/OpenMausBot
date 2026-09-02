@@ -9,6 +9,8 @@ public struct CommActivityPresentation: Equatable, Sendable {
     public let peerBotId: String
     public let title: String
     public let groupId: String
+    /// Canonical channel message to scroll to when opening from a comm chip.
+    public let focusMessageId: String?
     /// Whether the companion currently has a room it can open for this
     /// exchange. A missing room is still useful context, but it must not
     /// present a dead navigation affordance.
@@ -21,6 +23,7 @@ public struct CommActivityPresentation: Equatable, Sendable {
         let candidate = message.tool?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         title = candidate.isEmpty ? "Messaged @\(comm.withName)" : candidate
         groupId = comm.groupId
+        focusMessageId = comm.messageId
         self.destinationAvailable = destinationAvailable
     }
 

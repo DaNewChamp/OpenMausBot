@@ -44,33 +44,37 @@ export function mirrorExchange(
   channel: GroupRecord | undefined,
   sourceThreadId = from.threadId,
 ): void {
-  const note = (threadId: string, m: Omit<Message, "id" | "at">) => {
-    bus.store.appendMessage(threadId, m);
-    return message;
-  };
+  const note = (threadId: string, m: Omit<Message, "id" | "at">) => bus.store.appendMessage(threadId, m);
+  let channelMessageId: string | undefined;
   if (channel) {
-    note(channel.threadId, {
+    channelMessageId = note(channel.threadId, {
       role: "bot",
       kind: "text",
       text: message,
       from: { botId: from.id, name: from.name, color: from.color },
-    });
+    }).id;
   }
+  const commFor = (peer: BotRecord) =>
+    channel
+      ? {
+          groupId: channel.id,
+          withBotId: peer.id,
+          withName: peer.name,
+          withColor: peer.color,
+          ...(channelMessageId ? { messageId: channelMessageId } : {}),
+        }
+      : undefined;
   note(sourceThreadId, {
     role: "bot",
     kind: "activity",
     tool: { name: `Messaged @${target.name}` },
-    comm: channel
-      ? { groupId: channel.id, withBotId: target.id, withName: target.name, withColor: target.color }
-      : undefined,
+    comm: commFor(target),
   });
   note(target.threadId, {
     role: "bot",
     kind: "activity",
     tool: { name: `Message from @${from.name}` },
-    comm: channel
-      ? { groupId: channel.id, withBotId: from.id, withName: from.name, withColor: from.color }
-      : undefined,
+    comm: commFor(from),
   });
   if (channel) {
     bus.store.patchGroup(channel.id, { unread: true });

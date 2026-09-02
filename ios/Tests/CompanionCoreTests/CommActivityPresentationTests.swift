@@ -5,12 +5,13 @@ import Testing
 struct CommActivityPresentationTests {
     @Test
     func testOutgoingCommUsesOneNeutralPeerLabel() throws {
-        let data = Data(#"{"id":"m1","role":"bot","kind":"activity","at":1,"tool":{"name":"Messaged @CIO"},"comm":{"groupId":"room-1","withBotId":"cio","withName":"CIO","withColor":"blue"}}"#.utf8)
+        let data = Data(#"{"id":"m1","role":"bot","kind":"activity","at":1,"tool":{"name":"Messaged @CIO"},"comm":{"groupId":"room-1","withBotId":"cio","withName":"CIO","withColor":"blue","messageId":"channel-msg-1"}}"#.utf8)
         let message = try JSONDecoder().decode(Message.self, from: data)
         let row = try #require(CommActivityPresentation(message: message))
         #expect(row.peerBotId == "cio")
         #expect(row.title == "Messaged @CIO")
         #expect(row.groupId == "room-1")
+        #expect(row.focusMessageId == "channel-msg-1")
         #expect(row.showsRunning == false)
     }
 

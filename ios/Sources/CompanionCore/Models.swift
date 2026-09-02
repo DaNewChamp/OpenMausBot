@@ -183,6 +183,8 @@ public struct CommChip: Codable, Hashable, Sendable {
     public var withBotId: String
     public var withName: String
     public var withColor: String
+    /// Canonical channel message to scroll to when opening from a comm chip.
+    public var messageId: String?
 }
 
 /// How a message should be delivered when its conversation is already busy.

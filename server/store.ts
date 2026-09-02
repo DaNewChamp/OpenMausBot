@@ -153,7 +153,14 @@ export interface Message {
   reactions?: Array<{ emoji: string; by: string }>;
   /** comm chips: "Messaged @X" in the caller's chat, linking to the
    * bot⇄bot channel where the exchange is mirrored. */
-  comm?: { groupId: string; withBotId: string; withName: string; withColor: string };
+  comm?: {
+    groupId: string;
+    withBotId: string;
+    withName: string;
+    withColor: string;
+    /** Canonical channel message to scroll to when opening from a comm chip. */
+    messageId?: string;
+  };
   /** user messages sent while the bot was mid-turn, waiting in the
    * steer-queue to auto-send on settle. Cleared when the drain consumes
    * them; a true stranded by a restart is inert because the client only
