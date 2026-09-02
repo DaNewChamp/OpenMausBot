@@ -8,6 +8,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: [
+      "bridge/**/*.test.ts",
       "server/**/*.test.ts",
       "runtime/**/*.test.ts",
       "electron/**/*.test.mjs",

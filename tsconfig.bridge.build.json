@@ -18,5 +18,9 @@
     "server/engines/discovery.ts",
     "server/engines/bindings.ts",
     "server/engines/hermes.ts"
+  ],
+  "exclude": [
+    "bridge/src/**/*.test.ts",
+    "bridge/src/index-helpers.ts"
   ]
 }

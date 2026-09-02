@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import type { RuntimeEvent } from "./contracts.ts";
 import {
   encodeHermesBridgeResult,
+  HERMES_BRIDGE_MAX_EVENT_JSON_LENGTH,
   parseHermesBridgeResult,
   projectHermesDiscoveryWire,
   scrubRuntimeEvent,
   scrubRuntimeEvents,
+  validHermesBridgeProfile,
   wireContainsForbiddenMaterial,
 } from "../shared/bridge-hermes-contract.ts";
 
@@ -92,6 +94,38 @@ describe("Hermes bridge wire contract", () => {
     expect(() => parseHermesBridgeResult(JSON.stringify({
       kind: "hermes-send",
       body: { ok: true, turnId: "turn-1", events: [], stderr: "secret" },
-    }))).toThrow(/forbidden material/i);
+    }))).toThrow(/forbidden material|invalid/i);
+  });
+
+  it("bounds oversized event payloads during scrubbing", () => {
+    const huge = "x".repeat(HERMES_BRIDGE_MAX_EVENT_JSON_LENGTH + 1);
+    const event = {
+      eventId: "evt-1",
+      provider: "hermesBot",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      createdAt: "2026-09-01T00:00:00.000Z",
+      type: "content.delta",
+      streamKind: "assistant_text",
+      delta: huge,
+      text: huge,
+      message: huge,
+      title: huge,
+    } as RuntimeEvent;
+    const scrubbed = scrubRuntimeEvent(event);
+    expect(scrubbed).not.toBeNull();
+    expect(JSON.stringify(scrubbed).length).toBeLessThanOrEqual(HERMES_BRIDGE_MAX_EVENT_JSON_LENGTH);
+  });
+
+  it("rejects structurally invalid bridge results", () => {
+    expect(() => parseHermesBridgeResult(JSON.stringify({
+      kind: "hermes-send",
+      body: { ok: true, turnId: 123, events: [] },
+    }))).toThrow(/send body is invalid/i);
+  });
+
+  it("validates profile slugs at the contract boundary", () => {
+    expect(validHermesBridgeProfile("default")).toBe("default");
+    expect(validHermesBridgeProfile("../escape")).toBeUndefined();
   });
 });
