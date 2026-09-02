@@ -840,6 +840,43 @@ describe("Hermes live loopback fixture", () => {
       assertNoSecrets(JSON.stringify({ senderBot, receiverBot }));
     }, 60_000);
 
+    it("projects a real gateway subagent event into GET /api/bots hermesSubagents", async () => {
+      writeFileSync(join(hermesHome, "mode-control.txt"), "subagent");
+      const created = await api("POST", "/api/bots");
+      expect(created.status).toBe(201);
+      const bot = created.body.bot;
+      writeFileSync(bindingPath, JSON.stringify({
+        version: 1,
+        bindings: {
+          [bot.id]: {
+            adapter: "hermesBot",
+            profile: PROFILE,
+            canonicalTitle: "Bot Chat",
+            bindingVersion: 1,
+          },
+        },
+      }), { mode: 0o600 });
+
+      const sent = await api("POST", `/api/bots/${bot.id}/messages`, { text: "spawn fixture reviewer" });
+      expect(sent.status).toBe(202);
+      await waitFor(async () => {
+        const current = await api("GET", "/api/bots");
+        return Array.isArray(current.body.hermesSubagents)
+          && current.body.hermesSubagents.some((activity: { title?: string; parentThreadId?: string }) =>
+            activity.title === "Fixture reviewer" && activity.parentThreadId === bot.threadId);
+      }, "live Hermes subagent projection");
+
+      const fleet = await api("GET", "/api/bots");
+      const activity = fleet.body.hermesSubagents.find((candidate: { title?: string }) => candidate.title === "Fixture reviewer");
+      expect(activity).toMatchObject({
+        parentThreadId: bot.threadId,
+        title: "Fixture reviewer",
+        status: "started",
+        promoteEligible: false,
+      });
+      assertNoSecrets(JSON.stringify(fleet.body.hermesSubagents));
+    }, 60_000);
+
     it("brokers approval cards through respond once", async () => {
       writeFileSync(join(hermesHome, "mode-control.txt"), "approval-ask");
       const created = await api("POST", "/api/bots");

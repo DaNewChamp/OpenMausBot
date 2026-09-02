@@ -26,7 +26,6 @@ import {
   discoverBridgeHermesPlacements,
   ensureBridgeHermesCanonical,
   mergeHermesSetupProfiles,
-  placementKey,
   projectConnectedRemoteCapabilities,
   projectSetupSafeRemoteCapabilities,
   type HermesSetupPlacement,
@@ -511,16 +510,29 @@ function profileRowForPlacement(
     row.placement &&
     row.placement.kind === placement.kind &&
     row.placement.profile === placement.profile &&
-    (placement.kind === "local" || row.placement.bridge?.toLowerCase() === placement.bridge?.toLowerCase()));
+    (placement.kind === "local"
+      || (placement.bridgeId
+        ? row.placement.bridgeId?.toLowerCase() === placement.bridgeId.toLowerCase()
+        : row.placement.bridge?.toLowerCase() === placement.bridge?.toLowerCase())));
   if (matches.length !== 1 || matches[0]!.availability !== "available") {
     throw setupError("profile_unavailable");
   }
   return matches[0]!;
 }
 
+function placementsMatch(left: HermesSetupPlacement, right: HermesSetupPlacement): boolean {
+  if (left.kind !== right.kind || left.profile !== right.profile) return false;
+  if (left.kind === "local") return true;
+  if (left.bridgeId && right.bridgeId) {
+    return left.bridgeId.toLowerCase() === right.bridgeId.toLowerCase();
+  }
+  return Boolean(left.bridge && right.bridge)
+    && left.bridge!.toLowerCase() === right.bridge!.toLowerCase();
+}
+
 async function connectBridgeHermesProfile(options: ConnectHermesProfileOptions): Promise<ConnectedHermesProfile> {
   const placement = options.placement;
-  if (!placement || placement.kind !== "bridge" || !placement.bridge) {
+  if (!placement || placement.kind !== "bridge" || (!placement.bridge && !placement.bridgeId)) {
     throw setupError("profile_unavailable");
   }
   if (!options.bridgeRegistry) throw setupError("gateway_unavailable");
@@ -536,7 +548,8 @@ async function connectBridgeHermesProfile(options: ConnectHermesProfileOptions):
   if (!profile) throw setupError("profile_unavailable");
   const { bridgeId } = await ensureBridgeHermesCanonical(options.bridgeRegistry, {
     kind: "bridge",
-    bridge: placement.bridge,
+    ...(placement.bridge ? { bridge: placement.bridge } : {}),
+    ...(placement.bridgeId ? { bridgeId: placement.bridgeId } : {}),
     profile,
   });
 
@@ -589,7 +602,7 @@ async function connectBridgeHermesProfile(options: ConnectHermesProfileOptions):
 
   if (existingBotId) {
     const connectedProfile = statusBase.profiles.find((candidate) =>
-      candidate.placement && placementKey(candidate.placement) === placementKey(placement));
+      candidate.placement && placementsMatch(candidate.placement, placement));
     if (!connectedProfile?.botId) throw setupError("state_unavailable");
     return {
       botId: existingBotId,
@@ -647,7 +660,7 @@ async function connectBridgeHermesProfile(options: ConnectHermesProfileOptions):
     }
     const status = projectBridgeConnectStatus(after, (id) => Boolean(options.bot(id) ?? (id === created.id ? created : null)));
     const connectedProfile = status.profiles.find((candidate) =>
-      candidate.placement && placementKey(candidate.placement) === placementKey(placement));
+      candidate.placement && placementsMatch(candidate.placement, placement));
     if (!connectedProfile) throw setupError("state_unavailable");
     return { botId: created.id, profile: connectedProfile, status, created: true };
   } catch (error) {

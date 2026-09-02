@@ -10,7 +10,7 @@
 //                           malformed-envelope | missing-profile |
 //                           renamed-profile | renamed-named-profile |
 //                           named-profile | state-unavailable |
-//                           missing-cli | auth-fail
+//                           subagent | missing-cli | auth-fail
 //   FAKE_HERMES_DELTAS      set to 1 to emit message.delta frames
 //   FAKE_HERMES_DUMP        write { argv, env, pid } JSON for test assertions
 //   FAKE_HERMES_RPC_LOG     append one JSON object per RPC method call
@@ -404,6 +404,21 @@ process.stdin.on("data", (chunk) => {
                 },
                 ok: true,
                 status: "complete",
+              },
+            },
+          });
+        }
+        if (mode === "subagent") {
+          out({
+            jsonrpc: "2.0",
+            method: "event",
+            params: {
+              type: "agent.started",
+              session_id: runtimeId,
+              payload: {
+                id: "moa-temp-live-fixture",
+                name: "Fixture reviewer",
+                kind: "temporary",
               },
             },
           });

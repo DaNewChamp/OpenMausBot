@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 
 describe("Hermes V Bot MCP facade", () => {
@@ -159,7 +160,7 @@ describe("Hermes V Bot MCP facade", () => {
   });
 
   it("executes tools/call through the approved facade instead of a blanket tool unavailable stub", async () => {
-    const { createHermesVbotDaemonHandler } = await import("./hermes-vbot-mcp.ts");
+    const { createHermesVbotDaemonHandler, HERMES_VBOT_ALLOWED_TOOLS } = await import("./hermes-vbot-mcp.ts");
     const { startHermesVbotConnector, connectHermesVbotConnector } = await import("./hermes-vbot-connector.ts");
     const dir = mkdtempSync(join(tmpdir(), "vbot-hermes-mcp-call-"));
     dirs.push(dir);
@@ -184,6 +185,8 @@ describe("Hermes V Bot MCP facade", () => {
     });
     const listed = await client.request("tools/list");
     expect(JSON.stringify(listed)).toMatch(/list_bots/);
+    expect(listed).not.toHaveProperty("result");
+    expect((listed as { tools?: unknown[] }).tools).toHaveLength(HERMES_VBOT_ALLOWED_TOOLS.length);
     const called = await client.request("tools/call", { name: "list_bots", arguments: {} });
     const calledText = JSON.stringify(called);
     expect(calledText).not.toMatch(/tool unavailable/i);
@@ -194,6 +197,49 @@ describe("Hermes V Bot MCP facade", () => {
     expect(unknownText).toMatch(/Unknown tool: docker/);
     client.close();
     await server.close();
+  });
+
+  it("proves the stdio facade reaches a live connector and returns registered tool results", async () => {
+    const { createHermesVbotDaemonHandler, runHermesVbotMcpStdio } = await import("./hermes-vbot-mcp.ts");
+    const { startHermesVbotConnector } = await import("./hermes-vbot-connector.ts");
+    const dir = mkdtempSync(join(tmpdir(), "vbot-hermes-mcp-stdio-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "vbot.sock");
+    const credentialsPath = join(dir, "credentials.json");
+    writeFileSync(credentialsPath, JSON.stringify({ bridgeId: "bridge-mini", bridgeToken: "fixture-only" }));
+    const server = await startHermesVbotConnector({
+      listen: { socketPath },
+      peerCredential: "bridge-mini",
+      botScope: "bot-chief",
+      handler: createHermesVbotDaemonHandler({
+        executeTool: async (name) => ({ text: `fixture result for ${name}` }),
+      }),
+    });
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const output: string[] = [];
+    stdout.on("data", (chunk) => output.push(String(chunk)));
+    const run = runHermesVbotMcpStdio({
+      argv: ["--socket", socketPath, "--bot-scope", "bot-chief"],
+      credentialsPath,
+      stdin,
+      stdout,
+    });
+    stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })}\n`);
+    stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })}\n`);
+    stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "list_bots", arguments: {} } })}\n`);
+    const deadline = Date.now() + 5_000;
+    while (!output.join("").includes("fixture result for list_bots") && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    stdin.end();
+    await run;
+    await server.close();
+    const text = output.join("");
+    expect(text).toMatch(/"id":2/);
+    expect(text).toMatch(/list_bots/);
+    expect(text).toMatch(/fixture result for list_bots/);
+    expect(text).not.toMatch(/tool unavailable/i);
   });
 
   it("fails closed honestly when the approved facade is unconfigured", async () => {

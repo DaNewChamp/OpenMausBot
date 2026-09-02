@@ -87,7 +87,7 @@ final class HermesSetupTests: XCTestCase {
 
     func testDecodesBridgePlacementProfilesSafely() throws {
         let data = Data(
-            #"{"state":"ready","profiles":[{"profile":"default","handle":"hermes","displayName":"Hermes","description":"Remote assistant","canonicalChat":"absent","availability":"available","placement":{"kind":"bridge","bridge":"Mac mini","profile":"default"}}],"capabilities":{"roster":true,"canonicalChat":false,"send":false,"finalResponse":false,"events":false,"stop":false,"routinesRead":false,"messageAgent":false,"groups":false,"crossMachine":false,"queueing":false,"steer":false,"attachments":false}}"#.utf8
+            #"{"state":"ready","profiles":[{"profile":"default","handle":"hermes","displayName":"Hermes","description":"Remote assistant","canonicalChat":"absent","availability":"available","placement":{"kind":"bridge","bridge":"Mac mini","bridgeId":"bridge-mini","profile":"default"}}],"capabilities":{"roster":true,"canonicalChat":false,"send":false,"finalResponse":false,"events":false,"stop":false,"routinesRead":false,"messageAgent":false,"groups":false,"crossMachine":false,"queueing":false,"steer":false,"attachments":false}}"#.utf8
         )
 
         let status = try JSONDecoder().decode(HermesSetupStatus.self, from: data)
@@ -95,8 +95,8 @@ final class HermesSetupTests: XCTestCase {
 
         XCTAssertEqual(profile?.placement?.kind, .bridge)
         XCTAssertEqual(profile?.placement?.bridge, "Mac mini")
-        XCTAssertEqual(profile?.id, "bridge:mac mini:default")
-        XCTAssertFalse(String(data: data, encoding: .utf8)!.contains("bridgeId"))
+        XCTAssertEqual(profile?.placement?.bridgeId, "bridge-mini")
+        XCTAssertEqual(profile?.id, "bridge:bridge-mini:default")
     }
 
     func testConnectEncodesTypedBridgePlacement() async throws {
@@ -105,7 +105,7 @@ final class HermesSetupTests: XCTestCase {
         )
 
         _ = try await client.connectHermes(
-            placement: HermesSetupPlacement(kind: .bridge, profile: "default", bridge: "mini")
+            placement: HermesSetupPlacement(kind: .bridge, profile: "default", bridge: "mini", bridgeId: "bridge-mini")
         )
         struct ConnectBody: Decodable { let placement: HermesSetupPlacement }
         let body = try JSONDecoder().decode(
@@ -115,6 +115,7 @@ final class HermesSetupTests: XCTestCase {
         XCTAssertEqual(body.placement.kind, .bridge)
         XCTAssertEqual(body.placement.profile, "default")
         XCTAssertEqual(body.placement.bridge, "mini")
+        XCTAssertEqual(body.placement.bridgeId, "bridge-mini")
     }
 
     func testPlacementLabelsAndGroupingUseFriendlyBridgeNames() {
@@ -170,11 +171,25 @@ final class HermesSetupTests: XCTestCase {
             description: "Remote",
             canonicalChat: .absent,
             availability: .available,
-            placement: HermesSetupPlacement(kind: .bridge, profile: "default", bridge: "mini")
+            placement: HermesSetupPlacement(kind: .bridge, profile: "default", bridge: "Mac mini", bridgeId: "bridge-mini")
         )
         XCTAssertEqual(local.id, "local:default")
-        XCTAssertEqual(remote.id, "bridge:mini:default")
+        XCTAssertEqual(remote.id, "bridge:bridge-mini:default")
         XCTAssertNotEqual(local.id, remote.id)
+    }
+
+    func testBridgeWithoutCanonicalIdNeverUsesFriendlyDisplayNameInEndpointId() {
+        let remote = HermesSetupProfile(
+            profile: "default",
+            handle: "hermes",
+            displayName: "Hermes",
+            description: "Remote",
+            canonicalChat: .absent,
+            availability: .available,
+            placement: HermesSetupPlacement(kind: .bridge, profile: "default", bridge: "Mac mini")
+        )
+        XCTAssertEqual(remote.id, "bridge:unknown:default")
+        XCTAssertFalse(remote.id.contains("Mac mini"))
     }
 
     func testReadsStatusThroughAuthenticatedHermesRoute() async throws {
@@ -400,6 +415,14 @@ final class HermesSetupTests: XCTestCase {
         XCTAssertFalse(json.contains("token"))
     }
 
+    func testConversionRequestNeverUsesWhitespaceDisplayNameAsBridgeId() {
+        let request = HermesConversionApplyPolicy.request(
+            from: HermesEndpointOption(id: "bridge:Mac mini:default", computerName: "Mac mini", profile: "default")
+        )
+        XCTAssertEqual(request.kind, "bridge")
+        XCTAssertNil(request.bridgeId)
+    }
+
     func testConversionSheetApplyUsesTheEndpointRequestForConnectedBots() throws {
         let local = HermesEndpointOption(id: "local:coder", computerName: "This computer", profile: "coder")
         let unconnected = HermesSetupProfile(
@@ -423,15 +446,15 @@ final class HermesSetupTests: XCTestCase {
             local.id
         )
         let requests = HermesConversionSheetPolicy.applyRequests(
-            endpoint: HermesEndpointOption(id: "bridge:mac mini:default", computerName: "Mac mini", profile: "default"),
+            endpoint: HermesEndpointOption(id: "bridge:bridge-mini:default", computerName: "Mac mini", profile: "default"),
             botIds: ["bot-chief", "", "bot-specialist"]
         )
         XCTAssertEqual(requests.map(\.botId), ["bot-chief", "bot-specialist"])
         XCTAssertEqual(requests.first?.request.kind, "bridge")
-        XCTAssertEqual(requests.first?.request.bridgeId, "mac mini")
+        XCTAssertEqual(requests.first?.request.bridgeId, "bridge-mini")
         XCTAssertEqual(requests.first?.request.profile, "default")
         XCTAssertTrue(requests.first?.request.userRequested ?? false)
-        XCTAssertEqual(requests.last?.request.bridgeId, "mac mini")
+        XCTAssertEqual(requests.last?.request.bridgeId, "bridge-mini")
     }
 
     func testHydratesTemporaryAgentsFromTheExistingFleetSnapshot() throws {

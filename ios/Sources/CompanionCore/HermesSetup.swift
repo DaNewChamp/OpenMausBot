@@ -18,21 +18,29 @@ public struct HermesSetupPlacement: Codable, Hashable, Sendable, Equatable {
     public var kind: HermesSetupPlacementKind
     public var profile: String
     public var bridge: String?
+    public var bridgeId: String?
 
-    public init(kind: HermesSetupPlacementKind = .local, profile: String = "", bridge: String? = nil) {
+    public init(
+        kind: HermesSetupPlacementKind = .local,
+        profile: String = "",
+        bridge: String? = nil,
+        bridgeId: String? = nil
+    ) {
         self.kind = kind
         self.profile = profile
         self.bridge = bridge
+        self.bridgeId = bridgeId
     }
 
-    private enum CodingKeys: String, CodingKey { case kind, profile, bridge }
+    private enum CodingKeys: String, CodingKey { case kind, profile, bridge, bridgeId }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             kind: try container.decodeIfPresent(HermesSetupPlacementKind.self, forKey: .kind) ?? .unknown,
             profile: try container.decodeIfPresent(String.self, forKey: .profile) ?? "",
-            bridge: try container.decodeIfPresent(String.self, forKey: .bridge)
+            bridge: try container.decodeIfPresent(String.self, forKey: .bridge),
+            bridgeId: try container.decodeIfPresent(String.self, forKey: .bridgeId)
         )
     }
 }
@@ -172,7 +180,7 @@ public struct HermesSetupProfile: Codable, Hashable, Identifiable, Sendable, Equ
             case .local:
                 return "local:\(placement.profile.isEmpty ? profile : placement.profile)"
             case .bridge:
-                let bridge = placement.bridge?.lowercased() ?? "bridge"
+                let bridge = placement.bridgeId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "unknown"
                 return "bridge:\(bridge):\(placement.profile)"
             case .unknown:
                 return "local:\(profile)"

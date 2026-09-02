@@ -258,11 +258,18 @@ extension BotRuntimeBinding: Codable {
 public enum HermesConversionApplyPolicy: Sendable {
     public static func request(from endpoint: HermesEndpointOption) -> HermesRuntimeRebindRequest {
         let parts = endpoint.id.split(separator: ":").map(String.init)
-        if parts.first == "bridge", parts.count >= 3 {
+        if parts.first == "bridge", parts.count == 3,
+           parts[1].range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil {
             return HermesRuntimeRebindRequest(
                 kind: "bridge",
                 profile: endpoint.profile,
                 bridgeId: parts[1]
+            )
+        }
+        if parts.first == "bridge" {
+            return HermesRuntimeRebindRequest(
+                kind: "bridge",
+                profile: endpoint.profile
             )
         }
         return HermesRuntimeRebindRequest(

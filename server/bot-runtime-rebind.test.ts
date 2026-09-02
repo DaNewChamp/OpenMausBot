@@ -203,35 +203,33 @@ describe("approved runtime conversion", () => {
     expect(store.bot(bot.id)?.modelSelection).toEqual(selection());
   });
 
-  it("applies live convert for iOS display-name ids and canonical discovery ids without minting a bot", async () => {
+  it("applies live convert for canonical discovery ids without minting a bot", async () => {
     const {
       requestBotRuntimeRebind,
       rememberHermesEndpoint,
-      rememberHermesBridgeAlias,
       resolveBotRuntimeBinding,
     } = await import("./bot-runtime-rebind.ts");
     rememberHermesEndpoint("bridge:bridge-mini:default", "rev-bridge-1");
-    rememberHermesBridgeAlias("Mac mini", "bridge-mini");
     const store = new Store(selection);
     const bot = store.createBot({ name: "Specialist" });
-    const fromIos = await requestBotRuntimeRebind({
+    const fromCanonical = await requestBotRuntimeRebind({
       store,
       request: {
         targetBotId: bot.id,
         binding: {
           kind: "hermes",
-          placement: { kind: "bridge", bridgeId: "mac mini", profile: "default" },
+          placement: { kind: "bridge", bridgeId: "bridge-mini", profile: "default" },
           bindingVersion: 2,
         },
         contextMode: "none",
         userRequested: true,
       },
     });
-    expect(fromIos).toMatchObject({ status: "applied" });
-    if (fromIos.status !== "applied") return;
-    expect(fromIos.bot.id).toBe(bot.id);
+    expect(fromCanonical).toMatchObject({ status: "applied" });
+    if (fromCanonical.status !== "applied") return;
+    expect(fromCanonical.bot.id).toBe(bot.id);
     expect(store.bots.filter((row) => row.name === "Specialist")).toHaveLength(1);
-    expect(fromIos.bot.runtimeBinding).toEqual({
+    expect(fromCanonical.bot.runtimeBinding).toEqual({
       kind: "hermes",
       placement: { kind: "bridge", bridgeId: "bridge-mini", profile: "default" },
       bindingVersion: 2,
@@ -255,7 +253,7 @@ describe("approved runtime conversion", () => {
       },
     });
     expect(reversed.status).toBe("applied");
-    const fromCanonical = await requestBotRuntimeRebind({
+    const fromCanonicalAgain = await requestBotRuntimeRebind({
       store,
       request: {
         targetBotId: bot.id,
@@ -268,14 +266,35 @@ describe("approved runtime conversion", () => {
         userRequested: true,
       },
     });
-    expect(fromCanonical).toMatchObject({ status: "applied" });
-    if (fromCanonical.status !== "applied") return;
-    expect(fromCanonical.bot.id).toBe(bot.id);
-    expect(fromCanonical.bot.runtimeBinding).toEqual({
+    expect(fromCanonicalAgain).toMatchObject({ status: "applied" });
+    if (fromCanonicalAgain.status !== "applied") return;
+    expect(fromCanonicalAgain.bot.id).toBe(bot.id);
+    expect(fromCanonicalAgain.bot.runtimeBinding).toEqual({
       kind: "hermes",
       placement: { kind: "bridge", bridgeId: "bridge-mini", profile: "default" },
       bindingVersion: 2,
     });
+  });
+
+  it("rejects a whitespace display-name bridge id instead of sending it to Hermes", async () => {
+    const { requestBotRuntimeRebind, rememberHermesEndpoint } = await import("./bot-runtime-rebind.ts");
+    rememberHermesEndpoint("bridge:bridge-mini:default", "rev-bridge-1");
+    const store = new Store(selection);
+    const bot = store.createBot({ name: "Specialist" });
+    const result = await requestBotRuntimeRebind({
+      store,
+      request: {
+        targetBotId: bot.id,
+        binding: {
+          kind: "hermes",
+          placement: { kind: "bridge", bridgeId: "Mac mini", profile: "default" },
+          bindingVersion: 2,
+        },
+        contextMode: "none",
+        userRequested: true,
+      },
+    });
+    expect(result).toMatchObject({ status: "error", code: "invalid_binding" });
   });
 
   it("resolves convert-to-Hermes on this computer from local:{profile} discovery", async () => {

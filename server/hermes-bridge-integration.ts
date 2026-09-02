@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { RuntimeEvent } from "./contracts.ts";
 import type { BridgeRegistry } from "./bridge-registry.ts";
 import type { HermesBridgeBindingStoreResult } from "./bridge-hermes-bindings.ts";
@@ -23,6 +24,7 @@ import {
 import type { BotRuntimeBinding } from "./bot-runtime-binding.ts";
 import type { HermesSetupProfile } from "./hermes-setup.ts";
 import { normalizeHermesSetupProfile } from "./hermes-setup.ts";
+import { rememberHermesEndpoint } from "./bot-runtime-rebind.ts";
 import { negotiateHermesCapabilities, type HermesCapabilityManifest } from "./hermes-capabilities.ts";
 
 export const HERMES_BOT_CHAT_TITLE = "Hermes Bot Chat" as const;
@@ -109,6 +111,7 @@ export interface HermesSetupPlacement {
   kind: HermesSetupPlacementKind;
   profile: string;
   bridge?: string;
+  bridgeId?: string;
 }
 
 const PLACEMENT_KINDS = new Set<HermesSetupPlacementKind>(["local", "bridge"]);
@@ -121,18 +124,39 @@ function safeBridgeName(value: unknown): string | undefined {
   return trimmed.toLowerCase();
 }
 
+function safeBridgeId(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > 128) return undefined;
+  if (value.trim() !== value || !/^[A-Za-z0-9._-]+$/.test(value)) return undefined;
+  return value;
+}
+
+function bridgeHermesCapabilityRevision(capabilities: HermesCapabilityFlags): string {
+  const proven = HERMES_CAPABILITY_KEYS.filter((key) => capabilities[key]).sort();
+  return createHash("sha256").update(JSON.stringify(proven)).digest("hex").slice(0, 32);
+}
+
 export function normalizeHermesSetupPlacement(value: unknown): HermesSetupPlacement | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  if (record.bridgeId !== undefined || record.bridge_id !== undefined) return undefined;
   const kind = record.kind;
   if (kind !== "local" && kind !== "bridge") return undefined;
   const profile = normalizeHermesSetupProfile(record.profile);
   if (!profile) return undefined;
-  if (kind === "local") return { kind, profile };
+  if (kind === "local") {
+    if (record.bridge !== undefined || record.bridgeId !== undefined || record.bridge_id !== undefined) return undefined;
+    return { kind, profile };
+  }
   const bridge = safeBridgeName(record.bridge);
-  if (!bridge) return undefined;
-  return { kind, profile, bridge };
+  const hasBridgeId = record.bridgeId !== undefined || record.bridge_id !== undefined;
+  const bridgeId = safeBridgeId(record.bridgeId ?? record.bridge_id);
+  if (hasBridgeId && !bridgeId) return undefined;
+  if (!bridge && !bridgeId) return undefined;
+  return {
+    kind,
+    profile,
+    ...(bridge ? { bridge } : {}),
+    ...(bridgeId ? { bridgeId } : {}),
+  };
 }
 
 export function parseHermesSetupConnectInput(body: unknown):
@@ -150,7 +174,7 @@ export function parseHermesSetupConnectInput(body: unknown):
     const placement = normalizeHermesSetupPlacement(values.placement);
     return placement
       ? { ok: true, placement }
-      : { ok: false, error: "placement must name a Hermes profile and, for bridge placements, a bridge" };
+      : { ok: false, error: "placement must name a Hermes profile and, for bridge placements, a bridge name or id" };
   }
   if (keys.some((key) => key !== "profile")) {
     return { ok: false, error: "Hermes setup accepts only profile or placement" };
@@ -163,20 +187,21 @@ export function parseHermesSetupConnectInput(body: unknown):
 }
 
 export function placementKey(placement: HermesSetupPlacement): string {
-  const bridge = placement.kind === "bridge" && placement.bridge
-    ? placement.bridge.toLowerCase()
+  const bridge = placement.kind === "bridge" && (placement.bridgeId || placement.bridge)
+    ? (placement.bridgeId ?? placement.bridge)!.toLowerCase()
     : "hub";
   return `${placement.kind}:${bridge}:${placement.profile}`;
 }
 
 function publicBridgeProfile(
   bridgeName: string,
+  bridgeId: string,
   row: HermesSetupProfile,
   botId?: string,
 ): HermesSetupProfile {
   return {
     ...row,
-    placement: { kind: "bridge", bridge: bridgeName, profile: row.profile },
+    placement: { kind: "bridge", bridge: bridgeName, bridgeId, profile: row.profile },
     ...(botId ? { botId } : {}),
   };
 }
@@ -256,10 +281,13 @@ export async function discoverBridgeHermesPlacements(
       const { discovery, bridgeName } = await discoverHermesOnBridge(registry, { bridgeId: bridge.id });
       if (discovery.state !== "available") continue;
       capabilitySets.push(discovery.capabilities);
+      const remoteCapabilityRevision = bridgeHermesCapabilityRevision(discovery.capabilities);
       for (const row of discovery.profiles) {
-        if (row.availability !== "available" || !row.profile) continue;
-        profiles.push(publicBridgeProfile(bridgeName, {
-          profile: row.profile,
+        const profile = normalizeHermesSetupProfile(row.profile);
+        if (row.availability !== "available" || !profile) continue;
+        rememberHermesEndpoint(`bridge:${bridge.id}:${profile}`, remoteCapabilityRevision);
+        profiles.push(publicBridgeProfile(bridgeName, bridge.id, {
+          profile,
           handle: row.handle,
           displayName: row.displayName,
           description: row.description,
@@ -383,9 +411,13 @@ export async function dispatchHermesBridgeInterrupt(
 
 export async function ensureBridgeHermesCanonical(
   registry: BridgeRegistry,
-  placement: HermesSetupPlacement & { kind: "bridge"; bridge: string },
+  placement: HermesSetupPlacement & { kind: "bridge" },
 ): Promise<{ bridgeId: string; bridgeName: string }> {
-  const bridge = resolveBridge(registry, { name: placement.bridge, capability: "hermes" });
+  const bridge = resolveBridge(registry, {
+    ...(placement.bridgeId ? { bridgeId: placement.bridgeId } : {}),
+    ...(placement.bridge ? { name: placement.bridge } : {}),
+    capability: "hermes",
+  });
   if (!bridge) throw new HermesEngineError("gateway_unavailable");
   const { canonical } = await ensureCanonicalHermesOnBridge(registry, placement.profile, {
     bridgeId: bridge.id,
@@ -419,9 +451,11 @@ export function annotateBridgeConnectedProfiles(
     const target = resolveBridgeBindingTarget(registry, binding);
     if (!target) continue;
     byPlacement.set(placementKey({ kind: "bridge", bridge: target.bridge, profile: target.profile }), botId);
+    byPlacement.set(placementKey({ kind: "bridge", bridgeId: binding.bridgeId, profile: target.profile }), botId);
   }
   return profiles.map((profile) => {
-    if (!profile.placement || profile.placement.kind !== "bridge" || !profile.placement.bridge) return profile;
+    if (!profile.placement || profile.placement.kind !== "bridge"
+      || (!profile.placement.bridge && !profile.placement.bridgeId)) return profile;
     const botId = byPlacement.get(placementKey(profile.placement));
     return botId ? { ...profile, botId } : profile;
   });

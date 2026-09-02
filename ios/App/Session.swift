@@ -880,6 +880,21 @@ final class Session: ObservableObject {
               let computer = UserDefaults.standard.string(forKey: "vbot.defaultHermesComputer"),
               let profile = UserDefaults.standard.string(forKey: "vbot.defaultHermesProfile")
         else { return nil }
+        if let discovered = hermesEndpointOptions.first(where: { $0.id == id }) {
+            return discovered
+        }
+        // Migrate the pre-Wave-1 display-name id once a fresh status response
+        // provides the canonical bridge id. The label remains user-friendly,
+        // while all subsequent runtime requests use bridge:<bridgeId>:<profile>.
+        if id.hasPrefix("bridge:"),
+           let discovered = hermesEndpointOptions.first(where: {
+               $0.computerName.caseInsensitiveCompare(computer) == .orderedSame
+                   && $0.profile.caseInsensitiveCompare(profile) == .orderedSame
+           }) {
+            setDefaultHermesEndpoint(discovered)
+            return discovered
+        }
+        if id.hasPrefix("bridge:") { return nil }
         return HermesEndpointOption(id: id, computerName: computer, profile: profile)
     }
 

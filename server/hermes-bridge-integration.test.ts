@@ -25,6 +25,10 @@ import {
   setHermesBridgeBinding,
 } from "./bridge-hermes-bindings.ts";
 import {
+  lookupHermesEndpoint,
+  resetRememberedHermesEndpointsForTests,
+} from "./bot-runtime-rebind.ts";
+import {
   connectHermesProfile,
   readHermesSetupStatus,
   type HermesSetupProfile,
@@ -32,6 +36,7 @@ import {
 } from "./hermes-setup.ts";
 
 function resetBridgeData(): void {
+  resetRememberedHermesEndpointsForTests();
   mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   for (const file of ["bridges.json", "bridge-jobs.json", "hermes-bridge-bindings.json"]) {
     const path = join(DATA_DIR, file);
@@ -125,7 +130,7 @@ describe("Hermes bridge integration setup", () => {
     resetBridgeData();
   });
 
-  it("normalizes typed local and bridge placements without bridge ids", () => {
+  it("normalizes typed local and bridge placements with optional canonical bridge ids", () => {
     expect(normalizeHermesSetupPlacement({ kind: "local", profile: "default" })).toEqual({
       kind: "local",
       profile: "default",
@@ -135,7 +140,14 @@ describe("Hermes bridge integration setup", () => {
       bridge: "mac mini",
       profile: "work",
     });
+    expect(normalizeHermesSetupPlacement({ kind: "bridge", bridgeId: "bridge-mini", profile: "default" })).toEqual({
+      kind: "bridge",
+      bridgeId: "bridge-mini",
+      profile: "default",
+    });
+    expect(normalizeHermesSetupPlacement({ kind: "bridge", bridge: "Mac mini", bridgeId: "Mac mini", profile: "default" })).toBeUndefined();
     expect(normalizeHermesSetupPlacement({ kind: "bridge", profile: "default" })).toBeUndefined();
+    expect(normalizeHermesSetupPlacement({ kind: "local", profile: "default", bridgeId: "bridge-mini" })).toBeUndefined();
     expect(normalizeHermesSetupPlacement({ bridgeId: "secret", profile: "default" })).toBeUndefined();
   });
 
@@ -150,10 +162,16 @@ describe("Hermes bridge integration setup", () => {
       ok: true,
       placement: { kind: "bridge", bridge: "mini", profile: "default" },
     });
+    expect(parseHermesSetupConnectInput({
+      placement: { kind: "bridge", bridgeId: "bridge-mini", profile: "default" },
+    })).toEqual({
+      ok: true,
+      placement: { kind: "bridge", bridgeId: "bridge-mini", profile: "default" },
+    });
     expect(parseHermesSetupConnectInput({ token: "secret" })).toMatchObject({ ok: false });
   });
 
-  it("lists online granted bridge placements by friendly bridge name and profile only", async () => {
+  it("lists online granted bridge placements with friendly name and canonical id", async () => {
     vi.useFakeTimers();
     const { registry, bridgeId } = pairedHermesBridge("Mac mini");
     const promise = discoverBridgeHermesPlacements(registry);
@@ -173,14 +191,20 @@ describe("Hermes bridge integration setup", () => {
     const discovery = await promise;
     expect(discovery.profiles).toEqual([expect.objectContaining({
       profile: "default",
-      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+      placement: expect.objectContaining({ kind: "bridge", bridge: "Mac mini", bridgeId, profile: "default" }),
     })]);
     expect(discovery.capabilities).toMatchObject({
       roster: true,
       send: true,
       canonicalChat: true,
     });
-    expect(JSON.stringify(discovery)).not.toMatch(/bridgeId|HERMES_HOME|jsonrpc/i);
+    expect(lookupHermesEndpoint({
+      kind: "hermes",
+      placement: { kind: "bridge", bridgeId, profile: "default" },
+      bindingVersion: 2,
+    })).toMatchObject({ state: "available", endpointId: `bridge:${bridgeId}:default` });
+    expect(JSON.stringify(discovery)).toMatch(/bridgeId/);
+    expect(JSON.stringify(discovery)).not.toMatch(/HERMES_HOME|jsonrpc/i);
     vi.useRealTimers();
   });
 
@@ -269,7 +293,7 @@ describe("Hermes bridge integration setup", () => {
     });
     const connectPromise = connectHermesProfile({
       registry,
-      placement: { kind: "bridge", bridge: "mac mini", profile: "default" },
+      placement: { kind: "bridge", bridgeId, profile: "default" },
       bridgeRegistry,
       loadBridgeBindings: () => ({ state: "available", value: bridgeBindings }),
       setBridgeBinding: (id, binding) => {
@@ -319,13 +343,13 @@ describe("Hermes bridge integration setup", () => {
     expect(result.profile).toMatchObject({
       profile: "default",
       botId: "bot-bridge-1",
-      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+      placement: expect.objectContaining({ kind: "bridge", bridge: "Mac mini", bridgeId, profile: "default" }),
     });
     expect(result.status.state).toBe("connected");
     expect(result.status.profiles).toEqual(expect.arrayContaining([expect.objectContaining({
       profile: "default",
       botId: "bot-bridge-1",
-      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+      placement: expect.objectContaining({ kind: "bridge", bridge: "Mac mini", bridgeId, profile: "default" }),
     })]));
     expect(createBot).toHaveBeenCalledTimes(1);
   });
@@ -358,7 +382,7 @@ describe("Hermes bridge integration setup", () => {
       state: "ready",
       profiles: [expect.objectContaining({
         profile: "default",
-        placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+        placement: expect.objectContaining({ kind: "bridge", bridge: "Mac mini", bridgeId, profile: "default" }),
       })],
       capabilities: {
         roster: true,
@@ -369,7 +393,8 @@ describe("Hermes bridge integration setup", () => {
         stop: false,
       },
     });
-    expect(JSON.stringify(status)).not.toMatch(/bridgeId|HERMES_HOME|jsonrpc|Bearer |sk-/i);
+    expect(JSON.stringify(status)).toMatch(/bridgeId/);
+    expect(JSON.stringify(status)).not.toMatch(/HERMES_HOME|jsonrpc|Bearer |sk-/i);
     vi.useRealTimers();
   });
 
@@ -443,9 +468,10 @@ describe("Hermes bridge integration setup", () => {
     expect(result.profile).toMatchObject({
       profile: "default",
       botId: "bot-remote-1",
-      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+      placement: expect.objectContaining({ kind: "bridge", bridge: "Mac mini", bridgeId, profile: "default" }),
     });
-    expect(JSON.stringify(result)).not.toMatch(/bridgeId|HERMES_HOME|jsonrpc|Bearer |sk-/i);
+    expect(JSON.stringify(result)).toMatch(/bridgeId/);
+    expect(JSON.stringify(result)).not.toMatch(/HERMES_HOME|jsonrpc|Bearer |sk-/i);
     expect(registry.forBinding).not.toHaveBeenCalled();
     expect(createBot).toHaveBeenCalledWith(expect.objectContaining({
       modelSelection: { instanceId: "hermes", model: "hermes" },

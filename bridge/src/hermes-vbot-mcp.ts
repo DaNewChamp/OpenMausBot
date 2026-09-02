@@ -265,6 +265,7 @@ export async function runHermesVbotMcpStdio(input: {
   });
   const stdout = input.stdout ?? process.stdout;
   const rl = readline.createInterface({ input: input.stdin ?? process.stdin, terminal: false });
+  const inFlight = new Set<Promise<void>>();
   rl.on("line", (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
@@ -275,7 +276,7 @@ export async function runHermesVbotMcpStdio(input: {
       return;
     }
     if (!msg.method) return;
-    void client.request(msg.method, msg.params).then((result: unknown) => {
+    const request = client.request(msg.method, msg.params).then((result: unknown) => {
       if (msg.id === undefined) return;
       stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result })}\n`);
     }).catch((error: unknown) => {
@@ -286,11 +287,15 @@ export async function runHermesVbotMcpStdio(input: {
         error: { code: -32603, message: error instanceof Error ? error.message : "request failed" },
       })}\n`);
     });
+    inFlight.add(request);
+    void request.finally(() => inFlight.delete(request));
   });
   await new Promise<void>((resolve) => {
     rl.on("close", () => {
-      client.close();
-      resolve();
+      void Promise.allSettled(inFlight).finally(() => {
+        client.close();
+        resolve();
+      });
     });
   });
 }
