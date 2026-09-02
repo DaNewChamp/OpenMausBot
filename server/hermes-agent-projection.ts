@@ -37,6 +37,7 @@ type ProjectionRecord = {
   transcriptThreadId: string;
   botId?: string;
   status: "started" | "updated" | "completed" | "promoted";
+  updatedAt: number;
 };
 
 type ProjectionFile = { agents: Record<string, ProjectionRecord> };
@@ -122,6 +123,7 @@ export function projectHermesAgent(
   if (existing) {
     existing.status = existing.status === "started" ? "updated" : existing.status;
     existing.name = input.name;
+    existing.updatedAt = Date.now();
     saveProjectionFile(file);
     return {
       botId: existing.botId,
@@ -141,6 +143,7 @@ export function projectHermesAgent(
     name: input.name,
     transcriptThreadId: newId(),
     status: "started",
+    updatedAt: Date.now(),
   };
 
   if (input.kind === "persistent") {
@@ -179,6 +182,7 @@ export function completeHermesAgent(
   const record = file.agents[input.hermesAgentId];
   if (!record) throw new Error("Hermes agent projection store is unavailable");
   if (record.status !== "promoted") record.status = "completed";
+  record.updatedAt = Date.now();
   saveProjectionFile(file);
   return {
     activityId: record.activityId,
@@ -198,6 +202,7 @@ export function promoteHermesAgent(
   if (!record) throw new Error("Hermes agent projection store is unavailable");
   if (record.botId) {
     record.status = "promoted";
+    record.updatedAt = Date.now();
     saveProjectionFile(file);
     return { botId: record.botId, activityId: record.activityId, event: eventFor(record, "subagent.promoted") };
   }
@@ -226,6 +231,7 @@ export function promoteHermesAgent(
   record.botId = bot.id;
   record.status = "promoted";
   record.kind = "temporary";
+  record.updatedAt = Date.now();
   saveProjectionFile(file);
   return { botId: bot.id, activityId: record.activityId, event: eventFor(record, "subagent.promoted") };
 }
@@ -238,26 +244,53 @@ export function projectedHermesBot(store: Store, hermesAgentId: string): BotReco
   return store.bot(record.botId);
 }
 
-export function listProjectedHermesActivities(): Array<{
+export type PublicHermesSubagentActivity = {
   activityId: string;
   parentThreadId: string;
   title: string;
   status: ProjectionRecord["status"];
   transcriptThreadId: string;
   promoteEligible: boolean;
-}> {
+  updatedAt: number;
+};
+
+function publicActivity(record: ProjectionRecord, now = Date.now()): PublicHermesSubagentActivity {
+  const activity: PublicHermesSubagentActivity = {
+    activityId: record.activityId,
+    parentThreadId: record.parentThreadId,
+    title: record.name,
+    status: record.status,
+    transcriptThreadId: record.transcriptThreadId,
+    promoteEligible: record.kind === "temporary" && record.status === "completed",
+    updatedAt: record.updatedAt || now,
+  };
+  if (SECRETISH.test(JSON.stringify(activity))) {
+    throw new Error("Hermes subagent event contained secret-shaped values");
+  }
+  return activity;
+}
+
+export function hermesSubagentBroadcastFrame(
+  record: ProjectionRecord,
+  now = Date.now(),
+): { kind: "hermes.subagent"; activity: PublicHermesSubagentActivity } {
+  return { kind: "hermes.subagent", activity: publicActivity(record, now) };
+}
+
+export function listProjectedHermesActivities(): PublicHermesSubagentActivity[] {
   const loaded = loadProjectionFile();
   if (loaded.state === "unavailable") return [];
   return Object.values(loaded.value.agents)
     .filter((record) => record.kind === "temporary" && record.status !== "promoted")
-    .map((record) => ({
-      activityId: record.activityId,
-      parentThreadId: record.parentThreadId,
-      title: record.name,
-      status: record.status,
-      transcriptThreadId: record.transcriptThreadId,
-      promoteEligible: record.status === "completed",
-    }));
+    .map((record) => publicActivity(record));
+}
+
+export function projectedHermesSubagentFrame(activityId: string): { kind: "hermes.subagent"; activity: PublicHermesSubagentActivity } | null {
+  const loaded = loadProjectionFile();
+  if (loaded.state === "unavailable") return null;
+  const record = Object.values(loaded.value.agents).find((row) => row.activityId === activityId);
+  if (!record || record.kind !== "temporary") return null;
+  return hermesSubagentBroadcastFrame(record);
 }
 
 export function applyLiveHermesSubagent(

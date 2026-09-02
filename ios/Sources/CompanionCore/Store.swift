@@ -406,6 +406,13 @@ public struct CompanionState: Sendable {
         case let .runtime(event):
             apply(runtime: event)
 
+        case let .hermesSubagent(activity):
+            if let index = hermesSubagents.firstIndex(where: { $0.activityId == activity.activityId }) {
+                hermesSubagents[index] = activity
+            } else {
+                hermesSubagents.append(activity)
+            }
+
         case let .screen(botId, png, mime):
             screens[botId] = ScreenFrame(png: png, mime: mime)
 

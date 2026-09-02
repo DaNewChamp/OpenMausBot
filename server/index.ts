@@ -199,7 +199,7 @@ import {
   requestBotRuntimeRebind,
   resolveRuntimeRebind,
 } from "./bot-runtime-rebind.ts";
-import { applyLiveHermesSubagent, isProjectedHermesTranscript, listProjectedHermesActivities, promoteHermesAgent } from "./hermes-agent-projection.ts";
+import { applyLiveHermesSubagent, isProjectedHermesTranscript, listProjectedHermesActivities, projectedHermesSubagentFrame, promoteHermesAgent } from "./hermes-agent-projection.ts";
 import { executeHermesBridgeTool } from "./hermes-bridge-tools.ts";
 import {
   mentionedBots,
@@ -4267,7 +4267,9 @@ function projectHermesComm(candidate: HermesCommCandidate): void {
 function projectHermesSubagentLive(
   event: Parameters<typeof applyLiveHermesSubagent>[1],
 ): void {
-  applyLiveHermesSubagent(store, event);
+  const applied = applyLiveHermesSubagent(store, event);
+  const frame = projectedHermesSubagentFrame(applied.activityId);
+  if (frame) broadcast(frame);
 }
 
 function projectBotComposer(botId: string): { queueing: false; steer: false; stop: true } | undefined {
@@ -6593,6 +6595,8 @@ const server = createServer(async (req, res) => {
       try {
         const promoted = promoteHermesAgent(store, { activityId: m[1] });
         const bot = store.bot(promoted.botId);
+        const frame = projectedHermesSubagentFrame(promoted.activityId);
+        if (frame) broadcast(frame);
         return json(res, 200, { botId: promoted.botId, activityId: promoted.activityId, bot: bot ? wireBot(bot) : undefined });
       } catch {
         return json(res, 409, { error: "Hermes agent is unavailable" });

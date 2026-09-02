@@ -575,6 +575,29 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(message.text, "ran")
     }
 
+    func testDecodesASanitizedHermesSubagentFrameWithoutRuntimeIds() throws {
+        let json = """
+        {"kind":"hermes.subagent","seq":8,"activity":{
+          "activityId":"act-1","parentThreadId":"parent-thread","title":"Draft review",
+          "status":"started","transcriptThreadId":"thread-temp-1","promoteEligible":false,
+          "updatedAt":1700000000000}}
+        """
+        let frame = try JSONDecoder().decode(StreamFrame.self, from: Data(json.utf8))
+        guard case let .hermesSubagent(activity) = frame.frame else {
+            return XCTFail("expected .hermesSubagent, got \(frame.frame)")
+        }
+        XCTAssertEqual(activity.activityId, "act-1")
+        XCTAssertEqual(activity.parentThreadId, "parent-thread")
+        XCTAssertEqual(activity.transcriptThreadId, "thread-temp-1")
+        XCTAssertEqual(activity.status, .started)
+        XCTAssertEqual(activity.updatedAt, 1_700_000_000_000)
+        XCTAssertEqual(frame.frame.threadId, "thread-temp-1")
+        XCTAssertFalse(json.contains("hermesAgentId"))
+        XCTAssertFalse(json.contains("moa-temp"))
+        XCTAssertFalse(json.lowercased().contains("token"))
+        XCTAssertFalse(json.lowercased().contains("sk-"))
+    }
+
     func testDecodesOAuthConnectorCardWithoutExposingCredentialText() throws {
         let json = #"""
         {

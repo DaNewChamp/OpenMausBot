@@ -73,13 +73,14 @@ public enum Frame: Sendable {
     case computer(botId: String, state: String)
     case config
     case runtime(RuntimeEvent)
+    case hermesSubagent(HermesSubagentActivity)
     case unknown(kind: String)
 }
 
 extension Frame: Decodable {
     private enum CodingKeys: String, CodingKey {
         case kind, cursor, resumed, threadId, message, activeLeafId
-        case bot, botId, group, groupId, notification, png, mime, state, event
+        case bot, botId, group, groupId, notification, png, mime, state, event, activity
     }
 
     public init(from decoder: Decoder) throws {
@@ -132,6 +133,8 @@ extension Frame: Decodable {
             self = .config
         case "runtime":
             self = .runtime(try container.decode(RuntimeEvent.self, forKey: .event))
+        case "hermes.subagent":
+            self = .hermesSubagent(try container.decode(HermesSubagentActivity.self, forKey: .activity))
         default:
             // routines, and whatever the harness adds next
             self = .unknown(kind: kind)
@@ -153,6 +156,8 @@ extension Frame {
             return notification.threadId
         case let .runtime(event):
             return event.threadId
+        case let .hermesSubagent(activity):
+            return activity.transcriptThreadId
         default:
             return nil
         }

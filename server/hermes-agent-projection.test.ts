@@ -119,7 +119,55 @@ describe("Hermes agent projection", () => {
       transcriptThreadId: started.transcriptThreadId,
       promoteEligible: true,
     });
-    expect(JSON.stringify(listed)).not.toMatch(/token|HERMES_HOME|\/Users\/|sk-/i);
+    expect(listed[0]?.updatedAt).toBeGreaterThan(0);
+    expect(JSON.stringify(listed)).not.toMatch(/token|HERMES_HOME|\/Users\/|sk-|hermesAgentId|moa-temp-live/i);
+  });
+
+  it("emits a sanitized SSE frame for started, updated, and completed temporary agents", async () => {
+    const { projectHermesAgent, completeHermesAgent, projectedHermesSubagentFrame } = await import(
+      "./hermes-agent-projection.ts"
+    );
+    const store = new Store(selection);
+    const parent = store.createBot({ name: "Chief" }, { seedMessages: false });
+    const started = projectHermesAgent(store, {
+      hermesAgentId: "moa-temp-sse",
+      kind: "temporary",
+      name: "Draft review",
+      parentBotId: parent.id,
+      parentThreadId: parent.threadId,
+    });
+    const startedFrame = projectedHermesSubagentFrame(started.activityId);
+    expect(startedFrame).toMatchObject({
+      kind: "hermes.subagent",
+      activity: {
+        activityId: started.activityId,
+        parentThreadId: parent.threadId,
+        title: "Draft review",
+        status: "started",
+        transcriptThreadId: started.transcriptThreadId,
+        promoteEligible: false,
+      },
+    });
+    expect(startedFrame?.activity.updatedAt).toBeGreaterThan(0);
+    expect(JSON.stringify(startedFrame)).not.toMatch(/token|HERMES_HOME|\/Users\/|sk-|hermesAgentId|moa-temp-sse/i);
+
+    const replayed = projectedHermesSubagentFrame(started.activityId);
+    expect(replayed).toEqual(startedFrame);
+
+    const updated = projectHermesAgent(store, {
+      hermesAgentId: "moa-temp-sse",
+      kind: "temporary",
+      name: "Draft review",
+      parentBotId: parent.id,
+      parentThreadId: parent.threadId,
+    });
+    expect(projectedHermesSubagentFrame(updated.activityId)?.activity.status).toBe("updated");
+
+    completeHermesAgent(store, { hermesAgentId: "moa-temp-sse" });
+    const completedFrame = projectedHermesSubagentFrame(started.activityId);
+    expect(completedFrame?.activity.status).toBe("completed");
+    expect(completedFrame?.activity.promoteEligible).toBe(true);
+    expect(JSON.stringify(completedFrame)).not.toMatch(/token|HERMES_HOME|\/Users\/|sk-|runtime|session/i);
   });
 
   it("does not mint a new identity when the projection store is unreadable", async () => {
