@@ -161,7 +161,9 @@ import { loadHermesBridgeBindings } from "./bridge-hermes-bindings.ts";
 import {
   bridgeBindingUnavailableError,
   dispatchHermesBridgeSend,
+  isBridgeHermesBotCandidate,
   parseHermesSetupConnectInput,
+  resolveHermesBotDispatch,
   type HermesSetupPlacement,
 } from "./hermes-bridge-integration.ts";
 import {
@@ -867,6 +869,10 @@ async function interruptBotTurn(
       loadBridgeBindings: loadHermesBridgeBindings,
       bridgeRegistry: bridges,
       hermesRegistry,
+      mightBeBridgeBound: (targetBotId) => {
+        const candidate = store.bot(targetBotId);
+        return Boolean(candidate && isBridgeHermesBotCandidate(candidate, hermesBotInstanceId(cfg)));
+      },
       resolveProvider: ({ botId: targetBotId, runOn: targetRunOn }) => {
         const bot = store.bot(targetBotId);
         if (targetRunOn === "cloud") {
@@ -2176,16 +2182,25 @@ async function startTurn(
   // a persisted binding cannot silently fall through to the selected generic
   // provider.  An unreadable sidecar is likewise fail-closed for this turn.
   const hermesBindings = loadHermesBindings();
-  const hermesBinding = hermesBindings?.state === "available"
-    ? hermesBindings.value.get(bot.id)
-    : undefined;
-  const hermesBindingError = hermesBindings?.state === "unavailable" ? hermesBindings : null;
   const hermesBridgeBindings = loadHermesBridgeBindings();
-  const hermesBridgeBinding = hermesBridgeBindings?.state === "available"
-    ? hermesBridgeBindings.value.get(bot.id)
+  const hermesDispatchResolution = resolveHermesBotDispatch(bot.id, {
+    localBindings: hermesBindings,
+    bridgeBindings: hermesBridgeBindings,
+    bridgeCandidate: isBridgeHermesBotCandidate(bot, hermesBotInstanceId(cfg)),
+  });
+  const hermesBinding = hermesDispatchResolution.route === "local"
+    ? hermesDispatchResolution.binding
     : undefined;
-  const hermesBridgeBindingError = hermesBridgeBindings?.state === "unavailable" ? hermesBridgeBindings : null;
-  const hermesDispatch = Boolean(hermesBinding || hermesBindingError || hermesBridgeBinding || hermesBridgeBindingError);
+  const hermesBindingError = hermesDispatchResolution.route === "local-unavailable"
+    ? hermesDispatchResolution
+    : null;
+  const hermesBridgeBinding = hermesDispatchResolution.route === "bridge"
+    ? hermesDispatchResolution.binding
+    : undefined;
+  const hermesBridgeBindingError = hermesDispatchResolution.route === "bridge-unavailable"
+    ? hermesDispatchResolution
+    : null;
+  const hermesDispatch = hermesDispatchResolution.route !== "none";
   const hermesEngine = hermesBinding ? hermesRegistry.forBinding(hermesBinding) : null;
   // a task takes its name from the first thing you asked it to do
   if (text.trim() && !opts?.cardContinuation) store.titleTaskFromFirstMessage(bot.id, text, threadId);
@@ -4200,8 +4215,9 @@ function isHermesBoundBot(botId: string): boolean {
   if (bindings.state === "unavailable") return true;
   if (bindings.value.has(botId)) return true;
   const bridgeBindings = loadHermesBridgeBindings();
-  if (bridgeBindings.state === "unavailable") return true;
-  return bridgeBindings.value.has(botId);
+  if (bridgeBindings.state === "available") return bridgeBindings.value.has(botId);
+  const bot = store.bot(botId);
+  return Boolean(bot && isBridgeHermesBotCandidate(bot, hermesBotInstanceId(cfg)));
 }
 
 function localHermesBindingForBot(botId: string): HermesBotBinding | undefined {

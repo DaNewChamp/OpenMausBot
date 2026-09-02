@@ -149,6 +149,48 @@ describe("binding-aware interrupt dispatch", () => {
     expect(h.calls()).toEqual({ hermes: 0, provider: 1 });
   });
 
+  it("keeps local Hermes interrupt when the bridge sidecar is unreadable", async () => {
+    const h = harness("available");
+    h.dependencies.loadBridgeBindings = () => ({
+      state: "unavailable",
+      code: "state_unavailable",
+      message: "Hermes state is unavailable",
+    });
+    await h.dispatch();
+    expect(h.calls()).toEqual({ hermes: 1, provider: 0 });
+  });
+
+  it("fails closed for bridge-shaped bots when the bridge sidecar is unreadable", async () => {
+    const dependencies: HermesInterruptDependencies = {
+      loadBindings: () => ({ state: "available", value: new Map() }),
+      loadBridgeBindings: () => ({
+        state: "unavailable",
+        code: "state_unavailable",
+        message: "Hermes state is unavailable",
+      }),
+      mightBeBridgeBound: () => true,
+      hermesRegistry: { forBinding: () => null },
+      resolveProvider: () => ({
+        adapter: { interruptTurn: async () => undefined },
+      }),
+    };
+    await expect(dispatchHermesInterrupt({ botId: "bot-bridge", threadId: "thread-1" }, dependencies))
+      .rejects.toMatchObject({ code: "state_unavailable" });
+  });
+
+  it("falls through to the provider when the bridge sidecar is unreadable for a non-Hermes bot", async () => {
+    const h = harness("available");
+    h.dependencies.loadBindings = () => ({ state: "available", value: new Map() });
+    h.dependencies.loadBridgeBindings = () => ({
+      state: "unavailable",
+      code: "state_unavailable",
+      message: "Hermes state is unavailable",
+    });
+    h.dependencies.mightBeBridgeBound = () => false;
+    await h.dispatch();
+    expect(h.calls()).toEqual({ hermes: 0, provider: 1 });
+  });
+
   it.each([
     ["available", 1, 0],
     ["disabled", 0, 0],

@@ -1,5 +1,6 @@
 import type { RuntimeEvent } from "./contracts.ts";
 import type { BridgeRegistry } from "./bridge-registry.ts";
+import type { HermesBridgeBindingStoreResult } from "./bridge-hermes-bindings.ts";
 import {
   discoverHermesOnBridge,
   ensureCanonicalHermesOnBridge,
@@ -8,13 +9,56 @@ import {
   sendHermesOnBridge,
 } from "./bridge-hermes.ts";
 import { resolveBridge } from "./bridge-exec.ts";
+import type { BindingStoreResult } from "./engines/bindings.ts";
 import {
   type HermesBridgeBinding,
   type ScrubbedRuntimeEvent,
 } from "../shared/bridge-hermes-contract.ts";
-import { HermesEngineError } from "./engines/contracts.ts";
+import { HermesEngineError, type HermesBotBinding } from "./engines/contracts.ts";
 import type { HermesSetupProfile } from "./hermes-setup.ts";
 import { normalizeHermesSetupProfile } from "./hermes-setup.ts";
+
+export const HERMES_BOT_CHAT_TITLE = "Hermes Bot Chat" as const;
+
+export function isBridgeHermesBotCandidate(
+  bot: { title?: string; modelSelection: { instanceId: string } },
+  hermesInstanceId: string,
+): boolean {
+  return bot.title === HERMES_BOT_CHAT_TITLE && bot.modelSelection.instanceId === hermesInstanceId;
+}
+
+export type HermesBotDispatchResolution =
+  | { route: "local"; binding: HermesBotBinding }
+  | { route: "bridge"; binding: HermesBridgeBinding }
+  | { route: "local-unavailable"; code: "state_unavailable" | "malformed_response" }
+  | { route: "bridge-unavailable"; code: "state_unavailable" | "malformed_response" }
+  | { route: "none" };
+
+/** Local Hermes bindings are authoritative. Bridge bindings apply only when the
+ * bot has no local binding; an unreadable bridge sidecar fails closed only for
+ * bots whose runtime metadata matches a bridge-connected Hermes setup bot. */
+export function resolveHermesBotDispatch(
+  botId: string,
+  options: {
+    localBindings: BindingStoreResult<ReadonlyMap<string, HermesBotBinding>>;
+    bridgeBindings: HermesBridgeBindingStoreResult<ReadonlyMap<string, HermesBridgeBinding>>;
+    bridgeCandidate: boolean;
+  },
+): HermesBotDispatchResolution {
+  if (options.localBindings.state === "unavailable") {
+    return { route: "local-unavailable", code: options.localBindings.code };
+  }
+  const localBinding = options.localBindings.value.get(botId);
+  if (localBinding) return { route: "local", binding: localBinding };
+
+  if (options.bridgeBindings.state === "available") {
+    const bridgeBinding = options.bridgeBindings.value.get(botId);
+    return bridgeBinding ? { route: "bridge", binding: bridgeBinding } : { route: "none" };
+  }
+  return options.bridgeCandidate
+    ? { route: "bridge-unavailable", code: options.bridgeBindings.code }
+    : { route: "none" };
+}
 
 export type HermesSetupPlacementKind = "local" | "bridge";
 

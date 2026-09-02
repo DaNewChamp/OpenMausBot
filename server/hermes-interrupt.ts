@@ -6,7 +6,11 @@ import {
   type HermesBotBinding,
 } from "./engines/contracts.ts";
 import type { HermesBridgeBinding } from "../shared/bridge-hermes-contract.ts";
-import { bridgeBindingUnavailableError, dispatchHermesBridgeInterrupt } from "./hermes-bridge-integration.ts";
+import {
+  bridgeBindingUnavailableError,
+  dispatchHermesBridgeInterrupt,
+  resolveHermesBotDispatch,
+} from "./hermes-bridge-integration.ts";
 
 export type HermesInterruptRunOn = "maus" | "cloud";
 
@@ -36,6 +40,7 @@ export interface HermesInterruptDependencies {
   bridgeRegistry?: BridgeRegistry;
   hermesRegistry: HermesInterruptRegistry;
   resolveProvider: (target: HermesInterruptTarget) => HermesInterruptProvider | null;
+  mightBeBridgeBound?: (botId: string) => boolean;
 }
 
 export type HermesInterruptRoute = "hermes" | "hermes-bridge" | "provider" | "none";
@@ -60,24 +65,24 @@ export async function dispatchHermesInterrupt(
   target: HermesInterruptTarget,
   dependencies: HermesInterruptDependencies,
 ): Promise<HermesInterruptRoute> {
-  const bridgeBindings = (dependencies.loadBridgeBindings ?? loadHermesBridgeBindings)();
-  if (bridgeBindings.state === "unavailable") throw new HermesEngineError(bridgeBindings.code);
+  const resolution = resolveHermesBotDispatch(target.botId, {
+    localBindings: dependencies.loadBindings(),
+    bridgeBindings: (dependencies.loadBridgeBindings ?? loadHermesBridgeBindings)(),
+    bridgeCandidate: dependencies.mightBeBridgeBound?.(target.botId) ?? false,
+  });
 
-  const bridgeBinding = bridgeBindings.value.get(target.botId);
-  if (bridgeBinding) {
-    await interruptBridgeBinding(bridgeBinding, dependencies);
-    return "hermes-bridge";
+  if (resolution.route === "local-unavailable" || resolution.route === "bridge-unavailable") {
+    throw new HermesEngineError(resolution.code);
   }
-
-  const bindings = dependencies.loadBindings();
-  if (bindings.state === "unavailable") throw new HermesEngineError(bindings.code);
-
-  const binding = bindings.value.get(target.botId);
-  if (binding) {
-    const engine = dependencies.hermesRegistry.forBinding(binding);
+  if (resolution.route === "local") {
+    const engine = dependencies.hermesRegistry.forBinding(resolution.binding);
     if (!engine) throw new HermesEngineError("state_unavailable");
-    await engine.interrupt(binding.profile);
+    await engine.interrupt(resolution.binding.profile);
     return "hermes";
+  }
+  if (resolution.route === "bridge") {
+    await interruptBridgeBinding(resolution.binding, dependencies);
+    return "hermes-bridge";
   }
 
   const provider = dependencies.resolveProvider(target);

@@ -18,6 +18,7 @@ import {
   placementKey,
   replayScrubbedHermesEvents,
   resolveBridgeBindingTarget,
+  resolveHermesBotDispatch,
 } from "./hermes-bridge-integration.ts";
 import {
   setHermesBridgeBinding,
@@ -434,5 +435,52 @@ describe("Hermes bridge integration dispatch", () => {
     await vi.advanceTimersByTimeAsync(500);
     await expect(promise).resolves.toBeUndefined();
     vi.useRealTimers();
+  });
+});
+
+describe("resolveHermesBotDispatch", () => {
+  const localBinding = {
+    adapter: "hermesBot" as const,
+    profile: "default",
+    canonicalTitle: "Bot Chat" as const,
+    bindingVersion: 1 as const,
+  };
+  const bridgeBinding = { bridgeId: "bridge-1", profile: "default", bindingVersion: 1 as const };
+  const unavailable = {
+    state: "unavailable" as const,
+    code: "state_unavailable" as const,
+    message: "Hermes state is unavailable",
+  };
+
+  it("prefers a readable local binding when the bridge sidecar is unreadable", () => {
+    expect(resolveHermesBotDispatch("bot-1", {
+      localBindings: { state: "available", value: new Map([["bot-1", localBinding]]) },
+      bridgeBindings: unavailable,
+      bridgeCandidate: false,
+    })).toEqual({ route: "local", binding: localBinding });
+  });
+
+  it("fails closed for bridge-shaped bots when the bridge sidecar is unreadable", () => {
+    expect(resolveHermesBotDispatch("bot-bridge", {
+      localBindings: { state: "available", value: new Map() },
+      bridgeBindings: unavailable,
+      bridgeCandidate: true,
+    })).toEqual({ route: "bridge-unavailable", code: "state_unavailable" });
+  });
+
+  it("leaves non-Hermes bots unbound when the bridge sidecar is unreadable", () => {
+    expect(resolveHermesBotDispatch("bot-claude", {
+      localBindings: { state: "available", value: new Map() },
+      bridgeBindings: unavailable,
+      bridgeCandidate: false,
+    })).toEqual({ route: "none" });
+  });
+
+  it("routes bridge-bound bots through the bridge binding when readable", () => {
+    expect(resolveHermesBotDispatch("bot-bridge", {
+      localBindings: { state: "available", value: new Map() },
+      bridgeBindings: { state: "available", value: new Map([["bot-bridge", bridgeBinding]]) },
+      bridgeCandidate: true,
+    })).toEqual({ route: "bridge", binding: bridgeBinding });
   });
 });
