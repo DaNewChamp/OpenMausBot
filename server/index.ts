@@ -4453,17 +4453,26 @@ function readBody(req: IncomingMessage): Promise<any> {
  * the same strict, non-secret request shape without forwarding arbitrary JSON
  * into the provider or Store. */
 function parseHermesSetupBody(body: unknown):
-  | { ok: true; profile?: string; placement?: HermesSetupPlacement }
+  | { ok: true; profile?: string; placement?: HermesSetupPlacement; botId?: string }
   | { ok: false; error: string } {
   const parsed = parseHermesSetupConnectInput(body);
   if (!parsed.ok) return parsed;
   if (parsed.placement?.kind === "local") {
-    return { ok: true, profile: parsed.placement.profile, placement: parsed.placement };
+    return {
+      ok: true,
+      profile: parsed.placement.profile,
+      placement: parsed.placement,
+      ...(parsed.botId ? { botId: parsed.botId } : {}),
+    };
   }
   if (parsed.placement?.kind === "bridge") {
-    return { ok: true, placement: parsed.placement };
+    return {
+      ok: true,
+      placement: parsed.placement,
+      ...(parsed.botId ? { botId: parsed.botId } : {}),
+    };
   }
-  return { ok: true };
+  return parsed.botId ? { ok: true, botId: parsed.botId } : { ok: true };
 }
 
 // Loopback-only enforcement: the harness runs on 127.0.0.1 but accepts
@@ -7788,6 +7797,7 @@ const server = createServer(async (req, res) => {
           registry: hermesRegistry,
           profile: parsed.profile,
           placement: parsed.placement,
+          botId: parsed.botId,
           bridgeRegistry: bridges,
           bot: (id) => store.bot(id),
           createBot: (profile, opts) => store.createBot(profile, opts),

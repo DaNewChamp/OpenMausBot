@@ -97,30 +97,52 @@ export function normalizeHermesSetupPlacement(value: unknown): HermesSetupPlacem
   return { kind, profile, bridge };
 }
 
+const BOT_ID_PATTERN = /^[\w-]{1,200}$/;
+const CONNECT_KEYS = new Set(["profile", "placement", "botId"]);
+
+export function normalizeHermesSetupBotId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed !== value || trimmed.length === 0) return undefined;
+  if (!BOT_ID_PATTERN.test(trimmed)) return undefined;
+  if (/^sk-/i.test(trimmed)) return undefined;
+  if (/token|secret|bearer/i.test(trimmed)) return undefined;
+  return trimmed;
+}
+
 export function parseHermesSetupConnectInput(body: unknown):
-  | { ok: true; placement?: HermesSetupPlacement }
+  | { ok: true; placement?: HermesSetupPlacement; botId?: string }
   | { ok: false; error: string } {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return { ok: false, error: "Hermes setup requires a JSON object" };
   }
   const values = body as Record<string, unknown>;
   const keys = Object.keys(values);
-  if (values.placement !== undefined) {
-    if (keys.some((key) => key !== "placement")) {
-      return { ok: false, error: "Hermes setup accepts only placement" };
-    }
-    const placement = normalizeHermesSetupPlacement(values.placement);
-    return placement
-      ? { ok: true, placement }
-      : { ok: false, error: "placement must name a Hermes profile and, for bridge placements, a bridge" };
-  }
-  if (keys.some((key) => key !== "profile")) {
+  if (keys.some((key) => !CONNECT_KEYS.has(key))) {
     return { ok: false, error: "Hermes setup accepts only profile or placement" };
   }
-  if (values.profile === undefined) return { ok: true };
+  if (values.profile !== undefined && values.placement !== undefined) {
+    return { ok: false, error: "Hermes setup accepts only profile or placement" };
+  }
+
+  let botId: string | undefined;
+  if (values.botId !== undefined) {
+    botId = normalizeHermesSetupBotId(values.botId);
+    if (!botId) return { ok: false, error: "botId must name an existing bot" };
+  }
+
+  if (values.placement !== undefined) {
+    const placement = normalizeHermesSetupPlacement(values.placement);
+    return placement
+      ? { ok: true, placement, ...(botId ? { botId } : {}) }
+      : { ok: false, error: "placement must name a Hermes profile and, for bridge placements, a bridge" };
+  }
+  if (values.profile === undefined) {
+    return { ok: true, ...(botId ? { botId } : {}) };
+  }
   const profile = normalizeHermesSetupProfile(values.profile);
   return profile
-    ? { ok: true, placement: { kind: "local", profile } }
+    ? { ok: true, placement: { kind: "local", profile }, ...(botId ? { botId } : {}) }
     : { ok: false, error: "profile must be a Hermes profile name" };
 }
 

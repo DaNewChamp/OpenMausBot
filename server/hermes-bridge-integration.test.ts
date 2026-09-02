@@ -151,6 +151,23 @@ describe("Hermes bridge integration setup", () => {
       placement: { kind: "bridge", bridge: "mini", profile: "default" },
     });
     expect(parseHermesSetupConnectInput({ token: "secret" })).toMatchObject({ ok: false });
+    expect(parseHermesSetupConnectInput({
+      botId: "bot-keep",
+      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+    })).toEqual({
+      ok: true,
+      botId: "bot-keep",
+      placement: { kind: "bridge", bridge: "mac mini", profile: "default" },
+    });
+    expect(parseHermesSetupConnectInput({
+      botId: "bot-keep",
+      profile: "work",
+    })).toEqual({
+      ok: true,
+      botId: "bot-keep",
+      placement: { kind: "local", profile: "work" },
+    });
+    expect(parseHermesSetupConnectInput({ botId: "sk-secret", profile: "default" })).toMatchObject({ ok: false });
   });
 
   it("lists online granted bridge placements by friendly bridge name and profile only", async () => {
