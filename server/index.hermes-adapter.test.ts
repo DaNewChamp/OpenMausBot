@@ -45,6 +45,8 @@ process.stdin.on("data", (chunk) => {
     writeLog(request);
     if (request.method === "gateway.capabilities") {
       out({ jsonrpc: "2.0", id: request.id, result: { per_session_exclusive_submit: true } });
+    } else if (request.method === "groups.capabilities") {
+      out({ jsonrpc: "2.0", id: request.id, result: { authority_epoch: 1 } });
     } else if (request.method === "profiles.list") {
       out({ jsonrpc: "2.0", id: request.id, result: { profiles: [{ name: "default", is_default: true, display_name: "Hermes fixture" }] } });
     } else if (request.method === "session.list") {
@@ -188,6 +190,8 @@ describe("Hermes Bot Chat hub integration", () => {
     expect(hermes).toMatchObject({
       instanceId: "hermes",
       capabilities: {
+        computerMcp: false,
+        localComputerMcp: false,
         hermesBot: {
           state: "available",
           capabilities: {
@@ -225,6 +229,11 @@ describe("Hermes Bot Chat hub integration", () => {
       }),
       { mode: 0o600 },
     );
+
+    const listed = await api("GET", "/api/bots");
+    const listedBot = listed.body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
+    expect(listedBot?.composer).toEqual({ queueing: false, steer: false, stop: true });
+    expect(JSON.stringify(listedBot)).not.toMatch(/canonicalTitle|profile|session-root|runtime-gen/i);
 
     const sent = await api("POST", `/api/bots/${bot.id}/messages`, { text: "hello Hermes" });
     expect(sent).toEqual({ status: 202, body: { ok: true, disposition: "started" } });
