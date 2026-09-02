@@ -8,6 +8,7 @@ import {
   projectHermesSetupStatus,
   type HermesSetupRegistry,
   type ConnectHermesProfileOptions,
+  type HermesSetupProfile,
 } from "./hermes-setup.ts";
 
 const capabilities = {
@@ -82,6 +83,36 @@ describe("Hermes setup projection", () => {
       bindings,
       botExists: () => false,
     })).toMatchObject({ state: "unavailable", reason: "missing_cli", profiles: [] });
+  });
+
+  it("projects ready remote bridge profiles when local Hermes is disabled", () => {
+    const remoteProfile: HermesSetupProfile = {
+      profile: "default",
+      handle: "hermes",
+      displayName: "Hermes",
+      description: "Remote assistant",
+      canonicalChat: "absent",
+      availability: "available",
+      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+    };
+    const status = projectHermesSetupStatus({
+      enabled: false,
+      description: description({ state: "unavailable", profiles: [] }),
+      bindings: { state: "available", value: new Map() },
+      remoteProfiles: [remoteProfile],
+      remoteCapabilities: { ...capabilities, send: true, events: true },
+      botExists: () => false,
+    });
+    expect(status).toMatchObject({
+      state: "ready",
+      profiles: [remoteProfile],
+      capabilities: {
+        roster: true,
+        canonicalChat: false,
+        send: false,
+        events: false,
+      },
+    });
   });
 
   it("marks only a valid existing binding as connected", () => {

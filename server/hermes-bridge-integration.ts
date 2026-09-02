@@ -14,7 +14,12 @@ import {
   type HermesBridgeBinding,
   type ScrubbedRuntimeEvent,
 } from "../shared/bridge-hermes-contract.ts";
-import { HermesEngineError, type HermesBotBinding } from "./engines/contracts.ts";
+import {
+  HERMES_CAPABILITY_KEYS,
+  HermesEngineError,
+  type HermesBotBinding,
+  type HermesCapabilityFlags,
+} from "./engines/contracts.ts";
 import type { HermesSetupProfile } from "./hermes-setup.ts";
 import { normalizeHermesSetupProfile } from "./hermes-setup.ts";
 
@@ -138,18 +143,80 @@ function publicBridgeProfile(
   };
 }
 
+const EMPTY_HERMES_CAPABILITIES: HermesCapabilityFlags = {
+  roster: false,
+  canonicalChat: false,
+  send: false,
+  finalResponse: false,
+  events: false,
+  stop: false,
+  routinesRead: false,
+  messageAgent: false,
+  groups: false,
+  crossMachine: false,
+  queueing: false,
+  steer: false,
+  attachments: false,
+  adoptMint: false,
+  approvals: false,
+  exclusiveSubmit: false,
+};
+
+export interface BridgeHermesDiscoveryResult {
+  profiles: HermesSetupProfile[];
+  capabilities: HermesCapabilityFlags;
+}
+
+export function mergeHermesCapabilitiesConservatively(
+  capabilities: readonly HermesCapabilityFlags[],
+): HermesCapabilityFlags {
+  if (capabilities.length === 0) return { ...EMPTY_HERMES_CAPABILITIES };
+  const output = { ...capabilities[0]! };
+  for (let index = 1; index < capabilities.length; index += 1) {
+    const next = capabilities[index]!;
+    for (const key of HERMES_CAPABILITY_KEYS) {
+      output[key] = output[key] && next[key];
+    }
+  }
+  return output;
+}
+
+/** Setup status exposes only roster from remote discovery until a profile connects. */
+export function projectSetupSafeRemoteCapabilities(
+  capabilities: HermesCapabilityFlags,
+): HermesCapabilityFlags {
+  return {
+    ...EMPTY_HERMES_CAPABILITIES,
+    roster: capabilities.roster,
+  };
+}
+
+export function projectConnectedRemoteCapabilities(
+  capabilities: HermesCapabilityFlags,
+  profiles: readonly HermesSetupProfile[],
+): HermesCapabilityFlags {
+  const canonicalChatProven = capabilities.canonicalChat
+    && profiles.some((profile) => profile.botId !== undefined && profile.canonicalChat === "present");
+  return {
+    ...capabilities,
+    canonicalChat: canonicalChatProven,
+  };
+}
+
 export async function discoverBridgeHermesPlacements(
   registry: BridgeRegistry,
-): Promise<HermesSetupProfile[]> {
+): Promise<BridgeHermesDiscoveryResult> {
   const bridges = registry.list().filter((bridge) =>
     bridge.online &&
     bridge.capabilities.includes("hermes") &&
     bridge.grantedCapabilities.includes("hermes"));
   const profiles: HermesSetupProfile[] = [];
+  const capabilitySets: HermesCapabilityFlags[] = [];
   for (const bridge of bridges) {
     try {
       const { discovery, bridgeName } = await discoverHermesOnBridge(registry, { bridgeId: bridge.id });
       if (discovery.state !== "available") continue;
+      capabilitySets.push(discovery.capabilities);
       for (const row of discovery.profiles) {
         if (row.availability !== "available" || !row.profile) continue;
         profiles.push(publicBridgeProfile(bridgeName, {
@@ -167,7 +234,10 @@ export async function discoverBridgeHermesPlacements(
       continue;
     }
   }
-  return profiles;
+  return {
+    profiles,
+    capabilities: mergeHermesCapabilitiesConservatively(capabilitySets),
+  };
 }
 
 export function mergeHermesSetupProfiles(

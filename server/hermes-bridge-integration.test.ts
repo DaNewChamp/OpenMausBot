@@ -12,6 +12,7 @@ import {
   discoverBridgeHermesPlacements,
   dispatchHermesBridgeSend,
   dispatchHermesBridgeInterrupt,
+  mergeHermesCapabilitiesConservatively,
   mergeHermesSetupProfiles,
   normalizeHermesSetupPlacement,
   parseHermesSetupConnectInput,
@@ -25,6 +26,7 @@ import {
 } from "./bridge-hermes-bindings.ts";
 import {
   connectHermesProfile,
+  readHermesSetupStatus,
   type HermesSetupProfile,
   type HermesSetupRegistry,
 } from "./hermes-setup.ts";
@@ -77,7 +79,7 @@ function discoveryBody(profile = "default") {
   };
 }
 
-function fakeHermesRegistry(): HermesSetupRegistry {
+function fakeHermesRegistry(enabled = true): HermesSetupRegistry {
   const description: HermesEngineDescription = {
     state: "available",
     instanceId: "hermes",
@@ -94,7 +96,7 @@ function fakeHermesRegistry(): HermesSetupRegistry {
     }],
   };
   return {
-    isEnabled: true,
+    isEnabled: enabled,
     instanceId: "hermes",
     discover: vi.fn(async () => description),
     describe: vi.fn(async () => description),
@@ -168,13 +170,31 @@ describe("Hermes bridge integration setup", () => {
       generation: job!.generation,
     });
     await vi.advanceTimersByTimeAsync(500);
-    const profiles = await promise;
-    expect(profiles).toEqual([expect.objectContaining({
+    const discovery = await promise;
+    expect(discovery.profiles).toEqual([expect.objectContaining({
       profile: "default",
       placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
     })]);
-    expect(JSON.stringify(profiles)).not.toMatch(/bridgeId|HERMES_HOME|jsonrpc/i);
+    expect(discovery.capabilities).toMatchObject({
+      roster: true,
+      send: true,
+      canonicalChat: true,
+    });
+    expect(JSON.stringify(discovery)).not.toMatch(/bridgeId|HERMES_HOME|jsonrpc/i);
     vi.useRealTimers();
+  });
+
+  it("merges bridge capabilities conservatively across multiple bridges", () => {
+    const base = discoveryBody().capabilities;
+    expect(mergeHermesCapabilitiesConservatively([
+      { ...base, send: true, stop: true, events: false },
+      { ...base, send: false, events: true, stop: true },
+    ])).toMatchObject({
+      roster: true,
+      send: false,
+      stop: true,
+      events: false,
+    });
   });
 
   it("matches placement keys case-insensitively for bridge names", () => {
@@ -239,7 +259,7 @@ describe("Hermes bridge integration setup", () => {
 
   it("connectHermesProfile connects mixed-case bridge placement and annotates botId in status", async () => {
     const { registry: bridgeRegistry, bridgeId } = pairedHermesBridge("Mac mini");
-    const registry = fakeHermesRegistry();
+    const registry = fakeHermesRegistry(true);
     const bots = new Map<string, { id: string }>();
     let bridgeBindings = new Map<string, { bridgeId: string; profile: string; bindingVersion: 1 }>();
     const createBot = vi.fn(() => {
@@ -308,6 +328,143 @@ describe("Hermes bridge integration setup", () => {
       placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
     })]));
     expect(createBot).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports ready remote bridge profiles when the hub Hermes registry is disabled", async () => {
+    const { registry: bridgeRegistry, bridgeId } = pairedHermesBridge("Mac mini");
+    const registry = fakeHermesRegistry(false);
+    vi.useFakeTimers();
+    const statusPromise = readHermesSetupStatus(registry, {
+      bridgeRegistry,
+      loadBindings: () => ({ state: "available", value: new Map() }),
+      loadBridgeBindings: () => ({ state: "available", value: new Map() }),
+      botExists: () => false,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    const [job] = bridgeRegistry.pollJobs(bridgeId);
+    bridgeRegistry.storeResult({
+      jobId: job!.id,
+      bridgeId,
+      exitCode: 0,
+      stdout: encodeHermesBridgeResult({ kind: "hermes-discover", body: discoveryBody() }),
+      stderr: "",
+      truncated: false,
+      finishedAt: Date.now(),
+      generation: job!.generation,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    const status = await statusPromise;
+    expect(status).toMatchObject({
+      state: "ready",
+      profiles: [expect.objectContaining({
+        profile: "default",
+        placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+      })],
+      capabilities: {
+        roster: true,
+        canonicalChat: false,
+        send: false,
+        finalResponse: false,
+        events: false,
+        stop: false,
+      },
+    });
+    expect(JSON.stringify(status)).not.toMatch(/bridgeId|HERMES_HOME|jsonrpc|Bearer |sk-/i);
+    vi.useRealTimers();
+  });
+
+  it("connects through a disabled hub registry without requiring local Hermes CLI", async () => {
+    const { registry: bridgeRegistry, bridgeId } = pairedHermesBridge("Mac mini");
+    const registry = fakeHermesRegistry(false);
+    const bots = new Map<string, { id: string }>();
+    let bridgeBindings = new Map<string, { bridgeId: string; profile: string; bindingVersion: 1 }>();
+    const createBot = vi.fn(() => {
+      const bot = { id: "bot-remote-1" };
+      bots.set(bot.id, bot);
+      return bot;
+    });
+    const connectPromise = connectHermesProfile({
+      registry,
+      placement: { kind: "bridge", bridge: "mac mini", profile: "default" },
+      bridgeRegistry,
+      loadBridgeBindings: () => ({ state: "available", value: bridgeBindings }),
+      setBridgeBinding: (id, binding) => {
+        bridgeBindings = new Map(bridgeBindings).set(id, binding);
+        return { state: "available", value: undefined };
+      },
+      removeBridgeBinding: (id) => {
+        bridgeBindings = new Map([...bridgeBindings].filter(([key]) => key !== id));
+        return { state: "available", value: undefined };
+      },
+      loadBindings: () => ({ state: "available", value: new Map() }),
+      bot: (id) => bots.get(id) ?? null,
+      createBot,
+      deleteBot: (id) => bots.delete(id),
+    });
+
+    const discoverJob = await waitForBridgeJob(bridgeRegistry, bridgeId, "hermes-discover");
+    bridgeRegistry.storeResult({
+      jobId: discoverJob.id,
+      bridgeId,
+      exitCode: 0,
+      stdout: encodeHermesBridgeResult({ kind: "hermes-discover", body: discoveryBody() }),
+      stderr: "",
+      truncated: false,
+      finishedAt: Date.now(),
+      generation: discoverJob.generation,
+    });
+
+    const canonicalJob = await waitForBridgeJob(bridgeRegistry, bridgeId, "hermes-ensure-canonical");
+    bridgeRegistry.storeResult({
+      jobId: canonicalJob.id,
+      bridgeId,
+      exitCode: 0,
+      stdout: encodeHermesBridgeResult({
+        kind: "hermes-ensure-canonical",
+        body: { state: "present", adopted: true },
+      }),
+      stderr: "",
+      truncated: false,
+      finishedAt: Date.now(),
+      generation: canonicalJob.generation,
+    });
+
+    const result = await connectPromise;
+    expect(result.created).toBe(true);
+    expect(result.status.state).toBe("connected");
+    expect(result.status.capabilities).toMatchObject({
+      roster: true,
+      send: true,
+      finalResponse: true,
+      events: true,
+      stop: true,
+      canonicalChat: false,
+    });
+    expect(result.profile).toMatchObject({
+      profile: "default",
+      botId: "bot-remote-1",
+      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+    });
+    expect(JSON.stringify(result)).not.toMatch(/bridgeId|HERMES_HOME|jsonrpc|Bearer |sk-/i);
+    expect(registry.forBinding).not.toHaveBeenCalled();
+    expect(createBot).toHaveBeenCalledWith(expect.objectContaining({
+      modelSelection: { instanceId: "hermes", model: "hermes" },
+    }), { seedMessages: false });
+  });
+
+  it("keeps disabled setup empty when the granted bridge is offline or revoked", async () => {
+    const registry = fakeHermesRegistry(false);
+    const { registry: bridgeRegistry, bridgeId } = pairedHermesBridge("Mac mini");
+    bridgeRegistry.touch(bridgeId);
+    const path = join(DATA_DIR, "bridges.json");
+    writeFileSync(path, JSON.stringify({ bridges: [] }), { mode: 0o600 });
+    const status = await readHermesSetupStatus(registry, {
+      bridgeRegistry,
+      loadBindings: () => ({ state: "available", value: new Map() }),
+      loadBridgeBindings: () => ({ state: "available", value: new Map() }),
+      botExists: () => false,
+    });
+    expect(status).toMatchObject({ state: "disabled", profiles: [] });
   });
 });
 
