@@ -16,6 +16,18 @@ const out = join(root, "dist-companion");
 const nested = join(out, "companion", "src");
 const serverDir = join(out, "server");
 const sharedDir = join(out, "shared");
+const tsconfig = JSON.parse(
+  readFileSync(join(root, "tsconfig.companion.build.json"), "utf8"),
+);
+
+function expectedSubdirJs(subdir) {
+  const names = new Set();
+  for (const pattern of tsconfig.include ?? []) {
+    if (!pattern.startsWith(`${subdir}/`) || !pattern.endsWith(".ts")) continue;
+    names.add(`${pattern.slice(subdir.length + 1, -3)}.js`);
+  }
+  return names;
+}
 
 function rewriteCompanionImports(source) {
   return source
@@ -34,8 +46,8 @@ if (!existsSync(nested)) {
 
 const companionJs = listDir(nested).filter((name) => name.endsWith(".js"));
 const expectedRoot = new Set(companionJs);
-const expectedServer = new Set(listDir(serverDir));
-const expectedShared = new Set(listDir(sharedDir).filter((name) => name.endsWith(".js")));
+const expectedServer = expectedSubdirJs("server");
+const expectedShared = expectedSubdirJs("shared");
 
 for (const name of listDir(out)) {
   const path = join(out, name);
@@ -51,14 +63,15 @@ for (const name of companionJs) {
 
 mkdirSync(sharedDir, { recursive: true });
 cpSync(join(root, "shared", "hub-identity.mjs"), join(sharedDir, "hub-identity.mjs"));
+expectedShared.add("hub-identity.mjs");
 
 for (const name of listDir(sharedDir)) {
-  if (name === "hub-identity.mjs" || vendoredSharedJs.has(name)) continue;
+  if (expectedShared.has(name)) continue;
   rmSync(join(sharedDir, name));
 }
 
 for (const name of listDir(serverDir)) {
-  if (vendoredServerJs.has(name)) continue;
+  if (expectedServer.has(name)) continue;
   rmSync(join(serverDir, name));
 }
 
