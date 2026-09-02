@@ -298,6 +298,81 @@ describe("Hermes V Bot MCP facade", () => {
     expect(JSON.stringify(result)).not.toMatch(/token|OMB_COMMS|Bearer|sk-/i);
   });
 
+  it("keeps concurrent env-executor credentials isolated without mutating process.env", async () => {
+    const { createServer } = await import("node:http");
+    const { createHermesVbotEnvToolExecutor } = await import("./hermes-vbot-mcp.ts");
+    const previous = {
+      OMB_HARNESS_URL: process.env.OMB_HARNESS_URL,
+      OMB_COMMS_TOKEN: process.env.OMB_COMMS_TOKEN,
+      OMB_BOT_ID: process.env.OMB_BOT_ID,
+    };
+    process.env.OMB_HARNESS_URL = "http://127.0.0.1:1";
+    process.env.OMB_COMMS_TOKEN = "global-must-not-win";
+    process.env.OMB_BOT_ID = "global-bot";
+
+    const seen: Record<"a" | "b", { auth?: string; url?: string }> = { a: {}, b: {} };
+    const listen = async (label: "a" | "b") => {
+      const server = createServer((req, res) => {
+        seen[label].auth = req.headers.authorization;
+        seen[label].url = String(req.url);
+        setTimeout(() => {
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ bots: [{ id: `peer-${label}`, name: label, model: "x" }] }));
+        }, 80);
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("expected tcp address");
+      return { server, url: `http://127.0.0.1:${address.port}` };
+    };
+
+    const a = await listen("a");
+    const b = await listen("b");
+    const envA = {
+      OMB_HARNESS_URL: a.url,
+      OMB_COMMS_TOKEN: "secret-a",
+      OMB_BOT_ID: "bot-a",
+    };
+    const envB = {
+      OMB_HARNESS_URL: b.url,
+      OMB_COMMS_TOKEN: "secret-b",
+      OMB_BOT_ID: "bot-b",
+    };
+    try {
+      const execA = createHermesVbotEnvToolExecutor(envA);
+      const execB = createHermesVbotEnvToolExecutor(envB);
+      envA.OMB_COMMS_TOKEN = "mutated-after-factory-a";
+      envB.OMB_COMMS_TOKEN = "mutated-after-factory-b";
+      const [resultA, resultB] = await Promise.all([execA("list_bots", {}), execB("list_bots", {})]);
+      expect(resultA.isError).not.toBe(true);
+      expect(resultB.isError).not.toBe(true);
+      expect(seen.a.auth).toBe("Bearer secret-a");
+      expect(seen.b.auth).toBe("Bearer secret-b");
+      expect(seen.a.url).toContain("self=bot-a");
+      expect(seen.b.url).toContain("self=bot-b");
+      expect(process.env.OMB_HARNESS_URL).toBe("http://127.0.0.1:1");
+      expect(process.env.OMB_COMMS_TOKEN).toBe("global-must-not-win");
+      expect(process.env.OMB_BOT_ID).toBe("global-bot");
+      expect(JSON.stringify(resultA)).not.toMatch(
+        /secret-a|secret-b|mutated-after-factory|global-must-not-win|OMB_COMMS_TOKEN/i,
+      );
+      expect(JSON.stringify(resultB)).not.toMatch(
+        /secret-a|secret-b|mutated-after-factory|global-must-not-win|OMB_COMMS_TOKEN/i,
+      );
+    } finally {
+      if (previous.OMB_HARNESS_URL === undefined) delete process.env.OMB_HARNESS_URL;
+      else process.env.OMB_HARNESS_URL = previous.OMB_HARNESS_URL;
+      if (previous.OMB_COMMS_TOKEN === undefined) delete process.env.OMB_COMMS_TOKEN;
+      else process.env.OMB_COMMS_TOKEN = previous.OMB_COMMS_TOKEN;
+      if (previous.OMB_BOT_ID === undefined) delete process.env.OMB_BOT_ID;
+      else process.env.OMB_BOT_ID = previous.OMB_BOT_ID;
+      await Promise.all([
+        new Promise<void>((resolve, reject) => a.server.close((error) => error ? reject(error) : resolve())),
+        new Promise<void>((resolve, reject) => b.server.close((error) => error ? reject(error) : resolve())),
+      ]);
+    }
+  });
+
   it("tools/list returns the real agents-proxy schema, not name-only stubs", async () => {
     const { createHermesVbotDaemonHandler, HERMES_VBOT_ALLOWED_TOOLS } = await import("./hermes-vbot-mcp.ts");
     const listed = await createHermesVbotDaemonHandler()({

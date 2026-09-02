@@ -125,33 +125,19 @@ export function hermesDaemonCredentialSnapshot(
 export function createHermesVbotEnvToolExecutor(
   env: NodeJS.ProcessEnv = process.env,
 ): HermesVbotToolExecutor {
+  const scope = Object.freeze({
+    harnessUrl: (env.OMB_HARNESS_URL ?? "").trim(),
+    token: (env.OMB_COMMS_TOKEN ?? "").trim(),
+    botId: (env.OMB_BOT_ID ?? "").trim(),
+    threadId: (env.OMB_THREAD_ID ?? "").trim(),
+    turnDepth: Number(env.OMB_TURN_DEPTH ?? "0") || 0,
+  });
   return async (name, args) => {
-    const harness = (env.OMB_HARNESS_URL ?? "").trim();
-    const token = (env.OMB_COMMS_TOKEN ?? "").trim();
-    if (!harness || !token) {
+    if (!scope.harnessUrl || !scope.token) {
       return { text: "V Bot tool facade is unconfigured", isError: true };
     }
-    const previous = {
-      OMB_HARNESS_URL: process.env.OMB_HARNESS_URL,
-      OMB_COMMS_TOKEN: process.env.OMB_COMMS_TOKEN,
-      OMB_BOT_ID: process.env.OMB_BOT_ID,
-      OMB_THREAD_ID: process.env.OMB_THREAD_ID,
-      OMB_TURN_DEPTH: process.env.OMB_TURN_DEPTH,
-    };
-    process.env.OMB_HARNESS_URL = harness;
-    process.env.OMB_COMMS_TOKEN = token;
-    process.env.OMB_BOT_ID = (env.OMB_BOT_ID ?? "").trim();
-    process.env.OMB_THREAD_ID = (env.OMB_THREAD_ID ?? "").trim();
-    if (env.OMB_TURN_DEPTH) process.env.OMB_TURN_DEPTH = env.OMB_TURN_DEPTH;
-    try {
-      const { executeAgentsProxyTool } = await import("../../server/drivers/agents-proxy.ts");
-      return await executeAgentsProxyTool(name, args);
-    } finally {
-      for (const [key, value] of Object.entries(previous)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
+    const { executeAgentsProxyTool } = await import("../../server/drivers/agents-proxy.ts");
+    return await executeAgentsProxyTool(name, args, { ...scope });
   };
 }
 
