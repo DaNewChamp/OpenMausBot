@@ -69,6 +69,15 @@ const COMMAND_TOOLS = new Set([
   "run_on_ssh_target",
 ]);
 
+/** Only command runners have a remembered grant that can be narrowed to the
+ * program the person just reviewed. Ordinary tools (for example Read) are
+ * intentionally excluded: their legacy bare-tool keys would grant every
+ * future invocation while looking like a one-action consent. */
+export function isNarrowApprovalTool(tool: string): boolean {
+  const bare = tool.replace(/^mcp__[^_]+__/, "").toLowerCase();
+  return COMMAND_TOOLS.has(bare);
+}
+
 export function approvalKey(tool: string, summary: string, scope?: "local-computer" | "bridge"): string {
   const bare = tool.replace(/^mcp__[^_]+__/, "").toLowerCase();
   if (!COMMAND_TOOLS.has(bare)) return scope ? `${scope}:${tool}` : tool;
@@ -79,6 +88,13 @@ export function approvalKey(tool: string, summary: string, scope?: "local-comput
   const program = (words[i] ?? "").split("/").pop()?.replace(/[^\w.-]/g, "") ?? "";
   const key = program ? `${tool}:${program}` : tool;
   return scope ? `${scope}:${key}` : key;
+}
+
+/** Return a standing-grant key only when its scope is proven narrow. Keep
+ * approvalKey's broad legacy return values for API compatibility, but never
+ * use those values to create or honor a new grant. */
+export function approvalGrantKey(tool: string, summary: string, scope?: "local-computer" | "bridge"): string | undefined {
+  return isNarrowApprovalTool(tool) ? approvalKey(tool, summary, scope) : undefined;
 }
 
 export interface AutoApprover {
@@ -149,11 +165,11 @@ export function autoVerdict(
   // worth auditing is "this WOULD have auto-approved, and only the block
   // stood in the way", which cannot be told apart from an ordinary
   // "nobody granted this" card without knowing both halves.
-  const key = approvalKey(tool, summary, context?.scope);
+  const key = approvalGrantKey(tool, summary, context?.scope);
   const grant =
     destructive || sensitive
       ? null
-      : bot.alwaysAllow?.includes(key)
+      : key && bot.alwaysAllow?.includes(key)
         ? { approve: `auto-approved ${key} (always allowed)`, source: "always-allow" as const, rule: key }
       : mode === "allow"
           ? { approve: `auto-approved ${tool}`, source: "auto-mode" as const, rule: undefined }
@@ -179,7 +195,7 @@ export function autoVerdict(
     // only an explicit always-allow grant (or a later human card) may run.
     if (destructive) return { approve: null, source: "destructive-guard", rule: destructive };
     if (sensitive) return { approve: null, source: "sensitive-guard", rule: sensitive };
-    if (bot.alwaysAllow?.includes(key)) {
+    if (key && bot.alwaysAllow?.includes(key)) {
       return { approve: `auto-approved ${key} (always allowed)`, source: "always-allow" as const, rule: key };
     }
     return { approve: null, source: "no-grant" };

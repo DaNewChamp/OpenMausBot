@@ -85,7 +85,7 @@ public struct OptionCard: Codable, Hashable, Sendable {
         guard isPermission else { return choice }
         if Self.isRefusal(choice) { return "Deny" }
         if Self.isStandingGrant(choice) { return "Always allow" }
-        return "Allow once"
+        return "Allow"
     }
 
     /// The wire API accepts an approval behavior rather than the button's

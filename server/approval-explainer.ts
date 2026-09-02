@@ -6,7 +6,7 @@
 
 import { createHash } from "node:crypto";
 
-import { looksDestructive, looksSensitive } from "./auto-approve.ts";
+import { isNarrowApprovalTool, looksDestructive, looksSensitive } from "./auto-approve.ts";
 import { sanitizeLocalVmInvokeText } from "./local-vm-invoke.ts";
 
 export type ApprovalRiskLevel = "low" | "medium" | "high";
@@ -39,25 +39,22 @@ export function approvalReason(explanation: ApprovalExplanation, hostLabel?: str
     .replace(/^Creates\s+/i, "create ")
     .replace(/^Deletes\s+/i, "delete ")
     .replace(/^Edits\s+/i, "edit ")
+    .replace(/^Connects\s+/i, "connect ")
+    .replace(/^Uses\s+/i, "use ")
     .replace(/^Runs\s+/i, "run ");
+
+  const action = intent ? `${intent.charAt(0).toLowerCase()}${intent.slice(1)}` : "";
+  const actionClause = action
+    ? /^(?:may|might|could|can|will|should)\b/i.test(action)
+      ? `the bot ${action}`
+      : `the bot wants to ${action}`
+    : "";
 
   if (explanation.riskLevel === "low" && intent) {
     return `This request needs your approval because the bot wants to ${intent} on ${host}. Nothing runs unless you approve.`;
   }
-  if (explanation.executiveSummary.toLowerCase().includes("credential") || explanation.executiveSummary.toLowerCase().includes("private")) {
-    return `This request needs your approval because it may expose credentials or private data on ${host}. Nothing runs unless you approve.`;
-  }
-  if (explanation.riskLevel === "high") {
-    if (/^(?:inspect|read|list|search|show|count|publish|create|delete|edit|run)\s/i.test(intent)) {
-      return `This request needs your approval because the bot wants to ${intent} on ${host}. Nothing runs unless you approve.`;
-    }
-    return `This request needs your approval because it may change files, processes, or system state on ${host}. Nothing runs unless you approve.`;
-  }
-  if (explanation.executiveSummary.toLowerCase().includes("connects")) {
-    return "This request needs your approval because it may send data to another computer or online service. Nothing runs unless you approve.";
-  }
-  if (explanation.executiveSummary.toLowerCase().includes("computer") || explanation.executiveSummary.toLowerCase().includes("on-screen")) {
-    return `This request needs your approval because it will interact with the desktop on ${host}. Nothing runs unless you approve.`;
+  if ((explanation.riskLevel === "high" || explanation.riskLevel === "medium") && actionClause) {
+    return `This request needs your approval because ${actionClause} on ${host}. Nothing runs unless you approve.`;
   }
   return "This request needs your approval because the effect of the tool could not be determined safely. Nothing runs unless you approve.";
 }
@@ -65,7 +62,8 @@ export function approvalReason(explanation: ApprovalExplanation, hostLabel?: str
 /** Explain the exact scope of a narrow remembered grant without exposing its
  * internal key. The caller only puts this on a card when the broker supplied
  * an allow key, so sensitive/destructive actions never inherit this copy. */
-export function approvalGrantSummary(toolLabel: string, command: string, hostLabel: string): string {
+export function approvalGrantSummary(toolLabel: string, command: string, hostLabel: string): string | undefined {
+  if (!isNarrowApprovalTool(toolLabel)) return undefined;
   const safeTool = sanitizeExplanationText(toolLabel) || "this tool";
   const safeHost = sanitizeExplanationText(hostLabel) || "this computer";
   const segments = shellSegments(sanitizeLocalVmInvokeText(String(command ?? "").slice(0, 16_000)));

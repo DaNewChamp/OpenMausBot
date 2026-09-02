@@ -1,4 +1,4 @@
-// The approval box: what the bot wants to do, and three ways to answer.
+// The approval box: what the bot wants to do, and the available answers.
 //
 // Deliberately not the lettered A/B/C list the onboarding card uses — an
 // approval is a decision about one concrete action, so it shows the tool
@@ -59,7 +59,7 @@ export function ApprovalCard({
         <div className="mt-1 text-[13px] leading-relaxed text-ink">
           {card.reason || "This request needs your approval before the bot can continue. Nothing runs unless you approve."}
         </div>
-        {card.alwaysAllowSummary && !settled && (
+        {card.allowKey && card.alwaysAllowSummary && !settled && (
           <div className="mt-2 border-t border-hairline/30 pt-2">
             <div className="text-[13px] font-medium text-accent">Always allow</div>
             <div className="mt-0.5 text-[12px] leading-relaxed text-ink-secondary">{card.alwaysAllowSummary}</div>

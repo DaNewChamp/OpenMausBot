@@ -470,10 +470,6 @@ export function Composer({
               pending={approval}
               threadId={threadId}
               bot={approvalBot}
-              onCancelTurn={() => {
-                if (group) dispatch({ type: "interruptGroup", groupId: group.id });
-                else if (bot) dispatch({ type: "interrupt", botId: bot.id });
-              }}
             />
           </div>
         )}

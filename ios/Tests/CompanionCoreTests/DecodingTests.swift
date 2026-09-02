@@ -342,7 +342,7 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(card.actionSummary, "This will let Terminal run on Mac mini.")
         XCTAssertEqual(card.alwaysAllowSummary, "Always allow Terminal to run git commands on Mac mini.")
         XCTAssertEqual(card.details, "git status --short")
-        XCTAssertEqual(card.displayLabel(for: "Allow"), "Allow once")
+        XCTAssertEqual(card.displayLabel(for: "Allow"), "Allow")
         XCTAssertEqual(card.displayLabel(for: "Deny"), "Deny")
         XCTAssertEqual(card.displayLabel(for: "Always allow"), "Always allow")
         XCTAssertEqual(card.permissionAllowChoice, "Allow")

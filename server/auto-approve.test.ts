@@ -4,7 +4,7 @@
 // question is never answered by the machine.
 import { describe, expect, it } from "vitest";
 
-import { approvalKey, autoDecision, looksDestructive, looksSensitive } from "./auto-approve.ts";
+import { approvalGrantKey, approvalKey, autoDecision, looksDestructive, looksSensitive } from "./auto-approve.ts";
 
 describe("looksDestructive", () => {
   const dangerous = [
@@ -72,6 +72,8 @@ describe("approvalKey", () => {
   it("leaves ordinary tools alone", () => {
     expect(approvalKey("Read", "src/index.ts")).toBe("Read");
     expect(approvalKey("mcp__ogb__computer_batch", "click 5,5")).toBe("mcp__ogb__computer_batch");
+    expect(approvalGrantKey("Read", "src/index.ts")).toBeUndefined();
+    expect(approvalGrantKey("mcp__ogb__computer_batch", "click 5,5")).toBeUndefined();
   });
 
   it("names local and cloud grants in different scopes", () => {
@@ -102,9 +104,9 @@ describe("autoDecision", () => {
     expect(autoDecision({ autoApprove: true }, "Bash", "rm -rf /")).toBeNull();
   });
 
-  it("honours always-allow for one tool without turning on auto mode", () => {
+  it("does not treat a broad legacy tool key as a standing grant", () => {
     const bot = { alwaysAllow: ["Read"] };
-    expect(autoDecision(bot, "Read", "src/index.ts")).toBe("auto-approved Read (always allowed)");
+    expect(autoDecision(bot, "Read", "src/index.ts")).toBeNull();
     expect(autoDecision(bot, "Bash", "ls")).toBeNull();
   });
 

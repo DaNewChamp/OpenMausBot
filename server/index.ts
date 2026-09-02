@@ -21,7 +21,7 @@ import {
   type CredentialTargetId,
 } from "../shared/credential-request.ts";
 
-import { approvalKey, autoVerdict, looksDestructive, looksSensitive, permissionMode } from "./auto-approve.ts";
+import { approvalGrantKey, approvalKey, autoVerdict, looksDestructive, looksSensitive, permissionMode } from "./auto-approve.ts";
 import * as checkpoints from "./checkpoints.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
@@ -999,6 +999,13 @@ function grantBlocked(command: string, tool: string): boolean {
   return looksDestructive(command) || looksDestructive(tool) || looksSensitive(command);
 }
 
+function approvalChoices(permission: boolean, choices: string[] | undefined, grantKey?: string): string[] {
+  const offered = choices?.length ? choices : permission ? ["Allow", "Deny"] : [];
+  if (!permission || grantKey) return offered;
+  const withoutBroadGrant = offered.filter((choice) => !/always\s+allow|remember|trust\s+this|allow\s+future/i.test(choice));
+  return withoutBroadGrant.length ? withoutBroadGrant : ["Allow", "Deny"];
+}
+
 export function approvalPresentation(tool: string, summary: string, scope?: "local-computer" | "bridge"): {
   toolLabel: string;
   hostLabel: string;
@@ -1024,6 +1031,7 @@ export function approvalPresentation(tool: string, summary: string, scope?: "loc
   const details = sanitizeLocalVmInvokeText(String(summary ?? "").slice(0, 16_000));
   const explanation = explainApproval(tool, details, hostLabel);
   const reason = approvalReason(explanation, hostLabel);
+  const grantKey = approvalGrantKey(tool, details, scope);
   const readOnlyCommand = explanation.riskLevel === "low" && explanation.changeSummary === "Nothing; read-only";
   const actionSummary = toolLabel === "Terminal"
     ? `${readOnlyCommand ? "Run a read-only command" : "Run a command"} on ${hostLabel}`
@@ -1046,7 +1054,7 @@ export function approvalPresentation(tool: string, summary: string, scope?: "loc
     explanationConfidence: explanation.confidence,
     explanationSource: explanation.source ?? "local",
     ...(
-      scope !== "local-computer" && !grantBlocked(details, tool)
+      scope !== "local-computer" && !grantBlocked(details, tool) && grantKey
         ? { alwaysAllowSummary: approvalGrantSummary(toolLabel, details, hostLabel) }
         : {}
     ),
@@ -1452,7 +1460,7 @@ bus.subscribe((event: RuntimeEvent) => {
             const presentation = approvalPresentation(tool, summary, event.approvalScope);
             const grantKey = event.approvalScope || grantBlocked(summary, tool)
               ? undefined
-              : approvalKey(tool, summary, event.approvalScope);
+              : approvalGrantKey(tool, summary, event.approvalScope);
             const card = pushMessage({
               role: "bot",
               kind: "options",
@@ -1472,7 +1480,7 @@ bus.subscribe((event: RuntimeEvent) => {
                 ...(grantKey && presentation.alwaysAllowSummary
                   ? { alwaysAllowSummary: presentation.alwaysAllowSummary }
                   : {}),
-                options: grantKey ? ["Allow", "Deny", "Always allow"] : ["Allow", "Deny"],
+                options: approvalChoices(true, event.choices, grantKey),
                 requestId,
                 tool,
                 ...(grantKey ? { allowKey: grantKey } : {}),
@@ -1508,7 +1516,7 @@ bus.subscribe((event: RuntimeEvent) => {
         ? approvalPresentation(event.tool, event.summary, event.approvalScope)
         : null;
       const grantKey = permission && !event.approvalScope && !grantBlocked(event.summary, event.tool)
-        ? approvalKey(event.tool, event.summary, event.approvalScope)
+        ? approvalGrantKey(event.tool, event.summary, event.approvalScope)
         : undefined;
       const message = pushMessage({
         role: "bot",
@@ -1536,7 +1544,7 @@ bus.subscribe((event: RuntimeEvent) => {
               title: "Your bot has a question",
               subtitle: event.summary,
             }),
-          options: event.choices?.length ? event.choices : permission ? ["Allow", "Deny"] : [],
+          options: approvalChoices(permission, event.choices, grantKey),
           requestId: event.requestId,
           tool: permission ? event.tool : undefined,
           // the exact grant "always allow" would remember, decided here so

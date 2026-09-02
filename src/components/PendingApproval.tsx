@@ -44,7 +44,7 @@ export function pendingApprovals(messages: Message[]): Pending[] {
       detail: m.card!.details ?? m.card!.subtitle,
       held: m.card!.held,
       reason: m.card!.reason,
-      alwaysAllowSummary: m.card!.alwaysAllowSummary,
+      alwaysAllowSummary: m.card!.allowKey ? m.card!.alwaysAllowSummary : undefined,
       executiveSummary: m.card!.executiveSummary,
       changeSummary: m.card!.changeSummary,
       resourceSummary: m.card!.resourceSummary,
@@ -92,7 +92,7 @@ export const PendingApprovalPanel = memo(function PendingApprovalPanel({
         <div className="mt-1 text-[13px] leading-relaxed text-ink">
           {pending.reason || "This request needs your approval before the bot can continue. Nothing runs unless you approve."}
         </div>
-        {pending.alwaysAllowSummary && (
+        {pending.allowKey && pending.alwaysAllowSummary && (
           <div className="mt-2 border-t border-hairline/30 pt-2">
             <div className="text-[13px] font-medium text-accent">Always allow</div>
             <div className="mt-0.5 text-[12px] leading-relaxed text-ink-secondary">{pending.alwaysAllowSummary}</div>
@@ -135,13 +135,11 @@ export function PendingApprovalActions({
   pending,
   threadId,
   bot,
-  onCancelTurn,
 }: {
   pending: Pending;
   threadId: string;
   /** who asked — "always allow" is remembered against them */
   bot?: Bot;
-  onCancelTurn: () => void;
 }) {
   const { dispatch } = useStore();
   const decide = (behavior: "allow" | "deny", always = false) =>
@@ -156,31 +154,30 @@ export function PendingApprovalActions({
 
   const base = "rounded-full px-3.5 py-1.5 text-[13.5px] transition-colors";
   return (
-    <div className="flex flex-wrap items-center justify-end gap-2 px-2 py-2">
-      <button onClick={onCancelTurn} className={cn(base, "text-ink-secondary hover:bg-control hover:text-ink")}>
-        Cancel turn
-      </button>
-      <button
-        onClick={() => decide("deny")}
-        className={cn(base, "border border-danger/40 text-danger hover:bg-danger/10")}
-      >
-        Deny
-      </button>
-      {bot && pending.allowKey && (
+    <div className="flex flex-col items-stretch gap-1 px-2 py-2">
+      <div className="flex items-center justify-end gap-2">
+        <button
+          onClick={() => decide("deny")}
+          className={cn(base, "border border-danger/40 text-danger hover:bg-danger/10")}
+        >
+          Deny
+        </button>
+        <button
+          onClick={() => decide("allow")}
+          className={cn(base, "bg-accent font-medium text-white hover:brightness-110")}
+        >
+          Allow
+        </button>
+      </div>
+      {bot && pending.allowKey && pending.alwaysAllowSummary && (
         <button
           onClick={() => decide("allow", true)}
-          title={`Stop asking ${bot.name} about ${pending.allowKey}`}
-          className={cn(base, "border border-hairline/50 text-ink hover:bg-control")}
+          title={`Stop asking ${bot.name} about this narrow action`}
+          className={cn(base, "self-end text-ink-secondary hover:bg-control hover:text-ink")}
         >
           Always allow
         </button>
       )}
-      <button
-        onClick={() => decide("allow")}
-        className={cn(base, "bg-accent font-medium text-white hover:brightness-110")}
-      >
-        Allow once
-      </button>
     </div>
   );
 }

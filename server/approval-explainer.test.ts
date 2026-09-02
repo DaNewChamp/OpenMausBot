@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { explainApproval, isReadOnlyShellCommand, reviewApproval } from "./approval-explainer.ts";
+import { approvalGrantSummary, explainApproval, isReadOnlyShellCommand, reviewApproval } from "./approval-explainer.ts";
 import { approvalPresentation } from "./index.ts";
 
 describe("approval explanations", () => {
@@ -37,6 +37,24 @@ describe("approval explanations", () => {
     const presentation = approvalPresentation("terminal", "git status --short", "bridge");
     expect(presentation.alwaysAllowSummary).toBe("Always allow Terminal to run git commands on Bridge.");
     expect(approvalPresentation("terminal", "rm -rf /tmp/scratch", "bridge").alwaysAllowSummary).toBeUndefined();
+  });
+
+  it("does not offer a misleading standing grant for broad non-command tools", () => {
+    const presentation = approvalPresentation("Read", "server/config.ts", undefined);
+    expect(presentation.alwaysAllowSummary).toBeUndefined();
+    expect(approvalGrantSummary("Read", "server/config.ts", "Mac mini")).toBeUndefined();
+  });
+
+  it("uses deterministic sensitive and network facts in the approval reason", () => {
+    expect(approvalPresentation("terminal", "cat ~/.ssh/id_ed25519", "local-computer").reason).toBe(
+      "This request needs your approval because the bot wants to read information that may contain credentials or private data on Mac mini. Nothing runs unless you approve.",
+    );
+    expect(approvalPresentation("terminal", "curl https://example.com", "local-computer").reason).toBe(
+      "This request needs your approval because the bot wants to connect to another computer or online service on Mac mini. Nothing runs unless you approve.",
+    );
+    expect(approvalPresentation("terminal", "rm -rf /tmp/build", "local-computer").reason).toBe(
+      "This request needs your approval because the bot wants to delete files or folders on Mac mini. Nothing runs unless you approve.",
+    );
   });
 
   function expectFailClosed(command: string) {

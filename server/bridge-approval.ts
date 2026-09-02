@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import type { ServerResponse } from "node:http";
 
-import { approvalKey, autoVerdict, looksDestructive, looksSensitive } from "./auto-approve.ts";
+import { approvalGrantKey, autoVerdict, looksDestructive, looksSensitive } from "./auto-approve.ts";
 import { DATA_DIR } from "./config.ts";
 import { newId } from "./contracts.ts";
 import { appendDecision } from "./decision-log.ts";
@@ -330,7 +330,7 @@ function startPending<T>(
 ): Pending<T> {
   const timeoutMs = req.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS;
   const requestId = newId();
-  const allowKey = grantBlocked(req.command, req.tool) ? undefined : approvalKey(req.tool, req.command, "bridge");
+  const allowKey = grantBlocked(req.command, req.tool) ? undefined : approvalGrantKey(req.tool, req.command, "bridge");
   const card = withCard ? pushApprovalCard(bus, live, req, requestId, allowKey) : undefined;
   if (withCard) {
     appendDecision(DATA_DIR, {
