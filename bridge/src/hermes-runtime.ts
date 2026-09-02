@@ -11,7 +11,11 @@ function failureCode(error: unknown): HermesFailureCode {
   return error instanceof HermesEngineError ? error.code : "upstream_error";
 }
 
-export function createHermesBridgeRuntimeFromEngine(engine: HermesBotEngine): HermesBridgeRuntime {
+export function createHermesBridgeRuntimeFromEngine(
+  engine: HermesBotEngine,
+  options: { closeOnDispose?: boolean } = {},
+): HermesBridgeRuntime {
+  const closeOnDispose = options.closeOnDispose ?? false;
   return {
     async discover() {
       return projectHermesDiscoveryWire(await engine.discover());
@@ -37,19 +41,60 @@ export function createHermesBridgeRuntimeFromEngine(engine: HermesBotEngine): He
         return { state: "unknown", reason: failureCode(error) };
       }
     },
-    async send(payload) {
+    async send(payload, signal?: AbortSignal) {
+      if (signal?.aborted) {
+        return {
+          ok: false,
+          reason: "upstream_error" as const,
+          turnId: payload.turnId,
+          events: [],
+        };
+      }
       const events: RuntimeEvent[] = [];
       const unsubscribe = engine.onEvent((event) => {
         events.push(event);
       });
+      let removeAbortListener: (() => void) | undefined;
+      const abortPromise = signal
+        ? new Promise<never>((_, reject) => {
+          const onAbort = () => {
+            void engine.interrupt(payload.profile, payload.turnId).catch(() => {});
+            reject(new Error("aborted"));
+          };
+          if (signal.aborted) {
+            onAbort();
+            return;
+          }
+          signal.addEventListener("abort", onAbort, { once: true });
+          removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+        })
+        : undefined;
       try {
-        const result = await engine.send(payload);
+        const result = await (abortPromise
+          ? Promise.race([engine.send(payload), abortPromise])
+          : engine.send(payload));
+        if (signal?.aborted) {
+          return {
+            ok: false,
+            reason: "upstream_error" as const,
+            turnId: payload.turnId,
+            events: scrubRuntimeEvents(events),
+          };
+        }
         return {
           ok: true,
           turnId: result.turnId,
           events: scrubRuntimeEvents(events),
         };
       } catch (error) {
+        if (signal?.aborted || (error instanceof Error && error.message === "aborted")) {
+          return {
+            ok: false,
+            reason: "upstream_error" as const,
+            turnId: payload.turnId,
+            events: scrubRuntimeEvents(events),
+          };
+        }
         return {
           ok: false,
           reason: failureCode(error),
@@ -57,6 +102,7 @@ export function createHermesBridgeRuntimeFromEngine(engine: HermesBotEngine): He
           events: scrubRuntimeEvents(events),
         };
       } finally {
+        removeAbortListener?.();
         unsubscribe();
       }
     },
@@ -68,7 +114,9 @@ export function createHermesBridgeRuntimeFromEngine(engine: HermesBotEngine): He
         return { ok: false, reason: failureCode(error) };
       }
     },
-    close: () => engine.close(),
+    close: async () => {
+      if (closeOnDispose) engine.close();
+    },
   };
 }
 
@@ -81,7 +129,7 @@ export function defaultHermesBridgeRuntimeFactory(): HermesBridgeRuntimeFactory 
           cli: process.env.OMB_BRIDGE_HERMES_CLI ?? "hermes",
         });
       }
-      return createHermesBridgeRuntimeFromEngine(shared);
+      return createHermesBridgeRuntimeFromEngine(shared, { closeOnDispose: false });
     },
   };
 }
