@@ -369,6 +369,9 @@ describe("Hermes discovery normalization", () => {
       queueing: false,
       steer: false,
       attachments: false,
+      adoptMint: false,
+      approvals: false,
+      exclusiveSubmit: false,
     });
   });
 });

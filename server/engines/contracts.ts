@@ -15,6 +15,9 @@ export const HERMES_CAPABILITY_KEYS = [
   "queueing",
   "steer",
   "attachments",
+  "adoptMint",
+  "approvals",
+  "exclusiveSubmit",
 ] as const;
 
 export interface HermesCapabilityFlags {
@@ -31,6 +34,9 @@ export interface HermesCapabilityFlags {
   queueing: boolean;
   steer: boolean;
   attachments: boolean;
+  adoptMint: boolean;
+  approvals: boolean;
+  exclusiveSubmit: boolean;
 }
 
 export interface HermesBotBinding {

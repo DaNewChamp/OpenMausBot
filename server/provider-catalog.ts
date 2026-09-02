@@ -63,6 +63,9 @@ export interface AdvertisedCatalogInstance {
         queueing: boolean;
         steer: boolean;
         attachments: boolean;
+        adoptMint: boolean;
+        approvals: boolean;
+        exclusiveSubmit: boolean;
       };
     };
   };

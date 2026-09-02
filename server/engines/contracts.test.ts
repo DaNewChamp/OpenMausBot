@@ -24,6 +24,9 @@ describe("Hermes internal contracts", () => {
       "queueing",
       "steer",
       "attachments",
+      "adoptMint",
+      "approvals",
+      "exclusiveSubmit",
     ]);
 
     const projected = projectHermesCapabilities({
@@ -40,6 +43,9 @@ describe("Hermes internal contracts", () => {
       queueing: true,
       steer: true,
       attachments: true,
+      adoptMint: true,
+      approvals: true,
+      exclusiveSubmit: true,
     });
     expect(Object.keys(projected)).toEqual(HERMES_CAPABILITY_KEYS);
     expect(projected).toEqual({
@@ -56,7 +62,23 @@ describe("Hermes internal contracts", () => {
       queueing: false,
       steer: false,
       attachments: false,
+      adoptMint: false,
+      approvals: false,
+      exclusiveSubmit: true,
     } satisfies HermesCapabilityFlags);
+  });
+
+  it("turns exclusiveSubmit on only after gateway.capabilities proves per_session_exclusive_submit", () => {
+    expect(projectHermesCapabilities({ exclusiveSubmit: true }).exclusiveSubmit).toBe(true);
+    expect(projectHermesCapabilities({ provenExclusiveSubmit: true } as never).exclusiveSubmit).toBe(false);
+  });
+
+  it("lists the Wave 2 keys after the Wave 1 keys", () => {
+    expect(HERMES_CAPABILITY_KEYS.slice(-3)).toEqual([
+      "adoptMint",
+      "approvals",
+      "exclusiveSubmit",
+    ]);
   });
 
   it("exposes only a stable failure code and safe human message", () => {

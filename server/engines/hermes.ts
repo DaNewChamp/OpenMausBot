@@ -7,6 +7,7 @@ import {
   normalizeCanonicalLookup,
   normalizeProfileRowsResult,
   projectHermesCapabilities,
+  type HermesReadiness,
 } from "./discovery.ts";
 import {
   clearHermesPendingProfile,
@@ -858,6 +859,15 @@ export class HermesBotAdapter implements HermesBotEngine {
   async discover(): Promise<HermesDiscovery> {
     try {
       await this.client.start();
+      const capabilities = await this.client.request("gateway.capabilities", {});
+      if (
+        capabilities
+        && typeof capabilities === "object"
+        && !Array.isArray(capabilities)
+        && (capabilities as Record<string, unknown>).per_session_exclusive_submit === true
+      ) {
+        this.readiness.exclusiveSubmit = true;
+      }
       const payload = await this.client.request("profiles.list", { include_sessions: true });
       const normalized = normalizeProfileRowsResult(payload);
       if (normalized.state === "unknown") {
@@ -1458,15 +1468,6 @@ function canonicalUnknownCode(
     default:
       return "state_unavailable";
   }
-}
-
-interface HermesReadiness {
-  roster?: boolean;
-  canonicalChat?: boolean;
-  send?: boolean;
-  finalResponse?: boolean;
-  events?: boolean;
-  stop?: boolean;
 }
 
 export function createHermesBotEngine(options: HermesBotEngineOptions = {}): HermesBotAdapter {

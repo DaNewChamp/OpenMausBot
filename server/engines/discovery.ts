@@ -373,6 +373,9 @@ export interface HermesReadiness {
   queueing?: boolean;
   steer?: boolean;
   attachments?: boolean;
+  adoptMint?: boolean;
+  approvals?: boolean;
+  exclusiveSubmit?: boolean;
 }
 
 export function projectHermesCapabilities(readiness: HermesReadiness): HermesCapabilityFlags {
@@ -383,6 +386,7 @@ export function projectHermesCapabilities(readiness: HermesReadiness): HermesCap
     "finalResponse",
     "events",
     "stop",
+    "exclusiveSubmit",
   ]);
   const output = {} as HermesCapabilityFlags;
   for (const key of HERMES_CAPABILITY_KEYS) {

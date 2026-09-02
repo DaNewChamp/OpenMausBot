@@ -43,7 +43,9 @@ process.stdin.on("data", (chunk) => {
     let request;
     try { request = JSON.parse(line); } catch { continue; }
     writeLog(request);
-    if (request.method === "profiles.list") {
+    if (request.method === "gateway.capabilities") {
+      out({ jsonrpc: "2.0", id: request.id, result: { per_session_exclusive_submit: true } });
+    } else if (request.method === "profiles.list") {
       out({ jsonrpc: "2.0", id: request.id, result: { profiles: [{ name: "default", is_default: true, display_name: "Hermes fixture" }] } });
     } else if (request.method === "session.list") {
       out({ jsonrpc: "2.0", id: request.id, result: { sessions: [{ id: "root-session", resolved_id: "resolved-session", title: "Bot Chat", hidden: true, source: "tui", message_count: 1 }] } });

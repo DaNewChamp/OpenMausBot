@@ -105,6 +105,9 @@ function unavailableDescription(instanceId?: string, reason: HermesDiscovery["re
       queueing: false,
       steer: false,
       attachments: false,
+      adoptMint: false,
+      approvals: false,
+      exclusiveSubmit: false,
     },
     profiles: [],
   };

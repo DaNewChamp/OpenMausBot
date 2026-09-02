@@ -96,6 +96,9 @@ const EMPTY_CAPABILITIES: HermesCapabilityFlags = {
   queueing: false,
   steer: false,
   attachments: false,
+  adoptMint: false,
+  approvals: false,
+  exclusiveSubmit: false,
 };
 
 const PROFILE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;

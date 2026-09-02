@@ -24,6 +24,9 @@ const capabilities = {
   queueing: false,
   steer: false,
   attachments: false,
+  adoptMint: false,
+  approvals: false,
+  exclusiveSubmit: false,
 };
 
 const description = (overrides: Partial<HermesEngineDescription> = {}): HermesEngineDescription => ({

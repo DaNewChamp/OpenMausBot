@@ -157,6 +157,11 @@ process.stdin.on("data", (chunk) => {
       return;
     }
 
+    if (request.method === "gateway.capabilities") {
+      out({ jsonrpc: "2.0", id: request.id, result: { per_session_exclusive_submit: true } });
+      return;
+    }
+
     if (request.method === "profiles.list") {
       if (mode === "auth-fail") {
         out({ jsonrpc: "2.0", id: request.id, error: { code: 401, message: "token=/fixture/secret" } });

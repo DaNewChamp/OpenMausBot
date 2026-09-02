@@ -29,12 +29,22 @@ class FakeProcess extends EventEmitter implements HermesProcess {
     writes: [] as string[],
     write: (chunk: string) => {
       this.stdin.writes.push(chunk);
-      this.onRequest?.(JSON.parse(chunk));
+      const request = JSON.parse(chunk) as { id: number; method: string; params: Record<string, unknown> };
+      if (request.method === "gateway.capabilities") {
+        if (this.capabilitiesMode === "auto") {
+          this.frame({ jsonrpc: "2.0", id: request.id, result: { per_session_exclusive_submit: true } });
+        } else if (this.capabilitiesMode === "omit") {
+          this.frame({ jsonrpc: "2.0", id: request.id, result: {} });
+        }
+        return true;
+      }
+      this.onRequest?.(request);
       return true;
     },
     end: vi.fn(),
     on: vi.fn(),
   };
+  capabilitiesMode: "auto" | "manual" | "omit" = "auto";
   onRequest?: (request: { id: number; method: string; params: Record<string, unknown> }) => void;
   kill = vi.fn(() => true);
 
@@ -84,7 +94,9 @@ describe("Hermes Bot Chat loopback transport", () => {
     await settle();
     ready(child);
     await settle();
-    const request = JSON.parse(child.stdin.writes[0]!);
+    const capabilities = JSON.parse(child.stdin.writes.find((raw) => JSON.parse(raw).method === "gateway.capabilities")!);
+    expect(capabilities.params).toEqual({});
+    const request = JSON.parse(child.stdin.writes.at(-1)!);
     expect(request.method).toBe("profiles.list");
     child.frame({ jsonrpc: "2.0", method: "event", params: { type: "status.update", payload: { text: "ignored" } } });
     child.frame({ jsonrpc: "2.0", id: request.id, result: { profiles: [{ name: "default", is_default: true }] } });
@@ -93,6 +105,7 @@ describe("Hermes Bot Chat loopback transport", () => {
       state: "available",
       version: "0.21.0",
       profiles: [{ profile: "default", handle: "hermes" }],
+      capabilities: { exclusiveSubmit: true },
     });
     expect(discoveryResult.authenticated).not.toBe(true);
     expect(spawn).toHaveBeenCalledWith(
@@ -104,6 +117,24 @@ describe("Hermes Bot Chat loopback transport", () => {
     expect(env.V_BOT_TOKEN).toBeUndefined();
     expect(env.OPENMAUSBOT_SECRET).toBeUndefined();
     expect(env.HERMES_HOME).toBe("/private/hermes");
+    await engine.close();
+  });
+
+  it("calls gateway.capabilities after gateway.ready and refuses exclusiveSubmit when omitted", async () => {
+    const child = new FakeProcess();
+    child.capabilitiesMode = "omit";
+    const engine = createHermesBotEngine({ spawn: () => child });
+    const discover = engine.discover();
+    await settle();
+    ready(child);
+    await settle();
+    const caps = JSON.parse(child.stdin.writes.find((raw) => JSON.parse(raw).method === "gateway.capabilities")!);
+    expect(caps.params).toEqual({});
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(roster.method).toBe("profiles.list");
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "default" }] } });
+    const discovery = await discover;
+    expect(discovery.capabilities.exclusiveSubmit).toBe(false);
     await engine.close();
   });
 
@@ -237,7 +268,7 @@ describe("Hermes Bot Chat loopback transport", () => {
 
     const roster = JSON.parse(child.stdin.writes.at(-1)!);
     expect(roster.method).toBe("profiles.list");
-    expect(child.stdin.writes).toHaveLength(1);
+    expect(child.stdin.writes).toHaveLength(2);
     child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "default", is_default: true }] } });
     await settle();
     const list = JSON.parse(child.stdin.writes.at(-1)!);
@@ -255,7 +286,7 @@ describe("Hermes Bot Chat loopback transport", () => {
     await expect(first).resolves.toEqual({ turnId: "turn-first" });
     await expect(second).rejects.toMatchObject({ code: "upstream_error" });
     expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).toEqual([
-      "profiles.list", "session.list", "session.resume", "prompt.submit",
+      "gateway.capabilities", "profiles.list", "session.list", "session.resume", "prompt.submit",
     ]);
 
     child.frame({ jsonrpc: "2.0", method: "event", params: { type: "message.delta", session_id: "ephemeral-runtime", payload: { text: "still running" } } });
@@ -386,8 +417,9 @@ describe("Hermes Bot Chat loopback transport", () => {
       });
       await expect(retry).resolves.toMatchObject({ profile: "coder" });
       expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).toEqual([
-        "profiles.list", "session.list", "session.create",
-        "profiles.list", "session.list", "session.create", "profiles.list", "session.list",
+        "gateway.capabilities", "profiles.list", "session.list", "session.create",
+        "gateway.capabilities", "profiles.list", "session.list", "session.create",
+        "gateway.capabilities", "profiles.list", "session.list",
       ]);
     } finally {
       await engine.close();
@@ -478,8 +510,9 @@ describe("Hermes Bot Chat loopback transport", () => {
       child.frame({ jsonrpc: "2.0", id: retryList.id, result: { sessions: [] } });
       await expect(retry).rejects.toMatchObject({ code: "state_unavailable" });
       expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).toEqual([
-        "profiles.list", "session.list", "session.create", "profiles.list", "session.list",
-        "profiles.list", "session.list",
+        "gateway.capabilities", "profiles.list", "session.list", "session.create",
+        "gateway.capabilities", "profiles.list", "session.list",
+        "gateway.capabilities", "profiles.list", "session.list",
       ]);
       expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).not.toContain("session.delete");
       expect(readFileSync(pendingPath, "utf8")).not.toContain("durable-created");
@@ -516,7 +549,7 @@ describe("Hermes Bot Chat loopback transport", () => {
       child.frame({ jsonrpc: "2.0", id: create.id, result: created });
       await expect(ensure).rejects.toMatchObject({ code: "malformed_response" });
       expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).toEqual([
-        "profiles.list", "session.list", "session.create",
+        "gateway.capabilities", "profiles.list", "session.list", "session.create",
       ]);
     } finally {
       await engine.close();
@@ -541,7 +574,7 @@ describe("Hermes Bot Chat loopback transport", () => {
     child.frame({ jsonrpc: "2.0", id: create.id, result: {} });
     await expect(ensure).rejects.toMatchObject({ code: "malformed_response" });
     expect(child.stdin.writes.map((raw) => JSON.parse(raw).method)).toEqual([
-      "profiles.list", "session.list", "session.create",
+      "gateway.capabilities", "profiles.list", "session.list", "session.create",
     ]);
     await engine.close();
   });
@@ -900,7 +933,7 @@ describe("Hermes Bot Chat loopback transport", () => {
     secondChild.frame({ jsonrpc: "2.0", method: "event", params: { type: "message.complete", session_id: "runtime-new", payload: { text: "ok", status: "complete" } } });
     await settle();
     expect(secondChild.stdin.writes.map((raw) => JSON.parse(raw).method)).toEqual([
-      "profiles.list", "session.list", "session.resume", "prompt.submit",
+      "gateway.capabilities", "profiles.list", "session.list", "session.resume", "prompt.submit",
     ]);
     await engine.close();
   });
