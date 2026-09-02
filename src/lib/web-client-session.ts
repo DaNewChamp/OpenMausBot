@@ -8,12 +8,11 @@ import {
 import { clearClientCookie, getClientCookie, setClientCookie } from "./web-client-cookies";
 import { isWebClientMode, webClientSearch } from "./web-client-mode";
 
-const ACCOUNT_COOKIE = "vbot_w_acct";
 const HUB_URL_COOKIE = "vbot_w_hub";
-const HUB_TOKEN_COOKIE = "vbot_w_hub_cred";
 const HUB_NAME_COOKIE = "vbot_w_hub_name";
-const ACCOUNT_MAX_AGE = 7 * 24 * 60 * 60;
 const HUB_MAX_AGE = 365 * 24 * 60 * 60;
+const DEFAULT_CONTROL_PLANE = "https://accounts.openmausbot.com";
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 export interface WebAccountUser {
   id: string;
@@ -52,14 +51,28 @@ export interface WebClientSessionSnapshot {
 
 let hubApiBase = "";
 let hubDeviceToken: string | null = null;
+let accountTokenMemory: string | null = null;
+
+function isAllowedControlPlaneOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    const loopback = LOOPBACK_HOSTS.has(url.hostname);
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) return false;
+    if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) return false;
+    if (origin === DEFAULT_CONTROL_PLANE) return true;
+    return loopback;
+  } catch {
+    return false;
+  }
+}
 
 export function resolveControlPlaneUrl(search = globalThis.location?.search ?? ""): string {
   const override = new URLSearchParams(search).get("controlPlane");
   if (override) {
     const normalized = normalizeControlPlaneURL(override);
-    if (normalized) return normalized;
+    if (normalized && isAllowedControlPlaneOrigin(normalized)) return normalized;
   }
-  return normalizeControlPlaneURL("https://accounts.openmausbot.com");
+  return DEFAULT_CONTROL_PLANE;
 }
 
 export function setHubApiBase(base: string) {
@@ -78,6 +91,14 @@ export function getHubDeviceToken(): string | null {
   return hubDeviceToken;
 }
 
+export function setAccountToken(token: string | null) {
+  accountTokenMemory = token;
+}
+
+export function getAccountToken(): string | null {
+  return accountTokenMemory;
+}
+
 export function hubApiUrl(path: string): string {
   if (path.startsWith("http://") || path.startsWith("https://")) return path;
   return `${hubApiBase}${path}`;
@@ -93,22 +114,17 @@ export function assertHubApiReady(): void {
   }
 }
 
-function readStoredAccountToken(): string | null {
-  const token = getClientCookie(ACCOUNT_COOKIE);
-  return token && token.length >= 20 ? token : null;
+export function assertAccountDiscoveryOnly(path: string, search = webClientSearch()): void {
+  if (!isWebClientMode(search)) return;
+  if (!accountDiscoveryOnly(path, search)) {
+    throw new Error("Complete hub pairing before using the hub API.");
+  }
 }
 
-function readStoredHub(): WebHubConnection | null {
+function readStoredHubUrl(): string | null {
   const baseUrl = getClientCookie(HUB_URL_COOKIE);
-  const deviceToken = getClientCookie(HUB_TOKEN_COOKIE);
-  if (!baseUrl || !deviceToken) return null;
-  const normalized = normalizeHubBaseUrl(baseUrl);
-  if (!normalized || deviceToken.length < 20) return null;
-  return {
-    baseUrl: normalized,
-    deviceToken,
-    deviceName: getClientCookie(HUB_NAME_COOKIE) ?? "Web client",
-  };
+  if (!baseUrl) return null;
+  return normalizeHubBaseUrl(baseUrl);
 }
 
 export function normalizeHubBaseUrl(value: string): string | null {
@@ -125,16 +141,15 @@ export function normalizeHubBaseUrl(value: string): string | null {
 }
 
 export function persistAccountSession(token: string) {
-  setClientCookie(ACCOUNT_COOKIE, token, ACCOUNT_MAX_AGE);
+  setAccountToken(token);
 }
 
 export function clearAccountSession() {
-  clearClientCookie(ACCOUNT_COOKIE);
+  setAccountToken(null);
 }
 
 export function persistHubConnection(connection: WebHubConnection) {
   setClientCookie(HUB_URL_COOKIE, connection.baseUrl, HUB_MAX_AGE);
-  setClientCookie(HUB_TOKEN_COOKIE, connection.deviceToken, HUB_MAX_AGE);
   setClientCookie(HUB_NAME_COOKIE, connection.deviceName, HUB_MAX_AGE);
   setHubApiBase(connection.baseUrl);
   setHubDeviceToken(connection.deviceToken);
@@ -142,7 +157,6 @@ export function persistHubConnection(connection: WebHubConnection) {
 
 export function clearHubConnection() {
   clearClientCookie(HUB_URL_COOKIE);
-  clearClientCookie(HUB_TOKEN_COOKIE);
   clearClientCookie(HUB_NAME_COOKIE);
   setHubApiBase("");
   setHubDeviceToken(null);
@@ -153,33 +167,57 @@ export function pocketIdCallbackURL(controlPlaneUrl: string, returnTo: string): 
   return `${base}/web-client/complete?redirect=${encodeURIComponent(returnTo)}`;
 }
 
-export function consumeAccountTokenFromLocation(): string | null {
+export function consumeWebAuthCodeFromLocation(): string | null {
   try {
-    const hash = globalThis.location?.hash?.replace(/^#/, "") ?? "";
-    if (!hash) return null;
-    const token = new URLSearchParams(hash).get("account");
-    if (!token || token.length < 20 || token.startsWith("omb_install_")) return null;
-    const next = `${globalThis.location?.pathname ?? "/"}${globalThis.location?.search ?? ""}`;
+    const search = globalThis.location?.search ?? "";
+    const params = new URLSearchParams(search);
+    const code = params.get("web_auth_code");
+    if (!code) return null;
+    params.delete("web_auth_code");
+    params.delete("auth_error");
+    const nextSearch = params.toString();
+    const next = `${globalThis.location?.pathname ?? "/"}${nextSearch ? `?${nextSearch}` : ""}`;
     globalThis.history?.replaceState?.(null, "", next);
-    return token;
+    return code;
   } catch {
     return null;
   }
 }
 
+export async function exchangeWebAuthCode(baseURL: string, code: string): Promise<string> {
+  const response = await fetch(`${baseURL.replace(/\/$/, "")}/web-client/exchange`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: globalThis.location?.origin ?? baseURL },
+    body: JSON.stringify({ code }),
+  });
+  const payload = (await response.json().catch(() => null)) as { accountToken?: string; error?: string } | null;
+  if (!response.ok || typeof payload?.accountToken !== "string") {
+    throw new ControlPlaneError(payload?.error ?? "request_failed", response.status);
+  }
+  persistAccountSession(payload.accountToken);
+  return payload.accountToken;
+}
+
+export async function bootstrapWebClientAuth(baseURL: string) {
+  const code = consumeWebAuthCodeFromLocation();
+  if (!code) return null;
+  return exchangeWebAuthCode(baseURL, code);
+}
+
 export function loadWebClientSession(search = globalThis.location?.search ?? ""): WebClientSessionSnapshot {
   const controlPlaneUrl = resolveControlPlaneUrl(search);
-  const fragmentToken = consumeAccountTokenFromLocation();
-  if (fragmentToken) persistAccountSession(fragmentToken);
-  const accountToken = readStoredAccountToken();
-  const hub = readStoredHub();
-  if (hub) {
-    setHubApiBase(hub.baseUrl);
-    setHubDeviceToken(hub.deviceToken);
-  }
+  const hubUrl = readStoredHubUrl();
+  if (hubUrl) setHubApiBase(hubUrl);
+  const hub = hubDeviceToken && hubApiBase
+    ? {
+        baseUrl: hubApiBase,
+        deviceToken: hubDeviceToken,
+        deviceName: getClientCookie(HUB_NAME_COOKIE) ?? "Web client",
+      }
+    : null;
   return {
     account: null,
-    accountToken,
+    accountToken: accountTokenMemory,
     fleet: [],
     hub,
     controlPlaneUrl,
@@ -311,7 +349,7 @@ export async function pairDirectHub(input: PairDirectInput): Promise<WebHubConne
 
 export function accountDiscoveryOnly(path: string, search = webClientSearch()): boolean {
   if (!isWebClientMode(search)) return false;
-  return path === "/v1/me" || path === "/v1/fleet" || path.startsWith("/api/auth/");
+  return path === "/v1/me" || path === "/v1/fleet" || path.startsWith("/api/auth/") || path === "/web-client/exchange";
 }
 
 export function decodeFleetPayload(payload: unknown): WebFleetInstallation[] | null {

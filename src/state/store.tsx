@@ -36,6 +36,7 @@ import {
 } from "@/lib/vbot-engine";
 import { isWebClientMode } from "@/lib/web-client-mode";
 import {
+  assertHubApiReady,
   getHubDeviceToken,
   hubApiUrl,
 } from "@/lib/web-client-session";
@@ -1213,6 +1214,7 @@ function hubAuthHeaders(headers?: HeadersInit): Headers {
   const next = new Headers(headers);
   if (!next.has("content-type")) next.set("content-type", "application/json");
   if (isWebClientMode()) {
+    assertHubApiReady();
     const token = getHubDeviceToken();
     if (token) next.set("authorization", `Bearer ${token}`);
   }
@@ -1220,10 +1222,12 @@ function hubAuthHeaders(headers?: HeadersInit): Headers {
 }
 
 function hubFetch(path: string, init?: RequestInit): Promise<Response> {
+  if (isWebClientMode()) assertHubApiReady();
   return fetch(hubApiUrl(path), { ...init, headers: hubAuthHeaders(init?.headers) });
 }
 
 export async function api(path: string, init?: RequestInit): Promise<any> {
+  if (isWebClientMode()) assertHubApiReady();
   const res = await hubFetch(path, init);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? `${res.status} ${res.statusText}`);
@@ -1970,8 +1974,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       else pendingFrames.push(frame);
     };
 
-    const token = isWebClientMode() ? getHubDeviceToken() : null;
-    if (token) {
+    if (isWebClientMode()) {
+      const token = getHubDeviceToken();
+      if (!token) {
+        rawDispatch({ type: "connected", value: false });
+        return () => {
+          alive = false;
+          clearTimeout(hydrationFallback);
+        };
+      }
       const stop = openAuthorizedEventStream({
         url: hubApiUrl("/api/events"),
         token,

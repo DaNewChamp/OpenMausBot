@@ -20,6 +20,7 @@ import { SettingsPanel } from "@/components/SettingsPanel";
 import { Sidebar } from "@/components/Sidebar";
 import { StoreProvider, useStore, type Bot as BotRecord } from "@/state/store";
 import {
+  bootstrapWebClientAuth,
   canCallHubApi,
   clearAccountSession,
   clearHubConnection,
@@ -504,7 +505,27 @@ export function WebClientShell() {
 
 export function WebClientApp() {
   const [session, setSession] = useState(() => loadWebClientSession());
-  if (!session.hub) {
+  const [bootstrapping, setBootstrapping] = useState(
+    () => new URLSearchParams(globalThis.location?.search ?? "").has("web_auth_code"),
+  );
+
+  useEffect(() => {
+    void bootstrapWebClientAuth(session.controlPlaneUrl)
+      .then((token) => {
+        if (token) setSession((prev) => ({ ...prev, accountToken: token }));
+      })
+      .catch(() => {})
+      .finally(() => setBootstrapping(false));
+  }, [session.controlPlaneUrl]);
+
+  if (bootstrapping) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-app text-ink-secondary">
+        Finishing sign-in…
+      </main>
+    );
+  }
+  if (!canCallHubApi()) {
     return <WebClientGate session={session} onSessionChange={setSession} />;
   }
   return (

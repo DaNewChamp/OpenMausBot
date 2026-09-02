@@ -22,11 +22,11 @@ afterEach(() => {
 });
 
 describe("web client cookies", () => {
-  it("stores and clears values without localStorage", () => {
-    setClientCookie("vbot_test", "secret-value", 3600);
-    expect(getClientCookie("vbot_test")).toBe("secret-value");
-    clearClientCookie("vbot_test");
-    expect(getClientCookie("vbot_test")).toBeFalsy();
+  it("stores non-secret UI hints without localStorage", () => {
+    setClientCookie("vbot_w_hub", "https://hub.example", 3600);
+    expect(getClientCookie("vbot_w_hub")).toBe("https://hub.example");
+    clearClientCookie("vbot_w_hub");
+    expect(getClientCookie("vbot_w_hub")).toBeFalsy();
   });
 
   it("scopes cookies to path / and SameSite=Strict", () => {
