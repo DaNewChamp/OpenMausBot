@@ -97,8 +97,8 @@ final class HermesSetupTests: XCTestCase {
         )
 
         _ = try await client.connectHermes(
-            botId: "bot-keep",
-            placement: HermesSetupPlacement(kind: .local, profile: "work")
+            placement: HermesSetupPlacement(kind: .local, profile: "work"),
+            botId: "bot-keep"
         )
         struct RebindBody: Decodable {
             let botId: String
