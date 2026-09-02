@@ -23,6 +23,10 @@
 //   list_routines / create_routine / run_routine → scheduled tasks
 //   request_credential(id, reason?)       → show a secure, allowlisted key card
 //
+// The first-party Hermes connector (bridge/src/hermes-vbot-mcp.ts) exposes this
+// same approved tool set over a loopback MCP facade. The facade argv and
+// Hermes config receive only a socket path and bot scope — never OMB_COMMS_TOKEN.
+//
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
 // the harness when it builds the integration:
@@ -31,6 +35,7 @@
 //   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
 //   OMB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
 import readline from "node:readline";
+import { pathToFileURL } from "node:url";
 
 import { CREDENTIAL_TARGETS, isCredentialTargetId } from "../../shared/credential-request.ts";
 
@@ -309,6 +314,8 @@ const TOOLS = [
     },
   },
 ];
+
+export const AGENT_PROXY_TOOL_NAMES = TOOLS.map((tool) => tool.name);
 
 type Json = Record<string, unknown>;
 const send = (msg: Json) => process.stdout.write(JSON.stringify(msg) + "\n");
@@ -721,18 +728,31 @@ async function handle(msg: Json) {
   }
 }
 
-const rl = readline.createInterface({ input: process.stdin, terminal: false });
-rl.on("line", (line) => {
-  const t = line.trim();
-  if (!t) return;
-  let msg: Json;
+function isDirectRun(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  if (entry.endsWith("agents-proxy.ts") || entry.endsWith("agents-proxy.js")) return true;
   try {
-    msg = JSON.parse(t) as Json;
+    return import.meta.url === pathToFileURL(entry).href;
   } catch {
-    return;
+    return false;
   }
-  void handle(msg).catch((e) => {
-    if (msg.id !== undefined) rpcErr(msg.id, -32603, (e as Error).message);
+}
+
+if (isDirectRun()) {
+  const rl = readline.createInterface({ input: process.stdin, terminal: false });
+  rl.on("line", (line) => {
+    const t = line.trim();
+    if (!t) return;
+    let msg: Json;
+    try {
+      msg = JSON.parse(t) as Json;
+    } catch {
+      return;
+    }
+    void handle(msg).catch((e) => {
+      if (msg.id !== undefined) rpcErr(msg.id, -32603, (e as Error).message);
+    });
   });
-});
-rl.on("close", () => process.exit(0));
+  rl.on("close", () => process.exit(0));
+}

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
+import { join } from "node:path";
 
 import { heartbeat, registerBridge, submitResult } from "./client.ts";
 import { credentialsPath, loadCredentials, saveCredentials } from "./config.ts";
@@ -12,6 +13,7 @@ import {
   discoverLocalHermesEndpoints,
   type HermesEndpointDescriptor,
 } from "./hermes-endpoints.ts";
+import { installHermesVbotConnector } from "./hermes-vbot-mcp.ts";
 import {
   bridgeHeartbeatIntervalMs,
   bridgeHermesExecutionEnabled,
@@ -192,11 +194,31 @@ async function main() {
     return;
   }
 
+  if (command === "hermes-connector-install") {
+    const hub = flag("--hub");
+    const botScope = flag("--bot-scope");
+    const bridgeDir = process.env.OMB_BRIDGE_DIR ?? join(homedir(), ".openmausbot-bridge");
+    const configPath = flag("--config") ?? join(bridgeDir, "hermes-vbot-mcp.json");
+    const socketPath = flag("--socket") ?? join(bridgeDir, "vbot.sock");
+    if (!hub || !botScope) {
+      throw new Error('usage: hermes-connector-install --hub "Mac mini" --bot-scope <bot-id> [--config path] [--socket path]');
+    }
+    const result = installHermesVbotConnector({
+      configPath,
+      socketPath,
+      botScope,
+      hubDisplayName: hub,
+    });
+    console.log(`${result.adopted ? "updated" : "installed"} Hermes V Bot connector for ${hub} (bot scope ${botScope})`);
+    return;
+  }
+
   console.log(`openmausbot-bridge
 
   connect --url <harness-url> --code <6-digit> [--name host]
   run
   status
+  hermes-connector-install --hub <name> --bot-scope <bot-id> [--config path] [--socket path]
 
   OMB_BRIDGE_SHELL=1        advertise shell execution capability
   OMB_BRIDGE_LOCAL_VM=1     advertise local-vm relay capability
