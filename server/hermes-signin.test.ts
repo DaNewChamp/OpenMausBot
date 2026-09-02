@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { BridgeRegistry, type BridgeJob } from "./bridge-registry.ts";
 import { DATA_DIR } from "./config.ts";
+import { HermesEngineError } from "./engines/contracts.ts";
 import { encodeHermesBridgeResult } from "../shared/bridge-hermes-contract.ts";
 import {
   parseHermesSignInInput,
@@ -55,12 +56,77 @@ async function waitForBridgeJob(
   throw new Error(`timed out waiting for ${kind}`);
 }
 
-function expectNoDiagnostics(value: unknown): void {
-  const serialized = `${typeof value === "string" ? value : JSON.stringify(value)} ${
-    value instanceof Error ? `${value.name} ${value.message} ${value.stack ?? ""}` : ""
-  }`;
-  expect(serialized).not.toMatch(/sk-|Bearer |HERMES_HOME|token|secret|\/Users\/|stderr/i);
+const DIAGNOSTIC_LEAK = /sk-|Bearer |HERMES_HOME|token|secret|\/Users\/|stderr/i;
+const WORKTREE_STACK = [
+  "HermesEngineError: Hermes gateway is unavailable",
+  "    at startHermesSignIn (/Users/Vincent/Github/.worktrees/vbot-hermes-verify-0902/server/hermes-signin.ts:83:13)",
+  "    at processTicksAndRejections (node:internal/process/task_queues:105:5)",
+].join("\n");
+
+function diagnosticSurface(value: unknown): string {
+  const parts: string[] = [];
+  if (typeof value === "string") return value;
+  try {
+    parts.push(JSON.stringify(value) ?? "null");
+  } catch {
+    parts.push("");
+  }
+  if (!value || typeof value !== "object") return parts.join(" ");
+  const record = value as Record<string, unknown>;
+  for (const key of ["name", "message", "code"]) {
+    if (record[key] !== undefined) parts.push(String(record[key]));
+  }
+  for (const [key, entry] of Object.entries(record)) {
+    if (key === "stack") continue;
+    parts.push(key);
+    if (entry === undefined) continue;
+    if (typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean") {
+      parts.push(String(entry));
+      continue;
+    }
+    try {
+      parts.push(JSON.stringify(entry) ?? "");
+    } catch {
+      /* ignore non-JSON enumerable values */
+    }
+  }
+  return parts.join(" ");
 }
+
+function expectNoDiagnostics(value: unknown): void {
+  expect(diagnosticSurface(value)).not.toMatch(DIAGNOSTIC_LEAK);
+}
+
+describe("Hermes sign-in diagnostic assertions", () => {
+  it("does not treat V8 stack frames from a /Users worktree as a leak", () => {
+    const error = new HermesEngineError("gateway_unavailable");
+    error.stack = WORKTREE_STACK;
+    expect(error).toMatchObject({ code: "gateway_unavailable" });
+    expectNoDiagnostics(error);
+  });
+
+  it("still flags secret-shaped fields in name, message, enumerable properties, and JSON", () => {
+    const leaked = new HermesEngineError("gateway_unavailable");
+    leaked.stack = WORKTREE_STACK;
+    Object.defineProperty(leaked, "message", {
+      value: "HERMES_HOME=/Users/Vincent/.hermes token=sk-secret",
+      configurable: true,
+    });
+    expect(() => expectNoDiagnostics(leaked)).toThrow(/HERMES_HOME|sk-secret|\/Users\//i);
+
+    const enumerable = new HermesEngineError("gateway_unavailable");
+    enumerable.stack = WORKTREE_STACK;
+    Object.assign(enumerable, { stderr: "Bearer secret" });
+    expect(() => expectNoDiagnostics(enumerable)).toThrow(/Bearer |stderr|secret/i);
+
+    expect(() => expectNoDiagnostics({
+      kind: "terminal",
+      computerName: "Mac mini",
+      message: "Complete sign-in on Mac mini, then try again.",
+      stdout: "token=sk-secret",
+    })).toThrow(/sk-|token/i);
+  });
+});
 
 describe("Hermes sign-in handoff", () => {
   beforeEach(() => {
