@@ -34,6 +34,12 @@ public enum CompanionNotificationAuthorizationState: Equatable, Sendable {
 public enum CompanionOnboardingPreferences {
     public static let pendingNotificationOnboardingKey =
         "companion.onboarding.notificationPending"
+    public static let pendingHermesConnectionCardKey =
+        "companion.onboarding.hermesCardPending"
+
+    public static func dismissedHermesConnectionCardKey(connectionID: String) -> String {
+        "companion.onboarding.hermesCardDismissed.\(connectionID)"
+    }
 }
 
 /// Keeps the crash-sensitive part of a successful pairing commit explicit
