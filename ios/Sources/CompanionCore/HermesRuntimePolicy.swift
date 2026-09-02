@@ -126,6 +126,7 @@ public struct HermesSubagentActivity: Hashable, Identifiable, Sendable, Equatabl
     public var status: Status
     public var transcriptThreadId: String
     public var promoteEligible: Bool
+    public var updatedAt: Double?
 
     public var id: String { activityId }
 
@@ -135,7 +136,8 @@ public struct HermesSubagentActivity: Hashable, Identifiable, Sendable, Equatabl
         title: String,
         status: Status,
         transcriptThreadId: String,
-        promoteEligible: Bool
+        promoteEligible: Bool,
+        updatedAt: Double? = nil
     ) {
         self.activityId = activityId
         self.parentThreadId = parentThreadId
@@ -143,6 +145,7 @@ public struct HermesSubagentActivity: Hashable, Identifiable, Sendable, Equatabl
         self.status = status
         self.transcriptThreadId = transcriptThreadId
         self.promoteEligible = promoteEligible
+        self.updatedAt = updatedAt
     }
 
     public func placeholderBot() -> Bot {
@@ -390,6 +393,7 @@ public enum HermesRuntimePresentationPolicy: Sendable {
 
 public enum HermesSubagentPresentationPolicy: Sendable {
     public static let promoteTitle = "Promote to Bot"
+    public static let recentlyFinishedRetention: TimeInterval = 60
 
     public static func navigationThreadId(for activity: HermesSubagentActivity) -> String {
         activity.transcriptThreadId
@@ -397,5 +401,39 @@ public enum HermesSubagentPresentationPolicy: Sendable {
 
     public static func showsPromote(for activity: HermesSubagentActivity) -> Bool {
         activity.promoteEligible && activity.status != .promoted
+    }
+
+    public static func showsInLivePill(
+        _ activity: HermesSubagentActivity,
+        now: Date = Date()
+    ) -> Bool {
+        switch activity.status {
+        case .started, .updated:
+            return true
+        case .completed:
+            guard let updatedAt = activity.updatedAt else { return false }
+            return now.timeIntervalSince1970 - (updatedAt / 1000) <= recentlyFinishedRetention
+        case .promoted, .unknown:
+            return false
+        }
+    }
+
+    public static func retainedInParentHistory(_ activity: HermesSubagentActivity) -> Bool {
+        switch activity.status {
+        case .started, .updated, .completed:
+            return !activity.transcriptThreadId.isEmpty
+        case .promoted, .unknown:
+            return false
+        }
+    }
+
+    public static func parentHistoryActivities(
+        _ activities: [HermesSubagentActivity],
+        parentThreadId: String
+    ) -> [HermesSubagentActivity] {
+        activities.filter {
+            retainedInParentHistory($0)
+                && ($0.parentThreadId == parentThreadId || $0.transcriptThreadId == parentThreadId)
+        }
     }
 }

@@ -130,6 +130,61 @@ struct HomeActivityPresentationTests {
         #expect(activity.status != .promoted)
     }
 
+    @Test
+    func livePillDropsCompletedAgentsAfterRetentionWhileParentHistoryStaysReopenable() {
+        let nowMs = 1_700_000_060_000.0
+        let now = Date(timeIntervalSince1970: nowMs / 1000)
+        let recent = HermesSubagentActivity(
+            activityId: "act-recent",
+            parentThreadId: "parent-thread",
+            title: "Draft review",
+            status: .completed,
+            transcriptThreadId: "thread-temp-recent",
+            promoteEligible: true,
+            updatedAt: nowMs - 30_000
+        )
+        let stale = HermesSubagentActivity(
+            activityId: "act-stale",
+            parentThreadId: "parent-thread",
+            title: "Older review",
+            status: .completed,
+            transcriptThreadId: "thread-temp-stale",
+            promoteEligible: true,
+            updatedAt: nowMs - 61_000
+        )
+
+        #expect(HermesSubagentPresentationPolicy.showsInLivePill(recent, now: now))
+        #expect(!HermesSubagentPresentationPolicy.showsInLivePill(stale, now: now))
+        #expect(HermesSubagentPresentationPolicy.retainedInParentHistory(recent))
+        #expect(HermesSubagentPresentationPolicy.retainedInParentHistory(stale))
+        #expect(
+            HermesSubagentPresentationPolicy.parentHistoryActivities(
+                [recent, stale],
+                parentThreadId: "parent-thread"
+            ).map(\.activityId) == ["act-recent", "act-stale"]
+        )
+        #expect(HermesSubagentPresentationPolicy.navigationThreadId(for: stale) == "thread-temp-stale")
+        #expect(ChatActivityNavigationPolicy.action(fromParentThreadId: "parent-thread") == .pushFocusedTranscript)
+
+        let live = HomeActivityPresentation(state: CompanionState(), subagents: [recent], now: now)
+        #expect(live.state == .active)
+        #expect(HomeActivityRailLayoutPolicy.showsRail(for: live.state))
+        #expect(live.recentlyFinished.map(\.threadId) == ["thread-temp-recent"])
+        #expect(
+            HomeActivityRailLayoutPolicy.composerPillPlacement(presentationState: live.state)
+                == .immediatelyAboveComposer
+        )
+
+        let quiet = HomeActivityPresentation(state: CompanionState(), subagents: [stale], now: now)
+        #expect(quiet.state == .quiet)
+        #expect(!HomeActivityRailLayoutPolicy.showsRail(for: quiet.state))
+        #expect(
+            HomeActivityRailLayoutPolicy.composerPillPlacement(presentationState: quiet.state) == .hidden
+        )
+        #expect(quiet.items.isEmpty)
+        #expect(HomeInChatActivityProjectionPolicy.scopedSubagents([stale], parentThreadId: "parent-thread") == [stale])
+    }
+
     private func fixtureState() throws -> CompanionState {
         let url = try #require(
             Bundle.module.url(forResource: "bots-paged", withExtension: "json", subdirectory: "Fixtures")

@@ -106,13 +106,15 @@ public struct HomeActivityPresentation: Equatable, Sendable {
         state: CompanionState,
         queuedReceipts: [HomeActivityQueueReceipt] = [],
         subagents: [HermesSubagentActivity] = [],
-        parentThreadId: String? = nil
+        parentThreadId: String? = nil,
+        now: Date = Date()
     ) {
         self.init(
             projecting: state,
             queuedReceipts: queuedReceipts,
             subagents: subagents,
-            parentThreadId: parentThreadId
+            parentThreadId: parentThreadId,
+            now: now
         )
     }
 
@@ -200,7 +202,8 @@ public struct HomeActivityPresentation: Equatable, Sendable {
         projecting state: CompanionState,
         queuedReceipts: [HomeActivityQueueReceipt],
         subagents: [HermesSubagentActivity],
-        parentThreadId: String? = nil
+        parentThreadId: String? = nil,
+        now: Date = Date()
     ) {
         let hiddenBotIDs = Set(state.bots.filter { $0.hidden == true }.map(\.threadId))
         let scopedThreadId = HomeInChatActivityProjectionPolicy.scopedThreadId(
@@ -293,8 +296,14 @@ public struct HomeActivityPresentation: Equatable, Sendable {
             }
             .sorted(by: Self.itemOrder)
 
-        let liveSubagents = subagents.filter { $0.status == .started || $0.status == .updated }
-        let completedSubagents = subagents.filter { $0.status == .completed }
+        let liveSubagents = subagents.filter {
+            HermesSubagentPresentationPolicy.showsInLivePill($0, now: now)
+                && ($0.status == .started || $0.status == .updated)
+        }
+        let completedSubagents = subagents.filter {
+            HermesSubagentPresentationPolicy.showsInLivePill($0, now: now)
+                && $0.status == .completed
+        }
         self.temporaryAgentCount = liveSubagents.count
         let subagentActive = liveSubagents.map { activity in
             Item(
