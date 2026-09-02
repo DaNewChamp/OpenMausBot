@@ -174,6 +174,8 @@ public struct HermesBotProvenance: Codable, Hashable, Sendable, Equatable {
         self.sourceActivityId = sourceActivityId
     }
 }
+
+public struct BotRuntimeBinding: Codable, Hashable, Sendable, Equatable {
     public var kind: String
     public var instanceId: String?
     public var model: String?
