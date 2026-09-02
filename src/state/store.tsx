@@ -593,6 +593,21 @@ export function openNotificationTarget(
   if (known) dispatch({ type: "switchTask", botId: target.botId, threadId: target.threadId });
 }
 
+/** Wrapped dispatch reads stateRef before React re-renders, so this sees pre-reducer unread. */
+export function unreadMarkReadPath(
+  state: Pick<AppState, "bots" | "groups">,
+  conversationId: string,
+  options?: { groupsOnly?: boolean },
+): `/api/bots/${string}` | `/api/groups/${string}` | null {
+  if (!options?.groupsOnly) {
+    const bot = state.bots.find((candidate) => candidate.id === conversationId);
+    if (bot?.unread) return `/api/bots/${conversationId}`;
+  }
+  const group = state.groups.find((candidate) => candidate.id === conversationId);
+  if (group?.unread) return `/api/groups/${conversationId}`;
+  return null;
+}
+
 function updateBot(state: AppState, botId: string, fn: (b: Bot) => Bot): AppState {
   return { ...state, bots: state.bots.map((b) => (b.id === botId ? fn(b) : b)) };
 }
@@ -1583,12 +1598,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           );
           break;
         case "select": {
-          const bot = stateRef.current.bots.find((b) => b.id === action.id);
-          const group = stateRef.current.groups.find((g) => g.id === action.id);
-          if (bot?.unread) {
-            api(`/api/bots/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
-          } else if (group?.unread) {
-            api(`/api/groups/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
+          const path = unreadMarkReadPath(stateRef.current, action.id);
+          if (path) {
+            api(path, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
+          }
+          break;
+        }
+        case "openBotChannel": {
+          const path = unreadMarkReadPath(stateRef.current, action.groupId, { groupsOnly: true });
+          if (path) {
+            api(path, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
           }
           break;
         }

@@ -5,6 +5,7 @@ import {
   initialState,
   openNotificationTarget,
   reducer,
+  unreadMarkReadPath,
   type Bot,
   type Message,
 } from "./store";
@@ -252,6 +253,50 @@ describe("section Chiefs", () => {
     expect(next.bots.find((candidate) => candidate.id === workChief.id)?.chiefOfStaff).toBe(false);
     expect(next.bots.find((candidate) => candidate.id === workCandidate.id)?.chiefOfStaff).toBe(true);
     expect(next.bots.find((candidate) => candidate.id === personalChief.id)?.chiefOfStaff).toBe(true);
+  });
+});
+
+describe("openBotChannel mark-read", () => {
+  const botRoom = (id: string, unread: boolean) => ({
+    id,
+    threadId: `thread-${id}`,
+    name: "Alpha ⇄ Beta",
+    memberIds: ["alpha", "beta"],
+    dm: true,
+    messages: [],
+    defaultResponder: { kind: "mentions" as const },
+    bulletin: "",
+    unread,
+    createdAt: 0,
+  });
+
+  it("clears unread locally for the opened bot room only", () => {
+    const unreadRoom = botRoom("dm-unread", true);
+    const otherUnread = botRoom("dm-other", true);
+    const state = {
+      ...initialState,
+      groups: [unreadRoom, otherUnread],
+    };
+    const next = reducer(state, {
+      type: "openBotChannel",
+      groupId: "dm-unread",
+      perspectiveBotId: "beta",
+    });
+    expect(next.groups.find((group) => group.id === "dm-unread")?.unread).toBe(false);
+    expect(next.groups.find((group) => group.id === "dm-other")?.unread).toBe(true);
+    expect(next.botChannelPerspective).toEqual({ roomId: "dm-unread", botId: "beta" });
+  });
+
+  it("PATCHes only an unread bot room and skips already-read or unrelated rooms", () => {
+    const unreadRoom = botRoom("dm-unread", true);
+    const readRoom = botRoom("dm-read", false);
+    const otherUnread = botRoom("dm-other", true);
+    const state = { bots: [], groups: [unreadRoom, readRoom, otherUnread] };
+
+    expect(unreadMarkReadPath(state, "dm-unread", { groupsOnly: true })).toBe("/api/groups/dm-unread");
+    expect(unreadMarkReadPath(state, "dm-read", { groupsOnly: true })).toBeNull();
+    expect(unreadMarkReadPath(state, "dm-other", { groupsOnly: true })).toBe("/api/groups/dm-other");
+    expect(unreadMarkReadPath(state, "missing", { groupsOnly: true })).toBeNull();
   });
 });
 
