@@ -1,8 +1,27 @@
 import { betterAuth } from "better-auth";
-import { bearer, emailOTP } from "better-auth/plugins";
+import { bearer, emailOTP, genericOAuth } from "better-auth/plugins";
 
 import type { ControlPlaneConfig } from "./config";
 import { sendOTPEmail } from "./email";
+
+function pocketIdOAuth(env: Env) {
+  const issuer = env.POCKETID_ISSUER?.trim();
+  const clientId = env.POCKETID_CLIENT_ID?.trim();
+  const clientSecret = env.POCKETID_CLIENT_SECRET?.trim();
+  if (!issuer || !clientId || !clientSecret) return null;
+  const discoveryUrl = `${issuer.replace(/\/$/, "")}/.well-known/openid-configuration`;
+  return genericOAuth({
+    config: [
+      {
+        providerId: "pocketid",
+        clientId,
+        clientSecret,
+        discoveryUrl,
+        scopes: ["openid", "email", "profile"],
+      },
+    ],
+  });
+}
 
 export function createAuth(
   env: Env,
@@ -10,6 +29,7 @@ export function createAuth(
   config: ControlPlaneConfig,
   requestId: string,
 ) {
+  const pocketId = pocketIdOAuth(env);
   return betterAuth({
     appName: "OpenMausBot",
     baseURL: config.authBaseURL,
@@ -60,6 +80,7 @@ export function createAuth(
         },
       }),
       bearer({ requireSignature: true }),
+      ...(pocketId ? [pocketId] : []),
     ],
   });
 }

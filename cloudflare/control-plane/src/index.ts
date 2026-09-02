@@ -21,6 +21,7 @@ import {
   rotateInstallationCredential,
 } from "./installations";
 import { listFleet, updateInstallationPresence } from "./fleet";
+import { completeWebClientAuth } from "./web-client-auth";
 
 const ROTATE_ROUTE = /^\/v1\/installations\/([^/]+)\/credentials\/rotate$/;
 const INSTALLATION_ROUTE = /^\/v1\/installations\/([^/]+)$/;
@@ -81,6 +82,9 @@ async function route(
   }
 
   const auth = createAuth(env, ctx, config, requestId);
+  if (request.method === "GET" && url.pathname === "/web-client/complete") {
+    return completeWebClientAuth(request, auth, config.allowedOrigins);
+  }
   if (request.method === "GET" && url.pathname === "/v1/me") {
     const session = await accountSession(request, auth);
     if (!session) throw new HTTPError(401, "unauthorized");
