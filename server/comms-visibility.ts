@@ -31,6 +31,13 @@ export function getOrCreateChannel(store: Store, from: BotRecord, target: BotRec
   return store.createGroup(`${from.name} ⇄ ${target.name}`, [from.id, target.id], true, from.section);
 }
 
+export function resolveCommChipAnchorId(
+  channelMessages: readonly { id: string }[],
+  fallbackMessageId: string,
+): string {
+  return channelMessages.at(-1)?.id ?? fallbackMessageId;
+}
+
 /** Mirror `from`'s outgoing message into the channel, drop chips into
  * both 1:1 threads linking to the channel, and bump the channel's unread
  * count. The chips are what make bot-to-bot turns observable — those

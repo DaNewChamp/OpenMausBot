@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HermesEngineError } from "./engines/contracts.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { DATA_DIR } from "./config.ts";
-import { getOrCreateChannel, mirrorExchange } from "./comms-visibility.ts";
+import { getOrCreateChannel, mirrorExchange, resolveCommChipAnchorId } from "./comms-visibility.ts";
 import { Store } from "./store.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
@@ -101,5 +101,10 @@ describe("mirrorExchange comm anchors", () => {
     const incoming = store.messagesFor(target.threadId).find((m) => m.comm?.groupId === channel.id);
     expect(outgoing?.comm?.messageId).toBe(anchorId);
     expect(incoming?.comm?.messageId).toBe(anchorId);
+  });
+
+  it("resolveCommChipAnchorId prefers the latest channel message", () => {
+    expect(resolveCommChipAnchorId([{ id: "first" }, { id: "latest" }], "fallback")).toBe("latest");
+    expect(resolveCommChipAnchorId([], "fallback")).toBe("fallback");
   });
 });

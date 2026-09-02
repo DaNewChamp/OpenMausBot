@@ -127,7 +127,14 @@ import { isEffortLevel, newEventId, type EffortLevel, type RequestOutcome, type 
 import { RETRY_MAX_ATTEMPTS } from "./drivers/retry.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
-import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
+import {
+  getOrCreateChannel,
+  mirrorActivity,
+  mirrorExchange,
+  mirrorReply,
+  resolveCommChipAnchorId,
+  type CommsBus,
+} from "./comms-visibility.ts";
 import { searchMessages } from "./message-db.ts";
 import { promptWithReply, transcriptText } from "./replies.ts";
 import { approvalGrantSummary, approvalReason, explainApproval, reviewApproval } from "./approval-explainer.ts";
@@ -1788,7 +1795,10 @@ function finalizePendingAskWatch(
   else if (ok) mirrorActivity(commsBus, target, channel, `${name} finished`, true);
   else mirrorActivity(commsBus, target, channel, failureName, false);
   if (ok && target) {
-    const anchorId = store.messagesFor(channel.threadId).at(-1)?.id ?? watched.channelMessageId;
+    const anchorId = resolveCommChipAnchorId(
+      store.messagesFor(channel.threadId),
+      watched.channelMessageId,
+    );
     store.patchMessage(watched.sourceThreadId, watched.sourceMessageId, {
       comm: {
         groupId: channel.id,
