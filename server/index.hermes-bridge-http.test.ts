@@ -109,8 +109,9 @@ describe("Hermes bridge setup over HTTP", () => {
   let bridgeId = "";
   let bridgeToken = "";
   let connectedBotId = "";
-  let stopWorker: (() => void) | undefined;
+  let stopWorker: (() => Promise<void>) | undefined;
   const hermesSendJobs: string[] = [];
+  const hermesSignInJobs: Array<{ id: string; argv?: unknown }> = [];
 
   const call = (method: string, path: string, body?: unknown, headers?: Record<string, string>) =>
     api(harness.base, method, path, body, headers);
@@ -138,7 +139,7 @@ describe("Hermes bridge setup over HTTP", () => {
         const beat = await call("POST", "/api/bridge/heartbeat", { bridgeId: id }, {
           authorization: `Bearer ${token}`,
         });
-        const jobs = ((beat.body as { jobs?: Array<{ id: string; kind: string; generation?: number; payload?: { turnId?: string; threadId?: string } }> }).jobs) ?? [];
+        const jobs = ((beat.body as { jobs?: Array<{ id: string; kind: string; generation?: number; payload?: { turnId?: string; threadId?: string; argv?: unknown } }> }).jobs) ?? [];
         for (const job of jobs) {
           let stdout = "";
           if (job.kind === "hermes-discover") {
@@ -149,6 +150,9 @@ describe("Hermes bridge setup over HTTP", () => {
             });
           } else if (job.kind === "hermes-ensure-canonical") {
             stdout = hermesStdout("hermes-ensure-canonical", { state: "present", adopted: true });
+          } else if (job.kind === "hermes-signin") {
+            hermesSignInJobs.push({ id: job.id, argv: job.payload?.argv });
+            stdout = hermesStdout("hermes-signin", { kind: "terminal" });
           } else if (job.kind === "hermes-send") {
             hermesSendJobs.push(job.id);
             stdout = hermesStdout("hermes-send", {
@@ -178,8 +182,11 @@ describe("Hermes bridge setup over HTTP", () => {
         await new Promise((resolve) => setTimeout(resolve, 40));
       }
     };
-    void loop();
-    return () => { running = false; };
+    const worker = loop();
+    return async () => {
+      running = false;
+      await worker;
+    };
   }
 
   async function waitFor(predicate: () => Promise<boolean>, message: string, timeoutMs = 15_000): Promise<void> {
@@ -200,7 +207,7 @@ describe("Hermes bridge setup over HTTP", () => {
   }, 40_000);
 
   afterAll(async () => {
-    stopWorker?.();
+    await stopWorker?.();
     await waitForExit(harness.child, { signal: "SIGTERM" });
     await removeTempDir(harness.home);
   });
@@ -266,6 +273,22 @@ describe("Hermes bridge setup over HTTP", () => {
     expect(existsSync(join(harness.home, "hermes-home", "requests.ndjson"))).toBe(false);
   }, 45_000);
 
+  it("POST sign-in starts Hermes setup on the selected online bridge", async () => {
+    const before = hermesSignInJobs.length;
+    const signed = await call("POST", "/api/hermes/setup/signin", {
+      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+    });
+    expect(signed.status).toBe(200);
+    expect(signed.body).toMatchObject({
+      kind: "terminal",
+      computerName: "Mac mini",
+      message: "Complete sign-in on Mac mini, then try again.",
+    });
+    expect(JSON.stringify(signed.body)).not.toMatch(/bridgeId|HERMES_HOME|jsonrpc|Bearer |sk-|token|secret|\/Users\//i);
+    expect(hermesSignInJobs.length).toBeGreaterThan(before);
+    expect(hermesSignInJobs.at(-1)).toMatchObject({ argv: ["setup"] });
+  }, 20_000);
+
   it("fails closed when the bridge is offline or revoked", async () => {
     expect(connectedBotId).toBeTruthy();
     const revoked = await call("DELETE", `/api/bridges/${bridgeId}`);
@@ -285,6 +308,14 @@ describe("Hermes bridge setup over HTTP", () => {
     });
     expect(rejected.status).toBe(409);
     expect(JSON.stringify(rejected.body)).not.toMatch(/bridgeId/i);
+
+    const signInBefore = hermesSignInJobs.length;
+    const signed = await call("POST", "/api/hermes/setup/signin", {
+      placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+    });
+    expect(signed.status).toBe(409);
+    expect(JSON.stringify(signed.body)).not.toMatch(/bridgeId|HERMES_HOME|jsonrpc|Bearer |sk-|token|secret|\/Users\/|stderr/i);
+    expect(hermesSignInJobs.length).toBe(signInBefore);
 
     const sendCountBefore = hermesSendJobs.length;
     expect((await call("POST", `/api/bots/${connectedBotId}/messages`, { text: "must fail closed" })).status).toBe(202);

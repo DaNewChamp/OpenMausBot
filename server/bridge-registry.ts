@@ -27,7 +27,8 @@ export type HermesBridgeJobKind =
   | "hermes-discover"
   | "hermes-ensure-canonical"
   | "hermes-send"
-  | "hermes-interrupt";
+  | "hermes-interrupt"
+  | "hermes-signin";
 
 export interface HermesBridgeDiscoverPayload {}
 
@@ -46,6 +47,10 @@ export interface HermesBridgeSendPayload {
 export interface HermesBridgeInterruptPayload {
   profile: string;
   turnId?: string;
+}
+
+export interface HermesBridgeSignInPayload {
+  argv: ["setup"];
 }
 
 export interface LocalVmJobPayload {
@@ -99,6 +104,11 @@ export interface HermesInterruptBridgeJob extends BridgeJobBase {
   payload: HermesBridgeInterruptPayload;
 }
 
+export interface HermesSignInBridgeJob extends BridgeJobBase {
+  kind: "hermes-signin";
+  payload: HermesBridgeSignInPayload;
+}
+
 export type BridgeJob =
   | ShellBridgeJob
   | LocalVmBridgeJob
@@ -106,7 +116,8 @@ export type BridgeJob =
   | HermesDiscoverBridgeJob
   | HermesEnsureCanonicalBridgeJob
   | HermesSendBridgeJob
-  | HermesInterruptBridgeJob;
+  | HermesInterruptBridgeJob
+  | HermesSignInBridgeJob;
 
 export interface BridgeJobResult {
   jobId: string;
@@ -253,6 +264,7 @@ export function jobFingerprint(job: BridgeJob): string {
   if (job.kind === "hermes-interrupt") {
     return `hermes-interrupt\0${job.payload.profile}\0${job.payload.turnId ?? ""}`;
   }
+  if (job.kind === "hermes-signin") return "hermes-signin";
   return `${job.kind}\0${job.payload.botId}\0${job.payload.action ?? ""}`;
 }
 
@@ -701,6 +713,28 @@ export class BridgeRegistry {
     if (opts.idempotencyKey) {
       const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
       if (existing) return existing.job as HermesInterruptBridgeJob;
+    }
+    this.enqueueRecord(bridgeId, job, opts);
+    return job;
+  }
+
+  enqueueHermesSignIn(
+    bridgeId: string,
+    timeoutMs = 15_000,
+    opts: EnqueueBridgeJobOpts = {},
+  ): HermesSignInBridgeJob {
+    requireCapability(bridgeId, "hermes");
+    const job: HermesSignInBridgeJob = {
+      id: randomUUID(),
+      bridgeId,
+      kind: "hermes-signin",
+      payload: { argv: ["setup"] },
+      timeoutMs,
+      createdAt: Date.now(),
+    };
+    if (opts.idempotencyKey) {
+      const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
+      if (existing) return existing.job as HermesSignInBridgeJob;
     }
     this.enqueueRecord(bridgeId, job, opts);
     return job;

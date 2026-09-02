@@ -8,6 +8,13 @@ import {
   type HermesBridgeSendWire,
   type ScrubbedRuntimeEvent,
 } from "../../shared/bridge-hermes-contract.ts";
+import {
+  defaultHermesSignInLaunch,
+  hermesSignInArgvIsSetup,
+  HERMES_SIGNIN_ARGV,
+  type HermesSignInLaunch,
+  type HermesSignInLaunchResult,
+} from "../../shared/hermes-signin-launch.ts";
 import type { BridgeJobResult } from "./types.ts";
 import { discoverLocalHermesEndpoints, type HermesEndpointDescriptor } from "./hermes-endpoints.ts";
 
@@ -47,6 +54,10 @@ export type HermesBridgeJob =
   | {
       kind: "hermes-interrupt";
       payload: { profile: string; turnId?: string };
+    }
+  | {
+      kind: "hermes-signin";
+      payload: { argv: ["setup"] };
     };
 
 export interface HermesBridgeRuntime {
@@ -96,8 +107,15 @@ export async function runHermesBridgeJob(
         return { exitCode: 1, stdout: "", stderr: "cancelled", truncated: false };
       }
       wire = { kind: "hermes-send", body };
-    } else {
+    } else if (job.kind === "hermes-interrupt") {
       wire = { kind: "hermes-interrupt", body: await runtime.interrupt(job.payload) };
+    } else {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: "hermes bridge job failed",
+        truncated: false,
+      };
     }
     return {
       exitCode: 0,
@@ -114,6 +132,37 @@ export async function runHermesBridgeJob(
     };
   } finally {
     await runtime.close().catch(() => {});
+  }
+}
+
+const SIGNIN_HANDOFF_FAILED = {
+  exitCode: 1,
+  stdout: "",
+  stderr: "hermes setup handoff failed",
+  truncated: false,
+} as const;
+
+export async function runHermesSignInJob(
+  job: Extract<HermesBridgeJob, { kind: "hermes-signin" }>,
+  launch: (command: HermesSignInLaunch) => Promise<HermesSignInLaunchResult> = defaultHermesSignInLaunch,
+): Promise<BridgeJobResult> {
+  if (!hermesSignInArgvIsSetup(job.payload.argv)) {
+    return { ...SIGNIN_HANDOFF_FAILED };
+  }
+  const result = await launch({ kind: "terminal", argv: HERMES_SIGNIN_ARGV });
+  if (!result.ok) return { ...SIGNIN_HANDOFF_FAILED };
+  try {
+    return {
+      exitCode: 0,
+      stdout: encodeHermesBridgeResult({
+        kind: "hermes-signin",
+        body: { kind: result.kind },
+      }),
+      stderr: "",
+      truncated: false,
+    };
+  } catch {
+    return { ...SIGNIN_HANDOFF_FAILED };
   }
 }
 

@@ -829,11 +829,15 @@ public enum ConversationPinResult<Value: Sendable>: Sendable {
 private struct HermesSetupConnectBody: Encodable, Sendable {
     let profile: String?
     let placement: HermesSetupPlacement?
+    let botId: String?
 
-    private enum CodingKeys: String, CodingKey { case profile, placement }
+    private enum CodingKeys: String, CodingKey { case profile, placement, botId }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        if let botId {
+            try container.encode(botId, forKey: .botId)
+        }
         if let placement {
             try container.encode(placement, forKey: .placement)
             return
@@ -842,6 +846,10 @@ private struct HermesSetupConnectBody: Encodable, Sendable {
             try container.encode(profile, forKey: .profile)
         }
     }
+}
+
+private struct HermesSignInBody: Encodable, Sendable {
+    let placement: HermesSetupPlacement
 }
 
 public struct CompanionClient: Sendable {
@@ -1107,13 +1115,14 @@ public struct CompanionClient: Sendable {
     /// is encoded as an empty object rather than a JSON null.
     public func connectHermes(
         profile: String? = nil,
-        placement: HermesSetupPlacement? = nil
+        placement: HermesSetupPlacement? = nil,
+        botId: String? = nil
     ) async throws -> HermesSetupConnectionResponse {
         try await send(
             try makeRequest(
                 "POST",
                 "/api/hermes/setup",
-                encodedBody: HermesSetupConnectBody(profile: profile, placement: placement)
+                encodedBody: HermesSetupConnectBody(profile: profile, placement: placement, botId: botId)
             ),
             as: HermesSetupConnectionResponse.self
         )
@@ -1130,6 +1139,21 @@ public struct CompanionClient: Sendable {
     public func promoteHermesSubagent(activityId: String) async throws {
         _ = try await send(
             try makeRequest("POST", "/api/hermes/subagents/\(activityId)/promote", body: [:])
+        )
+    }
+
+    /// Start Hermes' own sign-in on the selected computer. The phone never
+    /// receives provider tokens; the response is only a safe handoff.
+    public func startHermesSignIn(
+        placement: HermesSetupPlacement
+    ) async throws -> HermesSignInHandoff {
+        try await send(
+            try makeRequest(
+                "POST",
+                "/api/hermes/setup/signin",
+                encodedBody: HermesSignInBody(placement: placement)
+            ),
+            as: HermesSignInHandoff.self
         )
     }
 

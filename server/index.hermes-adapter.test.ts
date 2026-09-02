@@ -133,7 +133,7 @@ child.on("exit", (code, signal) => {
     },
   }));
 
-  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+  child = spawn(process.execPath, ["--experimental-strip-types", join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env: {
       ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
@@ -189,6 +189,10 @@ describe("Hermes Bot Chat hub integration", () => {
     expect(repeated.status).toBe(200);
     expect(repeated.body).toMatchObject({ created: false, botId: imported.body.botId });
     expect(JSON.stringify(repeated.body)).not.toMatch(/session|runtime|root-session|resolved-session/i);
+
+    const secretSignIn = await api("POST", "/api/hermes/setup/signin", { token: "sk-secret" });
+    expect(secretSignIn.status).toBe(400);
+    expect(JSON.stringify(secretSignIn.body)).not.toMatch(/sk-secret|HERMES_HOME|token/i);
 
     const sidecar = JSON.parse(readFileSync(join(dataDir, "hermes-bindings.json"), "utf8")) as {
       version: number;

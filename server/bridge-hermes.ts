@@ -14,6 +14,7 @@ import {
   type HermesBridgeInterruptWire,
   type HermesBridgeResultWire,
   type HermesBridgeSendWire,
+  type HermesBridgeSignInKind,
 } from "../shared/bridge-hermes-contract.ts";
 import type { HermesFailureCode } from "./engines/contracts.ts";
 import { rememberHermesBridgeAlias, rememberHermesEndpoint } from "./bot-runtime-rebind.ts";
@@ -196,6 +197,40 @@ export async function interruptHermesOnBridge(
     throw new HermesBridgeUnavailableError("malformed_response", "bridge Hermes interrupt job returned wrong kind");
   }
   return { interrupt: wire.body, bridgeName };
+}
+
+export async function startHermesSignInOnBridge(
+  registry: BridgeRegistry,
+  opts: { bridgeId?: string; name?: string; timeoutMs?: number } = {},
+): Promise<{ kind: HermesBridgeSignInKind; bridgeName: string }> {
+  const timeoutMs = opts.timeoutMs ?? 15_000;
+  const bridge = resolveBridge(registry, {
+    bridgeId: opts.bridgeId,
+    name: opts.name,
+    capability: "hermes",
+  });
+  if (!bridge) {
+    throw new HermesBridgeUnavailableError("gateway_unavailable", "bridge Hermes sign-in unavailable");
+  }
+  const job = registry.enqueueHermesSignIn(bridge.id, timeoutMs);
+  let result: BridgeJobResult;
+  try {
+    result = await waitForBridgeJobResult(registry, job.id, timeoutMs, bridge.name);
+  } catch {
+    throw new HermesBridgeUnavailableError("gateway_unavailable", "bridge Hermes sign-in unavailable");
+  }
+  if (result.exitCode !== 0) {
+    throw new HermesBridgeUnavailableError("gateway_unavailable", "bridge Hermes sign-in unavailable");
+  }
+  try {
+    const wire = parseHermesBridgeResult(result.stdout);
+    if (wire.kind !== "hermes-signin") {
+      throw new HermesBridgeUnavailableError("gateway_unavailable", "bridge Hermes sign-in unavailable");
+    }
+    return { kind: wire.body.kind, bridgeName: bridge.name };
+  } catch {
+    throw new HermesBridgeUnavailableError("gateway_unavailable", "bridge Hermes sign-in unavailable");
+  }
 }
 
 export function encodeBridgeHermesFixtureResult(result: HermesBridgeResultWire): BridgeJobResult {

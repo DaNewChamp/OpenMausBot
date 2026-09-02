@@ -162,6 +162,85 @@ public struct HermesSetupCapabilities: Codable, Hashable, Sendable, Equatable {
     }
 }
 
+public enum HermesEndpointAuthStatus: String, Codable, Sendable, Equatable {
+    case connected
+    case signInRequired
+    case offline
+    case unavailable
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = Self(rawValue: value) ?? .unknown
+    }
+}
+
+public struct HermesEndpointIdentity: Codable, Hashable, Sendable, Equatable {
+    public var id: String
+    public var kind: HermesSetupPlacementKind
+    public var profile: String
+    public var computerName: String
+    public var label: String
+
+    public init(
+        id: String = "",
+        kind: HermesSetupPlacementKind = .unknown,
+        profile: String = "",
+        computerName: String = "",
+        label: String = ""
+    ) {
+        self.id = id
+        self.kind = kind
+        self.profile = profile
+        self.computerName = computerName
+        self.label = label
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, kind, profile, computerName, label }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decodeIfPresent(String.self, forKey: .id) ?? "",
+            kind: try container.decodeIfPresent(HermesSetupPlacementKind.self, forKey: .kind) ?? .unknown,
+            profile: try container.decodeIfPresent(String.self, forKey: .profile) ?? "",
+            computerName: try container.decodeIfPresent(String.self, forKey: .computerName) ?? "",
+            label: try container.decodeIfPresent(String.self, forKey: .label) ?? ""
+        )
+    }
+}
+
+public struct HermesSignInAvailability: Codable, Hashable, Sendable, Equatable {
+    public var available: Bool
+
+    public init(available: Bool = false) {
+        self.available = available
+    }
+}
+
+public struct HermesSignInHandoff: Codable, Hashable, Sendable, Equatable {
+    public var kind: String
+    public var computerName: String
+    public var message: String
+
+    public init(kind: String = "", computerName: String = "", message: String = "") {
+        self.kind = kind
+        self.computerName = computerName
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey { case kind, computerName, message }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            kind: try container.decodeIfPresent(String.self, forKey: .kind) ?? "",
+            computerName: try container.decodeIfPresent(String.self, forKey: .computerName) ?? "",
+            message: try container.decodeIfPresent(String.self, forKey: .message) ?? ""
+        )
+    }
+}
+
 public struct HermesSetupProfile: Codable, Hashable, Identifiable, Sendable, Equatable {
     public var profile: String
     public var handle: String
@@ -173,14 +252,19 @@ public struct HermesSetupProfile: Codable, Hashable, Identifiable, Sendable, Equ
     public var availability: HermesProfileAvailability
     public var placement: HermesSetupPlacement?
     public var botId: String?
+    public var endpoint: HermesEndpointIdentity?
+    public var authStatus: HermesEndpointAuthStatus?
+    public var signIn: HermesSignInAvailability?
 
     public var id: String {
+        if let endpointId = endpoint?.id, !endpointId.isEmpty { return endpointId }
         if let placement {
             switch placement.kind {
             case .local:
                 return "local:\(placement.profile.isEmpty ? profile : placement.profile)"
             case .bridge:
-                let bridge = placement.bridgeId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "unknown"
+                let bridge = placement.bridgeId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    ?? "unknown"
                 return "bridge:\(bridge):\(placement.profile)"
             case .unknown:
                 return "local:\(profile)"
@@ -199,7 +283,10 @@ public struct HermesSetupProfile: Codable, Hashable, Identifiable, Sendable, Equ
         canonicalChat: HermesCanonicalState = .unknown,
         availability: HermesProfileAvailability = .unknown,
         placement: HermesSetupPlacement? = nil,
-        botId: String? = nil
+        botId: String? = nil,
+        endpoint: HermesEndpointIdentity? = nil,
+        authStatus: HermesEndpointAuthStatus? = nil,
+        signIn: HermesSignInAvailability? = nil
     ) {
         self.profile = profile
         self.handle = handle
@@ -211,10 +298,13 @@ public struct HermesSetupProfile: Codable, Hashable, Identifiable, Sendable, Equ
         self.availability = availability
         self.placement = placement
         self.botId = botId
+        self.endpoint = endpoint
+        self.authStatus = authStatus
+        self.signIn = signIn
     }
 
     private enum CodingKeys: String, CodingKey {
-        case profile, handle, displayName, description, model, provider, canonicalChat, availability, placement, botId
+        case profile, handle, displayName, description, model, provider, canonicalChat, availability, placement, botId, endpoint, authStatus, signIn
     }
 
     public init(from decoder: Decoder) throws {
@@ -229,7 +319,10 @@ public struct HermesSetupProfile: Codable, Hashable, Identifiable, Sendable, Equ
             canonicalChat: try container.decodeIfPresent(HermesCanonicalState.self, forKey: .canonicalChat) ?? .unknown,
             availability: try container.decodeIfPresent(HermesProfileAvailability.self, forKey: .availability) ?? .unknown,
             placement: try container.decodeIfPresent(HermesSetupPlacement.self, forKey: .placement),
-            botId: try container.decodeIfPresent(String.self, forKey: .botId)
+            botId: try container.decodeIfPresent(String.self, forKey: .botId),
+            endpoint: try container.decodeIfPresent(HermesEndpointIdentity.self, forKey: .endpoint),
+            authStatus: try container.decodeIfPresent(HermesEndpointAuthStatus.self, forKey: .authStatus),
+            signIn: try container.decodeIfPresent(HermesSignInAvailability.self, forKey: .signIn)
         )
     }
 }
@@ -340,6 +433,8 @@ public struct HermesSetupConnectionResponse: Codable, Hashable, Sendable, Equata
 public enum HermesSetupProfileAction: String, Sendable, Equatable {
     case connect
     case openChat
+    case signIn
+    case none
 }
 
 public enum HermesSetupPresentationState: Equatable, Sendable {
@@ -419,7 +514,7 @@ public enum HermesSetupPresentationPolicy {
                     state: .needsSetup,
                     title: "Sign in to Hermes",
                     message: "Sign in to Hermes on this computer, then try again.",
-                    actionTitle: "Try again"
+                    actionTitle: "Sign in"
                 )
             default:
                 return HermesSetupPresentation(
@@ -430,6 +525,23 @@ public enum HermesSetupPresentationPolicy {
                 )
             }
         }
+    }
+
+    public static func authStatusLabel(_ status: HermesEndpointAuthStatus?) -> String {
+        switch status {
+        case .connected:
+            return "Connected"
+        case .signInRequired:
+            return "Sign-in required"
+        case .offline:
+            return "Offline"
+        case .unavailable, .unknown, .none:
+            return "Unavailable"
+        }
+    }
+
+    public static func visibleProfiles(_ status: HermesSetupStatus) -> [HermesSetupProfile] {
+        status.profiles.filter { !$0.profile.isEmpty }
     }
 
     public static func availableProfiles(_ status: HermesSetupStatus) -> [HermesSetupProfile] {
@@ -447,8 +559,25 @@ public enum HermesSetupPresentationPolicy {
     }
 
     public static func profileAction(_ profile: HermesSetupProfile) -> HermesSetupProfileAction {
-        guard let botId = profile.botId, !botId.isEmpty else { return .connect }
-        return .openChat
+        if profile.authStatus == .signInRequired || profile.signIn?.available == true {
+            return .signIn
+        }
+        if let botId = profile.botId, !botId.isEmpty { return .openChat }
+        if profile.availability == .available { return .connect }
+        return .none
+    }
+
+    public static func endpointPickerProfiles(_ status: HermesSetupStatus) -> [HermesSetupProfile] {
+        visibleProfiles(status)
+    }
+
+    public static func selectedEndpoint(for botId: String, in status: HermesSetupStatus) -> HermesSetupProfile? {
+        status.profiles.first { $0.botId == botId }
+    }
+
+    public static func isHermesBoundBot(title: String, instanceId: String) -> Bool {
+        if title == "Hermes Bot Chat" { return true }
+        return instanceId.caseInsensitiveCompare("hermes") == .orderedSame
     }
 
     public static func defaultProfile(_ status: HermesSetupStatus) -> HermesSetupProfile? {
@@ -496,7 +625,7 @@ public enum HermesSetupPresentationPolicy {
         _ status: HermesSetupStatus,
         computerName: String? = nil
     ) -> [HermesSetupPlacementGroup] {
-        let available = availableProfiles(status)
+        let available = visibleProfiles(status)
         var local: [HermesSetupProfile] = []
         var bridgeGroups: [String: (label: String, profiles: [HermesSetupProfile])] = [:]
         for profile in available {

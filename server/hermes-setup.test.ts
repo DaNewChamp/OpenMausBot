@@ -127,10 +127,41 @@ describe("Hermes setup projection", () => {
       description: description(),
       bindings: { state: "available", value: new Map([["bot-1", binding]]) },
       botExists: (id) => id === "bot-1",
+      localComputerName: "Vincent’s Mac",
     });
     expect(status).toMatchObject({ state: "connected", capabilities: { canonicalChat: false } });
-    expect(status.profiles).toEqual([expect.objectContaining({ profile: "default", botId: "bot-1", canonicalChat: "absent" })]);
-    expect(JSON.stringify(status)).not.toMatch(/root|resolved|session/i);
+    expect(status.profiles).toEqual([expect.objectContaining({
+      profile: "default",
+      botId: "bot-1",
+      canonicalChat: "absent",
+      authStatus: "connected",
+      endpoint: expect.objectContaining({
+        id: "local:hub:default",
+        computerName: "Vincent’s Mac",
+        label: "Vincent’s Mac · Hermes",
+      }),
+    })]);
+    expect(JSON.stringify(status)).not.toMatch(/root|resolved|session|sk-|Bearer |HERMES_HOME/i);
+  });
+
+  it("projects sign-in required when local Hermes has no provider credentials", () => {
+    const status = projectHermesSetupStatus({
+      enabled: true,
+      description: description({ state: "unavailable", reason: "invalid_credentials", profiles: [] }),
+      bindings: { state: "available", value: new Map() },
+      botExists: () => false,
+      localComputerName: "Studio",
+    });
+    expect(status.state).toBe("unavailable");
+    expect(status.reason).toBe("invalid_credentials");
+    expect(status.profiles).toEqual([expect.objectContaining({
+      profile: "default",
+      authStatus: "signInRequired",
+      endpoint: expect.objectContaining({
+        computerName: "Studio",
+        label: "Studio · Hermes",
+      }),
+    })]);
   });
 
   it("does not infer canonical support from a binding when discovery has no canonical proof", () => {
@@ -278,5 +309,141 @@ describe("Hermes profile connect", () => {
     })).rejects.toMatchObject({ code: "state_unavailable" });
     expect(deleteBot).toHaveBeenCalledWith("bot-stuck");
     expect(bots.has("bot-stuck")).toBe(true);
+  });
+
+  it("rebinds an existing Hermes bot to another local profile without minting a new bot", async () => {
+    const ensureCanonical = vi.fn(async () => canonical);
+    const registry: HermesSetupRegistry = {
+      isEnabled: true,
+      instanceId: "hermes",
+      discover: vi.fn(async () => description({
+        profiles: [
+          {
+            profile: "default",
+            handle: "hermes",
+            displayName: "Hermes",
+            description: "Local assistant",
+            model: "sonnet",
+            provider: "anthropic",
+            canonicalChat: "present",
+            availability: "available",
+          },
+          {
+            profile: "work",
+            handle: "work",
+            displayName: "Work",
+            description: "Work profile",
+            model: "sonnet",
+            provider: "anthropic",
+            canonicalChat: "absent",
+            availability: "available",
+          },
+        ],
+      })),
+      describe: vi.fn(async () => description()),
+      forBinding: vi.fn((_binding: HermesBotBinding) => ({
+        ensureCanonical,
+      }) as unknown as HermesBotEngine),
+    };
+    const bots = new Map<string, { id: string }>([["bot-keep", { id: "bot-keep" }]]);
+    let bindings = new Map<string, HermesBotBinding>([[
+      "bot-keep",
+      { adapter: "hermesBot", profile: "default", canonicalTitle: "Bot Chat", bindingVersion: 1 },
+    ]]);
+    const createBot = vi.fn(() => {
+      throw new Error("must not mint another bot");
+    });
+    const result = await connectHermesProfile({
+      registry,
+      botId: "bot-keep",
+      placement: { kind: "local", profile: "work" },
+      loadBindings: () => ({ state: "available", value: bindings }),
+      setBinding: (id, binding) => {
+        bindings = new Map(bindings).set(id, binding);
+        return { state: "available", value: undefined };
+      },
+      removeBinding: (id) => {
+        const next = new Map(bindings);
+        next.delete(id);
+        bindings = next;
+        return { state: "available", value: undefined };
+      },
+      deleteBot: () => false,
+      bot: (id) => bots.get(id) ?? null,
+      createBot,
+    });
+    expect(result.botId).toBe("bot-keep");
+    expect(result.created).toBe(false);
+    expect(bindings.get("bot-keep")).toMatchObject({ profile: "work" });
+    expect(createBot).not.toHaveBeenCalled();
+    expect(ensureCanonical).toHaveBeenCalledWith("work");
+  });
+
+  it("does not rebind a bot that is not already Hermes-bound", async () => {
+    const registry = fakeRegistry({ ensureCanonical: vi.fn(async () => canonical) });
+    await expect(connectHermesProfile({
+      registry,
+      botId: "plain-bot",
+      placement: { kind: "local", profile: "default" },
+      loadBindings: () => ({ state: "available", value: new Map() }),
+      setBinding: () => ({ state: "available", value: undefined }),
+      deleteBot: () => false,
+      bot: (id) => id === "plain-bot" ? { id } : null,
+      createBot: () => {
+        throw new Error("must not mint another bot");
+      },
+    })).rejects.toMatchObject({ code: "state_unavailable" });
+  });
+
+  it("does not steal a profile already bound to another Hermes bot", async () => {
+    const registry = fakeRegistry({ ensureCanonical: vi.fn(async () => canonical) });
+    const bots = new Map<string, { id: string }>([
+      ["bot-keep", { id: "bot-keep" }],
+      ["bot-other", { id: "bot-other" }],
+    ]);
+    const bindings = new Map<string, HermesBotBinding>([
+      ["bot-keep", { adapter: "hermesBot", profile: "default", canonicalTitle: "Bot Chat", bindingVersion: 1 }],
+      ["bot-other", { adapter: "hermesBot", profile: "work", canonicalTitle: "Bot Chat", bindingVersion: 1 }],
+    ]);
+    await expect(connectHermesProfile({
+      registry: {
+        ...registry,
+        discover: vi.fn(async () => description({
+          profiles: [
+            {
+              profile: "default",
+              handle: "hermes",
+              displayName: "Hermes",
+              description: "Local assistant",
+              model: "sonnet",
+              provider: "anthropic",
+              canonicalChat: "present",
+              availability: "available",
+            },
+            {
+              profile: "work",
+              handle: "work",
+              displayName: "Work",
+              description: "Work profile",
+              model: "sonnet",
+              provider: "anthropic",
+              canonicalChat: "absent",
+              availability: "available",
+            },
+          ],
+        })),
+      },
+      botId: "bot-keep",
+      placement: { kind: "local", profile: "work" },
+      loadBindings: () => ({ state: "available", value: bindings }),
+      setBinding: () => ({ state: "available", value: undefined }),
+      deleteBot: () => false,
+      bot: (id) => bots.get(id) ?? null,
+      createBot: () => {
+        throw new Error("must not mint another bot");
+      },
+    })).rejects.toMatchObject({ code: "profile_unavailable" });
+    expect(bindings.get("bot-keep")).toMatchObject({ profile: "default" });
+    expect(bindings.get("bot-other")).toMatchObject({ profile: "work" });
   });
 });

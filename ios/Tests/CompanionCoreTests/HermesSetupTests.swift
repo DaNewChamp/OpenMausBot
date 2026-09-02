@@ -96,6 +96,58 @@ final class HermesSetupTests: XCTestCase {
         super.tearDown()
     }
 
+    func testDecodesEndpointAuthStatusAndSignInWithoutSecrets() throws {
+        let data = Data(
+            #"{"state":"unavailable","reason":"invalid_credentials","profiles":[{"profile":"default","handle":"hermes","displayName":"Hermes","description":"Local assistant","canonicalChat":"absent","availability":"unavailable","placement":{"kind":"local","profile":"default"},"endpoint":{"id":"local:hub:default","kind":"local","profile":"default","computerName":"Studio","label":"Studio · Hermes"},"authStatus":"signInRequired","signIn":{"available":true}}],"capabilities":{"roster":true,"canonicalChat":false,"send":false,"finalResponse":false,"events":false,"stop":false,"routinesRead":false,"messageAgent":false,"groups":false,"crossMachine":false,"queueing":false,"steer":false,"attachments":false}}"#.utf8
+        )
+
+        let status = try JSONDecoder().decode(HermesSetupStatus.self, from: data)
+        let profile = status.profiles.first
+
+        XCTAssertEqual(profile?.authStatus, .signInRequired)
+        XCTAssertEqual(profile?.endpoint?.computerName, "Studio")
+        XCTAssertEqual(profile?.endpoint?.label, "Studio · Hermes")
+        XCTAssertEqual(profile?.signIn?.available, true)
+        XCTAssertEqual(HermesSetupPresentationPolicy.authStatusLabel(.connected), "Connected")
+        XCTAssertEqual(HermesSetupPresentationPolicy.authStatusLabel(.signInRequired), "Sign-in required")
+        XCTAssertEqual(HermesSetupPresentationPolicy.authStatusLabel(.offline), "Offline")
+        XCTAssertEqual(HermesSetupPresentationPolicy.authStatusLabel(.unavailable), "Unavailable")
+        XCTAssertFalse(String(data: data, encoding: .utf8)!.contains("sk-"))
+        XCTAssertFalse(String(data: data, encoding: .utf8)!.contains("HERMES_HOME"))
+    }
+
+    func testConnectEncodesBotRebindAndSignInPlacement() async throws {
+        HermesSetupRequestStub.responseBody = Data(
+            #"{"botId":"bot-keep","profile":{"profile":"work","handle":"work","displayName":"Work","description":"Work","canonicalChat":"absent","availability":"available","placement":{"kind":"local","profile":"work"},"botId":"bot-keep"},"status":{"state":"connected","profiles":[],"capabilities":{"roster":true,"canonicalChat":false,"send":true,"finalResponse":true,"events":true,"stop":true,"routinesRead":false,"messageAgent":false,"groups":false,"crossMachine":false,"queueing":false,"steer":false,"attachments":false}},"created":false}"#.utf8
+        )
+
+        _ = try await client.connectHermes(
+            placement: HermesSetupPlacement(kind: .local, profile: "work"),
+            botId: "bot-keep"
+        )
+        struct RebindBody: Decodable {
+            let botId: String
+            let placement: HermesSetupPlacement
+        }
+        let rebind = try JSONDecoder().decode(
+            RebindBody.self,
+            from: HermesSetupRequestStub.capturedBody ?? Data()
+        )
+        XCTAssertEqual(rebind.botId, "bot-keep")
+        XCTAssertEqual(rebind.placement.profile, "work")
+
+        HermesSetupRequestStub.responseBody = Data(
+            #"{"kind":"terminal","computerName":"Mac mini","message":"Complete sign-in on Mac mini, then try again."}"#.utf8
+        )
+        let handoff = try await client.startHermesSignIn(
+            placement: HermesSetupPlacement(kind: .bridge, profile: "default", bridge: "Mac mini")
+        )
+        XCTAssertEqual(HermesSetupRequestStub.capturedRequest?.url?.path, "/api/hermes/setup/signin")
+        XCTAssertEqual(handoff.computerName, "Mac mini")
+        XCTAssertEqual(handoff.message, "Complete sign-in on Mac mini, then try again.")
+        XCTAssertFalse(handoff.message.contains("—"))
+    }
+
     func testDecodesHermesSetupStatusAndUnknownValuesSafely() throws {
         let data = Data(
             #"{"state":"connected","reason":"future_reason","profiles":[{"profile":"default","handle":"hermes","displayName":"Hermes","description":"Primary profile","canonicalChat":"present","availability":"available","botId":"bot-1","future":"ignored"}],"capabilities":{"roster":true,"canonicalChat":true,"send":true,"finalResponse":true,"events":true,"stop":true,"routinesRead":true,"messageAgent":false,"groups":false,"crossMachine":false,"queueing":true,"steer":true,"attachments":false}}"#.utf8
@@ -330,6 +382,22 @@ final class HermesSetupTests: XCTestCase {
             ),
             .openChat
         )
+        XCTAssertEqual(
+            HermesSetupPresentationPolicy.profileAction(
+                HermesSetupProfile(
+                    profile: "default",
+                    handle: "hermes",
+                    displayName: "Hermes",
+                    description: "Profile",
+                    availability: .unavailable,
+                    authStatus: .signInRequired,
+                    signIn: HermesSignInAvailability(available: true)
+                )
+            ),
+            .signIn
+        )
+        XCTAssertTrue(HermesSetupPresentationPolicy.isHermesBoundBot(title: "Hermes Bot Chat", instanceId: "hermes"))
+        XCTAssertFalse(HermesSetupPresentationPolicy.isHermesBoundBot(title: "Scout", instanceId: "claude"))
     }
 
     func testEndpointLabelsUseComputerNameAndProfile() {

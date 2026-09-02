@@ -34,6 +34,13 @@ import { negotiateHermesCapabilities } from "./hermes-capabilities.ts";
 import { rememberLocalHermesProfiles } from "./bot-runtime-rebind.ts";
 import type { HermesBotEngine } from "./engines/hermes.ts";
 import type { HermesEngineDescription } from "./engines/index.ts";
+import {
+  projectHermesEndpoint,
+  projectHermesEndpointAuthStatus,
+  type HermesEndpointAuthStatus,
+  type HermesEndpointIdentity,
+  type HermesEndpointAuthReason,
+} from "./engines/hermes-endpoints.ts";
 
 export type HermesSetupState = "disabled" | "ready" | "connected" | "unavailable";
 
@@ -45,6 +52,9 @@ export type HermesSetupReason =
 export interface HermesSetupProfile extends HermesRosterRow {
   botId?: string;
   placement?: HermesSetupPlacement;
+  endpoint?: HermesEndpointIdentity;
+  authStatus?: HermesEndpointAuthStatus;
+  signIn?: { available: boolean };
 }
 
 export interface HermesSetupStatus {
@@ -87,12 +97,15 @@ export interface ProjectHermesSetupStatusOptions {
   remoteProfiles?: HermesSetupProfile[];
   remoteCapabilities?: HermesCapabilityFlags;
   botExists: (id: string) => boolean;
+  localComputerName?: string;
 }
 
 export interface ConnectHermesProfileOptions {
   registry: HermesSetupRegistry;
   profile?: string;
   placement?: HermesSetupPlacement;
+  botId?: string;
+  localComputerName?: string;
   bridgeRegistry?: BridgeRegistry;
   loadBindings?: HermesBindingLoader;
   setBinding?: HermesBindingWriter;
@@ -276,7 +289,82 @@ function projectRemoteHermesSetupStatus(options: ProjectHermesSetupStatusOptions
   };
 }
 
-export function projectHermesSetupStatus(options: ProjectHermesSetupStatusOptions): HermesSetupStatus {
+function localAuthFromDescription(
+  enabled: boolean,
+  description: HermesEngineDescription,
+): {
+  computerOnline: boolean;
+  hermesReachable: boolean;
+  providerConfigured: boolean;
+  reason?: HermesEndpointAuthReason;
+} {
+  if (!enabled) {
+    return { computerOnline: true, hermesReachable: false, providerConfigured: false };
+  }
+  if (description.state === "available") {
+    return { computerOnline: true, hermesReachable: true, providerConfigured: true };
+  }
+  const reason = description.reason;
+  if (reason === "invalid_credentials") {
+    return {
+      computerOnline: true,
+      hermesReachable: true,
+      providerConfigured: false,
+      reason,
+    };
+  }
+  return {
+    computerOnline: true,
+    hermesReachable: false,
+    providerConfigured: false,
+    ...(reason ? { reason } : {}),
+  };
+}
+
+function synthesizedLocalSignInProfile(): HermesSetupProfile {
+  return {
+    profile: "default",
+    handle: "hermes",
+    displayName: "Hermes",
+    description: "Local assistant",
+    canonicalChat: "absent",
+    availability: "unavailable",
+    placement: { kind: "local", profile: "default" },
+  };
+}
+
+function decorateSetupProfiles(
+  profiles: readonly HermesSetupProfile[],
+  options: ProjectHermesSetupStatusOptions,
+): HermesSetupProfile[] {
+  const localAuth = localAuthFromDescription(options.enabled, options.description);
+  return profiles.map((profile) => {
+    const placement = profile.placement ?? { kind: "local" as const, profile: profile.profile };
+    const endpoint = projectHermesEndpoint(
+      placement.kind === "bridge"
+        ? { kind: "bridge", profile: placement.profile, bridge: placement.bridge }
+        : { kind: "local", profile: placement.profile },
+      options.localComputerName,
+    );
+    const authStatus = profile.authStatus ?? projectHermesEndpointAuthStatus(
+      placement.kind === "bridge"
+        ? {
+            computerOnline: true,
+            hermesReachable: profile.availability === "available",
+            providerConfigured: profile.availability === "available",
+          }
+        : localAuth,
+    );
+    return {
+      ...profile,
+      endpoint,
+      authStatus,
+      ...(authStatus === "signInRequired" ? { signIn: { available: true } } : {}),
+    };
+  });
+}
+
+function projectHermesSetupStatusCore(options: ProjectHermesSetupStatusOptions): HermesSetupStatus {
   const mapUnavailableProfiles = (profiles: readonly HermesRosterRow[]) =>
     profiles.map((row) => publicProfile(row, { kind: "local", profile: row.profile }, undefined));
 
@@ -423,6 +511,19 @@ export function projectHermesSetupStatus(options: ProjectHermesSetupStatusOption
   };
 }
 
+export function projectHermesSetupStatus(options: ProjectHermesSetupStatusOptions): HermesSetupStatus {
+  const status = projectHermesSetupStatusCore(options);
+  const needsLocalSignIn = status.state === "unavailable"
+    && status.reason === "invalid_credentials"
+    && status.profiles.length === 0
+    && options.enabled;
+  const profiles = needsLocalSignIn ? [synthesizedLocalSignInProfile()] : status.profiles;
+  return {
+    ...status,
+    profiles: decorateSetupProfiles(profiles, options),
+  };
+}
+
 export async function readHermesSetupStatus(
   registry: HermesSetupRegistry,
   options: {
@@ -430,6 +531,7 @@ export async function readHermesSetupStatus(
     loadBridgeBindings?: () => ReturnType<typeof loadHermesBridgeBindings>;
     bridgeRegistry?: BridgeRegistry;
     botExists: (id: string) => boolean;
+    localComputerName?: string;
   },
 ): Promise<HermesSetupStatus> {
   let description: HermesEngineDescription;
@@ -480,6 +582,7 @@ export async function readHermesSetupStatus(
     remoteProfiles: remoteDiscovery.profiles,
     remoteCapabilities: remoteDiscovery.capabilities,
     botExists: options.botExists,
+    localComputerName: options.localComputerName,
   });
   return {
     ...status,
@@ -670,7 +773,177 @@ async function connectBridgeHermesProfile(options: ConnectHermesProfileOptions):
   }
 }
 
+async function rebindLocalHermesProfile(options: ConnectHermesProfileOptions): Promise<ConnectedHermesProfile> {
+  const botId = options.botId;
+  if (!botId) throw setupError("state_unavailable");
+  if (!options.registry.isEnabled) throw setupError("state_unavailable");
+  if (!options.bot(botId)) throw setupError("state_unavailable");
+
+  let description: HermesEngineDescription;
+  try {
+    description = await options.registry.discover();
+  } catch {
+    throw setupError("state_unavailable");
+  }
+  if (description.state !== "available") throw setupError(unavailableReason(description));
+
+  const requestedProfile = options.placement?.profile ?? options.profile;
+  const row = profileForRequest(description.profiles, requestedProfile);
+  const profile = safeProfile(row.profile);
+  if (!profile) throw setupError("profile_unavailable");
+  const binding: HermesBotBinding = {
+    adapter: "hermesBot",
+    profile,
+    canonicalTitle: "Bot Chat",
+    bindingVersion: 1,
+  };
+  const loadBindings = options.loadBindings ?? loadHermesBindings;
+  const setBinding = options.setBinding ?? setHermesBinding;
+  const loadBridgeBindings = options.loadBridgeBindings ?? loadHermesBridgeBindings;
+  const removeBridgeBinding = options.removeBridgeBinding ?? removeHermesBridgeBinding;
+  const before = loadBindings();
+  if (before.state === "unavailable") throw setupError(before.code);
+
+  const current = before.value.get(botId);
+  let bridgeBound = false;
+  if (!current || current.adapter !== "hermesBot") {
+    const bridgeBefore = loadBridgeBindings();
+    if (bridgeBefore.state === "unavailable") throw setupError(bridgeBefore.code);
+    bridgeBound = bridgeBefore.value.has(botId);
+    if (!bridgeBound) throw setupError("state_unavailable");
+  }
+
+  for (const [id, existing] of before.value) {
+    if (id === botId) continue;
+    if (safeProfile(existing.profile) === profile) throw setupError("profile_unavailable");
+  }
+
+  const engine = options.registry.forBinding(binding);
+  if (!engine) throw setupError("gateway_unavailable");
+  try {
+    if (engine.ensureCanonical) await engine.ensureCanonical(profile);
+    else await engine.resolveCanonical(profile);
+  } catch (error) {
+    if (error instanceof HermesEngineError) throw error;
+    throw setupError("upstream_error");
+  }
+
+  const persisted = setBinding(botId, binding);
+  if (persisted.state === "unavailable") throw setupError(persisted.code);
+  const after = loadBindings();
+  if (after.state === "unavailable" || after.value.get(botId)?.profile !== profile) {
+    throw setupError(after.state === "unavailable" ? after.code : "state_unavailable");
+  }
+  if (bridgeBound) {
+    try {
+      removeBridgeBinding(botId);
+    } catch {
+      throw setupError("state_unavailable");
+    }
+  }
+
+  const status = projectHermesSetupStatus({
+    enabled: true,
+    description: descriptionWithCanonical(description, profile),
+    bindings: after,
+    botExists: (id) => Boolean(options.bot(id)),
+    localComputerName: options.localComputerName,
+  });
+  const connectedProfile = status.profiles.find((candidate) =>
+    candidate.placement?.kind === "local" && candidate.profile === profile);
+  if (!connectedProfile) throw setupError("state_unavailable");
+  return { botId, profile: connectedProfile, status, created: false };
+}
+
+async function rebindBridgeHermesProfile(options: ConnectHermesProfileOptions): Promise<ConnectedHermesProfile> {
+  const botId = options.botId;
+  const placement = options.placement;
+  if (!botId || !placement || placement.kind !== "bridge" || !placement.bridge) {
+    throw setupError("profile_unavailable");
+  }
+  if (!options.bot(botId)) throw setupError("state_unavailable");
+  if (!options.bridgeRegistry) throw setupError("gateway_unavailable");
+
+  const loadBindings = options.loadBindings ?? loadHermesBindings;
+  const loadBridgeBindings = options.loadBridgeBindings ?? loadHermesBridgeBindings;
+  const setBridgeBinding = options.setBridgeBinding ?? setHermesBridgeBinding;
+  const removeBinding = options.removeBinding ?? removeHermesBinding;
+  const localBefore = loadBindings();
+  if (localBefore.state === "unavailable") throw setupError(localBefore.code);
+  const before = loadBridgeBindings();
+  if (before.state === "unavailable") throw setupError(before.code);
+  const localBound = Boolean(localBefore.value.get(botId)?.adapter === "hermesBot");
+  const bridgeBound = before.value.has(botId);
+  if (!localBound && !bridgeBound) throw setupError("state_unavailable");
+
+  const remoteDiscovery = await discoverBridgeHermesPlacements(options.bridgeRegistry);
+  const row = profileRowForPlacement(remoteDiscovery.profiles, placement);
+  const profile = safeProfile(row.profile);
+  if (!profile) throw setupError("profile_unavailable");
+  const { bridgeId } = await ensureBridgeHermesCanonical(options.bridgeRegistry, {
+    kind: "bridge",
+    bridge: placement.bridge,
+    profile,
+  });
+
+  for (const [id, existing] of before.value) {
+    if (id === botId) continue;
+    if (existing.bridgeId === bridgeId && safeProfile(existing.profile) === profile) {
+      throw setupError("profile_unavailable");
+    }
+  }
+
+  const persisted = setBridgeBinding(botId, { bridgeId, profile, bindingVersion: 1 });
+  if (persisted.state === "unavailable") throw setupError(persisted.code);
+  if (localBound) {
+    const removed = removeBinding(botId);
+    if (removed.state === "unavailable") throw setupError(removed.code);
+  }
+
+  const after = loadBridgeBindings();
+  const localDescription = options.registry.isEnabled
+    ? descriptionWithCanonical(await options.registry.describe(), profile)
+    : undefined;
+  const status = options.registry.isEnabled && localDescription
+    ? projectHermesSetupStatus({
+      enabled: true,
+      description: localDescription,
+      bindings: localBound
+        ? { state: "available", value: new Map([...localBefore.value].filter(([id]) => id !== botId)) }
+        : localBefore,
+      bridgeBindings: after,
+      bridgeRegistry: options.bridgeRegistry,
+      remoteProfiles: remoteDiscovery.profiles,
+      remoteCapabilities: remoteDiscovery.capabilities,
+      botExists: (id) => Boolean(options.bot(id)),
+      localComputerName: options.localComputerName,
+    })
+    : projectHermesSetupStatus({
+      enabled: false,
+      description: {
+        state: "unavailable",
+        capabilities: { ...EMPTY_CAPABILITIES },
+        profiles: [],
+      },
+      bindings: { state: "available", value: new Map() },
+      bridgeBindings: after,
+      bridgeRegistry: options.bridgeRegistry,
+      remoteProfiles: remoteDiscovery.profiles,
+      remoteCapabilities: remoteDiscovery.capabilities,
+      botExists: (id) => Boolean(options.bot(id)),
+      localComputerName: options.localComputerName,
+    });
+  const connectedProfile = status.profiles.find((candidate) =>
+    candidate.placement && placementsMatch(candidate.placement, placement));
+  if (!connectedProfile) throw setupError("state_unavailable");
+  return { botId, profile: connectedProfile, status, created: false };
+}
+
 async function connectHermesProfileUnlocked(options: ConnectHermesProfileOptions): Promise<ConnectedHermesProfile> {
+  if (options.botId) {
+    if (options.placement?.kind === "bridge") return rebindBridgeHermesProfile(options);
+    return rebindLocalHermesProfile(options);
+  }
   if (options.placement?.kind === "bridge") {
     return connectBridgeHermesProfile(options);
   }

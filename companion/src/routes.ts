@@ -45,7 +45,14 @@ export const HERMES_SETUP_CONNECT_ROUTE = {
   path: /^\/api\/hermes\/(?:setup(?:\/connect)?|connect)$/,
 } as const;
 
+export const HERMES_SETUP_SIGNIN_ROUTE = {
+  method: "POST",
+  path: /^\/api\/hermes\/setup\/signin$/,
+} as const;
+
 const HERMES_PROFILE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+const HERMES_BOT_ID_PATTERN = /^[\w-]{1,200}$/;
+const HERMES_SETUP_BODY_KEYS = new Set(["profile", "placement", "botId"]);
 
 function isSafeHermesProfile(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0 || value.length > 64) return false;
@@ -53,6 +60,40 @@ function isSafeHermesProfile(value: unknown): value is string {
   if (/^session(?:[-_]|$)/i.test(value) || /^(?:root|resolved)[-_]?session/i.test(value)) return false;
   if (/^[0-9a-f]{16,}$/i.test(value) || /^[0-9a-f]{8}-[0-9a-f-]{8,}$/i.test(value)) return false;
   return true;
+}
+
+function isSafeHermesBotId(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 200) return false;
+  if (value.trim() !== value || !HERMES_BOT_ID_PATTERN.test(value)) return false;
+  if (/^sk-/i.test(value) || /token|secret|bearer/i.test(value)) return false;
+  return true;
+}
+
+function safeBridgeName(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > 80) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || /[\u0000-\u001f]/.test(trimmed)) return undefined;
+  return trimmed.toLowerCase();
+}
+
+export interface HermesSetupPlacementBody {
+  kind: "local" | "bridge";
+  profile: string;
+  bridge?: string;
+}
+
+function normalizeHermesSetupPlacement(value: unknown): HermesSetupPlacementBody | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.bridgeId !== undefined || record.bridge_id !== undefined) return undefined;
+  const kind = record.kind;
+  if (kind !== "local" && kind !== "bridge") return undefined;
+  if (!isSafeHermesProfile(record.profile)) return undefined;
+  const profile = record.profile.toLowerCase();
+  if (kind === "local") return { kind, profile };
+  const bridge = safeBridgeName(record.bridge);
+  if (!bridge) return undefined;
+  return { kind, profile, bridge };
 }
 
 export function isHermesSetupStatus(method: string, path: string): boolean {
@@ -63,23 +104,56 @@ export function isHermesSetupConnect(method: string, path: string): boolean {
   return method === HERMES_SETUP_CONNECT_ROUTE.method && HERMES_SETUP_CONNECT_ROUTE.path.test(path);
 }
 
+export function isHermesSetupSignIn(method: string, path: string): boolean {
+  return method === HERMES_SETUP_SIGNIN_ROUTE.method && HERMES_SETUP_SIGNIN_ROUTE.path.test(path);
+}
+
 export function validateHermesSetupBody(
   method: string,
   path: string,
   body: unknown,
-): { denial: Denial } | { profile?: string } {
+): { denial: Denial } | { profile?: string; placement?: HermesSetupPlacementBody; botId?: string } {
+  if (isHermesSetupSignIn(method, path)) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return { denial: { status: 400, error: "Hermes sign-in requires a JSON object" } };
+    }
+    const values = body as Record<string, unknown>;
+    if (Object.keys(values).some((key) => key !== "placement")) {
+      return { denial: { status: 400, error: "Hermes sign-in accepts only placement" } };
+    }
+    const placement = normalizeHermesSetupPlacement(values.placement);
+    return placement
+      ? { placement }
+      : { denial: { status: 400, error: "placement must name a Hermes profile and, for bridge placements, a bridge" } };
+  }
   if (!isHermesSetupConnect(method, path)) return {};
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return { denial: { status: 400, error: "Hermes setup requires a JSON object" } };
   }
   const values = body as Record<string, unknown>;
-  const extra = Object.keys(values).find((key) => key !== "profile");
+  const extra = Object.keys(values).find((key) => !HERMES_SETUP_BODY_KEYS.has(key));
   if (extra) return { denial: { status: 400, error: `unsupported Hermes setup field: ${extra}` } };
-  if (values.profile === undefined) return {};
+  if (values.profile !== undefined && values.placement !== undefined) {
+    return { denial: { status: 400, error: "Hermes setup accepts only profile or placement" } };
+  }
+  let botId: string | undefined;
+  if (values.botId !== undefined) {
+    if (!isSafeHermesBotId(values.botId)) {
+      return { denial: { status: 400, error: "botId must name an existing bot" } };
+    }
+    botId = values.botId;
+  }
+  if (values.placement !== undefined) {
+    const placement = normalizeHermesSetupPlacement(values.placement);
+    return placement
+      ? { placement, ...(botId ? { botId } : {}) }
+      : { denial: { status: 400, error: "placement must name a Hermes profile and, for bridge placements, a bridge" } };
+  }
+  if (values.profile === undefined) return botId ? { botId } : {};
   if (!isSafeHermesProfile(values.profile)) {
     return { denial: { status: 400, error: "profile must be a Hermes profile name" } };
   }
-  return { profile: values.profile.toLowerCase() };
+  return { profile: values.profile.toLowerCase(), ...(botId ? { botId } : {}) };
 }
 
 /** The one companion route that crosses into full interactive desktop
@@ -635,6 +709,7 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "GET", path: /^\/api\/instances$/ },
   HERMES_SETUP_STATUS_ROUTE,
   HERMES_SETUP_CONNECT_ROUTE,
+  HERMES_SETUP_SIGNIN_ROUTE,
   { method: "GET", path: /^\/api\/vbot\/engine-sync$/ },
   { method: "PATCH", path: /^\/api\/vbot\/primary-engine$/ },
   { method: "GET", path: /^\/api\/vbot\/bots$/ },

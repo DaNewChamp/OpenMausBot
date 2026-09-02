@@ -38,6 +38,7 @@ import {
   isGroupSetup,
   isGroupUnread,
   isHermesSetupConnect,
+  isHermesSetupSignIn,
   isHermesSetupStatus,
   isLocalVmAction,
   isLocalVmScreenshot,
@@ -454,7 +455,7 @@ export function createProxyHandler(options: ProxyOptions) {
       });
     }
 
-    if (isHermesSetupConnect(method, path)) {
+    if (isHermesSetupConnect(method, path) || isHermesSetupSignIn(method, path)) {
       const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
       if (!contentType.startsWith("application/json")) {
         return sendJson(res, 415, { error: "Hermes setup requires application/json" });

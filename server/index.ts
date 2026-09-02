@@ -6,6 +6,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
+import { hostname } from "node:os";
 import { extname, join } from "node:path";
 import { promisify } from "node:util";
 
@@ -175,6 +176,10 @@ import {
   connectHermesProfile,
   readHermesSetupStatus,
 } from "./hermes-setup.ts";
+import {
+  parseHermesSignInInput,
+  startHermesSignIn,
+} from "./hermes-signin.ts";
 import {
   abortSignalFromHttp,
   cancelBridgeApprovalsFor,
@@ -4473,17 +4478,26 @@ function readBody(req: IncomingMessage): Promise<any> {
  * the same strict, non-secret request shape without forwarding arbitrary JSON
  * into the provider or Store. */
 function parseHermesSetupBody(body: unknown):
-  | { ok: true; profile?: string; placement?: HermesSetupPlacement }
+  | { ok: true; profile?: string; placement?: HermesSetupPlacement; botId?: string }
   | { ok: false; error: string } {
   const parsed = parseHermesSetupConnectInput(body);
   if (!parsed.ok) return parsed;
   if (parsed.placement?.kind === "local") {
-    return { ok: true, profile: parsed.placement.profile, placement: parsed.placement };
+    return {
+      ok: true,
+      profile: parsed.placement.profile,
+      placement: parsed.placement,
+      ...(parsed.botId ? { botId: parsed.botId } : {}),
+    };
   }
   if (parsed.placement?.kind === "bridge") {
-    return { ok: true, placement: parsed.placement };
+    return {
+      ok: true,
+      placement: parsed.placement,
+      ...(parsed.botId ? { botId: parsed.botId } : {}),
+    };
   }
-  return { ok: true };
+  return parsed.botId ? { ok: true, botId: parsed.botId } : { ok: true };
 }
 
 // Loopback-only enforcement: the harness runs on 127.0.0.1 but accepts
@@ -7829,12 +7843,39 @@ const server = createServer(async (req, res) => {
     // companion sidecar therefore share exactly the same transaction.
     const hermesSetupStatusPath = path === "/api/hermes/setup" || path === "/api/hermes/setup/status";
     const hermesSetupConnectPath = path === "/api/hermes/setup" || path === "/api/hermes/setup/connect" || path === "/api/hermes/connect";
+    const hermesSetupSignInPath = path === "/api/hermes/setup/signin";
     if (method === "GET" && hermesSetupStatusPath) {
       const status = await readHermesSetupStatus(hermesRegistry, {
         botExists: (id) => Boolean(store.bot(id)),
         bridgeRegistry: bridges,
+        localComputerName: hostname(),
       });
       return json(res, 200, status);
+    }
+    if (method === "POST" && hermesSetupSignInPath) {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "Hermes sign-in requires application/json" });
+      }
+      let body: unknown;
+      try {
+        body = await readBody(req);
+      } catch (error) {
+        return json(res, (error as { status?: number }).status ?? 400, {
+          error: error instanceof Error ? error.message : "invalid JSON body",
+        });
+      }
+      const parsed = parseHermesSignInInput(body);
+      if (!parsed.ok) return json(res, 400, { error: parsed.error });
+      try {
+        const handoff = await startHermesSignIn({
+          placement: parsed.placement,
+          localComputerName: hostname(),
+          bridgeRegistry: bridges,
+        });
+        return json(res, 200, handoff);
+      } catch (error) {
+        return json(res, 409, hermesSetupJson(hermesFailure(error)));
+      }
     }
     if (method === "POST" && hermesSetupConnectPath) {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
@@ -7880,6 +7921,7 @@ const server = createServer(async (req, res) => {
           registry: hermesRegistry,
           profile: parsed.profile,
           placement: parsed.placement,
+          botId: parsed.botId,
           bridgeRegistry: bridges,
           bot: (id) => store.bot(id),
           createBot: (profile, opts) => store.createBot(profile, opts),

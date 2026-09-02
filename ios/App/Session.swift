@@ -824,20 +824,23 @@ final class Session: ObservableObject {
     @discardableResult
     func connectHermes(
         profile: String? = nil,
-        placement: HermesSetupPlacement? = nil
+        placement: HermesSetupPlacement? = nil,
+        botId: String? = nil
     ) async -> HermesSetupConnectionResponse? {
         guard let client else {
             actionError = "Pair this phone with a computer before connecting Hermes."
             return nil
         }
         do {
-            let result = try await client.connectHermes(profile: profile, placement: placement)
+            let result = try await client.connectHermes(profile: profile, placement: placement, botId: botId)
             guard !Task.isCancelled else { return nil }
             do {
                 _ = try await hydrate()
             } catch {
                 if error.isCancellation { return nil }
-                actionError = "Hermes connected, but the fleet could not be refreshed. Try again."
+                actionError = botId == nil
+                    ? "Hermes connected, but the fleet could not be refreshed. Try again."
+                    : "Hermes endpoint updated, but the fleet could not be refreshed. Try again."
                 return nil
             }
             guard !Task.isCancelled else { return nil }
@@ -846,6 +849,23 @@ final class Session: ObservableObject {
                 return nil
             }
             return result
+        } catch {
+            if error.isCancellation { return nil }
+            if let api = error as? APIError, api.isUnauthorized {
+                status = .unauthorized
+            }
+            actionError = error.localizedDescription
+            return nil
+        }
+    }
+
+    func startHermesSignIn(placement: HermesSetupPlacement) async -> HermesSignInHandoff? {
+        guard let client else {
+            actionError = "Pair this phone with a computer before signing in to Hermes."
+            return nil
+        }
+        do {
+            return try await client.startHermesSignIn(placement: placement)
         } catch {
             if error.isCancellation { return nil }
             if let api = error as? APIError, api.isUnauthorized {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createFakeHermesBridgeRuntime, runHermesBridgeJob } from "./hermes.ts";
+import { createFakeHermesBridgeRuntime, runHermesBridgeJob, runHermesSignInJob } from "./hermes.ts";
 import { parseHermesBridgeResult } from "../../shared/bridge-hermes-contract.ts";
 
 describe("bridge Hermes job handler", () => {
@@ -100,5 +100,37 @@ describe("bridge Hermes job handler", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("cancelled");
     expect(result.stdout).toBe("");
+  });
+
+  it("launches Hermes setup without capturing output", async () => {
+    const launches: Array<{ kind: string; argv: readonly string[] }> = [];
+    const result = await runHermesSignInJob(
+      { kind: "hermes-signin", payload: { argv: ["setup"] } },
+      async (command) => {
+        launches.push(command);
+        return { ok: true, kind: "terminal" };
+      },
+    );
+    expect(launches).toEqual([{ kind: "terminal", argv: ["setup"] }]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(parseHermesBridgeResult(result.stdout)).toEqual({
+      kind: "hermes-signin",
+      body: { kind: "terminal" },
+    });
+    expect(JSON.stringify({ launches, result })).not.toMatch(/sk-|Bearer |HERMES_HOME|token|secret|\/Users\//i);
+  });
+
+  it("fails closed when Hermes setup cannot start", async () => {
+    const result = await runHermesSignInJob(
+      { kind: "hermes-signin", payload: { argv: ["setup"] } },
+      async () => ({ ok: false }),
+    );
+    expect(result).toMatchObject({
+      exitCode: 1,
+      stdout: "",
+      stderr: "hermes setup handoff failed",
+    });
+    expect(result.stderr).not.toMatch(/sk-|HERMES_HOME|\/Users\/|token|secret/i);
   });
 });
