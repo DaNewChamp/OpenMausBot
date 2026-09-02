@@ -616,7 +616,7 @@ struct ConnectedComputersView: View {
     var body: some View {
         List {
             if let active = session.connection {
-                Section("Current computer") {
+                Section(ConnectionPresentationPolicy.hubSectionTitle) {
                     NavigationLink {
                         ConnectionSecurityView()
                     } label: {
@@ -665,7 +665,7 @@ struct ConnectedComputersView: View {
             }
 
             if session.bridgeRosterLoading {
-                Section("Registered bridges") {
+                Section(ConnectionPresentationPolicy.bridgeSectionTitle) {
                     HStack {
                         ProgressView()
                         Text("Loading bridges…")
@@ -673,26 +673,43 @@ struct ConnectedComputersView: View {
                     }
                 }
             } else if !session.bridgeRoster.isEmpty {
-                Section("Registered bridges") {
-                    ForEach(session.bridgeRoster) { bridge in
+                Section {
+                    ForEach(BridgePresentationPolicy.present(session.bridgeRoster)) { bridge in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 8) {
-                                Text(bridge.name)
+                                Text(bridge.displayName)
                                     .font(.body.weight(.medium))
+                                if bridge.stale {
+                                    Text(bridge.roleLabel.rawValue)
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(Color.secondary.opacity(0.12), in: Capsule())
+                                }
                                 Spacer(minLength: 8)
                                 Circle()
-                                    .fill(bridge.online ? Color.green : Color.secondary)
+                                    .fill(bridge.entry.online ? Color.green : Color.secondary)
                                     .frame(width: 7, height: 7)
-                                Text(BridgePresentationPolicy.onlineStatus(bridge.online))
+                                Text(BridgePresentationPolicy.onlineStatus(bridge.entry.online))
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
-                            Text(BridgePresentationPolicy.capabilitySummary(bridge.capabilities))
+                            if !bridge.stale {
+                                Text(bridge.roleLabel.rawValue)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(BridgePresentationPolicy.capabilitySummary(bridge.entry.capabilities))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 2)
                     }
+                } header: {
+                    Text(ConnectionPresentationPolicy.bridgeSectionTitle)
+                } footer: {
+                    Text(ConnectionPresentationPolicy.bridgeSectionFooter)
                 }
             }
 

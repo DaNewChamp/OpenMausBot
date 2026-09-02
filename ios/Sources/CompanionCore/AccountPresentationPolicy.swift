@@ -27,49 +27,16 @@ public enum AccountAvatarSymbol: String, CaseIterable, Identifiable, Sendable {
 }
 
 public enum ConnectionPresentationPolicy: Sendable {
-    private static let genericNames: Set<String> = [
-        "computer", "desktop", "open maus", "open maus bot", "openmaus", "openmausbot", "v bot", "vbot"
-    ]
-
     public static func displayName(for connection: Connection) -> String {
-        if let alias = connection.alias?.trimmingCharacters(in: .whitespacesAndNewlines), !alias.isEmpty {
-            return alias
-        }
-        return displayName(name: connection.name, host: connection.host)
+        FleetPresentationPolicy.resolveHubDisplayName(
+            name: connection.name,
+            host: connection.host,
+            alias: connection.alias
+        )
     }
 
     public static func displayName(name: String, host: String) -> String {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalized = trimmed.lowercased().replacingOccurrences(of: "-", with: " ")
-        guard trimmed.isEmpty || genericNames.contains(normalized) else { return trimmed }
-
-        let address = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        if address.contains(":")
-            || address.range(of: #"^\d{1,3}(?:\.\d{1,3}){3}$"#, options: .regularExpression) != nil {
-            return "Connected computer"
-        }
-        let hostName = address
-            .split(separator: ".", maxSplits: 1)
-            .first
-            .map(String.init) ?? ""
-        guard !hostName.isEmpty else {
-            return "Connected computer"
-        }
-
-        let words = hostName
-            .replacingOccurrences(of: "-", with: " ")
-            .replacingOccurrences(of: "_", with: " ")
-            .split(whereSeparator: \.isWhitespace)
-            .map { word -> String in
-                switch word.lowercased() {
-                case "macmini": return "Mac mini"
-                case "macbook": return "MacBook"
-                case "mac": return "Mac"
-                case "mini": return "mini"
-                default: return word.prefix(1).uppercased() + word.dropFirst()
-                }
-            }
-        return words.isEmpty ? "Connected computer" : words.joined(separator: " ")
+        FleetPresentationPolicy.resolveHubDisplayName(name: name, host: host)
     }
 
     public static func fleetSummary(count: Int) -> String {
@@ -79,4 +46,9 @@ public enum ConnectionPresentationPolicy: Sendable {
         default: return "\(count) computers paired"
         }
     }
+
+    public static let hubSectionTitle = "This V Bot hub"
+    public static let bridgeSectionTitle = "Execution bridges"
+    public static let bridgeSectionFooter =
+        "Bridges run jobs for this hub. They are separate from the phone pairing that connects you to the hub."
 }
