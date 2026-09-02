@@ -51,8 +51,10 @@ function readShebangPython(cliPath: string, readFile: (path: string, encoding: B
   try {
     const first = readFile(cliPath, "utf8").split("\n", 1)[0]?.trim();
     if (!first?.startsWith("#!")) return undefined;
-    const interpreter = first.slice(2).trim().split(/\s+/)[0];
-    return interpreter || undefined;
+    const body = first.slice(2).trim();
+    const parts = body.split(/\s+/).filter(Boolean);
+    if (parts[0] === "env" && parts[1]) return parts[1];
+    return parts[0] || undefined;
   } catch {
     return undefined;
   }
@@ -143,12 +145,31 @@ function derivePythonFromCli(
   readFile: (path: string, encoding: BufferEncoding) => string,
   platform: NodeJS.Platform,
 ): string | undefined {
-  const configured = environment.HERMES_PYTHON?.trim();
+  const configured = environment.HERMES_PYTHON?.trim() || environment.PYTHON?.trim();
   if (configured) return configured;
+
+  const venvRoot = environment.VIRTUAL_ENV?.trim();
+  if (venvRoot) {
+    for (const candidate of venvPythonCandidates(venvRoot, platform)) {
+      if (exists(candidate)) return candidate;
+    }
+  }
 
   if (exists(cliPath)) {
     const shebang = readShebangPython(cliPath, readFile);
-    if (shebang && exists(shebang)) return shebang;
+    if (shebang) {
+      if (exists(shebang)) return shebang;
+      if (!shebang.includes("/") && !shebang.includes("\\")) {
+        const pathEnv = environment.PATH?.trim();
+        if (pathEnv) {
+          for (const dir of pathEnv.split(delimiter)) {
+            if (!dir) continue;
+            const candidate = join(dir, shebang);
+            if (exists(candidate)) return candidate;
+          }
+        }
+      }
+    }
   }
 
   const sibling = siblingPython(dirname(cliPath), platform, exists);

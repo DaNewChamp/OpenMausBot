@@ -145,6 +145,40 @@ describe("resolveHermesGatewayLaunch", () => {
     }
   });
 
+  it("derives python from /usr/bin/env shebang, PYTHON, and VIRTUAL_ENV", () => {
+    const tree = makeFakeHermesTree({ layout: "flat" });
+    writeFileSync(tree.cliPath, "#!/usr/bin/env python3\n");
+    const launch = resolveHermesGatewayLaunch({
+      cli: tree.cliPath,
+      environment: {
+        PATH: "/usr/bin:/bin",
+        PYTHON: "/opt/custom/python3",
+      },
+    }, {
+      exists: (path) => path === join(tree.sourceRoot, "tui_gateway", "entry.py") || path === tree.cliPath,
+      realpath: (path) => path,
+      readFile: (path) => (path === tree.cliPath ? "#!/usr/bin/env python3\n" : ""),
+    });
+    expect(launch).toMatchObject({ command: "/opt/custom/python3" });
+  });
+
+  it("prefers VIRTUAL_ENV python before repo venv when HERMES_PYTHON and PYTHON are unset", () => {
+    const tree = makeFakeHermesTree({ layout: "unix-venv" });
+    const venvPython = join("/tmp/fake-venv", "bin", "python3");
+    const launch = resolveHermesGatewayLaunch({
+      cli: tree.cliPath,
+      environment: { VIRTUAL_ENV: "/tmp/fake-venv" },
+    }, {
+      exists: (path) =>
+        path === join(tree.sourceRoot, "tui_gateway", "entry.py")
+        || path === tree.cliPath
+        || path === venvPython,
+      realpath: (path) => path,
+      readFile: () => "",
+    });
+    expect(launch).toMatchObject({ command: venvPython });
+  });
+
   it("returns missing_cli when the gateway entry module is absent", () => {
     const launch = resolveHermesGatewayLaunch({
       cli: "/opt/hermes/bin/hermes",
