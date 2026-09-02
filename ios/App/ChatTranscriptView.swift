@@ -44,10 +44,7 @@ struct ChatTranscriptView: View {
     }
 
     private var renderedMessages: [Message] {
-        if effectiveActivityDetail == .hidden {
-            return messages.filter { $0.kind != .activity }
-        }
-        return messages
+        visibleTranscriptMessages(messages, detail: effectiveActivityDetail)
     }
 
     private var effectiveActivityDetail: ActivityDetail {

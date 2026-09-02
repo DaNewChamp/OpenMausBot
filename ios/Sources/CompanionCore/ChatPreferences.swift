@@ -147,6 +147,14 @@ public enum TranscriptRow: Identifiable, Hashable, Sendable {
     public var senderName: String? { head.from?.name }
 }
 
+/// Applies the activity-detail preference without hiding communication rows.
+/// Comm activities remain visible at every level because they are navigation
+/// affordances for the shared bot conversation, not generic tool receipts.
+public func visibleTranscriptMessages(_ messages: [Message], detail: ActivityDetail) -> [Message] {
+    guard detail == .hidden else { return messages }
+    return messages.filter { $0.kind != .activity || $0.comm != nil }
+}
+
 /// Folds a transcript to the requested level of detail.
 ///
 /// A failed step is never folded away: the reason to turn activity down is
@@ -157,7 +165,7 @@ public func transcriptRows(_ messages: [Message], detail: ActivityDetail) -> [Tr
     case .full:
         return messages.map(TranscriptRow.message)
     case .hidden:
-        return messages.filter { $0.kind != .activity }.map(TranscriptRow.message)
+        return visibleTranscriptMessages(messages, detail: detail).map(TranscriptRow.message)
     case .reduced:
         var rows: [TranscriptRow] = []
         var run: [Message] = []

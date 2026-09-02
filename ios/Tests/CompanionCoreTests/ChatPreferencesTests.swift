@@ -42,6 +42,20 @@ final class ChatPreferencesTests: XCTestCase {
         XCTAssertEqual(transcriptRows(messages, detail: .hidden).map(\.id), ["a"])
     }
 
+    func testHiddenKeepsCommActivityForNavigation() {
+        var comm = activity("comm")
+        comm.tool = ToolActivity(name: "Messaged @Desk Docs", ok: true)
+        comm.comm = CommChip(
+            groupId: "room-1",
+            withBotId: "desk-docs",
+            withName: "Desk Docs",
+            withColor: "green"
+        )
+        let messages = [text("a"), activity("tool"), comm, text("d")]
+
+        XCTAssertEqual(transcriptRows(messages, detail: .hidden).map(\.id), ["a", "comm", "d"])
+    }
+
     // MARK: - Reduced
 
     func testReducedCollapsesConsecutiveActivityIntoOneRun() {
