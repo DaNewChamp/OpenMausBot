@@ -189,6 +189,7 @@ import {
   type RuntimeRebindRequest,
 } from "./bot-runtime-binding.ts";
 import {
+  canonicalizeBotRuntimeBinding,
   requestBotRuntimeRebind,
   resolveRuntimeRebind,
 } from "./bot-runtime-rebind.ts";
@@ -4969,7 +4970,7 @@ const server = createServer(async (req, res) => {
           if (actor && fromThreadId && !store.taskByThread(actor.id, fromThreadId)) {
             return json(res, 403, { error: "source thread does not belong to sender" });
           }
-          if (!isBotRuntimeBinding(body.binding)) {
+          if (!isBotRuntimeBinding(canonicalizeBotRuntimeBinding(body.binding))) {
             return json(res, 400, { error: "binding is invalid" });
           }
           const contextMode = body.contextMode === "summary" ? "summary" : "none";
@@ -4977,7 +4978,7 @@ const server = createServer(async (req, res) => {
           if (!userRequested && !actor) return json(res, 403, { error: "unknown sender" });
           const request: RuntimeRebindRequest = {
             targetBotId,
-            binding: body.binding,
+            binding: canonicalizeBotRuntimeBinding(body.binding) as RuntimeRebindRequest["binding"],
             contextMode,
             userRequested,
           };
@@ -6535,13 +6536,14 @@ const server = createServer(async (req, res) => {
     m = path.match(/^\/api\/bots\/([\w-]+)\/runtime-binding$/);
     if (m && method === "POST") {
       const body = await readBody(req);
-      if (!isBotRuntimeBinding(body.binding)) return json(res, 400, { error: "binding is invalid" });
+      const binding = canonicalizeBotRuntimeBinding(body.binding);
+      if (!isBotRuntimeBinding(binding)) return json(res, 400, { error: "binding is invalid" });
       const contextMode = body.contextMode === "summary" ? "summary" : "none";
       const result = await requestBotRuntimeRebind({
         store,
         request: {
           targetBotId: m[1]!,
-          binding: body.binding,
+          binding,
           contextMode,
           userRequested: true,
         },

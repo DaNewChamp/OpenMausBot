@@ -16,7 +16,7 @@ import {
   type HermesBridgeSendWire,
 } from "../shared/bridge-hermes-contract.ts";
 import type { HermesFailureCode } from "./engines/contracts.ts";
-import { rememberHermesEndpoint } from "./bot-runtime-rebind.ts";
+import { rememberHermesBridgeAlias, rememberHermesEndpoint } from "./bot-runtime-rebind.ts";
 
 const lastKnownHermesEndpoints = new Map<string, HermesEndpointDescriptor[]>();
 
@@ -63,6 +63,14 @@ export function ingestHermesEndpointDescriptors(bridgeId: string, raw: unknown):
   for (const row of parsed) {
     if (row.status === "available" && row.profile) {
       rememberHermesEndpoint(row.endpointId, row.capabilityRevision);
+      const displayComputer = row.displayName.split(" / ")[0]?.trim();
+      if (displayComputer) {
+        rememberHermesBridgeAlias(displayComputer, row.bridgeId);
+        const aliasId = `bridge:${displayComputer.toLowerCase()}:${row.profile.toLowerCase()}`;
+        if (aliasId !== row.endpointId) {
+          rememberHermesEndpoint(aliasId, row.capabilityRevision);
+        }
+      }
     }
   }
   return parsed;

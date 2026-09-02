@@ -108,6 +108,8 @@ describe("typed Hermes bridge transport", () => {
 
   it("retains last known Hermes descriptors only while the identity store is readable", async () => {
     const { ingestHermesEndpointDescriptors, lastKnownHermesEndpointsFor } = await import("./bridge-hermes.ts");
+    const { lookupHermesEndpoint, resetRememberedHermesEndpointsForTests } = await import("./bot-runtime-rebind.ts");
+    resetRememberedHermesEndpointsForTests();
     const available = [{
       endpointId: "bridge:bridge-mini:default",
       bridgeId: "bridge-mini",
@@ -119,6 +121,25 @@ describe("typed Hermes bridge transport", () => {
     }];
     expect(ingestHermesEndpointDescriptors("bridge-mini", available)).toEqual(available);
     expect(lastKnownHermesEndpointsFor("bridge-mini")).toEqual(available);
+    expect(lookupHermesEndpoint({
+      kind: "hermes",
+      placement: { kind: "bridge", bridgeId: "bridge-mini", profile: "default" },
+      bindingVersion: 2,
+    })).toEqual({
+      state: "available",
+      endpointId: "bridge:bridge-mini:default",
+      capabilityRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+    expect(lookupHermesEndpoint({
+      kind: "hermes",
+      placement: { kind: "bridge", bridgeId: "mac mini", profile: "default" },
+      bindingVersion: 2,
+    })).toEqual({
+      state: "available",
+      endpointId: "bridge:bridge-mini:default",
+      capabilityRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+    resetRememberedHermesEndpointsForTests();
     const unreadable = [{
       endpointId: "bridge:bridge-mini:unreadable",
       bridgeId: "bridge-mini",

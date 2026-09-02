@@ -22,6 +22,7 @@ export {
 } from "./bot-runtime-binding.ts";
 
 const endpoints = new Map<string, { revision: string; status: "available" | "unreadable" }>();
+const bridgeAliases = new Map<string, string>();
 const pendingRebinds = new Map<
   string,
   {
@@ -77,6 +78,29 @@ export function rememberHermesEndpoint(
   endpoints.set(endpointId, { revision: capabilityRevision, status });
 }
 
+export function rememberHermesBridgeAlias(label: string, bridgeId: string): void {
+  const key = label.trim().toLowerCase();
+  const canonical = bridgeId.trim();
+  if (!key || !canonical) return;
+  bridgeAliases.set(key, canonical);
+}
+
+export function canonicalizeBotRuntimeBinding(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  if (record.kind !== "hermes" || !record.placement || typeof record.placement !== "object" || Array.isArray(record.placement)) {
+    return value;
+  }
+  const placement = record.placement as Record<string, unknown>;
+  if (placement.kind !== "bridge" || typeof placement.bridgeId !== "string") return value;
+  const alias = bridgeAliases.get(placement.bridgeId.trim().toLowerCase());
+  if (!alias || alias === placement.bridgeId) return value;
+  return {
+    ...record,
+    placement: { ...placement, bridgeId: alias },
+  };
+}
+
 export function rememberLocalHermesProfiles(
   profiles: Array<{ profile?: string; availability?: string }>,
   capabilityRevision: string,
@@ -90,14 +114,20 @@ export function rememberLocalHermesProfiles(
 
 export function resetRememberedHermesEndpointsForTests(): void {
   endpoints.clear();
+  bridgeAliases.clear();
 }
 
 export function lookupHermesEndpoint(binding: BotRuntimeBinding): RuntimeEndpointState {
   if (binding.kind === "provider") {
     return { state: "available", endpointId: hermesEndpointId(binding), capabilityRevision: "provider" };
   }
-  const id = hermesEndpointId(binding);
-  const known = endpoints.get(id);
+  const canonical = canonicalizeBotRuntimeBinding(binding);
+  const resolved = isBotRuntimeBinding(canonical) ? canonical : binding;
+  if (resolved.kind === "provider") {
+    return { state: "available", endpointId: hermesEndpointId(resolved), capabilityRevision: "provider" };
+  }
+  const id = hermesEndpointId(resolved);
+  const known = endpoints.get(id) ?? endpoints.get(hermesEndpointId(binding));
   if (!known) return { state: "missing" };
   if (known.status === "unreadable") return { state: "unreadable", endpointId: id };
   return { state: "available", endpointId: id, capabilityRevision: known.revision };
@@ -151,12 +181,13 @@ function settleCard(bus: ApprovalBus, threadId: string, messageId: string, behav
 export async function requestBotRuntimeRebind(input: RequestBotRuntimeRebindInput): Promise<RuntimeRebindResult> {
   const bot = input.store.bot(input.request.targetBotId);
   if (!bot) return publicError("bot_not_found", "Bot is unavailable");
-  if (!isBotRuntimeBinding(input.request.binding)) {
+  const binding = canonicalizeBotRuntimeBinding(input.request.binding);
+  if (!isBotRuntimeBinding(binding)) {
     return publicError("invalid_binding", "Runtime binding is invalid");
   }
 
-  const endpoint = input.endpoint ?? lookupHermesEndpoint(input.request.binding);
-  if (input.request.binding.kind === "hermes" && endpoint.state !== "available") {
+  const endpoint = input.endpoint ?? lookupHermesEndpoint(binding);
+  if (binding.kind === "hermes" && endpoint.state !== "available") {
     const code = endpoint.state === "unreadable" ? "endpoint_unreadable" : "endpoint_unavailable";
     if (input.endpointError) {
       return publicError(code, "Hermes endpoint is unavailable", input.endpointError);
@@ -166,7 +197,7 @@ export async function requestBotRuntimeRebind(input: RequestBotRuntimeRebindInpu
 
   const planned = planBotRuntimeRebind({
     bot,
-    requested: input.request.binding,
+    requested: binding,
     contextMode: input.request.contextMode,
     context: input.context,
     endpoint,
