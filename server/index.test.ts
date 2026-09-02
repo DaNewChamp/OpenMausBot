@@ -1132,6 +1132,105 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("broadcasts sanitized bot updates on successful runtime binding change and rejects invalid requests", async () => {
+    const created = await api("POST", "/api/bots");
+    const bot = created.body.bot;
+    const stream = await openSse(`${BASE}/api/events`);
+    try {
+      await stream.until((frame) => frame.kind === "hello");
+
+      const invalid = await api("POST", `/api/bots/${bot.id}/runtime-binding`, {
+        binding: { kind: "invalid-kind" },
+      });
+      expect(invalid.status).toBe(400);
+      expect(invalid.body).toEqual({ error: "binding is invalid" });
+
+      const missing = await api("POST", "/api/bots/non-existent-bot/runtime-binding", {
+        binding: {
+          kind: "provider",
+          instanceId: "claude",
+          model: "claude-opus-4",
+        },
+      });
+      expect(missing.status).toBe(400);
+
+      const rebind = await api("POST", `/api/bots/${bot.id}/runtime-binding`, {
+        binding: {
+          kind: "provider",
+          instanceId: "claude",
+          model: "claude-opus-4",
+        },
+      });
+      expect(rebind.status).toBe(200);
+      expect(rebind.body).toMatchObject({
+        status: "applied",
+        restartRequired: false,
+      });
+      expect(rebind.body.bot).toMatchObject({
+        id: bot.id,
+        runtimeBinding: {
+          kind: "provider",
+          instanceId: "claude",
+          model: "claude-opus-4",
+        },
+        modelSelection: {
+          instanceId: "claude",
+          model: "claude-opus-4",
+        },
+      });
+
+      const frame = await stream.until(
+        (candidate) =>
+          candidate.kind === "bot" &&
+          candidate.bot?.id === bot.id &&
+          candidate.bot?.runtimeBinding?.kind === "provider" &&
+          candidate.bot?.runtimeBinding?.model === "claude-opus-4",
+      );
+      expect(frame.bot).toMatchObject({
+        id: bot.id,
+        runtimeBinding: {
+          kind: "provider",
+          instanceId: "claude",
+          model: "claude-opus-4",
+        },
+      });
+      expect(frame.bot).not.toHaveProperty("resumeCursors");
+    } finally {
+      stream.close();
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
+  it("refuses runtime binding changes while the bot is busy", async () => {
+    const created = await api("POST", "/api/bots");
+    const bot = created.body.bot;
+    rmSync(fakeClaudeDump, { force: true });
+    try {
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "stay busy" })).status).toBe(202);
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
+      expect((await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id).busy).toBe(true);
+
+      const busyRebind = await api("POST", `/api/bots/${bot.id}/runtime-binding`, {
+        binding: {
+          kind: "provider",
+          instanceId: "claude",
+          model: "claude-opus-4",
+        },
+      });
+      expect(busyRebind.status).toBe(409);
+      expect(busyRebind.body).toMatchObject({
+        status: "error",
+        code: "bot_active",
+      });
+    } finally {
+      await api("POST", `/api/bots/${bot.id}/interrupt`);
+      await expect.poll(async () => {
+        return (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id)?.busy;
+      }, { timeout: 5_000 }).toBeFalsy();
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
   it("exports every visible bot and imports the team without creating a room", async () => {
     const first = (await api("POST", "/api/bots")).body.bot;
     const second = (await api("POST", "/api/bots")).body.bot;

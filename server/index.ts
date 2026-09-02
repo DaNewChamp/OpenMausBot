@@ -5006,6 +5006,10 @@ const server = createServer(async (req, res) => {
               : undefined,
           });
           const status = result.status === "error" ? (result.code === "bot_active" ? 409 : 400) : 200;
+          if (result.status === "applied") {
+            const visible = wireBot(result.bot);
+            broadcast({ kind: "bot", bot: visible });
+          }
           return json(res, status, result);
         }
       }
@@ -6565,6 +6569,10 @@ const server = createServer(async (req, res) => {
         approval: approvalBus,
       });
       const status = result.status === "error" ? (result.code === "bot_active" ? 409 : 400) : 200;
+      if (result.status === "applied") {
+        const visible = wireBot(result.bot);
+        broadcast({ kind: "bot", bot: visible });
+      }
       return json(res, status, result);
     }
     m = path.match(/^\/api\/hermes\/subagents\/([\w-]+)\/promote$/);
