@@ -315,6 +315,7 @@ const TOOLS = [
   },
 ];
 
+export const AGENT_PROXY_TOOLS = TOOLS;
 export const AGENT_PROXY_TOOL_NAMES = TOOLS.map((tool) => tool.name);
 
 type Json = Record<string, unknown>;

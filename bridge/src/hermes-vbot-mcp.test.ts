@@ -187,6 +187,37 @@ describe("Hermes V Bot MCP facade", () => {
     expect(JSON.stringify(listed)).toMatch(/list_bots/);
     expect(listed).not.toHaveProperty("result");
     expect((listed as { tools?: unknown[] }).tools).toHaveLength(HERMES_VBOT_ALLOWED_TOOLS.length);
+    const tools = (listed as { tools: Array<{ name: string; description?: string; inputSchema?: unknown }> }).tools;
+    for (const tool of tools) {
+      expect(tool.description?.trim().length).toBeGreaterThan(0);
+      expect(tool.inputSchema).toMatchObject({ type: "object" });
+    }
+    expect(tools.find((tool) => tool.name === "list_bots")).toEqual({
+      name: "list_bots",
+      description:
+        "List the other bots (agents) in your OpenMausBot section you can message, with their model and whether they're busy. Call this before ask_bot or delegate_bot to discover who's available.",
+      inputSchema: { type: "object", properties: {} },
+    });
+    expect(tools.find((tool) => tool.name === "ask_bot")?.inputSchema).toEqual({
+      type: "object",
+      properties: {
+        bot_id: { type: "string", description: "The target bot's id (from list_bots)." },
+        message: { type: "string", description: "What to say / ask the bot." },
+      },
+      required: ["bot_id", "message"],
+    });
+    expect(tools.find((tool) => tool.name === "configure_bot_runtime")).toMatchObject({
+      name: "configure_bot_runtime",
+      description: expect.stringContaining("Convert a teammate"),
+      inputSchema: {
+        type: "object",
+        required: ["bot_id", "placement"],
+        properties: {
+          bot_id: { type: "string" },
+          placement: { type: "string", enum: ["provider", "local", "bridge"] },
+        },
+      },
+    });
     const called = await client.request("tools/call", { name: "list_bots", arguments: {} });
     const calledText = JSON.stringify(called);
     expect(calledText).not.toMatch(/tool unavailable/i);
@@ -265,5 +296,158 @@ describe("Hermes V Bot MCP facade", () => {
     expect(result.text).toMatch(/unconfigured/i);
     expect(result.text).not.toMatch(/tool unavailable/i);
     expect(JSON.stringify(result)).not.toMatch(/token|OMB_COMMS|Bearer|sk-/i);
+  });
+
+  it("tools/list returns the real agents-proxy schema, not name-only stubs", async () => {
+    const { createHermesVbotDaemonHandler, HERMES_VBOT_ALLOWED_TOOLS } = await import("./hermes-vbot-mcp.ts");
+    const listed = await createHermesVbotDaemonHandler()({
+      jsonrpc: "2.0",
+      id: 11,
+      method: "tools/list",
+    });
+    const tools = (listed.result as {
+      tools: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
+    }).tools;
+    expect(tools.map((tool) => tool.name)).toEqual([...HERMES_VBOT_ALLOWED_TOOLS]);
+    expect(tools).toHaveLength(HERMES_VBOT_ALLOWED_TOOLS.length);
+    for (const tool of tools) {
+      expect(tool.description?.trim().length).toBeGreaterThan(0);
+      expect(tool.inputSchema).toMatchObject({ type: "object" });
+    }
+    expect(tools.find((tool) => tool.name === "list_bots")).toEqual({
+      name: "list_bots",
+      description:
+        "List the other bots (agents) in your OpenMausBot section you can message, with their model and whether they're busy. Call this before ask_bot or delegate_bot to discover who's available.",
+      inputSchema: { type: "object", properties: {} },
+    });
+    expect(tools.find((tool) => tool.name === "ask_bot")?.inputSchema).toEqual({
+      type: "object",
+      properties: {
+        bot_id: { type: "string", description: "The target bot's id (from list_bots)." },
+        message: { type: "string", description: "What to say / ask the bot." },
+      },
+      required: ["bot_id", "message"],
+    });
+    expect(tools.find((tool) => tool.name === "configure_bot_runtime")).toEqual({
+      name: "configure_bot_runtime",
+      description:
+        "Convert a teammate between a provider engine and a native Hermes profile on a paired computer. Autonomous calls wait for the user's approval. Never include tokens, secret paths, or session ids.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          bot_id: { type: "string", description: "The teammate's id (from list_bots)." },
+          placement: { type: "string", enum: ["provider", "local", "bridge"], description: "Destination runtime kind." },
+          instance_id: { type: "string", description: "Provider instance id when placement is provider." },
+          model: { type: "string", description: "Optional provider model id." },
+          profile: { type: "string", description: "Hermes profile slug when placement is local or bridge." },
+          bridge_id: { type: "string", description: "Paired computer/bridge id when placement is bridge." },
+          context_mode: { type: "string", enum: ["summary", "none"], description: "Whether to send a sanitized handoff summary." },
+        },
+        required: ["bot_id", "placement"],
+      },
+    });
+  });
+});
+
+describe("Hermes daemon paired-credential wiring", () => {
+  it("treats missing or unreadable paired credentials as unavailable, never empty", async () => {
+    const { pairedHermesHarnessCredentials } = await import("./hermes-vbot-mcp.ts");
+    expect(pairedHermesHarnessCredentials(null)).toEqual({ state: "unavailable", code: "state_unavailable" });
+    expect(pairedHermesHarnessCredentials({})).toEqual({ state: "unavailable", code: "state_unavailable" });
+    expect(pairedHermesHarnessCredentials({ url: "", bridgeToken: "" })).toEqual({
+      state: "unavailable",
+      code: "state_unavailable",
+    });
+    expect(pairedHermesHarnessCredentials({
+      url: "https://openmaus.posival.com",
+      bridgeToken: "paired-secret",
+      bridgeId: "bridge-mini",
+      name: "Mac mini",
+    })).toEqual({ state: "unavailable", code: "state_unavailable" });
+  });
+
+  it("constructs the Hermes executor from paired url/secret rather than env-only harness vars", async () => {
+    const { createServer } = await import("node:http");
+    const {
+      pairedHermesHarnessCredentials,
+      createHermesVbotPairedToolExecutor,
+      hermesDaemonCredentialSnapshot,
+      createHermesDaemonToolExecutor,
+    } = await import("./hermes-vbot-mcp.ts");
+    const secret = "paired-bridge-secret-value";
+    const seen: { auth?: string; url?: string } = {};
+    const server = createServer((req, res) => {
+      seen.auth = req.headers.authorization;
+      seen.url = `http://${req.headers.host}${req.url}`;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ bots: [] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("expected tcp address");
+    const url = `http://127.0.0.1:${address.port}`;
+    const previous = {
+      OMB_HARNESS_URL: process.env.OMB_HARNESS_URL,
+      OMB_COMMS_TOKEN: process.env.OMB_COMMS_TOKEN,
+    };
+    process.env.OMB_HARNESS_URL = "http://127.0.0.1:1";
+    process.env.OMB_COMMS_TOKEN = "env-only-token-must-not-win";
+    try {
+      const credentials = {
+        url,
+        bridgeId: "bridge-mini",
+        bridgeToken: secret,
+        name: "Mac mini",
+      };
+      const parsed = pairedHermesHarnessCredentials(credentials);
+      expect(parsed).toEqual({ state: "available", url, secret });
+      const snapshot = hermesDaemonCredentialSnapshot(parsed);
+      const argv = ["node", "index.js", "run"];
+      const logs = ["bridge: Mac mini started"];
+      const fleet = { bridges: [{ id: "bridge-mini", name: "Mac mini" }] };
+      const config = { mcpServers: { vbot: { args: ["--socket", "/tmp/vbot.sock"] } } };
+      const proof = JSON.stringify({ snapshot, argv, logs, fleet, config });
+      expect(proof).not.toMatch(/paired-bridge-secret-value|env-only-token-must-not-win|OMB_COMMS_TOKEN/);
+      expect(JSON.stringify(snapshot)).not.toMatch(/secret|token|Bearer/i);
+      expect(snapshot).toMatchObject({ state: "available", url, loopback: true });
+
+      const execute = createHermesDaemonToolExecutor(credentials);
+      const result = await execute("list_bots", {});
+      expect(result.isError).not.toBe(true);
+      expect(result.text).toMatch(/No other bots/i);
+      expect(seen.auth).toBe(`Bearer ${secret}`);
+      expect(seen.url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${address.port}/api/internal/agents`));
+      expect(JSON.stringify(result)).not.toContain(secret);
+      expect(createHermesVbotPairedToolExecutor(parsed)).toEqual(expect.any(Function));
+    } finally {
+      if (previous.OMB_HARNESS_URL === undefined) delete process.env.OMB_HARNESS_URL;
+      else process.env.OMB_HARNESS_URL = previous.OMB_HARNESS_URL;
+      if (previous.OMB_COMMS_TOKEN === undefined) delete process.env.OMB_COMMS_TOKEN;
+      else process.env.OMB_COMMS_TOKEN = previous.OMB_COMMS_TOKEN;
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("does not fall back to env when paired credentials are unavailable", async () => {
+    const { createHermesDaemonToolExecutor } = await import("./hermes-vbot-mcp.ts");
+    const previous = {
+      OMB_HARNESS_URL: process.env.OMB_HARNESS_URL,
+      OMB_COMMS_TOKEN: process.env.OMB_COMMS_TOKEN,
+    };
+    process.env.OMB_HARNESS_URL = "http://127.0.0.1:8799";
+    process.env.OMB_COMMS_TOKEN = "env-only-token-must-not-win";
+    try {
+      const execute = createHermesDaemonToolExecutor(null);
+      const result = await execute("list_bots", {});
+      expect(result.isError).toBe(true);
+      expect(result.text).toMatch(/unavailable/i);
+      expect(result.text).not.toMatch(/unconfigured/i);
+      expect(JSON.stringify(result)).not.toMatch(/env-only-token-must-not-win|OMB_COMMS_TOKEN|Bearer/i);
+    } finally {
+      if (previous.OMB_HARNESS_URL === undefined) delete process.env.OMB_HARNESS_URL;
+      else process.env.OMB_HARNESS_URL = previous.OMB_HARNESS_URL;
+      if (previous.OMB_COMMS_TOKEN === undefined) delete process.env.OMB_COMMS_TOKEN;
+      else process.env.OMB_COMMS_TOKEN = previous.OMB_COMMS_TOKEN;
+    }
   });
 });

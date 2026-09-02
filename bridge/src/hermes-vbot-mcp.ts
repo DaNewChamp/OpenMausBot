@@ -61,6 +61,16 @@ export type HermesVbotToolExecutor = (
   args: Record<string, unknown>,
 ) => Promise<HermesVbotToolResult>;
 
+export type PairedHermesHarnessCredentials =
+  | { state: "available"; url: string; secret: string }
+  | { state: "unavailable"; code: "state_unavailable" };
+
+export type HermesDaemonCredentialSnapshot =
+  | { state: "available"; url: string; loopback: true }
+  | { state: "unavailable"; code: "state_unavailable" };
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -71,6 +81,45 @@ function mcpTextResult(id: string | number, text: string, isError = false): Json
     id,
     result: { content: [{ type: "text", text }], isError },
   };
+}
+
+export async function hermesVbotToolDescriptors() {
+  const { AGENT_PROXY_TOOLS } = await import("../../server/drivers/agents-proxy.ts");
+  return HERMES_VBOT_ALLOWED_TOOLS.map((name) => {
+    const tool = AGENT_PROXY_TOOLS.find((entry) => entry.name === name);
+    if (!tool || typeof tool.description !== "string" || !tool.inputSchema) {
+      throw new Error(`Hermes MCP tool metadata is unavailable for ${name}`);
+    }
+    return tool;
+  });
+}
+
+export function pairedHermesHarnessCredentials(input: unknown): PairedHermesHarnessCredentials {
+  if (!isRecord(input)) return { state: "unavailable", code: "state_unavailable" };
+  const url = typeof input.url === "string" ? input.url.trim() : "";
+  const secret = typeof input.bridgeToken === "string" ? input.bridgeToken.trim() : "";
+  if (!url || !secret) return { state: "unavailable", code: "state_unavailable" };
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { state: "unavailable", code: "state_unavailable" };
+    }
+    if (!LOOPBACK_HOSTS.has(parsed.hostname)) {
+      return { state: "unavailable", code: "state_unavailable" };
+    }
+  } catch {
+    return { state: "unavailable", code: "state_unavailable" };
+  }
+  return { state: "available", url, secret };
+}
+
+export function hermesDaemonCredentialSnapshot(
+  credentials: PairedHermesHarnessCredentials,
+): HermesDaemonCredentialSnapshot {
+  if (credentials.state !== "available") {
+    return { state: "unavailable", code: "state_unavailable" };
+  }
+  return { state: "available", url: credentials.url, loopback: true };
 }
 
 export function createHermesVbotEnvToolExecutor(
@@ -106,6 +155,22 @@ export function createHermesVbotEnvToolExecutor(
   };
 }
 
+export function createHermesVbotPairedToolExecutor(
+  credentials: PairedHermesHarnessCredentials,
+): HermesVbotToolExecutor {
+  if (credentials.state !== "available") {
+    return async () => ({ text: "V Bot tool facade is unavailable", isError: true });
+  }
+  return createHermesVbotEnvToolExecutor({
+    OMB_HARNESS_URL: credentials.url,
+    OMB_COMMS_TOKEN: credentials.secret,
+  });
+}
+
+export function createHermesDaemonToolExecutor(input: unknown): HermesVbotToolExecutor {
+  return createHermesVbotPairedToolExecutor(pairedHermesHarnessCredentials(input));
+}
+
 export function createHermesVbotDaemonHandler(options?: {
   executeTool?: HermesVbotToolExecutor;
 }): (request: JsonRpcRequest) => Promise<JsonRpcSuccess> {
@@ -125,7 +190,7 @@ export function createHermesVbotDaemonHandler(options?: {
       return {
         jsonrpc: "2.0",
         id: request.id,
-        result: { tools: HERMES_VBOT_ALLOWED_TOOLS.map((name) => ({ name })) },
+        result: { tools: await hermesVbotToolDescriptors() },
       };
     }
     if (request.method === "ping" || request.method === "notifications/initialized" || request.method === "notifications/cancelled") {
