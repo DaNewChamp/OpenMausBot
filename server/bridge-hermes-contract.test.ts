@@ -75,6 +75,9 @@ describe("Hermes bridge wire contract", () => {
         queueing: false,
         steer: false,
         attachments: false,
+        adoptMint: false,
+        approvals: false,
+        exclusiveSubmit: false,
       },
       profiles: [{
         profile: "default",

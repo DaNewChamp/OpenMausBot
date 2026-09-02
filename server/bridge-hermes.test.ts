@@ -70,6 +70,9 @@ describe("typed Hermes bridge transport", () => {
             queueing: false,
             steer: false,
             attachments: false,
+            adoptMint: false,
+            approvals: false,
+            exclusiveSubmit: false,
           },
           profiles: [{
             profile: "default",

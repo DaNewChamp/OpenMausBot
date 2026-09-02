@@ -1229,9 +1229,17 @@ describe("Hermes Bot Chat loopback transport", () => {
     emitMessageAgent(child, runtimeId, "tool.start");
     await settle();
     expect(delivered).toHaveLength(1);
-    expect(events.filter((event) => event.title === "too many teammate messages")).toHaveLength(0);
+    expect(events.filter((event) =>
+      event.type === "item.completed"
+      && event.itemType === "tool"
+      && event.title === "too many teammate messages",
+    )).toHaveLength(0);
     expect(events.filter((event) => event.type === "item.started" && event.title === "message_agent")).toHaveLength(1);
-    expect(events.filter((event) => event.type === "item.completed" && event.title === "message_agent")).toHaveLength(1);
+    expect(events.filter((event) =>
+      event.type === "item.completed"
+      && event.itemType === "tool"
+      && event.title === "message_agent",
+    )).toHaveLength(1);
     await engine.close();
   });
 
