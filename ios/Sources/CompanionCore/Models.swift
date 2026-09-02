@@ -185,6 +185,13 @@ public struct CommChip: Codable, Hashable, Sendable {
     public var withColor: String
     /// Canonical channel message to scroll to when opening from a comm chip.
     public var messageId: String?
+    public var plane: String? = nil
+}
+
+public struct BotComposerCapabilities: Codable, Hashable, Sendable {
+    public var queueing: Bool
+    public var steer: Bool
+    public var stop: Bool
 }
 
 /// How a message should be delivered when its conversation is already busy.
@@ -628,6 +635,7 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
     public var activeLeafId: String?
     /// Paged responses only: there is more transcript above what you got.
     public var hasMore: Bool?
+    public var composer: BotComposerCapabilities? = nil
 }
 
 public enum AvatarCrop: String, Codable, CaseIterable, Hashable, Sendable {

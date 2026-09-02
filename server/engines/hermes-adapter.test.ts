@@ -1050,6 +1050,36 @@ describe("Hermes Bot Chat loopback transport", () => {
     await engine.close();
   });
 
+  it("answers through approval.respond with once|deny", async () => {
+    const { child } = harness();
+    const engine = createHermesBotEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const send = engine.send({ profile: "coder", text: "run", threadId: "t", turnId: "turn-a" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", resolved_id: "tip", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "runtime-approval" } });
+    await settle();
+    const prompt = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: prompt.id, result: { accepted: true } });
+    await send;
+    const approval = engine.respondToApproval({ profile: "coder", requestId: "req-1", choice: "allow" });
+    await settle();
+    const rpc = JSON.parse(child.stdin.writes.at(-1)!);
+    expect(rpc.method).toBe("approval.respond");
+    expect(rpc.params.choice).toBe("once");
+    expect(rpc.params.request_id).toBe("req-1");
+    child.frame({ jsonrpc: "2.0", id: rpc.id, result: { ok: true } });
+    await approval;
+    await engine.close();
+  });
+
   it("fails closed for malformed JSON-RPC envelopes and events", async () => {
     const malformedFrames = [
       { jsonrpc: "1.0", method: "event", params: { type: "gateway.ready", payload: {} } },

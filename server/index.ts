@@ -4101,6 +4101,8 @@ async function describeProviderInstances() {
       ...instance,
       capabilities: {
         ...instance.capabilities,
+        computerMcp: false,
+        localComputerMcp: false,
         hermesBot: {
           state: hermes.state,
           ...(hermes.reason ? { reason: hermes.reason } : {}),

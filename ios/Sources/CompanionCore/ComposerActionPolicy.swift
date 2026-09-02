@@ -56,6 +56,17 @@ public enum VBotMutationRouting {
         sync?.usesReconstructedMutations == true ? .grokReconstructed : .openmaus
     }
 
+    public static func composerCapabilities(for sync: VBotEngineSync?, bot: Bot? = nil) -> EngineComposerCapabilities {
+        if let composer = bot?.composer {
+            return EngineComposerCapabilities(
+                queueing: composer.queueing,
+                steer: composer.steer,
+                stop: composer.stop
+            )
+        }
+        return composerCapabilities(for: sync)
+    }
+
     public static func composerCapabilities(for sync: VBotEngineSync?) -> EngineComposerCapabilities {
         guard target(for: sync) == .grokReconstructed else { return .openmaus }
         guard sync?.reconstructedMutationsReady == true,

@@ -129,3 +129,13 @@ versioned capability/stream transport with cancellation and backpressure.
 Voice calls are a separate, unshipped expansion. The reviewed design is tracked
 in [V Bot Native iPhone Voice Calls](./superpowers/plans/2026-09-01-vbot-native-voice-calls.md)
 and does not alter the Hermes adapter or bridge capabilities in Wave 1.
+
+## Hermes first-party adapter (Wave 2)
+
+Hermes remains a hub-owned **adapter runtime**, not a `VBotPrimaryEngine`. The
+iOS companion stays on the existing Grok-style surfaces: pairing, transcripts,
+approvals, comm activity, and composer controls. VM/fleet/computer destinations
+stay on V Bot's OpenMaus/Grok/ACP fleet; Hermes `computer_use` may run inside a
+Hermes turn but is not exposed as a V Bot Computer destination. Bound bots may
+receive additive `composer: { queueing: false, steer: false, stop: true }` on
+`GET /api/bots`; older phones ignore unknown fields.

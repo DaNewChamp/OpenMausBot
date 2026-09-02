@@ -1,8 +1,11 @@
-# Hermes Bot Chat adapter (Wave 1)
+# Hermes Bot Chat adapter (Wave 2)
 
-Wave 1 adds a narrow, hub-owned Hermes Bot Chat adapter. It is disabled by default,
-projects only the shared V Bot event contract, and never replaces V Bot pairing or
-becomes a new primary engine.
+Wave 2 extends the hub-owned Hermes Bot Chat adapter at pin `ab9866bc64`
+(`origin/main`). It keeps the Wave 1 trust path, adds `gateway.capabilities`
+negotiation (`per_session_exclusive_submit`), adopt-before-mint for missing
+canonical chats, dual-plane comm intercept (`message_agent` and V Bot `ask_bot` /
+`delegate_bot`), approval brokering through existing request cards, per-bot
+composer honesty, and replay/budget guards. `prompt.btw` steer remains unsupported.
 
 ## Trust path
 
@@ -64,7 +67,8 @@ resolved id internally and keeps the root id internal only. The gateway's runtim
 Lookup results are fail-closed:
 
 - `present`: exactly one matching hidden canonical row
-- `absent`: successful empty list (`sessions: []`) — Wave 1 never creates a chat
+- `absent`: successful empty list (`sessions: []`) — Wave 2 may adopt-before-mint
+  once under the profile lock, then re-lookup before resume
 - `unknown` / `unavailable`: RPC, auth, protocol, timeout, corrupt/unreadable
   state, profile rename/deletion, or malformed payloads
 
@@ -88,16 +92,19 @@ prior bytes unchanged.
 
 ## Capability flags
 
-Capabilities are affirmative. Wave 1 enables only what the loopback gateway proves:
+Capabilities are affirmative. Wave 2 adds negotiation and proven flags:
 
-| Flag | Wave 1 |
+| Flag | Wave 2 |
 | --- | --- |
 | roster, canonicalChat, send, finalResponse, events, stop | true when live |
-| routinesRead, messageAgent, groups, crossMachine, queueing, steer, attachments | false |
+| exclusiveSubmit | true only when `gateway.capabilities.per_session_exclusive_submit === true` |
+| adoptMint, messageAgent, approvals | true only after the adapter proves the guarded path |
+| routinesRead, groups, crossMachine, queueing, steer, attachments | false |
 
-Generic Hermes ACP/MCP availability does **not** enable `message_agent`, groups,
-relay, routines mutation, queue, steer, attachments, or computer integrations.
-While `groups` is false, Hermes-bound bots cannot join V Bot rooms.
+`groups` stays false. The only groups carve-out is a **1:1** V Bot DM channel so
+Hermes `message_agent` and V Bot `ask_bot` / `delegate_bot` can project into the
+existing comm/activity UI with `comm.plane` attribution (`vbot` or
+`hermesMessageAgent`). Multi-member rooms remain blocked.
 
 ## Send, interrupt, and transcript source of truth
 
@@ -150,7 +157,15 @@ be presented as a Hermes transport. A future remote path needs a dedicated,
 authenticated capability and streaming protocol with explicit cancellation and
 backpressure before it can be enabled.
 
-## Wave 1 deferrals
+## Wave 2 deferrals
+
+Wave 2 explicitly does **not** include:
+
+- Hermes groups/rooms/relay, attachments/vision, cron UI, skills/MCP settings
+- `prompt.btw` steer, provider secrets, remote Hermes, `VBotPrimaryEngine: "hermes"`
+- `model.save_key`, MCP OAuth/API keys, billing, raw SessionDB search APIs
+
+## Wave 1 deferrals (historical)
 
 Wave 1 explicitly does **not** include:
 
