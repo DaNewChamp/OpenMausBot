@@ -219,10 +219,10 @@ describe("Hermes bridge setup over HTTP", () => {
       state: "ready",
       profiles: [expect.objectContaining({
         profile: "default",
-        placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+        placement: { kind: "bridge", bridge: "Mac mini", bridgeId, profile: "default" },
       })],
     });
-    expect(JSON.stringify(ready.body)).not.toMatch(/bridgeId|HERMES_HOME|jsonrpc|Bearer |sk-/i);
+    expect(JSON.stringify(ready.body)).not.toMatch(/HERMES_HOME|jsonrpc|Bearer |sk-/i);
 
     const connected = await call("POST", "/api/hermes/setup", {
       placement: { kind: "bridge", bridge: "mac mini", profile: "default" },
@@ -233,11 +233,11 @@ describe("Hermes bridge setup over HTTP", () => {
       profile: {
         profile: "default",
         botId: expect.any(String),
-        placement: { kind: "bridge", bridge: "Mac mini", profile: "default" },
+        placement: { kind: "bridge", bridge: "Mac mini", bridgeId, profile: "default" },
       },
       status: { state: "connected" },
     });
-    expect(JSON.stringify(connected.body)).not.toMatch(/bridgeId|HERMES_HOME|jsonrpc|Bearer |sk-/i);
+    expect(JSON.stringify(connected.body)).not.toMatch(/HERMES_HOME|jsonrpc|Bearer |sk-/i);
 
     const config = JSON.parse(readFileSync(join(harness.dataDir, "config.json"), "utf8")) as {
       vbot?: { hermes?: { enabled?: boolean } };
