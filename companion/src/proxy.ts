@@ -73,6 +73,13 @@ import {
   viewerAccessSetCookieForRequest,
 } from "./viewer-access.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
+import {
+  corsResponseHeaders,
+  isBrowserSafeCompanionRoute,
+  webClientPreflightHeaders,
+} from "./web-client-cors.ts";
+
+const corsByResponse = new WeakMap<ServerResponse, string>();
 
 /** What the forwarding handler needs from the process around it. */
 export interface ProxyOptions {
@@ -127,6 +134,8 @@ export interface ProxyOptions {
     expiresAt: number;
     attemptsLeft: number;
   } | { error: string };
+  /** Exact browser origins allowed to call paired companion routes over CORS. */
+  webClientOrigins?: ReadonlySet<string>;
 }
 
 export interface CompanionEndpointSnapshot {
@@ -219,10 +228,12 @@ const sendJson = (res: ServerResponse, status: number, body: unknown): void => {
     return;
   }
   const text = JSON.stringify(body);
+  const corsOrigin = corsByResponse.get(res);
   res.writeHead(status, {
     "content-type": "application/json",
     "content-length": Buffer.byteLength(text),
     ...PRIVATE_RESPONSE_HEADERS,
+    ...(corsOrigin ? corsResponseHeaders(corsOrigin) : {}),
   });
   res.end(text);
 };
@@ -314,12 +325,34 @@ export function createProxyHandler(options: ProxyOptions) {
     const fullUrl = req.url ?? "/";
     const path = fullUrl.split("?")[0];
     const method = req.method ?? "GET";
+    const originHeader = req.headers.origin ? String(req.headers.origin) : null;
+    const allowedOrigin = originHeader && options.webClientOrigins?.has(originHeader)
+      ? originHeader
+      : null;
 
-    // A native app sends no Origin. Anything that does is a browser that has
-    // found this port, and a browser has no business on it — refused before
-    // the token is even looked at, and regardless of what the origin says.
-    if (req.headers.origin) {
+    if (originHeader && !allowedOrigin) {
       return sendJson(res, 403, { error: "forbidden: cross-origin request" });
+    }
+    if (allowedOrigin) corsByResponse.set(res, allowedOrigin);
+
+    if (method === "OPTIONS" && allowedOrigin) {
+      const requestedMethod = String(req.headers["access-control-request-method"] ?? "").toUpperCase();
+      const preflight = webClientPreflightHeaders(
+        allowedOrigin,
+        requestedMethod,
+        String(req.headers["access-control-request-headers"] ?? ""),
+      );
+      const eligible = preflight
+        && isBrowserSafeCompanionRoute(requestedMethod, path, requestedMethod !== "POST" || path !== "/api/pair");
+      if (!eligible) return sendJson(res, 403, { error: "forbidden: cross-origin request" });
+      res.writeHead(204, {
+        ...preflight,
+        "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+        "access-control-max-age": "600",
+        ...PRIVATE_RESPONSE_HEADERS,
+      });
+      res.end();
+      return;
     }
 
     const token = bearerToken(req.headers.authorization);
@@ -340,6 +373,9 @@ export function createProxyHandler(options: ProxyOptions) {
       // phone sends authenticates on one code path and not the other.
       authenticated: Boolean(device),
     });
+    if (allowedOrigin && !isBrowserSafeCompanionRoute(method, path, Boolean(device))) {
+      return sendJson(res, 403, { error: "forbidden: cross-origin request" });
+    }
     if (denial) return sendJson(res, denial.status, { error: denial.error });
 
     // Pairing a phone grants the ordinary companion surface, not a browser
@@ -793,6 +829,7 @@ export function createProxyHandler(options: ProxyOptions) {
           res.writeHead(harness.statusCode ?? 200, {
             "content-type": "text/event-stream",
             ...PRIVATE_RESPONSE_HEADERS,
+            ...(corsByResponse.get(res) ? corsResponseHeaders(corsByResponse.get(res)!) : {}),
             "cache-control": "private, no-store, no-transform",
             connection: "keep-alive",
             // Nagle would hold a small frame back waiting for company. On a
@@ -873,7 +910,11 @@ export function createProxyHandler(options: ProxyOptions) {
             )
             : null;
           if (viewerCookie) passthroughHeaders["set-cookie"] = [viewerCookie];
-          res.writeHead(harness.statusCode ?? 200, passthroughHeaders);
+          const corsOrigin = corsByResponse.get(res);
+          res.writeHead(harness.statusCode ?? 200, {
+            ...passthroughHeaders,
+            ...(corsOrigin ? corsResponseHeaders(corsOrigin) : {}),
+          });
           // `pipe` does not carry a failure from source to destination. An
           // upstream that dies part-way through an image would otherwise
           // leave the phone holding an open connection and a content-length
@@ -958,6 +999,7 @@ export function createProxyHandler(options: ProxyOptions) {
           res.writeHead(status, {
             ...privateHeaders(headers),
             "content-length": Buffer.byteLength(text),
+            ...(corsByResponse.get(res) ? corsResponseHeaders(corsByResponse.get(res)!) : {}),
           });
           res.end(text);
         }
