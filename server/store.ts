@@ -427,6 +427,13 @@ export interface BotRecord {
    * could not tell working from waiting-on-you from a stalled engine.
    * Transient like busy: reset to idle on load. */
   activity?: BotActivity;
+  /** Provenance when this bot was projected from a persistent or promoted Hermes agent. */
+  hermesProvenance?: {
+    hermesAgentId: string;
+    kind: "persistent" | "promoted";
+    parentBotId?: string;
+    sourceActivityId?: string;
+  };
   createdAt: number;
 }
 
@@ -1034,7 +1041,7 @@ export class Store {
     profile: Partial<
       Pick<
         BotRecord,
-        "name" | "title" | "description" | "color" | "mascotExpression" | "modelSelection" | "section" | "reportsToBotId"
+        "name" | "title" | "description" | "color" | "mascotExpression" | "modelSelection" | "section" | "reportsToBotId" | "hermesProvenance"
       >
     > = {},
     opts: {
@@ -1061,6 +1068,7 @@ export class Store {
     };
     if (section) bot.section = section;
     if (profile.reportsToBotId) bot.reportsToBotId = profile.reportsToBotId;
+    if (profile.hermesProvenance) bot.hermesProvenance = profile.hermesProvenance;
     bot.tasks = [{ threadId: bot.threadId, title: UNTITLED_TASK, createdAt: bot.createdAt, resumeCursors: {} }];
     const previousBots = this.bots.slice();
     let previousBytes: Buffer | undefined;

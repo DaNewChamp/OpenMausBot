@@ -22,6 +22,7 @@ import {
 } from "./engines/contracts.ts";
 import type { HermesSetupProfile } from "./hermes-setup.ts";
 import { normalizeHermesSetupProfile } from "./hermes-setup.ts";
+import { negotiateHermesCapabilities, type HermesCapabilityManifest } from "./hermes-capabilities.ts";
 
 export const HERMES_BOT_CHAT_TITLE = "Hermes Bot Chat" as const;
 
@@ -165,6 +166,7 @@ const EMPTY_HERMES_CAPABILITIES: HermesCapabilityFlags = {
 export interface BridgeHermesDiscoveryResult {
   profiles: HermesSetupProfile[];
   capabilities: HermesCapabilityFlags;
+  nativeCapabilities: HermesCapabilityManifest;
 }
 
 export function mergeHermesCapabilitiesConservatively(
@@ -234,9 +236,14 @@ export async function discoverBridgeHermesPlacements(
       continue;
     }
   }
+  const capabilities = mergeHermesCapabilitiesConservatively(capabilitySets);
   return {
     profiles,
-    capabilities: mergeHermesCapabilitiesConservatively(capabilitySets),
+    capabilities,
+    nativeCapabilities: negotiateHermesCapabilities({
+      observed: { ...capabilities },
+      descriptors: capabilitySets.map((flags) => ({ capabilities: { ...flags } })),
+    }),
   };
 }
 
