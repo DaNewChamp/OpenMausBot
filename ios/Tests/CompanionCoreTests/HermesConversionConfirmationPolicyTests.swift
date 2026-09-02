@@ -12,6 +12,12 @@ final class HermesConversionConfirmationPolicyTests: XCTestCase {
         XCTAssertFalse(HermesConversionConfirmationPolicy.shouldApplyRuntimeOnEndpointSelection())
     }
 
+    func testSetupEndpointTapFollowsSharedConfirmationPolicy() {
+        XCTAssertFalse(HermesConversionConfirmationPolicy.shouldPersistDefaultOnEndpointSelection())
+        XCTAssertTrue(HermesConversionConfirmationPolicy.shouldPersistDefaultOnConfirmedConversion())
+        XCTAssertNil(HermesConversionConfirmationPolicy.draftEndpointAfterCancel())
+    }
+
     func testCancelClearsDraftWithoutChangingPersistedDefault() {
         let persisted = HermesEndpointOption(
             id: "local:default",

@@ -191,7 +191,9 @@ struct HermesSetupView: View {
                 }
                 ForEach(hermesEndpoints) { endpoint in
                     Button(endpoint.label) {
-                        session.setDefaultHermesEndpoint(endpoint)
+                        if HermesConversionConfirmationPolicy.shouldPersistDefaultOnEndpointSelection() {
+                            session.setDefaultHermesEndpoint(endpoint)
+                        }
                         pendingConversion = HermesConversionSheetPolicy.pendingConversion(
                             selected: endpoint,
                             connectedProfiles: connectedProfiles
@@ -250,7 +252,9 @@ struct HermesSetupView: View {
                     for item in requests {
                         session.configureHermesRuntime(botId: item.botId, request: item.request)
                     }
-                    session.setDefaultHermesEndpoint(endpoint)
+                    if HermesConversionConfirmationPolicy.shouldPersistDefaultOnConfirmedConversion() {
+                        session.setDefaultHermesEndpoint(endpoint)
+                    }
                     pendingConversion = nil
                 }
                 .buttonStyle(.borderedProminent)
@@ -260,7 +264,9 @@ struct HermesSetupView: View {
             .navigationTitle("Convert runtime")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { pendingConversion = nil }
+                    Button("Cancel") {
+                        pendingConversion = HermesConversionConfirmationPolicy.draftEndpointAfterCancel()
+                    }
                 }
             }
         }
