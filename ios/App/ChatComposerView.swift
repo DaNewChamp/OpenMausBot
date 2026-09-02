@@ -47,7 +47,11 @@ struct ChatComposerView: View {
     }
 
     private var composerCapabilities: EngineComposerCapabilities {
-        VBotMutationRouting.composerCapabilities(for: session.engineSync, bot: session.selectedBot)
+        let bot: Bot? = {
+            if case let .bot(bot) = current { return bot }
+            return nil
+        }()
+        return VBotMutationRouting.composerCapabilities(for: session.engineSync, bot: bot)
     }
 
     private var roomMembers: [GroupRouting.Member] {
