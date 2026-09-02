@@ -804,11 +804,26 @@ function sanitizeGatewayEvent(value: unknown): Record<string, unknown> | undefin
     if (!hasOwn(value, "payload") || !isRecord(value.payload)) return undefined;
     const payload = value.payload;
 
-    if (!hasOwn(payload, "text") || !safeMessageText(payload.text)) return undefined;
-    const cleanPayload: Record<string, unknown> = { text: payload.text };
     if (type === "message.complete") {
       if (!hasOwn(payload, "status") || !safeFrameString(payload.status, 80) || payload.status.length === 0) return undefined;
-      cleanPayload.status = payload.status;
+      const status = payload.status;
+      const terminalFailure = status === "error"
+        || status === "interrupted"
+        || status === "cancelled"
+        || status === "canceled";
+      const cleanPayload: Record<string, unknown> = { status };
+      if (terminalFailure) {
+        // Hermes 0.10 may emit text:null on provider auth failures. Accept
+        // null/empty/missing text for terminal failures only; discard any
+        // provider diagnostic string so it cannot cross the boundary.
+        if (hasOwn(payload, "text") && payload.text != null && payload.text !== "") {
+          if (!safeMessageText(payload.text)) return undefined;
+        }
+      } else if (!hasOwn(payload, "text") || !safeMessageText(payload.text)) {
+        return undefined;
+      } else {
+        cleanPayload.text = payload.text;
+      }
       if (hasOwn(payload, "usage") && payload.usage !== undefined && payload.usage !== null) {
         if (!isRecord(payload.usage)) return undefined;
         const cleanUsage: Record<string, unknown> = {};
@@ -822,8 +837,12 @@ function sanitizeGatewayEvent(value: unknown): Record<string, unknown> | undefin
         if (Object.keys(cleanUsage).length === 0) return undefined;
         cleanPayload.usage = cleanUsage;
       }
+      output.payload = cleanPayload;
+      return output;
     }
-    output.payload = cleanPayload;
+
+    if (!hasOwn(payload, "text") || !safeMessageText(payload.text)) return undefined;
+    output.payload = { text: payload.text };
     return output;
   }
 
@@ -890,6 +909,7 @@ function eventText(value: unknown): string | undefined {
 function statusStopReason(status: string): string | null {
   if (status === "complete" || status === "success") return null;
   if (status === "cancelled" || status === "canceled" || status === "interrupted") return "interrupted";
+  if (status === "error") return "upstream_error";
   return "error";
 }
 
@@ -1517,17 +1537,27 @@ export class HermesBotAdapter implements HermesBotEngine {
     const status = typeof payload?.status === "string" ? payload.status : "";
     const usageProvided = payload?.usage !== undefined && payload?.usage !== null;
     const usage = normalizeUsage(payload?.usage);
-    if (!text || !["complete", "success", "error", "interrupted", "cancelled", "canceled"].includes(status) || (usageProvided && !usage)) {
+    const successful = status === "complete" || status === "success";
+    const terminalFailure = status === "error"
+      || status === "interrupted"
+      || status === "cancelled"
+      || status === "canceled";
+    // Success still requires non-empty safe text. Terminal failures may omit
+    // text (Hermes auth-error frames); their diagnostics are never projected.
+    if (
+      (!successful && !terminalFailure)
+      || (successful && !text)
+      || (usageProvided && !usage)
+    ) {
       this.demoteCapabilities();
       this.terminateRuntime(runtime, false, "malformed_response");
       return;
     }
-    const successful = status === "complete" || status === "success";
     this.readiness.finalResponse = successful;
     this.terminateRuntime(runtime, false, statusStopReason(status) ?? "complete", {
       // Error/cancellation payload text is provider diagnostics, not an
       // assistant answer; do not project it into V Bot transcripts.
-      ...(successful ? { assistantText: text } : {}),
+      ...(successful && text ? { assistantText: text } : {}),
       usage,
       ok: successful,
     });

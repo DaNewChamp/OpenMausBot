@@ -974,6 +974,111 @@ describe("Hermes Bot Chat loopback transport", () => {
     await engine.close();
   });
 
+  it("accepts message.complete with status=error and null text as a safe upstream failure", async () => {
+    const { child } = harness();
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const events: RuntimeEvent[] = [];
+    engine.onEvent((event) => events.push(event));
+    const send = engine.send({ profile: "coder", text: "hello", threadId: "t", turnId: "u" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "runtime-auth-fail" } });
+    await settle();
+    const prompt = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: prompt.id, result: { accepted: true } });
+    await send;
+    child.frame({
+      jsonrpc: "2.0",
+      method: "event",
+      params: { type: "message.complete", session_id: "runtime-auth-fail", payload: { text: null, status: "error" } },
+    });
+    await settle();
+    expect(events.filter((event) => event.type === "item.completed")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "runtime.error")).toEqual([
+      expect.objectContaining({ type: "runtime.error", message: "Hermes request failed" }),
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: false, stopReason: "upstream_error" });
+    await engine.close();
+  });
+
+  it("still rejects message.complete with status=complete and null text as malformed", async () => {
+    const { child } = harness();
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const events: RuntimeEvent[] = [];
+    engine.onEvent((event) => events.push(event));
+    const send = engine.send({ profile: "coder", text: "hello", threadId: "t", turnId: "u" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "runtime-null-success" } });
+    await settle();
+    const prompt = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: prompt.id, result: { accepted: true } });
+    await send;
+    child.frame({
+      jsonrpc: "2.0",
+      method: "event",
+      params: { type: "message.complete", session_id: "runtime-null-success", payload: { text: null, status: "complete" } },
+    });
+    await settle();
+    expect(events.filter((event) => event.type === "item.completed")).toHaveLength(0);
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: false, stopReason: "malformed_response" });
+    await engine.close();
+  });
+
+  it("discards provider diagnostic text on error complete without leaking secrets", async () => {
+    const { child } = harness();
+    const engine = createTestHermesEngine({ spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
+    const events: RuntimeEvent[] = [];
+    engine.onEvent((event) => events.push(event));
+    const send = engine.send({ profile: "coder", text: "hello", threadId: "t", turnId: "u" });
+    await settle();
+    ready(child);
+    await settle();
+    const roster = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: roster.id, result: { profiles: [{ name: "coder" }] } });
+    await settle();
+    const list = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: list.id, result: { sessions: [{ id: "root", title: "Bot Chat", source: "tui" }] } });
+    await settle();
+    const resume = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: resume.id, result: { session_id: "runtime-diag" } });
+    await settle();
+    const prompt = JSON.parse(child.stdin.writes.at(-1)!);
+    child.frame({ jsonrpc: "2.0", id: prompt.id, result: { accepted: true } });
+    await send;
+    child.frame({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "message.complete",
+        session_id: "runtime-diag",
+        payload: { text: "provider auth failed: sk-secret-openai-key-abc123", status: "error" },
+      },
+    });
+    await settle();
+    expect(events.filter((event) => event.type === "item.completed")).toHaveLength(0);
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: false, stopReason: "upstream_error" });
+    expect(JSON.stringify(events)).not.toContain("sk-secret");
+    expect(JSON.stringify(events)).not.toContain("openai-key");
+    await engine.close();
+  });
+
   it("emits one safe runtime error before one terminal event for an upstream prompt failure", async () => {
     const { child } = harness();
     const engine = new HermesBotAdapter({ environment: gatewayEnvironment(), spawn: vi.fn(() => child), timeouts: { requestMs: 100, turnMs: 500 } });
