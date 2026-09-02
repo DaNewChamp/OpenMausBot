@@ -442,6 +442,21 @@ function mutatePending<T>(path: string, mutate: (current: ReadonlySet<string>, s
   }
 }
 
+/** Read-time projection of a v1 sidecar row onto the versioned runtime binding.
+ * Never writes, never copies path/session/secret fields, and does not bump the
+ * sidecar version. */
+export function projectHermesBindingPlacement(binding: HermesBotBinding): {
+  kind: "hermes";
+  placement: { kind: "local"; profile: string };
+  bindingVersion: 2;
+} {
+  return {
+    kind: "hermes",
+    placement: { kind: "local", profile: binding.profile.toLowerCase() },
+    bindingVersion: 2,
+  };
+}
+
 export function loadHermesBindings(path?: string): BindingStoreResult<ReadonlyMap<string, HermesBotBinding>> {
   const resolved = targetPath(path);
   return resolved ? loadFromPath(resolved) : failure("state_unavailable");

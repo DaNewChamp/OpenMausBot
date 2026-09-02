@@ -11,6 +11,7 @@ import { DATA_DIR, PERMISSION_MODES } from "./config.ts";
 import type { PermissionMode } from "./config.ts";
 import * as mdb from "./message-db.ts";
 import { workspaceDir } from "./workspace.ts";
+import type { BotRuntimeBinding } from "./bot-runtime-binding.ts";
 import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./contracts.ts";
 import { pickBotName } from "./names.ts";
 import { redactSecretsInText } from "./redact.ts";
@@ -350,6 +351,9 @@ export interface BotRecord {
   avatarCrop?: BotAvatarCrop;
   unread: boolean;
   modelSelection: ModelSelection;
+  /** Versioned runtime binding. Absent records normalize from modelSelection
+   * and legacy Hermes sidecars at read time; this field is the durable write. */
+  runtimeBinding?: BotRuntimeBinding;
   /** provider-native continuation per instance (e.g. claude session id) */
   resumeCursors: Record<string, unknown>;
   /** which computer the bot acts on: its cloud box, this Mac (local CUA),

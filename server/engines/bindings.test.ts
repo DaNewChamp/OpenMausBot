@@ -21,6 +21,7 @@ import {
   loadHermesBindings,
   loadHermesPendingProfiles,
   markHermesPendingProfile,
+  projectHermesBindingPlacement,
   removeHermesBinding,
   setHermesBinding,
 } from "./bindings.ts";
@@ -41,6 +42,18 @@ describe("Hermes binding sidecar", () => {
     canonicalTitle: "Bot Chat",
     bindingVersion: 1,
   };
+
+  it("projects a v1 sidecar row at read time without rewriting storage", () => {
+    expect(setHermesBinding("bot-1", binding, file)).toEqual({ state: "available", value: undefined });
+    const before = readFileSync(file);
+    expect(projectHermesBindingPlacement(binding)).toEqual({
+      kind: "hermes",
+      placement: { kind: "local", profile: "coder" },
+      bindingVersion: 2,
+    });
+    expect(JSON.parse(before.toString("utf8")).version).toBe(1);
+    expect(readFileSync(file)).toEqual(before);
+  });
 
   it("treats a missing sidecar as an available empty set", () => {
     const result = loadHermesBindings(file);
