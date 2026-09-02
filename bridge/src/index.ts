@@ -126,7 +126,10 @@ async function runDaemon(credentials = loadCredentials()) {
       botScope: installed?.botScope ?? credentials.bridgeId,
     }),
     handler: createHermesVbotDaemonHandler({
-      executeTool: createHermesDaemonToolExecutor(credentials),
+      executeTool: createHermesDaemonToolExecutor({
+        ...credentials,
+        botScope: installed?.botScope ?? "",
+      }),
     }),
   });
   const inFlight = new Map<string, InFlightJob>();

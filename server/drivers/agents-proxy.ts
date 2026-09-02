@@ -34,16 +34,41 @@
 //   OMB_BOT_ID       the calling bot's id (excluded from list_bots; sender)
 //   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
 //   OMB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
+import { AsyncLocalStorage } from "node:async_hooks";
 import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 
 import { CREDENTIAL_TARGETS, isCredentialTargetId } from "../../shared/credential-request.ts";
 
-const HARNESS = () => process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
-const BOT_ID = () => process.env.OMB_BOT_ID ?? "";
-const THREAD_ID = () => process.env.OMB_THREAD_ID ?? "";
-const TOKEN = () => process.env.OMB_COMMS_TOKEN ?? "";
-const DEPTH = () => Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
+export type AgentsProxyCallContext = {
+  harnessUrl: string;
+  token: string;
+  botId: string;
+  threadId: string;
+  turnDepth: number;
+};
+
+const proxyContext = new AsyncLocalStorage<AgentsProxyCallContext>();
+
+function envContext(): AgentsProxyCallContext {
+  return {
+    harnessUrl: process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799",
+    token: process.env.OMB_COMMS_TOKEN ?? "",
+    botId: process.env.OMB_BOT_ID ?? "",
+    threadId: process.env.OMB_THREAD_ID ?? "",
+    turnDepth: Number(process.env.OMB_TURN_DEPTH ?? "0") || 0,
+  };
+}
+
+function context(): AgentsProxyCallContext {
+  return proxyContext.getStore() ?? envContext();
+}
+
+const HARNESS = () => context().harnessUrl;
+const BOT_ID = () => context().botId;
+const THREAD_ID = () => context().threadId;
+const TOKEN = () => context().token;
+const DEPTH = () => context().turnDepth;
 const MAX_CREATED_PER_TURN = 4;
 let createdThisTurn = 0;
 
@@ -335,7 +360,18 @@ async function api(path: string, init?: RequestInit): Promise<Json> {
   return body;
 }
 
-export async function executeAgentsProxyTool(name: string, args: Json): Promise<{ text: string; isError?: boolean }> {
+export async function executeAgentsProxyTool(
+  name: string,
+  args: Json,
+  scope?: AgentsProxyCallContext,
+): Promise<{ text: string; isError?: boolean }> {
+  if (scope) {
+    return proxyContext.run(scope, () => dispatchAgentsProxyTool(name, args));
+  }
+  return dispatchAgentsProxyTool(name, args);
+}
+
+async function dispatchAgentsProxyTool(name: string, args: Json): Promise<{ text: string; isError?: boolean }> {
   if (name === "list_bots") {
     const r = await api(`/api/internal/agents?self=${encodeURIComponent(BOT_ID())}`);
     const bots = (r.bots as Array<Json>) ?? [];

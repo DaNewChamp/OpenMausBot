@@ -161,4 +161,124 @@ describe("bridge route trust boundary", () => {
     expect(foreign.result().status).toBe(409);
     expect(registry.getJob(job.id)?.status).toBe("running");
   });
+
+  it("authenticates Hermes tools with the calling bridge and stays loopback-only", async () => {
+    const registry = new BridgeRegistry();
+    const { code } = registry.startPairing();
+    const first = registry.register({ name: "mini", code, capabilities: ["hermes"] });
+    const { code: code2 } = registry.startPairing();
+    const second = registry.register({ name: "other", code: code2, capabilities: ["hermes"] });
+    const calls: Array<{ bridgeId: string; name: string; botScope: string }> = [];
+
+    const companion = jsonSink();
+    await handleBridgeRoutes(
+      request("POST", "/api/bridge/hermes-tools", {
+        authorization: `Bearer ${first.bridgeToken}`,
+        body: { name: "list_bots", botScope: "bot-chief", arguments: {} },
+      }),
+      companion.res,
+      "POST",
+      "/api/bridge/hermes-tools",
+      companion.json,
+      registry,
+      { direct: false, companion: true, operator: false },
+    );
+    expect(companion.result().status).toBe(403);
+
+    const unauthorized = jsonSink();
+    await handleBridgeRoutes(
+      request("POST", "/api/bridge/hermes-tools", {
+        authorization: "Bearer not-a-bridge",
+        body: { name: "list_bots", botScope: "bot-chief", arguments: {} },
+      }),
+      unauthorized.res,
+      "POST",
+      "/api/bridge/hermes-tools",
+      unauthorized.json,
+      registry,
+      {
+        direct: true,
+        companion: false,
+        operator: false,
+        hermesTools: async () => ({ status: 200, body: { text: "should-not-run" } }),
+      },
+    );
+    expect(unauthorized.result().status).toBe(401);
+
+    const missingScope = jsonSink();
+    await handleBridgeRoutes(
+      request("POST", "/api/bridge/hermes-tools", {
+        authorization: `Bearer ${first.bridgeToken}`,
+        body: { name: "list_bots", arguments: {} },
+      }),
+      missingScope.res,
+      "POST",
+      "/api/bridge/hermes-tools",
+      missingScope.json,
+      registry,
+      {
+        direct: true,
+        companion: false,
+        operator: false,
+        hermesTools: async (input) => {
+          calls.push(input);
+          return { status: 200, body: { text: "ok" } };
+        },
+      },
+    );
+    expect(missingScope.result().status).toBe(400);
+    expect(calls).toEqual([]);
+
+    const permitted = jsonSink();
+    await handleBridgeRoutes(
+      request("POST", "/api/bridge/hermes-tools", {
+        authorization: `Bearer ${first.bridgeToken}`,
+        body: { name: "list_bots", botScope: "bot-chief", arguments: {} },
+      }),
+      permitted.res,
+      "POST",
+      "/api/bridge/hermes-tools",
+      permitted.json,
+      registry,
+      {
+        direct: true,
+        companion: false,
+        operator: false,
+        hermesTools: async (input) => {
+          calls.push(input);
+          return { status: 200, body: { text: "No other bots in this section yet." } };
+        },
+      },
+    );
+    expect(permitted.result()).toEqual({
+      status: 200,
+      body: { text: "No other bots in this section yet." },
+    });
+    expect(calls).toEqual([{ bridgeId: first.bridgeId, name: "list_bots", botScope: "bot-chief", args: {} }]);
+    expect(JSON.stringify(permitted.result().body)).not.toMatch(/bridgeToken|Bearer|OMB_COMMS/i);
+
+    const otherBridge = jsonSink();
+    await handleBridgeRoutes(
+      request("POST", "/api/bridge/hermes-tools", {
+        authorization: `Bearer ${second.bridgeToken}`,
+        body: { name: "list_bots", botScope: "bot-chief", arguments: {} },
+      }),
+      otherBridge.res,
+      "POST",
+      "/api/bridge/hermes-tools",
+      otherBridge.json,
+      registry,
+      {
+        direct: true,
+        companion: false,
+        operator: false,
+        hermesTools: async (input) => {
+          calls.push(input);
+          return { status: 403, body: { error: "Bot is out of scope for this bridge", code: "bot_scope", isError: true } };
+        },
+      },
+    );
+    expect(otherBridge.result().status).toBe(403);
+    expect(calls[1]?.bridgeId).toBe(second.bridgeId);
+  });
 });

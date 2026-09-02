@@ -199,6 +199,7 @@ import {
   resolveRuntimeRebind,
 } from "./bot-runtime-rebind.ts";
 import { applyLiveHermesSubagent, isProjectedHermesTranscript, listProjectedHermesActivities, promoteHermesAgent } from "./hermes-agent-projection.ts";
+import { executeHermesBridgeTool } from "./hermes-bridge-tools.ts";
 import {
   mentionedBots,
   roomResponders,
@@ -4562,6 +4563,15 @@ const server = createServer(async (req, res) => {
       companion: isCompanionRequest(req),
       direct: isDirectLoopback(req) && !isCompanionRequest(req),
       operator: isDirectLoopback(req) && !isCompanionRequest(req) && authorizedBridgeAdmin(req.headers.authorization),
+      hermesTools: ({ bridgeId, name, args, botScope }) =>
+        executeHermesBridgeTool({
+          store,
+          bridgeId,
+          name,
+          args,
+          botScope,
+          comms: { url: `http://127.0.0.1:${PORT}`, token: COMMS_TOKEN },
+        }),
     })) {
       return;
     }

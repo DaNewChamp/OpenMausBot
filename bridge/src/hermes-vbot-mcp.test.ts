@@ -375,12 +375,22 @@ describe("Hermes daemon paired-credential wiring", () => {
       createHermesDaemonToolExecutor,
     } = await import("./hermes-vbot-mcp.ts");
     const secret = "paired-bridge-secret-value";
-    const seen: { auth?: string; url?: string } = {};
+    const seen: { auth?: string; url?: string; body?: string } = {};
     const server = createServer((req, res) => {
       seen.auth = req.headers.authorization;
       seen.url = `http://${req.headers.host}${req.url}`;
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ bots: [] }));
+      let data = "";
+      req.on("data", (chunk) => { data += chunk; });
+      req.on("end", () => {
+        seen.body = data;
+        res.setHeader("content-type", "application/json");
+        if (req.url === "/api/internal/agents") {
+          res.statusCode = 401;
+          res.end(JSON.stringify({ error: "unauthorized" }));
+          return;
+        }
+        res.end(JSON.stringify({ text: "No other bots in this section yet." }));
+      });
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
@@ -398,6 +408,7 @@ describe("Hermes daemon paired-credential wiring", () => {
         bridgeId: "bridge-mini",
         bridgeToken: secret,
         name: "Mac mini",
+        botScope: "bot-chief",
       };
       const parsed = pairedHermesHarnessCredentials(credentials);
       expect(parsed).toEqual({ state: "available", url, secret });
@@ -416,7 +427,9 @@ describe("Hermes daemon paired-credential wiring", () => {
       expect(result.isError).not.toBe(true);
       expect(result.text).toMatch(/No other bots/i);
       expect(seen.auth).toBe(`Bearer ${secret}`);
-      expect(seen.url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${address.port}/api/internal/agents`));
+      expect(seen.url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${address.port}/api/bridge/hermes-tools`));
+      expect(seen.body).toContain("bot-chief");
+      expect(seen.body).not.toMatch(/paired-bridge-secret-value|env-only-token-must-not-win|OMB_COMMS_TOKEN/);
       expect(JSON.stringify(result)).not.toContain(secret);
       expect(createHermesVbotPairedToolExecutor(parsed)).toEqual(expect.any(Function));
     } finally {

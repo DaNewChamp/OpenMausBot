@@ -289,6 +289,41 @@ describe("Hermes bridge setup over HTTP", () => {
     expect(hermesSignInJobs.at(-1)).toMatchObject({ argv: ["setup"] });
   }, 20_000);
 
+  it("accepts paired bridge tools for the bound bot and rejects COMMS-style internal access", async () => {
+    expect(connectedBotId).toBeTruthy();
+    const authorized = { authorization: `Bearer ${bridgeToken}` };
+
+    const permitted = await call("POST", "/api/bridge/hermes-tools", {
+      name: "list_bots",
+      botScope: connectedBotId,
+      arguments: {},
+    }, authorized);
+    expect(permitted.status).toBe(200);
+    expect((permitted.body as { text?: string }).text).toMatch(/No other bots|bots you can message/i);
+    expect(JSON.stringify(permitted.body)).not.toMatch(/Bearer |OMB_COMMS|bridgeToken|sk-/i);
+
+    const internal = await call("GET", `/api/internal/agents?self=${encodeURIComponent(connectedBotId)}`, undefined, authorized);
+    expect(internal.status).toBe(401);
+
+    const unknownTool = await call("POST", "/api/bridge/hermes-tools", {
+      name: "rm_rf",
+      botScope: connectedBotId,
+      arguments: {},
+    }, authorized);
+    expect(unknownTool.status).toBe(400);
+
+    const outsider = await call("POST", "/api/bots");
+    expect(outsider.status).toBe(201);
+    const outsiderId = (outsider.body as { bot: { id: string } }).bot.id;
+    const outOfScope = await call("POST", "/api/bridge/hermes-tools", {
+      name: "list_bots",
+      botScope: outsiderId,
+      arguments: {},
+    }, authorized);
+    expect(outOfScope.status).toBe(403);
+    expect(JSON.stringify(outOfScope.body)).not.toMatch(/Bearer |OMB_COMMS|bridgeToken|sk-/i);
+  }, 20_000);
+
   it("fails closed when the bridge is offline or revoked", async () => {
     expect(connectedBotId).toBeTruthy();
     const revoked = await call("DELETE", `/api/bridges/${bridgeId}`);

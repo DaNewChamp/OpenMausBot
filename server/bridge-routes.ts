@@ -14,6 +14,13 @@ export interface BridgeRouteOpts {
   companion: boolean;
   /** Direct loopback plus the operator admin token. */
   operator: boolean;
+  /** Narrow Hermes MCP tool facade authenticated with the calling bridge. */
+  hermesTools?: (input: {
+    bridgeId: string;
+    name: string;
+    args: Record<string, unknown>;
+    botScope: string;
+  }) => Promise<{ status: number; body: unknown }>;
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -162,6 +169,22 @@ export async function handleBridgeRoutes(
     });
     if (!stored) return json(res, 409, { error: "result rejected" }), true;
     return json(res, 200, { ok: true }), true;
+  }
+
+  if (method === "POST" && path === "/api/bridge/hermes-tools") {
+    if (!opts.direct) return json(res, 403, { error: "Hermes tools are loopback-only" }), true;
+    if (!opts.hermesTools) return json(res, 503, { error: "Hermes tools are unavailable" }), true;
+    const body = await readJson(req);
+    const { parseHermesBridgeToolRequest } = await import("./hermes-bridge-tools.ts");
+    const parsed = parseHermesBridgeToolRequest(body);
+    if ("error" in parsed) return json(res, 400, { error: parsed.error }), true;
+    const result = await opts.hermesTools({
+      bridgeId: bridge.id,
+      name: parsed.name,
+      args: parsed.args,
+      botScope: parsed.botScope,
+    });
+    return json(res, result.status, result.body), true;
   }
 
   return json(res, 404, { error: `no route: ${method} ${path}` }), true;

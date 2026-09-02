@@ -157,18 +157,45 @@ export function createHermesVbotEnvToolExecutor(
 
 export function createHermesVbotPairedToolExecutor(
   credentials: PairedHermesHarnessCredentials,
+  options?: { botScope?: string },
 ): HermesVbotToolExecutor {
   if (credentials.state !== "available") {
     return async () => ({ text: "V Bot tool facade is unavailable", isError: true });
   }
-  return createHermesVbotEnvToolExecutor({
-    OMB_HARNESS_URL: credentials.url,
-    OMB_COMMS_TOKEN: credentials.secret,
-  });
+  const botScope = (options?.botScope ?? "").trim();
+  const url = `${credentials.url.replace(/\/$/, "")}/api/bridge/hermes-tools`;
+  const secret = credentials.secret;
+  return async (name, args) => {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${secret}`,
+        },
+        body: JSON.stringify({ name, arguments: args, botScope }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        text?: unknown;
+        error?: unknown;
+        isError?: unknown;
+      };
+      const text = typeof body.text === "string"
+        ? body.text
+        : typeof body.error === "string"
+          ? body.error
+          : `HTTP ${response.status}`;
+      if (!response.ok || body.isError === true) return { text, isError: true };
+      return { text };
+    } catch {
+      return { text: "V Bot tool facade is unavailable", isError: true };
+    }
+  };
 }
 
 export function createHermesDaemonToolExecutor(input: unknown): HermesVbotToolExecutor {
-  return createHermesVbotPairedToolExecutor(pairedHermesHarnessCredentials(input));
+  const botScope = isRecord(input) && typeof input.botScope === "string" ? input.botScope.trim() : "";
+  return createHermesVbotPairedToolExecutor(pairedHermesHarnessCredentials(input), { botScope });
 }
 
 export function createHermesVbotDaemonHandler(options?: {
