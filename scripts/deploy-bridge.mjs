@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const home = homedir();
@@ -13,15 +13,26 @@ const launchAgents = join(home, "Library", "LaunchAgents");
 const logsDir = join(home, "Library", "Logs", "OpenMausBotBridge");
 const hostedUrl = process.env.OMB_BRIDGE_URL ?? "https://openmaus.posival.com";
 const bridgeName = process.env.OMB_BRIDGE_NAME ?? hostname();
-const bridgeEnv = [
-  ["OMB_BRIDGE_SHELL", process.env.OMB_BRIDGE_SHELL],
-  ["OMB_BRIDGE_LOCAL_VM", process.env.OMB_BRIDGE_LOCAL_VM],
-  ["OMB_BRIDGE_SSH_FORWARD", process.env.OMB_BRIDGE_SSH_FORWARD],
-].filter(([, v]) => v === "1" || v === "true");
 
-const flags = new Set(process.argv.slice(2));
-const skipBuild = flags.has("--skip-build");
-const pairOnly = flags.has("--pair");
+export const BRIDGE_OPT_IN_ENV_KEYS = [
+  "OMB_BRIDGE_SHELL",
+  "OMB_BRIDGE_LOCAL_VM",
+  "OMB_BRIDGE_SSH_FORWARD",
+  "OMB_BRIDGE_HERMES",
+];
+
+export function bridgeEnvEnabled(value) {
+  return value === "1" || value === "true";
+}
+
+export function bridgeEnvFromProcessEnv(env = process.env) {
+  return BRIDGE_OPT_IN_ENV_KEYS.map((key) => [key, env[key]]).filter(([, value]) => bridgeEnvEnabled(value));
+}
+
+export function launchdEnvPlistFragment(bridgeEnv) {
+  if (bridgeEnv.length === 0) return "";
+  return `  <key>EnvironmentVariables</key><dict>${bridgeEnv.map(([k, v]) => `<key>${k}</key><string>${v}</string>`).join("")}</dict>\n`;
+}
 
 function run(cmd, args, opts = {}) {
   console.log(`+ ${cmd} ${args.join(" ")}`);
@@ -34,34 +45,37 @@ function writeExecutable(path, contents) {
   chmodSync(path, 0o755);
 }
 
-mkdirSync(logsDir, { recursive: true });
-mkdirSync(runtimeRoot, { recursive: true });
+async function main() {
+  const flags = new Set(process.argv.slice(2));
+  const skipBuild = flags.has("--skip-build");
+  const pairOnly = flags.has("--pair");
+  const bridgeEnv = bridgeEnvFromProcessEnv();
 
-if (!skipBuild) {
-  if (spawnSync("command", ["-v", "pnpm"], { encoding: "utf8" }).status === 0) run("pnpm", ["build:bridge"], { cwd: root });
-  else run("bun", ["run", "build:bridge"], { cwd: root });
-}
+  mkdirSync(logsDir, { recursive: true });
+  mkdirSync(runtimeRoot, { recursive: true });
 
-cpSync(join(root, "dist-bridge"), join(runtimeRoot, "bridge"), { recursive: true });
+  if (!skipBuild) {
+    if (spawnSync("command", ["-v", "pnpm"], { encoding: "utf8" }).status === 0) run("pnpm", ["build:bridge"], { cwd: root });
+    else run("bun", ["run", "build:bridge"], { cwd: root });
+  }
 
-const startScript = join(runtimeRoot, "start-bridge.sh");
-writeExecutable(
-  startScript,
-  `#!/bin/zsh
+  cpSync(join(root, "dist-bridge"), join(runtimeRoot, "bridge"), { recursive: true });
+
+  const startScript = join(runtimeRoot, "start-bridge.sh");
+  writeExecutable(
+    startScript,
+    `#!/bin/zsh
 set -euo pipefail
 NODE="$(command -v node)"
 exec "$NODE" "${runtimeRoot}/bridge/index.js" run
 `,
-);
+  );
 
-const plistPath = join(launchAgents, "com.posival.openmaus-bridge.plist");
-const envPlist =
-  bridgeEnv.length === 0
-    ? ""
-    : `  <key>EnvironmentVariables</key><dict>${bridgeEnv.map(([k, v]) => `<key>${k}</key><string>${v}</string>`).join("")}</dict>\n`;
-writeFileSync(
-  plistPath,
-  `<?xml version="1.0" encoding="UTF-8"?>
+  const plistPath = join(launchAgents, "com.posival.openmaus-bridge.plist");
+  const envPlist = launchdEnvPlistFragment(bridgeEnv);
+  writeFileSync(
+    plistPath,
+    `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>com.posival.openmaus-bridge</string>
@@ -71,17 +85,22 @@ ${envPlist}  <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>${logsDir}/bridge.out.log</string>
   <key>StandardErrorPath</key><string>${logsDir}/bridge.err.log</string>
 </dict></plist>`,
-);
+  );
 
-spawnSync("launchctl", ["bootout", `gui/${process.getuid()}`, plistPath], { stdio: "pipe" });
-run("launchctl", ["bootstrap", `gui/${process.getuid()}`, plistPath]);
+  spawnSync("launchctl", ["bootout", `gui/${process.getuid()}`, plistPath], { stdio: "pipe" });
+  run("launchctl", ["bootstrap", `gui/${process.getuid()}`, plistPath]);
 
-if (pairOnly || !existsSync(join(home, ".openmausbot-bridge", "credentials.json"))) {
-  console.log(`Pair this bridge:
+  if (pairOnly || !existsSync(join(home, ".openmausbot-bridge", "credentials.json"))) {
+    console.log(`Pair this bridge:
   1. On the cloud harness host: curl -X POST http://127.0.0.1:8799/api/bridge/pairing
   2. node ${runtimeRoot}/bridge/index.js connect --url ${hostedUrl} --code <code> --name "${bridgeName}"
   3. launchctl kickstart -k gui/${process.getuid()}/com.posival.openmaus-bridge`);
-} else {
-  run("launchctl", ["kickstart", "-k", `gui/${process.getuid()}/com.posival.openmaus-bridge`]);
-  console.log("bridge daemon restarted");
+  } else {
+    run("launchctl", ["kickstart", "-k", `gui/${process.getuid()}/com.posival.openmaus-bridge`]);
+    console.log("bridge daemon restarted");
+  }
+}
+
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  await main();
 }
