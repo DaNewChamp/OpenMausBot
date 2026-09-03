@@ -68,4 +68,31 @@ struct CommActivityPresentationTests {
         #expect(!CommActivityPresentation.shouldSuppressNarration(transcript[2], in: transcript, at: 2))
         #expect(!CommActivityPresentation.shouldSuppressNarration(transcript[4], in: transcript, at: 4))
     }
+
+    @Test
+    func testParentTranscriptUsesCompactCenteredCaptionNotBubble() throws {
+        let data = Data(#"{"id":"m1","role":"bot","kind":"activity","at":1,"tool":{"name":"Messaged @CIO"},"comm":{"groupId":"room-1","withBotId":"cio","withName":"CIO","withColor":"blue"}}"#.utf8)
+        let message = try JSONDecoder().decode(Message.self, from: data)
+        let row = try #require(CommActivityPresentation(message: message))
+        #expect(row.isCenteredCaption)
+        #expect(!row.usesBubbleChrome)
+        #expect(!row.showsPeerAvatar)
+        #expect(!row.showsChevron)
+        #expect(row.minimumHitTarget >= 44)
+        #expect(row.visualFontSizePoints < 15)
+        #expect(row.accessibilityLabel == "Messaged CIO")
+        #expect(row.accessibilityHint == "Opens the conversation with CIO")
+        #expect(row.unavailableAccessibilityLabel == nil)
+    }
+
+    @Test
+    func testUnavailableCaptionKeepsHitTargetAndVoiceOverCopy() throws {
+        let data = Data(#"{"id":"m3","role":"bot","kind":"activity","at":1,"comm":{"groupId":"deleted-room","withBotId":"risk","withName":"Risk","withColor":"red"}}"#.utf8)
+        let message = try JSONDecoder().decode(Message.self, from: data)
+        let row = try #require(CommActivityPresentation(message: message, destinationAvailable: false))
+        #expect(row.isCenteredCaption)
+        #expect(row.minimumHitTarget >= 44)
+        #expect(row.accessibilityLabel == "Messaged Risk, conversation unavailable")
+        #expect(row.accessibilityHint == "The conversation with Risk is no longer available")
+    }
 }
