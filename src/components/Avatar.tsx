@@ -21,6 +21,7 @@ import {
   type CursorSilhouette,
 } from "./CursorAvatar";
 import { botAvatarProfile, type BotAvatarCrop } from "../../shared/bot-avatar";
+import { hubAttachmentUrl } from "@/lib/web-client-session";
 
 /**
  * The pack's baked-in silhouette was exported with the body fill hardcoded
@@ -236,11 +237,12 @@ export type BotAvatarProps = Omit<MausAvatarProps, "color"> & {
  */
 export function BotAvatar({ bot, size = 44, label, ...mascotProps }: BotAvatarProps) {
   const profile = botAvatarProfile(bot);
+  const imageUrl = hubAttachmentUrl(profile.avatarUrl);
   const [imageFailed, setImageFailed] = useState(false);
 
-  useEffect(() => setImageFailed(false), [profile.avatarUrl]);
+  useEffect(() => setImageFailed(false), [imageUrl]);
 
-  if (profile.avatarCrop === "mascot" || !profile.avatarUrl || imageFailed) {
+  if (profile.avatarCrop === "mascot" || !imageUrl || imageFailed) {
     return (
       <MausAvatar
         {...mascotProps}
@@ -259,7 +261,7 @@ export function BotAvatar({ bot, size = 44, label, ...mascotProps }: BotAvatarPr
         : "0";
   return (
     <img
-      src={profile.avatarUrl}
+      src={imageUrl}
       alt={label ?? (bot.name ? `${bot.name} avatar` : "Bot avatar")}
       width={size}
       height={size}
