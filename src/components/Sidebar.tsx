@@ -1554,7 +1554,7 @@ export function Sidebar({
           <SearchResults query={query} onLanded={() => setQuery("")} />
         </div>
         {moreUnreads.length > 0 && density !== "icons" && (
-          <div className="sticky bottom-2 z-10 flex justify-center bg-panel pt-2">
+          <div className="flex justify-center bg-panel pt-2">
             <button
               type="button"
               onClick={jumpToUnread}
