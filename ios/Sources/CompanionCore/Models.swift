@@ -1393,18 +1393,63 @@ public struct ConfigFlag: Codable, Hashable, Sendable {
     public var voice: String?
 }
 
+/// The hub-wide style preamble every bot receives. The instructions text the
+/// server reports is already the effective value: a blank hub setting arrives
+/// resolved to the shipped default.
+public struct HouseStyleStatus: Codable, Hashable, Sendable {
+    public var enabled: Bool
+    public var instructions: String?
+}
+
+public struct HouseStylePatch: Encodable, Sendable {
+    public var enabled: Bool
+    public var instructions: String
+
+    public init(enabled: Bool, instructions: String) {
+        self.enabled = enabled
+        self.instructions = instructions
+    }
+}
+
+/// A write-only ZAI credential. Existing keys never travel to the phone, so
+/// there is nothing to echo back; sending one only ever sets it.
+public struct ZAIKeyPatch: Encodable, Sendable {
+    public var apiKey: String
+
+    public init(apiKey: String) {
+        self.apiKey = apiKey
+    }
+}
+
+/// The narrow slice of desktop configuration the phone may change. Sections
+/// left nil are omitted, so the server only saves what was set.
+public struct ConfigPatch: Encodable, Sendable {
+    public var houseStyle: HouseStylePatch?
+    public var zai: ZAIKeyPatch?
+
+    public init(houseStyle: HouseStylePatch? = nil, zai: ZAIKeyPatch? = nil) {
+        self.houseStyle = houseStyle
+        self.zai = zai
+    }
+}
+
 public struct Profile: Codable, Hashable, Sendable {
     public var name: String
     public var email: String
 }
 
 public struct ConfigStatus: Codable, Sendable {
+    public var xai: ConfigFlag?
     public var composio: ConfigFlag?
     public var box: ConfigFlag?
+    public var vps: ConfigFlag?
+    public var opencodeGo: ConfigFlag?
+    public var zai: ConfigFlag?
     public var tts: ConfigFlag?
     public var imageGen: ConfigFlag?
     public var profile: Profile?
     public var permissions: PermissionPolicyStatus?
+    public var houseStyle: HouseStyleStatus?
 
     /// Whether the shared synthesis credential exists on the paired
     /// computer. The credential itself never appears in this response.

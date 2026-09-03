@@ -1307,6 +1307,13 @@ public struct CompanionClient: Sendable {
         try await send(try makeRequest("GET", "/api/config"), as: ConfigStatus.self)
     }
 
+    /// Write the narrow slice of desktop configuration the phone owns. The
+    /// server answers with the same status the desktop settings page reads,
+    /// so callers can fold the response straight back into their state.
+    public func setConfig(_ patch: ConfigPatch) async throws -> ConfigStatus {
+        try await send(try makeRequest("PATCH", "/api/config", encodedBody: patch), as: ConfigStatus.self)
+    }
+
     /// Read the app-wide permission default from the paired computer. This
     /// narrow route avoids exposing the rest of the desktop configuration.
     public func permissionPolicy() async throws -> PermissionPolicyStatus {

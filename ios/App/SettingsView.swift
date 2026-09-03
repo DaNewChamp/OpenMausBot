@@ -18,6 +18,13 @@ struct SettingsView: View {
     @State private var permissionPolicyLoaded = false
     @State private var approvalReviewer: ApprovalReviewerStatus?
     @State private var approvalReviewerLoaded = false
+    @State private var config: ConfigStatus?
+    @State private var houseStyleEnabled = true
+    @State private var houseStyleInstructions = ""
+    @State private var houseStyleLoaded = false
+    @State private var houseStyleSaving = false
+    @State private var zaiKeyDraft = ""
+    @State private var zaiKeySaving = false
     @State private var enablingNotifications = false
     @State private var showingBrowserScanner = false
     @State private var scannedBrowserURL: URL?
@@ -43,6 +50,8 @@ struct SettingsView: View {
                     busySection
                     permissionsSection
                     approvalReviewerSection
+                    houseStyleSection
+                    providerKeysSection
                 }
             }
             .padding(.horizontal, VBotSurface.Space.page)
@@ -79,6 +88,12 @@ struct SettingsView: View {
             if let reviewer = await session.approvalReviewer() {
                 approvalReviewer = reviewer
                 approvalReviewerLoaded = true
+            }
+            if let status = await session.configStatus() {
+                config = status
+                houseStyleEnabled = status.houseStyle?.enabled ?? true
+                houseStyleInstructions = status.houseStyle?.instructions ?? ""
+                houseStyleLoaded = true
             }
         }
     }
@@ -444,6 +459,103 @@ struct SettingsView: View {
         return ApprovalReviewerModelPolicy.sectionExplanation
     }
 
+    private var houseStyleSection: some View {
+        VBotSurfaceGroup(
+            title: "House style",
+            footer: "Applies to every bot. A bot's own instructions can opt out with a line: [house-style: off]"
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle(isOn: houseStyleEnabledBinding) {
+                    Label {
+                        Text("Enabled")
+                    } icon: {
+                        SettingsIcon(symbol: "house", color: .indigo)
+                    }
+                }
+                .disabled(!houseStyleLoaded || houseStyleSaving)
+
+                TextEditor(text: $houseStyleInstructions)
+                    .frame(minHeight: 96)
+                    .disabled(!houseStyleLoaded || houseStyleSaving)
+                    .accessibilityLabel("House style instructions")
+
+                if houseStyleDirty {
+                    Button {
+                        Task { await saveHouseStyle() }
+                    } label: {
+                        if houseStyleSaving {
+                            ProgressView()
+                        } else {
+                            Text("Save")
+                        }
+                    }
+                    .disabled(houseStyleSaving)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(minHeight: VBotSurface.Hit.row)
+        }
+    }
+
+    private var providerKeysSection: some View {
+        VBotSurfaceGroup(
+            title: "Provider keys",
+            footer: "A check means that credential is saved on the paired computer. Keys stay there and are never sent back to this phone."
+        ) {
+            providerKeyRow("ZAI (GLM)", configured: config?.zai?.configured)
+            VBotHairline().padding(.leading, 16)
+            providerKeyRow("Grok (xAI)", configured: config?.xai?.configured)
+            VBotHairline().padding(.leading, 16)
+            providerKeyRow("OpenCode", configured: config?.opencodeGo?.configured)
+            VBotHairline().padding(.leading, 16)
+            providerKeyRow("Composio", configured: config?.composio?.configured == true || config?.composio?.apiKeyConfigured == true)
+            VBotHairline().padding(.leading, 16)
+            providerKeyRow("Box", configured: config?.box?.configured)
+            VBotHairline().padding(.leading, 16)
+            providerKeyRow("Image generation", configured: config?.imageGen?.configured)
+
+            VBotHairline()
+
+            HStack(spacing: 12) {
+                SecureField("Paste a ZAI (GLM) key", text: $zaiKeyDraft)
+                    .disabled(zaiKeySaving)
+                Button {
+                    Task { await saveZAIKey() }
+                } label: {
+                    if zaiKeySaving {
+                        ProgressView()
+                    } else {
+                        Text("Save")
+                    }
+                }
+                .disabled(zaiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || zaiKeySaving)
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: VBotSurface.Hit.row)
+        }
+    }
+
+    private func providerKeyRow(_ name: String, configured: Bool?) -> some View {
+        HStack(spacing: 12) {
+            Text(name)
+                .font(.body)
+            Spacer()
+            if configured == true {
+                Label("Configured", systemImage: "checkmark.circle.fill")
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(.green)
+            } else {
+                Text("Not set")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: VBotSurface.Hit.row)
+        .accessibilityElement(children: .combine)
+    }
+
     private var globalStoredActivityDetail: ActivityDetail {
         ActivityDetail(rawValue: activityDetail) ?? .reduced
     }
@@ -526,6 +638,50 @@ struct SettingsView: View {
         if let saved = await session.updateApprovalReviewer(patch) {
             approvalReviewer = saved
         }
+    }
+
+    private var houseStyleDirty: Bool {
+        guard houseStyleLoaded else { return false }
+        return (config?.houseStyle?.enabled ?? true) != houseStyleEnabled
+            || (config?.houseStyle?.instructions ?? "") != houseStyleInstructions
+    }
+
+    private var houseStyleEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { houseStyleEnabled },
+            set: { enabled in
+                guard houseStyleLoaded else { return }
+                houseStyleEnabled = enabled
+                Task { await saveHouseStyle() }
+            }
+        )
+    }
+
+    private func saveHouseStyle() async {
+        guard houseStyleLoaded, !houseStyleSaving else { return }
+        houseStyleSaving = true
+        if let saved = await session.updateConfig(
+            ConfigPatch(houseStyle: HouseStylePatch(
+                enabled: houseStyleEnabled,
+                instructions: houseStyleInstructions
+            ))
+        ) {
+            config = saved
+            houseStyleEnabled = saved.houseStyle?.enabled ?? houseStyleEnabled
+            houseStyleInstructions = saved.houseStyle?.instructions ?? houseStyleInstructions
+        }
+        houseStyleSaving = false
+    }
+
+    private func saveZAIKey() async {
+        let key = zaiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty, !zaiKeySaving else { return }
+        zaiKeySaving = true
+        if let saved = await session.updateConfig(ConfigPatch(zai: ZAIKeyPatch(apiKey: key))) {
+            config = saved
+            zaiKeyDraft = ""
+        }
+        zaiKeySaving = false
     }
 
     private func workspaceLink<Destination: View>(

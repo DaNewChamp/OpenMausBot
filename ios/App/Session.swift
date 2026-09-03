@@ -2990,6 +2990,12 @@ final class Session: ObservableObject {
         return try? await client.config()
     }
 
+    func updateConfig(_ patch: ConfigPatch) async -> ConfigStatus? {
+        guard let client else { return nil }
+        do { return try await client.setConfig(patch) }
+        catch { actionError = error.localizedDescription; return nil }
+    }
+
     /// Read the server-authoritative app-wide permission default. Preferences
     /// never live only on this phone.
     func permissionPolicy() async -> PermissionPolicyStatus? {
