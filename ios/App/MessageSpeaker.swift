@@ -1,4 +1,4 @@
-// Per-message read-aloud for the transcript.
+// Voice output for the phone.
 //
 // The desktop speaks through a window-wide speaker (src/lib/tts): the
 // harness splits the message into bounded utterances, one speak request per
@@ -8,13 +8,19 @@
 // target; CompanionCore stays Foundation-only so `swift test` runs without a
 // simulator (the same reasoning SpeechDictation records in its header).
 //
-// One message at a time, and the same button is stop: starting another
-// message or tapping the playing one bumps a generation token, and every
-// await re-checks it before it is allowed to touch the session or the
-// player again. A dictation capture is stopped before any playback starts —
-// the mic and a playback route must never be negotiated at the same time —
-// and an audio-session interruption (a call, or the user starting dictation
-// over the top) stops us the same way it stops dictation in ChatView.
+// Three engines sit behind one surface, picked per run from
+// VoiceOutputSettings: "hub" is that prepare/speak pipeline with the shared
+// voice key; "on-device" is LocalTtsEngine (AVSpeechSynthesizer); "custom
+// endpoint" fetches audio from an OpenAI-compatible speech server and plays
+// it here. Whichever engine speaks, the rules are the same: one audible
+// clip at a time, generation-token single-speaker semantics, a dictation
+// capture stopped before any playback route is negotiated, and an
+// audio-session interruption stops us the same way it stops dictation in
+// ChatView.
+//
+// `onAmplitude` publishes rough output level (player metering, or the
+// synthesizer's word envelope) so voice mode's orb moves with the real
+// voice.
 import AVFoundation
 import Combine
 import CompanionCore
@@ -29,6 +35,9 @@ final class MessageSpeaker: NSObject, ObservableObject {
 
     @Published private(set) var phase: Phase = .idle
 
+    /// Live output amplitude 0...1 while a clip plays, for the orb.
+    var onAmplitude: ((Float) -> Void)?
+
     /// The composer's dictation capture, paused before playback starts.
     weak var dictation: SpeechDictation?
 
@@ -37,11 +46,17 @@ final class MessageSpeaker: NSObject, ObservableObject {
     /// Resumed exactly once per clip, by the delegate callback or by a stop.
     /// `false` on the stop path is always discarded by the generation check.
     private var clipContinuation: CheckedContinuation<Bool, Never>?
+    private var meterTimer: Timer?
+    private let localEngine = LocalTtsEngine()
+    private let customClient = CustomEndpointTtsClient()
 
     private var interruptionObserver: AnyCancellable?
 
     override init() {
         super.init()
+        localEngine.onAmplitude = { [weak self] level in
+            self?.onAmplitude?(level)
+        }
         interruptionObserver = NotificationCenter.default
             .publisher(for: AVAudioSession.interruptionNotification)
             .receive(on: DispatchQueue.main)
@@ -81,11 +96,10 @@ final class MessageSpeaker: NSObject, ObservableObject {
     /// no `Message` for the bot's spoken reply, just text.
     static let voiceModeMessageId = "voice-mode"
 
-    /// Voice mode: speak arbitrary text — the bot's settled reply — and
-    /// return when the last clip finishes or the run is stopped. Same
-    /// prepare/speak pipeline, same one-audible-clip-at-a-time, same
-    /// generation token as a message speak; `stop()` interrupts it the
-    /// same way.
+    /// Voice mode: speak arbitrary text — the bot's settled reply — with
+    /// the configured engine, and return when the last clip finishes or the
+    /// run is stopped. Same one-audible-clip-at-a-time, same generation
+    /// token as any speak; `stop()` interrupts it the same way.
     func speakForVoiceMode(text: String, voiceId: String?, session: Session) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -95,7 +109,37 @@ final class MessageSpeaker: NSObject, ObservableObject {
         phase = .speaking(messageId: Self.voiceModeMessageId)
         // Pause the mic before the playback route is negotiated, not after.
         dictation?.stop()
-        await run(messageId: Self.voiceModeMessageId, text: trimmed, voiceId: voiceId, generation: gen, session: session)
+        let settings = VoiceOutputSettings.load()
+        var failure: String?
+        switch settings.engine {
+        case .hub:
+            await run(messageId: Self.voiceModeMessageId, text: trimmed, voiceId: voiceId, generation: gen, session: session)
+            return
+        case .onDevice:
+            do {
+                try await localEngine.speak(text: trimmed)
+            } catch {
+                // A deliberate stop also lands here, discarded by the
+                // generation check below.
+                failure = "On-device speech could not play."
+            }
+        case .customEndpoint:
+            do {
+                let audio = try await customClient.fetchAudio(text: trimmed, settings: settings)
+                guard gen == generation else { return }
+                try await play(audio)
+            } catch {
+                guard gen == generation else { return }
+                failure = settings.customEndpointConfigured
+                    ? "The custom voice endpoint could not be reached."
+                    : "Add a base URL for the custom voice endpoint in Settings → Chat."
+            }
+        }
+        guard gen == generation else { return }
+        if let failure {
+            session.actionError = failure
+        }
+        finish(generation: gen)
     }
 
     private func speak(message: Message, voiceId: String?, session: Session) {
@@ -166,20 +210,51 @@ final class MessageSpeaker: NSObject, ObservableObject {
 
         let nextPlayer = try AVAudioPlayer(data: audio)
         nextPlayer.delegate = self
+        nextPlayer.isMeteringEnabled = true
         guard nextPlayer.prepareToPlay(), nextPlayer.play() else {
             throw ClipError.unplayable
         }
         player = nextPlayer
+        startMetering(nextPlayer)
         let finished: Bool = await withCheckedContinuation { continuation in
             clipContinuation = continuation
         }
         guard finished else { throw ClipError.unplayable }
     }
 
+    /// The clip's real loudness, ~30 reads a second while it plays: the orb
+    /// swells with the voice instead of a stand-in animation.
+    private func startMetering(_ player: AVAudioPlayer) {
+        meterTimer?.invalidate()
+        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let player = self.player else { return }
+                player.updateMeters()
+                self.onAmplitude?(Self.level(fromDecibels: player.averagePower(forChannel: 0)))
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        meterTimer = timer
+    }
+
+    private func stopMetering() {
+        meterTimer?.invalidate()
+        meterTimer = nil
+        onAmplitude?(0)
+    }
+
+    /// Player metering reads decibels; the orb wants 0...1. Speech sits
+    /// roughly between -46 dB (room floor) and -4 dB (close and loud).
+    static func level(fromDecibels decibels: Float) -> Float {
+        min(max((decibels + 46) / 42, 0), 1)
+    }
+
     /// Stops the current clip and gives the audio route back. Safe when
     /// nothing is playing; also wakes a run suspended mid-clip so its loop
     /// can exit on the next generation check.
     private func settlePlayer() {
+        localEngine.stop()
+        stopMetering()
         player?.stop()
         player = nil
         clipContinuation?.resume(returning: false)
