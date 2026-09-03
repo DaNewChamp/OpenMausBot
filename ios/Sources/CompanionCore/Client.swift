@@ -1424,6 +1424,12 @@ public struct CompanionClient: Sendable {
         return (response.routines, response.runs)
     }
 
+    /// Imported Agent Skills for one bot. Same listing the desktop library
+    /// reads: name, description, enabled, provenance, and scan warnings.
+    public func skills(botId: String) async throws -> BotSkillsResponse {
+        try await send(try makeRequest("GET", "/api/bots/\(botId)/skills"), as: BotSkillsResponse.self)
+    }
+
     // MARK: - Doing
 
     /// Make a new bot. The harness picks its name, colour and greeting — the

@@ -3063,6 +3063,19 @@ final class Session: ObservableObject {
         catch { actionError = error.localizedDescription; return ([], []) }
     }
 
+    func loadBotSkills(botId: String, quietly: Bool = false) async -> [BotSkill]? {
+        guard let client else { return nil }
+        do {
+            return try await client.skills(botId: botId).skills
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            return nil
+        } catch {
+            if !quietly, !error.isCancellation { actionError = error.localizedDescription }
+            return nil
+        }
+    }
+
     func loadRoutineRunAvailability() async -> RoutineRunAvailability? {
         guard let client else { return nil }
         do {

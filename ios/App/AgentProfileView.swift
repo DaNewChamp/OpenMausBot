@@ -52,6 +52,7 @@ struct AgentProfileView: View {
     @State private var showingInstructions = false
     @State private var instructionsBaseline = ""
     @State private var showingRoutines = false
+    @State private var showingSkills = false
     @State private var routines: [Routine] = []
     @State private var routinesLoading = true
     @State private var showingMedia = false
@@ -146,6 +147,7 @@ struct AgentProfileView: View {
                         characterSection
                         permissionSection
                         instructionsRow
+                        skillsRow
                         routinesSection
                         notificationsRow
                         toolActivitySection
@@ -241,6 +243,9 @@ struct AgentProfileView: View {
             .sheet(isPresented: $showingRoutines) {
                 TasksRoutinesSheet()
             }
+            .sheet(isPresented: $showingSkills) {
+                SkillLibrarySheet(bot: current)
+            }
             .sheet(isPresented: $showingAvatarCrop, onDismiss: {
                 cropDraft = nil
                 photo = nil
@@ -287,6 +292,9 @@ struct AgentProfileView: View {
                 .disabled(!canEdit)
                 Button("Tasks & routines", systemImage: "clock") {
                     showingRoutines = true
+                }
+                Button("Skills", systemImage: "sparkles") {
+                    showingSkills = true
                 }
                 Divider()
                 Button("Media & avatar", systemImage: "photo") {
@@ -701,6 +709,33 @@ struct AgentProfileView: View {
         .buttonStyle(.plain)
         .profileCard()
         .accessibilityHint(description.isEmpty ? "Tell this Bot how to work" : "Edit this agent's instructions")
+        .padding(.top, 18)
+    }
+
+    private var skillsRow: some View {
+        Button {
+            showingSkills = true
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26)
+                Text("Skills")
+                    .font(.body)
+                    .foregroundStyle(Color.primary)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 18)
+            .frame(minHeight: 56)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .profileCard()
+        .accessibilityHint("Browse and run this Bot's skills")
         .padding(.top, 18)
     }
 

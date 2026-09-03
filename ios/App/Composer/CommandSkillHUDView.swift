@@ -1,3 +1,4 @@
+import CompanionCore
 import SwiftUI
 
 public struct CommandSkillItem: Identifiable {
@@ -15,6 +16,17 @@ public struct CommandSkillItem: Identifiable {
         self.iconName = iconName
         self.brandColor = brandColor
         self.command = command
+    }
+
+    public static func library(_ skill: BotSkill) -> CommandSkillItem {
+        CommandSkillItem(
+            id: "skill:\(skill.name)",
+            title: "/\(skill.name)",
+            description: SkillLibraryRunPolicy.visibleDescription(skill.description) ?? "",
+            iconName: "sparkles",
+            brandColor: Color(hex: "#8B5CF6"),
+            command: SkillLibraryRunPolicy.command(for: skill)
+        )
     }
 }
 
