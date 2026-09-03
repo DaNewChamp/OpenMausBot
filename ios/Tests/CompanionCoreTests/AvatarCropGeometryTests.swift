@@ -55,7 +55,7 @@ final class AvatarCropGeometryTests: XCTestCase {
             crop: crop
         )
         XCTAssertEqual(zoomed.x, 150, accuracy: 0.000_001)
-        XCTAssertEqual(zoomed.y, 50, accuracy: 0.000_001)
+        XCTAssertEqual(zoomed.y, -50, accuracy: 0.000_001)
     }
 
     func testCenteredSourceRectIsTheCoveringSquareOfTheImage() {

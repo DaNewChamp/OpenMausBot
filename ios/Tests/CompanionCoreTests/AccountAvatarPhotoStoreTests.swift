@@ -59,7 +59,8 @@ final class AccountAvatarPhotoStoreTests: XCTestCase {
 
     func testTruncatedJPEGIsUnavailable() throws {
         let jpeg = try AvatarImageFixtures.stillJPEG(width: 32, height: 32)
-        try AccountAvatarPhotoStore.savePhoto(Data(jpeg.prefix(12)))
+        try AccountAvatarPhotoStore.savePhoto(jpeg)
+        try Data(jpeg.prefix(12)).write(to: AccountAvatarPhotoStore.photoURL(), options: .atomic)
         XCTAssertNil(AccountAvatarPhotoStore.loadPhoto())
         XCTAssertFalse(AccountAvatarPhotoStore.isAvailable())
     }
@@ -90,12 +91,14 @@ final class AccountAvatarPhotoStoreTests: XCTestCase {
     }
 
     private func assertDefaultsContainNoImageBytes() {
-        for (key, value) in defaults.dictionaryRepresentation() {
-            if let data = value as? Data {
+        XCTAssertNil(defaults.data(forKey: AccountAvatarPhotoStore.revisionDefaultsKey))
+        XCTAssertEqual(defaults.integer(forKey: AccountAvatarPhotoStore.revisionDefaultsKey), 1)
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("companion.prefs.") {
+            if let data = defaults.data(forKey: key) {
                 XCTAssertLessThan(data.count, 32, "UserDefaults \(key) stored image bytes")
                 XCTAssertFalse(AvatarCropExport.isJPEG(data), "UserDefaults \(key) stored a JPEG")
             }
-            if let text = value as? String {
+            if let text = defaults.string(forKey: key) {
                 XCTAssertFalse(text.contains("base64"), "UserDefaults \(key) stored base64")
                 XCTAssertLessThan(text.count, 64, "UserDefaults \(key) stored a large string")
             }

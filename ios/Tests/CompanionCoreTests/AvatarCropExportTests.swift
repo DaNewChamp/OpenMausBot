@@ -163,7 +163,15 @@ enum AvatarImageFixtures {
         ) else {
             throw FixtureError.decode
         }
-        context.draw(image, in: CGRect(x: -x, y: -y, width: image.width, height: image.height))
+        context.draw(
+            image,
+            in: CGRect(
+                x: -CGFloat(x),
+                y: -CGFloat(y),
+                width: CGFloat(image.width),
+                height: CGFloat(image.height)
+            )
+        )
         return Pixel(red: pixel[0], green: pixel[1], blue: pixel[2])
     }
 
@@ -186,7 +194,7 @@ enum AvatarImageFixtures {
     private static func solidImage(width: Int, height: Int, red: CGFloat, green: CGFloat, blue: CGFloat) -> CGImage {
         makeImage(width: width, height: height) { context in
             context.setFillColor(CGColor(red: red / 255, green: green / 255, blue: blue / 255, alpha: 1))
-            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            context.fill(CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
         }
     }
 
@@ -194,9 +202,9 @@ enum AvatarImageFixtures {
         makeImage(width: width, height: height) { context in
             let half = CGFloat(width / 2)
             context.setFillColor(CGColor(red: leftRed ? 1 : 0, green: 0, blue: leftRed ? 0 : 1, alpha: 1))
-            context.fill(CGRect(x: 0, y: 0, width: half, height: height))
+            context.fill(CGRect(x: 0, y: 0, width: half, height: CGFloat(height)))
             context.setFillColor(CGColor(red: leftRed ? 0 : 1, green: 0, blue: leftRed ? 1 : 0, alpha: 1))
-            context.fill(CGRect(x: half, y: 0, width: CGFloat(width) - half, height: height))
+            context.fill(CGRect(x: half, y: 0, width: CGFloat(width) - half, height: CGFloat(height)))
         }
     }
 
