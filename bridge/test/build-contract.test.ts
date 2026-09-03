@@ -33,7 +33,7 @@ function isNodeOrRelativeSpecifier(specifier: string): boolean {
 function collectBareImports(filePath: string): string[] {
   const source = readFileSync(filePath, "utf8");
   const imports: string[] = [];
-  const pattern = /(?:from|import)\s+["']([^"']+)["']/g;
+  const pattern = /(?:from\s+|import\s*\(\s*)["']([^"']+)["']/g;
   for (const match of source.matchAll(pattern)) {
     imports.push(match[1]);
   }
@@ -91,7 +91,7 @@ function listJsFiles(dir: string): string[] {
 function collectRelativeImports(filePath: string): string[] {
   const source = readFileSync(filePath, "utf8");
   const imports: string[] = [];
-  const pattern = /(?:from|import)\s+["'](\.\.?\/[^"']+)["']/g;
+  const pattern = /(?:from\s+|import\s*\(\s*)["'](\.\.?\/[^"']+)["']/g;
   for (const match of source.matchAll(pattern)) {
     imports.push(match[1]);
   }
@@ -145,6 +145,7 @@ describe("bridge build contract", () => {
     expect(existsSync(join(dist, "hermes-runtime.js"))).toBe(true);
     expect(existsSync(join(dist, "shared", "bridge-hermes-contract.js"))).toBe(true);
     expect(existsSync(join(dist, "server", "engines", "hermes.js"))).toBe(true);
+    expect(existsSync(join(dist, "server", "drivers", "agents-proxy.js"))).toBe(true);
     expect(existsSync(join(dist, "server", "contracts.js"))).toBe(true);
     expect(existsSync(join(dist, "bridge", "src", "index.js"))).toBe(false);
   });

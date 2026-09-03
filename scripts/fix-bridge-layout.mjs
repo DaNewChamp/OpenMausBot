@@ -18,7 +18,7 @@ const sharedDir = join(out, "shared");
 
 function collectRelativeImports(source) {
   const imports = [];
-  const pattern = /(?:from|import)\s+["'](\.\.?\/[^"']+)["']/g;
+  const pattern = /(?:from\s+|import\s*\(\s*)["'](\.\.?\/[^"']+)["']/g;
   for (const match of source.matchAll(pattern)) {
     imports.push(match[1]);
   }
