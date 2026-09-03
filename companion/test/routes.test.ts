@@ -426,7 +426,10 @@ describe("what it may not", () => {
     expect(allowed("PATCH", "/api/bots/bot_123/profile/execution-policy")).toBe(false);
     expect(allowed("PUT", "/api/config")).toBe(false);
     expect(allowed("GET", "/api/attachments/../config.json")).toBe(false);
-    expect(allowed("POST", "/api/routine-runs/run_1/cancel")).toBe(false);
+    expect(allowed("POST", "/api/routine-runs/run_1/cancel")).toBe(true);
+    expect(allowed("POST", "/api/routine-runs/run_1/seen")).toBe(true);
+    expect(allowed("DELETE", "/api/routine-runs/run_1/cancel")).toBe(false);
+    expect(allowed("POST", "/api/routine-runs/run_1/cancel/extra")).toBe(false);
     expect(allowed("DELETE", "/api/connectors/slack")).toBe(false);
     expect(allowed("GET", "/api/connectors/connected/all")).toBe(false);
     // revocation is a Mac-only affordance: the phone can list and add
