@@ -417,4 +417,42 @@ describe("approved runtime conversion", () => {
     if (result.status !== "applied") return;
     expect(result.bot.runtimeBinding).toEqual(localHermes);
   });
+
+  it("uses the same strict public handoff parser so extra or secret-shaped context never crosses internally", async () => {
+    const { requestBotRuntimeRebind, rememberHermesEndpoint } = await import("./bot-runtime-rebind.ts");
+    rememberHermesEndpoint("local:coder", "rev-1");
+    const store = new Store(selection);
+    const bot = store.createBot({ name: "Specialist" });
+    const extra = await requestBotRuntimeRebind({
+      store,
+      request: {
+        targetBotId: bot.id,
+        binding: localHermes,
+        contextMode: "summary",
+        userRequested: true,
+      },
+      context: {
+        summary: "keep this",
+        notes: "raw extra from internal",
+      },
+    });
+    expect(extra).toMatchObject({ status: "error", code: "invalid_handoff" });
+    expect(JSON.stringify(extra)).not.toMatch(/raw extra from internal/i);
+
+    const secret = await requestBotRuntimeRebind({
+      store,
+      request: {
+        targetBotId: bot.id,
+        binding: localHermes,
+        contextMode: "summary",
+        userRequested: true,
+      },
+      context: {
+        summary: "keep this",
+        token: "sk-handoff-secret",
+      },
+    });
+    expect(secret).toMatchObject({ status: "error", code: "invalid_handoff" });
+    expect(JSON.stringify(secret)).not.toMatch(/sk-handoff-secret/i);
+  });
 });

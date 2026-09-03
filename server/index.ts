@@ -5000,13 +5000,14 @@ const server = createServer(async (req, res) => {
           if (!isBotRuntimeBinding(canonicalizeBotRuntimeBinding(body.binding))) {
             return json(res, 400, { error: "binding is invalid" });
           }
-          const contextMode = body.contextMode === "summary" ? "summary" : "none";
+          const handoff = parseRuntimeHandoffInput(body);
+          if (!handoff.ok) return json(res, 400, { error: handoff.message, code: handoff.code });
           const userRequested = body.userRequested === true;
           if (!userRequested && !actor) return json(res, 403, { error: "unknown sender" });
           const request: RuntimeRebindRequest = {
             targetBotId,
             binding: canonicalizeBotRuntimeBinding(body.binding) as RuntimeRebindRequest["binding"],
-            contextMode,
+            contextMode: handoff.contextMode,
             userRequested,
           };
           const result = await requestBotRuntimeRebind({
@@ -5014,9 +5015,7 @@ const server = createServer(async (req, res) => {
             request,
             actor,
             approval: approvalBus,
-            context: body.context && typeof body.context === "object" && !Array.isArray(body.context)
-              ? (body.context as Record<string, unknown>)
-              : undefined,
+            context: handoff.context,
           });
           const status = result.status === "error" ? (result.code === "bot_active" ? 409 : 400) : 200;
           if (result.status === "applied") {

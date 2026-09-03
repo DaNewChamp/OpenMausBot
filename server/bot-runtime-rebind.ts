@@ -6,6 +6,7 @@ import type { ApprovalBus } from "./peer-approval.ts";
 import {
   applyBotRuntimeRebind,
   isBotRuntimeBinding,
+  parseRuntimeHandoffInput,
   planBotRuntimeRebind,
   RuntimeRebindError,
   type BotRuntimeBinding,
@@ -195,11 +196,17 @@ export async function requestBotRuntimeRebind(input: RequestBotRuntimeRebindInpu
     return publicError(code, endpoint.state === "unreadable" ? "Hermes endpoint identity is unreadable" : "Hermes endpoint is unavailable");
   }
 
+  const handoff = parseRuntimeHandoffInput({
+    contextMode: input.request.contextMode,
+    context: input.context,
+  });
+  if (!handoff.ok) return publicError(handoff.code, handoff.message);
+
   const planned = planBotRuntimeRebind({
     bot,
     requested: binding,
-    contextMode: input.request.contextMode,
-    context: input.context,
+    contextMode: handoff.contextMode,
+    context: handoff.context,
     endpoint,
   });
   if (planned.ok !== true) {
