@@ -130,6 +130,10 @@ public struct HermesSubagentActivity: Hashable, Identifiable, Sendable, Equatabl
 
     public var id: String { activityId }
 
+    private enum CodingKeys: String, CodingKey {
+        case activityId, parentThreadId, title, status, transcriptThreadId, promoteEligible, updatedAt
+    }
+
     public init(
         activityId: String,
         parentThreadId: String,

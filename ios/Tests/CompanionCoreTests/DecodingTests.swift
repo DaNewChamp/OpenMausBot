@@ -580,7 +580,14 @@ final class DecodingTests: XCTestCase {
         {"kind":"hermes.subagent","seq":8,"activity":{
           "activityId":"act-1","parentThreadId":"parent-thread","title":"Draft review",
           "status":"started","transcriptThreadId":"thread-temp-1","promoteEligible":false,
-          "updatedAt":1700000000000}}
+          "updatedAt":1700000000000,
+          "hermesAgentId":"moa-temp-secret",
+          "token":"sk-ant-secret-value-123456",
+          "api_key":"sk-live-never-keep",
+          "HERMES_HOME":"/Users/vincent/.hermes",
+          "sessionId":"sess-runtime-1",
+          "resumeCursor":"cursor-secret"
+        }}
         """
         let frame = try JSONDecoder().decode(StreamFrame.self, from: Data(json.utf8))
         guard case let .hermesSubagent(activity) = frame.frame else {
@@ -591,11 +598,38 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(activity.transcriptThreadId, "thread-temp-1")
         XCTAssertEqual(activity.status, .started)
         XCTAssertEqual(activity.updatedAt, 1_700_000_000_000)
+        XCTAssertEqual(activity.title, "Draft review")
         XCTAssertEqual(frame.frame.threadId, "thread-temp-1")
-        XCTAssertFalse(json.contains("hermesAgentId"))
-        XCTAssertFalse(json.contains("moa-temp"))
-        XCTAssertFalse(json.lowercased().contains("token"))
-        XCTAssertFalse(json.lowercased().contains("sk-"))
+
+        let encoded = String(data: try JSONEncoder().encode(activity), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains("hermesAgentId"))
+        XCTAssertFalse(encoded.contains("moa-temp-secret"))
+        XCTAssertFalse(encoded.contains("sk-ant-secret-value-123456"))
+        XCTAssertFalse(encoded.contains("sk-live-never-keep"))
+        XCTAssertFalse(encoded.contains("HERMES_HOME"))
+        XCTAssertFalse(encoded.contains("/Users/vincent/.hermes"))
+        XCTAssertFalse(encoded.contains("sessionId"))
+        XCTAssertFalse(encoded.contains("sess-runtime-1"))
+        XCTAssertFalse(encoded.contains("resumeCursor"))
+        XCTAssertFalse(encoded.contains("cursor-secret"))
+        XCTAssertFalse(encoded.lowercased().contains("token"))
+        XCTAssertFalse(encoded.lowercased().contains("api_key"))
+        XCTAssertFalse(encoded.lowercased().contains("apikey"))
+
+        let labels = Set(Mirror(reflecting: activity).children.compactMap(\.label))
+        XCTAssertEqual(
+            labels.subtracting(["activityId", "parentThreadId", "title", "status", "transcriptThreadId", "promoteEligible", "updatedAt", "id"]),
+            []
+        )
+        for child in Mirror(reflecting: activity).children {
+            let value = String(describing: child.value)
+            XCTAssertFalse(value.contains("sk-ant-secret-value-123456"))
+            XCTAssertFalse(value.contains("sk-live-never-keep"))
+            XCTAssertFalse(value.contains("moa-temp-secret"))
+            XCTAssertFalse(value.contains("/Users/vincent/.hermes"))
+            XCTAssertFalse(value.contains("cursor-secret"))
+            XCTAssertFalse(value.contains("sess-runtime-1"))
+        }
     }
 
     func testDecodesOAuthConnectorCardWithoutExposingCredentialText() throws {
