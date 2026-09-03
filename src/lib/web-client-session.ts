@@ -3,6 +3,7 @@ import { clearClientCookie, getClientCookie, setClientCookie } from "./web-clien
 const HUB_URL_COOKIE = "vbot_w_hub";
 const HUB_NAME_COOKIE = "vbot_w_hub_name";
 const HUB_MAX_AGE = 365 * 24 * 60 * 60;
+const DEVICE_TOKEN_STORAGE_KEY = "vbot_w_device_token";
 
 /**
  * The hosted V Bot hub. Client and hub are deliberately different origins —
@@ -80,6 +81,44 @@ function readStoredHubUrl(): string | null {
   return normalizeHubBaseUrl(baseUrl);
 }
 
+/**
+ * The device token is the one secret in a web session, so it stays out of the
+ * cookie jar the page sends on every request — the cookies carry only the hub
+ * URL and device name, and the token waits in localStorage behind the hub
+ * origin it was paired against.
+ */
+interface StoredDeviceToken {
+  baseUrl: string;
+  token: string;
+}
+
+function readStoredDeviceToken(baseUrl: string): string | null {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    const stored = JSON.parse(
+      localStorage.getItem(DEVICE_TOKEN_STORAGE_KEY) ?? "null",
+    ) as Partial<StoredDeviceToken> | null;
+    if (stored?.baseUrl !== baseUrl || typeof stored.token !== "string" || !stored.token) return null;
+    return stored.token;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredDeviceToken(baseUrl: string, token: string) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(DEVICE_TOKEN_STORAGE_KEY, JSON.stringify({ baseUrl, token }));
+  } catch {
+    // A private window can refuse writes; the session then stays memory-only.
+  }
+}
+
+function clearStoredDeviceToken() {
+  if (typeof localStorage === "undefined") return;
+  localStorage.removeItem(DEVICE_TOKEN_STORAGE_KEY);
+}
+
 export function normalizeHubBaseUrl(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -121,12 +160,14 @@ export function persistHubConnection(connection: WebHubConnection) {
   setClientCookie(HUB_NAME_COOKIE, connection.deviceName, HUB_MAX_AGE);
   setHubApiBase(connection.baseUrl);
   setHubDeviceToken(connection.deviceToken);
+  writeStoredDeviceToken(connection.baseUrl, connection.deviceToken);
   hubDevice = connection.device;
 }
 
 export function clearHubConnection() {
   clearClientCookie(HUB_URL_COOKIE);
   clearClientCookie(HUB_NAME_COOKIE);
+  clearStoredDeviceToken();
   setHubApiBase("");
   setHubDeviceToken(null);
   hubDevice = null;
@@ -134,7 +175,10 @@ export function clearHubConnection() {
 
 export function loadWebClientSession(): WebClientSessionSnapshot {
   const hubUrl = readStoredHubUrl();
-  if (hubUrl) setHubApiBase(hubUrl);
+  if (hubUrl) {
+    setHubApiBase(hubUrl);
+    if (!hubDeviceToken) setHubDeviceToken(readStoredDeviceToken(hubUrl));
+  }
   const hub = hubDeviceToken && hubApiBase
     ? {
         baseUrl: hubApiBase,

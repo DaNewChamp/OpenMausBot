@@ -17,6 +17,7 @@ import {
   usePhoneSetupController,
 } from "./PhoneSetupFlow";
 import { companionPairingMode } from "../lib/phone-setup";
+import { isWebClientMode } from "@/lib/web-client-mode";
 import { ConnectionDetail } from "./ConnectionDetail";
 import { Card } from "./SettingsPrimitives";
 
@@ -248,7 +249,9 @@ export function CompanionSection({ profileEmail = "" }: { profileEmail?: string 
                         ? "Finishing secure access…"
                         : c.account?.status === "error"
                           ? c.account.message ?? "Secure access needs attention."
-                          : "You’ll be asked to sign in when you pair a phone."}
+                          : isWebClientMode()
+                            ? "Phone accounts are signed in on your computer."
+                            : "You’ll be asked to sign in when you pair a phone."}
                   </div>
                 </div>
               </div>

@@ -22,6 +22,7 @@ import {
 } from "./CursorAvatar";
 import { botAvatarProfile, type BotAvatarCrop } from "../../shared/bot-avatar";
 import { hubAttachmentUrl } from "@/lib/web-client-session";
+import { useAuthedImage } from "@/lib/use-authed-image";
 
 /**
  * The pack's baked-in silhouette was exported with the body fill hardcoded
@@ -237,12 +238,12 @@ export type BotAvatarProps = Omit<MausAvatarProps, "color"> & {
  */
 export function BotAvatar({ bot, size = 44, label, ...mascotProps }: BotAvatarProps) {
   const profile = botAvatarProfile(bot);
-  const imageUrl = hubAttachmentUrl(profile.avatarUrl);
-  const [imageFailed, setImageFailed] = useState(false);
+  const { src: imageUrl, failed: imageFailed } = useAuthedImage(hubAttachmentUrl(profile.avatarUrl));
+  const [imageLoadFailed, setImageLoadFailed] = useState(false);
 
-  useEffect(() => setImageFailed(false), [imageUrl]);
+  useEffect(() => setImageLoadFailed(false), [imageUrl]);
 
-  if (profile.avatarCrop === "mascot" || !imageUrl || imageFailed) {
+  if (profile.avatarCrop === "mascot" || !imageUrl || imageFailed || imageLoadFailed) {
     return (
       <MausAvatar
         {...mascotProps}
@@ -266,7 +267,7 @@ export function BotAvatar({ bot, size = 44, label, ...mascotProps }: BotAvatarPr
       width={size}
       height={size}
       draggable={false}
-      onError={() => setImageFailed(true)}
+      onError={() => setImageLoadFailed(true)}
       className="block shrink-0 bg-raised object-cover"
       style={{ width: size, height: size, borderRadius: radius }}
     />

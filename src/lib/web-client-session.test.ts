@@ -1,5 +1,6 @@
-import { describe, expect, it, beforeEach, vi } from "vitest";
+import { afterEach, describe, expect, it, beforeEach, vi } from "vitest";
 
+import { setClientCookie } from "./web-client-cookies";
 import {
   assertHubApiReady,
   canCallHubApi,
@@ -10,8 +11,11 @@ import {
   hubAttachmentUrl,
   HubPairError,
   isPairRequestId,
+  getHubDeviceToken,
+  loadWebClientSession,
   normalizeHubBaseUrl,
   pairDirectHub,
+  persistHubConnection,
   setHubApiBase,
   setHubDeviceToken,
 } from "./web-client-session";
@@ -202,5 +206,119 @@ describe("hubAttachmentUrl", () => {
     );
     expect(hubAttachmentUrl("payload.svg")).toBeNull();
     expect(hubAttachmentUrl("script.js")).toBeNull();
+  });
+});
+
+describe("session persistence across reloads", () => {
+  const token = "omb_" + "a".repeat(43);
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    const jar = new Map<string, string>();
+    storage = new Map();
+    vi.stubGlobal("document", {
+      get cookie() {
+        return [...jar.entries()].map(([name, value]) => `${name}=${value}`).join("; ");
+      },
+      set cookie(value: string) {
+        const pair = value.split(";")[0] ?? "";
+        const split = pair.indexOf("=");
+        if (split <= 0) return;
+        if (/Max-Age=0(?:;|$)/.test(value)) {
+          jar.delete(pair.slice(0, split));
+          return;
+        }
+        jar.set(pair.slice(0, split), pair.slice(split + 1));
+      },
+    });
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => void storage.set(key, value),
+      removeItem: (key: string) => void storage.delete(key),
+    });
+    setHubApiBase("");
+    setHubDeviceToken(null);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it("round-trips a paired session through the cookie jar and localStorage", () => {
+    persistHubConnection({
+      baseUrl: "https://hub.example",
+      deviceToken: token,
+      deviceName: "Web browser",
+      device: { id: "dev-1", name: "Web browser", createdAt: null, lastSeenAt: null, cloudDesktopAccess: true, localVmAccess: false },
+    });
+    const snapshot = loadWebClientSession();
+    expect(snapshot.hub).toMatchObject({
+      baseUrl: "https://hub.example",
+      deviceToken: token,
+      deviceName: "Web browser",
+    });
+    expect(snapshot.hub?.device).toMatchObject({ id: "dev-1" });
+  });
+
+  it("restores the full session on a fresh module load", async () => {
+    setClientCookie("vbot_w_hub", "https://hub.example", 60);
+    setClientCookie("vbot_w_hub_name", "Vincent's browser", 60);
+    storage.set("vbot_w_device_token", JSON.stringify({ baseUrl: "https://hub.example", token }));
+
+    const fresh = await import("./web-client-session");
+    const snapshot = fresh.loadWebClientSession();
+    expect(snapshot.hub).toMatchObject({
+      baseUrl: "https://hub.example",
+      deviceToken: token,
+      deviceName: "Vincent's browser",
+    });
+    expect(fresh.canCallHubApi()).toBe(true);
+  });
+
+  it("keeps the device token out of the cookie jar", () => {
+    persistHubConnection({
+      baseUrl: "https://hub.example",
+      deviceToken: token,
+      deviceName: "Web browser",
+      device: null,
+    });
+    expect(document.cookie).toBe("vbot_w_hub=https%3A%2F%2Fhub.example; vbot_w_hub_name=Web%20browser");
+    expect(document.cookie).not.toContain(token);
+    expect(getHubDeviceToken()).toBe(token);
+  });
+
+  it("clears the stored token when the session is discarded", () => {
+    persistHubConnection({
+      baseUrl: "https://hub.example",
+      deviceToken: token,
+      deviceName: "Web browser",
+      device: null,
+    });
+    expect(storage.get("vbot_w_device_token")).toBeTruthy();
+    clearHubConnection();
+    expect(storage.has("vbot_w_device_token")).toBe(false);
+    expect(loadWebClientSession().hub).toBeNull();
+  });
+
+  it("ignores a corrupted stored token instead of throwing", async () => {
+    setClientCookie("vbot_w_hub", "https://hub.example", 60);
+    storage.set("vbot_w_device_token", "{not json at all");
+
+    const fresh = await import("./web-client-session");
+    expect(fresh.loadWebClientSession().hub).toBeNull();
+    expect(fresh.canCallHubApi()).toBe(false);
+  });
+
+  it("ignores a token that belongs to a different hub", async () => {
+    setClientCookie("vbot_w_hub", "https://hub.example", 60);
+    storage.set(
+      "vbot_w_device_token",
+      JSON.stringify({ baseUrl: "https://other.example", token }),
+    );
+
+    const fresh = await import("./web-client-session");
+    expect(fresh.loadWebClientSession().hub).toBeNull();
+    expect(fresh.canCallHubApi()).toBe(false);
   });
 });

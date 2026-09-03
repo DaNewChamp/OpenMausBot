@@ -171,7 +171,7 @@ export function WebClientGate({
         <h1 className="mt-2 text-[22px] font-semibold tracking-tight">{WEB_PAIR_GATE_COPY.title}</h1>
         <p className="mt-2 text-[13px] leading-relaxed text-ink-secondary">
           Open Phone settings on your computer to start pairing, then enter the code it shows — or scan the QR
-          code with an already-paired iPhone.
+          code with an already-paired iPhone. This browser remembers the pairing, so it is a once-per-device step.
         </p>
 
         <div className="mt-5 grid grid-cols-2 gap-2" role="tablist" aria-label="Pairing method">

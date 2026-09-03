@@ -1628,7 +1628,7 @@ export function Sidebar({
             onOpen={() => dispatch(phoneSettingsAction())}
           />
         )}
-        {density !== "icons" && (
+        {density !== "icons" && !web && (
           <div className="mt-1 border-t border-hairline/20 pt-1">
             <SidebarPhonePrompt onOpen={() => dispatch(phoneSettingsAction())} />
           </div>

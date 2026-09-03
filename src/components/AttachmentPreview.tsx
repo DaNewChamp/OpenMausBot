@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import { Download, ImageOff, Maximize2, X } from "lucide-react";
 
 import { attachmentBasename, attachmentImageUrl } from "@/lib/composer-attachments";
+import { useAuthedImage } from "@/lib/use-authed-image";
 import { cn } from "@/lib/cn";
 
 export interface PreviewImage {
@@ -22,7 +23,9 @@ export function previewImage(path: string): PreviewImage | null {
 export function AttachmentPreviewDialog({ image, onClose }: { image: PreviewImage; onClose: () => void }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
-  const [failed, setFailed] = useState(false);
+  const { src, failed: fetchFailed } = useAuthedImage(image.src);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const failed = fetchFailed || loadFailed;
 
   useLayoutEffect(() => {
     closeRef.current = onClose;
@@ -85,7 +88,7 @@ export function AttachmentPreviewDialog({ image, onClose }: { image: PreviewImag
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <a
-              href={image.src}
+              href={src ?? image.src}
               download={image.name}
               className="flex size-9 items-center justify-center rounded-lg text-white/65 hover:bg-white/10 hover:text-white"
               aria-label={`Download ${image.name}`}
@@ -108,14 +111,14 @@ export function AttachmentPreviewDialog({ image, onClose }: { image: PreviewImag
               <ImageOff size={34} />
               <span className="text-[13px]">This attachment is no longer available.</span>
             </div>
-          ) : (
+          ) : src ? (
             <img
-              src={image.src}
+              src={src}
               alt={image.name}
-              onError={() => setFailed(true)}
+              onError={() => setLoadFailed(true)}
               className="block max-h-full max-w-full rounded-lg object-contain shadow-2xl"
             />
-          )}
+          ) : null}
         </div>
       </div>
     </div>,
@@ -124,8 +127,9 @@ export function AttachmentPreviewDialog({ image, onClose }: { image: PreviewImag
 }
 
 function Thumbnail({ image, onPreview }: { image: PreviewImage; onPreview: () => void }) {
-  const [failed, setFailed] = useState(false);
-  if (failed) return null;
+  const { src, failed: fetchFailed } = useAuthedImage(image.src);
+  const [loadFailed, setLoadFailed] = useState(false);
+  if (fetchFailed || loadFailed || !src) return null;
   return (
     <button
       onClick={onPreview}
@@ -134,10 +138,10 @@ function Thumbnail({ image, onPreview }: { image: PreviewImage; onPreview: () =>
       title={`Preview ${image.name}`}
     >
       <img
-        src={image.src}
+        src={src}
         alt={image.name}
         loading="lazy"
-        onError={() => setFailed(true)}
+        onError={() => setLoadFailed(true)}
         className="block max-h-[220px] w-full object-cover transition-transform duration-200 group-hover/image:scale-[1.015]"
       />
       <span className="absolute right-1.5 top-1.5 flex size-7 items-center justify-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover/image:opacity-100 group-focus-visible/image:opacity-100">

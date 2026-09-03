@@ -1501,16 +1501,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               }),
             }).catch(showError);
           if (action.alwaysAllow) {
-            const bot = stateRef.current.bots.find((b) => b.id === action.alwaysAllow!.botId);
-            const next = [...new Set([...(bot?.alwaysAllow ?? []), action.alwaysAllow.key])];
             // save the grant BEFORE releasing the bot: it may ask again
             // within milliseconds, and a grant that hasn't landed yet
             // would make "always allow" ask a second time. A failed save
             // still lets this one through — losing a preference must not
-            // strand the turn — but it says so.
-            void api(`/api/bots/${action.alwaysAllow.botId}`, {
-              method: "PATCH",
-              body: JSON.stringify({ alwaysAllow: next }),
+            // strand the turn — but it says so. The hub validates the key
+            // against the still-pending card, so this runs before respond.
+            void api(`/api/bots/${action.alwaysAllow.botId}/always-allow`, {
+              method: "POST",
+              body: JSON.stringify({ allowKey: action.alwaysAllow.key }),
             })
               .catch(showError)
               .finally(respond);
@@ -1785,9 +1784,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         api("/api/routines")
           .then(({ routines, runs }) => alive && rawDispatch({ type: "routinesHydrated", routines, runs }))
           .catch(() => {}),
-        api("/api/webhooks")
-          .then(({ webhooks, attempts, ingress }) => alive && rawDispatch({ type: "webhooksHydrated", webhooks, attempts: attempts ?? [], ingress }))
-          .catch(() => {}),
+        // The hub's proxy refuses /api/webhooks to browsers, so the web
+        // client skips the fetch instead of logging a 403 on every load.
+        ...(isWebClientMode() ? [] : [
+          api("/api/webhooks")
+            .then(({ webhooks, attempts, ingress }) => alive && rawDispatch({ type: "webhooksHydrated", webhooks, attempts: attempts ?? [], ingress }))
+            .catch(() => {}),
+        ]),
       ]);
 
     // A snapshot and the live fold have to meet at a defined boundary. Start
