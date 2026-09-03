@@ -252,7 +252,7 @@ function GroupListItem({
       <StackedMauses members={members} density={density} />
       <div className={cn("min-w-0 flex-1", density === "icons" && "hidden")}>
         <div className="flex items-baseline justify-between gap-2">
-          <span className="truncate text-[14px] font-medium text-ink">{group.name}</span>
+          <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{group.name}</span>
           {last && <span className="shrink-0 text-[11px] text-ink-secondary">{formatTime(last.at)}</span>}
         </div>
         <div className="flex items-center justify-between gap-2">
@@ -837,19 +837,16 @@ function BotListItem({
       />
       <div className={cn("min-w-0 flex-1", iconOnly && "hidden")}>
         <div className="flex items-baseline justify-between gap-2">
-          <span className="flex min-w-0 items-center gap-1.5 truncate text-[14px] font-medium text-ink">
+          <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-[14px] font-medium text-ink">
             {bot.pinned && <Pin size={12} className="shrink-0 text-ink-secondary" />}
             <RenameTitle
               key={iconOnly ? "icons" : "expanded"}
               value={bot.name}
               onCommit={(name) => dispatch({ type: "updateBot", botId: bot.id, patch: { name } })}
               onEditingChange={setRenaming}
-              className="truncate"
+              className="min-w-0 flex-1 truncate"
               inputClassName="w-full rounded bg-inset px-1 py-0.5 text-[14px] font-medium"
             />
-            {suffix && !renaming && (
-              <span className="shrink-0 text-[13px] font-medium text-ink-secondary">· {suffix}</span>
-            )}
           </span>
           {last && !renaming && (
             <span className="shrink-0 text-[11px] text-ink-secondary transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
@@ -859,7 +856,7 @@ function BotListItem({
         </div>
         <div className="flex items-center justify-between gap-2">
           <span className="flex min-w-0 items-center gap-1.5 truncate text-[12.5px] text-ink-secondary">
-            <span className="truncate">{preview(bot)}</span>
+            <span className="truncate">{suffix ? suffix + " · " : ""}{preview(bot)}</span>
           </span>
           {bot.unread && (
             <span className="shell-unread shrink-0 rounded-full bg-accent" />
@@ -1495,7 +1492,7 @@ export function Sidebar({
 
       {/* Bot list */}
       <div className="flex-1 overflow-y-auto px-2">
-        <div className="flex flex-col gap-0.5">
+        <div className={cn("flex flex-col gap-0.5", moreUnreads.length > 0 && density !== "icons" && "pb-12")}>
           {!unsectionedChief && sectionChiefs.length === 0 && visibleBots.length === 0 && sectionedBots.length === 0 && visibleGroups.length === 0 && q && q.length < MIN_QUERY && (
             <div className="px-3 py-6 text-center text-[13px] text-ink-secondary">Nothing matches “{query}”</div>
           )}
@@ -1557,7 +1554,7 @@ export function Sidebar({
           <SearchResults query={query} onLanded={() => setQuery("")} />
         </div>
         {moreUnreads.length > 0 && density !== "icons" && (
-          <div className="sticky bottom-2 flex justify-center pt-2">
+          <div className="sticky bottom-2 z-10 flex justify-center bg-panel pt-2">
             <button
               type="button"
               onClick={jumpToUnread}
