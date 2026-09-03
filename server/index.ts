@@ -68,6 +68,7 @@ import {
   validateNewBotReportsTo,
   validateReportsToForBot,
 } from "./bot-hierarchy.ts";
+import { canReachPeerBot, visiblePeerBots } from "./peer-comms-scope.ts";
 import { botSelfAwarenessCatalog, botSelfAwarenessPersona } from "./bot-self-awareness.ts";
 import {
   createRoomForChief,
@@ -2666,12 +2667,7 @@ async function startTurn(
       // integrations.agents gate below, the prompt hint) — a bot on a driver
       // without it must not be told about tools it cannot call. Any bot can
       // still be the TARGET of ask_bot regardless of its driver.
-      const sectionPeers = store.bots.filter(
-        (candidate) =>
-          candidate.id !== bot.id &&
-          !candidate.hidden &&
-          sectionKey(candidate.section) === sectionKey(bot.section),
-      );
+      const sectionPeers = visiblePeerBots(store, bot);
       if (
         commsDepth < MAX_COMMS_DEPTH &&
         instance.adapter.capabilities.agentsMcp === true
@@ -4591,15 +4587,10 @@ const server = createServer(async (req, res) => {
         if (!sender) return json(res, 403, { error: "unknown sender" });
         // title/description included so a "chief of staff"-style bot can
         // judge the team (who does what, who has no job description yet)
-        const bots = store.bots
-          .filter(
-            (b) =>
-              b.id !== self &&
-              !b.hidden &&
-              sectionKey(b.section) === sectionKey(sender.section),
-          )
+        const bots = visiblePeerBots(store, sender)
           .map((b) => {
             const manager = b.reportsToBotId ? store.bot(b.reportsToBotId) : null;
+            const section = sectionKey(b.section) || "General";
             return {
               id: b.id,
               name: b.name,
@@ -4609,6 +4600,7 @@ const server = createServer(async (req, res) => {
               busy: !!b.busy,
               title: b.title || undefined,
               description: b.description || undefined,
+              section,
               chiefOfStaff: Boolean(b.chiefOfStaff),
               reportsToBotId: b.reportsToBotId || undefined,
               reportsToName: manager?.name,
@@ -4634,7 +4626,7 @@ const server = createServer(async (req, res) => {
         // hard refusal — every peer turn has an accountable sender.
         const from = store.bot(fromBotId);
         if (!from) return json(res, 403, { error: "unknown sender" });
-        if (sectionKey(from.section) !== sectionKey(target.section)) {
+        if (!canReachPeerBot(from, target)) {
           return json(res, 403, { error: "that bot belongs to a different section" });
         }
         const fromThreadId = String(body.fromThreadId ?? from.threadId);
@@ -4670,7 +4662,7 @@ const server = createServer(async (req, res) => {
           const freshFrom = store.bot(fromBotId);
           const freshTarget = store.bot(toBotId);
           if (!freshFrom || !freshTarget) return json(res, 404, { error: "no such bot" });
-          if (sectionKey(freshFrom.section) !== sectionKey(freshTarget.section)) {
+          if (!canReachPeerBot(freshFrom, freshTarget)) {
             return json(res, 200, { error: "that bot moved to a different section" });
           }
           if (!store.taskByThread(freshFrom.id, fromThreadId)) {
@@ -4755,7 +4747,7 @@ const server = createServer(async (req, res) => {
         if (!from) return json(res, 404, { error: "no such bot" });
         const target = store.bot(toBotId);
         if (!target) return json(res, 404, { error: "no such bot" });
-        if (sectionKey(from.section) !== sectionKey(target.section)) {
+        if (!canReachPeerBot(from, target)) {
           return json(res, 403, { error: "that bot belongs to a different section" });
         }
         const fromThreadId = String(body.fromThreadId ?? from.threadId);

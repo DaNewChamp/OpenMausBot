@@ -1,5 +1,6 @@
 import { resolveBotRuntimeBinding } from "./bot-runtime-binding.ts";
 import { AGENT_PROXY_TOOL_NAMES, executeAgentsProxyTool } from "./drivers/agents-proxy.ts";
+import { canReachPeerBot } from "./peer-comms-scope.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { sectionKey, type Store } from "./store.ts";
 
@@ -32,6 +33,8 @@ const TARGET_BOT_ARG_TOOLS = new Set([
   "configure_bot",
   "configure_bot_runtime",
 ]);
+
+const MESSAGE_BOT_ARG_TOOLS = new Set(["ask_bot", "delegate_bot"]);
 
 export type HermesBridgeToolScopeFailure = {
   ok: false;
@@ -95,7 +98,13 @@ export function evaluateHermesBridgeToolScope(input: {
     const targetId = typeof input.args.bot_id === "string" ? input.args.bot_id.trim() : "";
     if (targetId && targetId !== botScope) {
       const target = input.store.bot(targetId);
-      if (!target || target.hidden || sectionKey(target.section) !== sectionKey(actor.section)) {
+      if (!target || !canReachPeerBot(actor, target)) {
+        return publicScopeError("bot_scope", "Bot is out of scope for this bridge");
+      }
+      if (
+        !MESSAGE_BOT_ARG_TOOLS.has(input.name)
+        && sectionKey(target.section) !== sectionKey(actor.section)
+      ) {
         return publicScopeError("bot_scope", "Bot is out of scope for this bridge");
       }
     }

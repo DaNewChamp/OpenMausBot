@@ -4,7 +4,7 @@
 // harness stays the single owner of turns, permissions, and recursion
 // limits:
 //
-//   list_bots()                          → the other bots in this section + their status
+//   list_bots()                          → bots the caller may message + their status
 //   ask_bot(bot_id, msg)                 → send a short question, wait, return
 //                                          the reply (or a still-working note)
 //   delegate_bot(bot_id, msg, reason?)   → hand real work to a peer ASYNC: returns
@@ -75,13 +75,13 @@ const TOOLS = [
   {
     name: "list_bots",
     description:
-      "List the other bots (agents) in your OpenMausBot section you can message, with their model and whether they're busy. Call this before ask_bot or delegate_bot to discover who's available.",
+      "List the other bots (agents) you can message, with their section, model, and whether they're busy. Call this before ask_bot or delegate_bot to discover who's available.",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "ask_bot",
     description:
-      "Send a short question to another bot in your section and wait for its reply. Use this only when you need their answer before you can continue. For real work or anything that may take more than a brief reply, use delegate_bot instead. If they are still working when the wait ends, you get a still-working note (not a failure) and their result appears in the conversation later.",
+      "Send a short question to another bot you can message and wait for its reply. Use this only when you need their answer before you can continue. For real work or anything that may take more than a brief reply, use delegate_bot instead. If they are still working when the wait ends, you get a still-working note (not a failure) and their result appears in the conversation later.",
     inputSchema: {
       type: "object",
       properties: {
@@ -374,11 +374,13 @@ async function dispatchAgentsProxyTool(name: string, args: Json): Promise<{ text
   if (name === "list_bots") {
     const r = await api(`/api/internal/agents?self=${encodeURIComponent(BOT_ID())}`);
     const bots = (r.bots as Array<Json>) ?? [];
-    if (!bots.length) return { text: "No other bots in this section yet." };
+    if (!bots.length) return { text: "No other bots you can message yet." };
     const lines = bots.map((b) => {
       const role = b.title ? ` — ${b.title}` : "";
       const about = b.description ? ` (${String(b.description).slice(0, 120)})` : "";
+      const section = typeof b.section === "string" && b.section.trim() ? b.section : "General";
       const stack = [
+        `section: ${section}`,
         `engine: ${b.engine ?? "unknown"}`,
         `model: ${b.model}`,
         b.effort ? `reasoning: ${b.effort}` : null,

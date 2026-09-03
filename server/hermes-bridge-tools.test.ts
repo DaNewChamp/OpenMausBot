@@ -88,6 +88,68 @@ describe("Hermes bridge-authenticated tool facade", () => {
     })).toMatchObject({ ok: false, code: "bot_scope" });
   });
 
+  it("lets a trusted Hermes chief message another section without widening bridge scope", async () => {
+    const { evaluateHermesBridgeToolScope } = await import("./hermes-bridge-tools.ts");
+    const store = new Store(selection);
+    const chief = store.createBot({ name: "Hermes Chief" }, { seedMessages: false });
+    const specialist = store.createBot({ name: "Hermes Specialist" }, { seedMessages: false });
+    const deskDocs = store.createBot({ name: "Desk Docs", section: "Desk" }, { seedMessages: false });
+    const binding = {
+      kind: "hermes" as const,
+      placement: { kind: "bridge" as const, bridgeId: "bridge-mini", profile: "default" },
+      bindingVersion: 2 as const,
+    };
+    store.patchBot(chief.id, { runtimeBinding: binding });
+    store.patchBot(specialist.id, { runtimeBinding: binding });
+    store.setChiefOfStaff(chief.id);
+
+    expect(evaluateHermesBridgeToolScope({
+      store,
+      bridgeId: "bridge-mini",
+      botScope: chief.id,
+      name: "ask_bot",
+      args: { bot_id: deskDocs.id, message: "summarize the desk" },
+    })).toEqual({ ok: true, botId: chief.id });
+    expect(evaluateHermesBridgeToolScope({
+      store,
+      bridgeId: "bridge-mini",
+      botScope: chief.id,
+      name: "delegate_bot",
+      args: { bot_id: deskDocs.id, message: "file the notes" },
+    })).toEqual({ ok: true, botId: chief.id });
+
+    expect(evaluateHermesBridgeToolScope({
+      store,
+      bridgeId: "bridge-mini",
+      botScope: specialist.id,
+      name: "ask_bot",
+      args: { bot_id: deskDocs.id, message: "summarize the desk" },
+    })).toMatchObject({ ok: false, code: "bot_scope" });
+    expect(evaluateHermesBridgeToolScope({
+      store,
+      bridgeId: "bridge-other",
+      botScope: chief.id,
+      name: "ask_bot",
+      args: { bot_id: deskDocs.id, message: "summarize the desk" },
+    })).toMatchObject({ ok: false, code: "bot_scope" });
+    expect(evaluateHermesBridgeToolScope({
+      store,
+      bridgeId: "bridge-mini",
+      botScope: chief.id,
+      name: "configure_bot",
+      args: { bot_id: deskDocs.id, role: "Docs" },
+    })).toMatchObject({ ok: false, code: "bot_scope" });
+
+    store.patchBot(deskDocs.id, { hidden: true });
+    expect(evaluateHermesBridgeToolScope({
+      store,
+      bridgeId: "bridge-mini",
+      botScope: chief.id,
+      name: "ask_bot",
+      args: { bot_id: deskDocs.id, message: "summarize the desk" },
+    })).toMatchObject({ ok: false, code: "bot_scope" });
+  });
+
   it("never puts hub or bridge secrets in facade errors or snapshots", async () => {
     const { evaluateHermesBridgeToolScope, hermesBridgeToolsPath } = await import("./hermes-bridge-tools.ts");
     const store = new Store(selection);
