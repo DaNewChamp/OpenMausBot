@@ -6,7 +6,7 @@ import { Check, CircleHelp, ExternalLink, Loader2, TriangleAlert } from "lucide-
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 
-export type ConfigSection = "composio" | "box" | "opencodeGo";
+export type ConfigSection = "composio" | "box" | "opencodeGo" | "zai";
 
 const SECTIONS: Record<
   ConfigSection,
@@ -18,12 +18,14 @@ const SECTIONS: Record<
   },
   box: { body: (v) => ({ box: { token: v } }), flag: (c) => c.box.configured },
   opencodeGo: { body: (v) => ({ opencodeGo: { apiKey: v } }), flag: (c) => c.opencodeGo?.configured ?? false },
+  zai: { body: (v) => ({ zai: { apiKey: v } }), flag: (c) => c.zai?.configured ?? false },
 };
 
-const ELECTRON_CREDENTIAL: Record<ConfigSection, "composioApiKey" | "boxToken" | "opencodeGoApiKey"> = {
+const ELECTRON_CREDENTIAL: Record<ConfigSection, "composioApiKey" | "boxToken" | "opencodeGoApiKey" | "zaiApiKey"> = {
   composio: "composioApiKey",
   box: "boxToken",
   opencodeGo: "opencodeGoApiKey",
+  zai: "zaiApiKey",
 };
 
 const CREDENTIALS: Record<
@@ -61,6 +63,14 @@ const CREDENTIALS: Record<
     description: "Optional. Existing OpenCode Zen, Go, and other provider connections are detected automatically.",
     href: "https://opencode.ai/docs/providers/",
     linkLabel: "Open the OpenCode provider guide",
+    optional: true,
+  },
+  zai: {
+    label: "ZAI (GLM) API key",
+    placeholder: "Paste your Z.ai API key",
+    description: "Run bots on GLM models with a GLM Coding Plan subscription from Z.ai.",
+    href: "https://docs.z.ai/devpack/quick-start",
+    linkLabel: "Open the GLM Coding Plan guide",
     optional: true,
   },
 };
