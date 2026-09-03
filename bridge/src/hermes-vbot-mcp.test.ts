@@ -771,6 +771,22 @@ describe("Hermes daemon paired-credential wiring", () => {
       bridgeToken: "paired-secret",
       bridgeId: "bridge-mini",
       name: "Mac mini",
+    })).toEqual({
+      state: "available",
+      url: "https://openmaus.posival.com",
+      secret: "paired-secret",
+    });
+    expect(pairedHermesHarnessCredentials({
+      url: "http://openmaus.posival.com",
+      bridgeToken: "paired-secret",
+    })).toEqual({ state: "unavailable", code: "state_unavailable" });
+    expect(pairedHermesHarnessCredentials({
+      url: "https://user:password@openmaus.posival.com",
+      bridgeToken: "paired-secret",
+    })).toEqual({ state: "unavailable", code: "state_unavailable" });
+    expect(pairedHermesHarnessCredentials({
+      url: "https://openmaus.posival.com?token=secret",
+      bridgeToken: "paired-secret",
     })).toEqual({ state: "unavailable", code: "state_unavailable" });
   });
 

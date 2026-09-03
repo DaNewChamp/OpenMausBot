@@ -70,7 +70,7 @@ export type PairedHermesHarnessCredentials =
   | { state: "unavailable"; code: "state_unavailable" };
 
 export type HermesDaemonCredentialSnapshot =
-  | { state: "available"; url: string; loopback: true }
+  | { state: "available"; url: string; loopback: boolean }
   | { state: "unavailable"; code: "state_unavailable" };
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
@@ -108,7 +108,10 @@ export function pairedHermesHarnessCredentials(input: unknown): PairedHermesHarn
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return { state: "unavailable", code: "state_unavailable" };
     }
-    if (!LOOPBACK_HOSTS.has(parsed.hostname)) {
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+      return { state: "unavailable", code: "state_unavailable" };
+    }
+    if (parsed.protocol === "http:" && !LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase())) {
       return { state: "unavailable", code: "state_unavailable" };
     }
   } catch {
@@ -123,7 +126,12 @@ export function hermesDaemonCredentialSnapshot(
   if (credentials.state !== "available") {
     return { state: "unavailable", code: "state_unavailable" };
   }
-  return { state: "available", url: credentials.url, loopback: true };
+  const parsed = new URL(credentials.url);
+  return {
+    state: "available",
+    url: credentials.url,
+    loopback: LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase()),
+  };
 }
 
 export function createHermesVbotEnvToolExecutor(
