@@ -42,6 +42,9 @@ struct ChatView: View {
     @AppStorage("companion.showBotChannels") private var showBotChannels = false
     @FocusState private var composerFocused: Bool
     @StateObject private var dictation = SpeechDictation()
+    /// Per-message read-aloud. One audible message at a time; the composer's
+    /// dictation capture is handed over so playback can pause it first.
+    @StateObject private var speaker = MessageSpeaker()
     /// Manual disclosure state, keyed by the run's first message id. Failures
     /// open on their own; a tap here is what keeps a success open or a
     /// failure shut after later chips land on the same run.
@@ -108,7 +111,7 @@ struct ChatView: View {
         // Live tokens stay hidden; working/tool/activity remain, and the
         // settled message appears once. Near-bottom follow and VoiceOver
         // phase announcements are unchanged.
-        chatPresented
+        chatPresented.environmentObject(speaker)
     }
 
     /// Sheets and importers sit on their own `some View` so they are not
@@ -162,6 +165,7 @@ struct ChatView: View {
                 // therefore skip the server mark-read request entirely.
                 let openedChat = current
                 let wasUnread = openedChat.unread
+                speaker.dictation = dictation
                 session.setForegroundThread(threadId)
                 if newAfterMessageId == nil, wasUnread {
                     newAfterMessageId = messages.last(where: { $0.role == .user })?.id
@@ -207,6 +211,7 @@ struct ChatView: View {
                 )
             }
             .onDisappear {
+                speaker.stop()
                 dictation.stop()
                 if NotificationCoordinator.shared.foregroundThreadId == threadId {
                     session.setForegroundThread(nil)
@@ -721,6 +726,7 @@ struct MessageRow: View {
     var onOpenComm: (CommChip) -> Void = { _ in }
     var onReply: (Message) -> Void = { _ in }
     @EnvironmentObject private var session: Session
+    @EnvironmentObject private var speaker: MessageSpeaker
     @Environment(\.conversationTypography) private var typography
     @State private var editingText = ""
     @State private var showingEdit = false
@@ -737,9 +743,63 @@ struct MessageRow: View {
         session.state.versions(of: message, inThread: chat.threadId)
     }
 
+    /// Assistant text is speakable — the same set the desktop's SpeakButton
+    /// covers. Readiness (key, voice) is the harness's call at request time,
+    /// not something the row guesses.
+    private var showsSpeakControl: Bool {
+        message.role == .bot && message.kind == .text
+            && !(message.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
+    /// The speaking bot's configured voice. In a room that is whoever wrote
+    /// the line; omitting a voice still works — it selects the workspace
+    /// default on the computer.
+    private var speakVoiceId: String? {
+        switch chat {
+        case let .bot(bot):
+            return bot.voice
+        case let .room:
+            guard let botId = message.from?.botId else { return nil }
+            return session.state.bot(botId)?.voice
+        }
+    }
+
+    private var speakControl: some View {
+        Button {
+            Haptics.selection()
+            speaker.toggle(message: message, voiceId: speakVoiceId, session: session)
+        } label: {
+            Group {
+                if speaker.isPreparing(messageId: message.id) {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Image(
+                        systemName: speaker.isSpeaking(messageId: message.id)
+                            ? "stop.fill" : "speaker.wave.2"
+                    )
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(
+                        speaker.isSpeaking(messageId: message.id) ? Color.accentColor : Color.secondary
+                    )
+                }
+            }
+            .frame(width: 24, height: 24)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            speaker.isSpeaking(messageId: message.id) ? "Stop reading aloud" : "Read this aloud"
+        )
+    }
+
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
             content
+
+            if showsSpeakControl {
+                speakControl
+            }
 
             if let reactions = message.reactions, !reactions.isEmpty {
                 HStack(spacing: 6) {
