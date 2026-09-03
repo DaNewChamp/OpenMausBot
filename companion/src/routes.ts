@@ -861,7 +861,12 @@ const EXPLAINED: ReadonlyArray<{ path: RegExp; error: string }> = [
 export function isBridgeDaemonRoute(method: string, path: string): boolean {
   return (
     method === "POST" &&
-    (path === "/api/bridge/register" || path === "/api/bridge/heartbeat" || path === "/api/bridge/result")
+    (
+      path === "/api/bridge/register"
+      || path === "/api/bridge/heartbeat"
+      || path === "/api/bridge/result"
+      || path === "/api/bridge/hermes-tools"
+    )
   );
 }
 

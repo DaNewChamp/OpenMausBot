@@ -41,10 +41,11 @@ describe("credentials", () => {
     expect(ask("GET", "/api/healthz", false)?.status).toBe(401);
   });
 
-  it("lets only the three bridge daemon POSTs through without a device token", () => {
+  it("lets only the exact bridge daemon POSTs through without a device token", () => {
     expect(ask("POST", "/api/bridge/register", false)).toBeNull();
     expect(ask("POST", "/api/bridge/heartbeat", false)).toBeNull();
     expect(ask("POST", "/api/bridge/result", false)).toBeNull();
+    expect(ask("POST", "/api/bridge/hermes-tools", false)).toBeNull();
     for (const [method, path] of [
       ["GET", "/api/bridge/jobs"],
       ["GET", "/api/bridge/jobs/job-1"],
