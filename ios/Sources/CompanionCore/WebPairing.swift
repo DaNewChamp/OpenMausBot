@@ -44,10 +44,15 @@ public struct WebPairingRequest: Equatable, Sendable, Identifiable {
         else { return nil }
 
         var values: [String: String] = [:]
-        for item in components.queryItems ?? [] {
-            let name = item.name
+        // Read the raw percent-encoded query: form-style "+" means a space in
+        // links produced by URLSearchParams, and URLComponents would keep it
+        // literally. A real "+" always arrives as %2B, so this stays lossless.
+        for item in components.percentEncodedQueryItems ?? [] {
+            let name = item.name.replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? item.name
+            let encodedValue = item.value?.replacingOccurrences(of: "+", with: " ") ?? ""
+            let value = encodedValue.removingPercentEncoding ?? encodedValue
             if forbiddenKeys.contains(name.lowercased()) { return nil }
-            guard values[name] == nil, let value = item.value else { return nil }
+            guard values[name] == nil else { return nil }
             values[name] = value
         }
 

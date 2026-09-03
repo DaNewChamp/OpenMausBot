@@ -111,7 +111,22 @@ describe("web pairing QR payload", () => {
     expect(parseWebPairingLink("openmausbot://web-pair?v=1")).toBeNull();
   });
 
-  it("sanitizes the device name before it is encoded", () => {
+  it("encodes device-name spaces as %20, never as +", () => {
+  const link = serializeWebPairingLink({
+    version: 1,
+    hubOrigin: "https://hub-vbot.posival.com",
+    hubId: "hub-1",
+    requestId: "A".repeat(22),
+    challengeHash: "a".repeat(64),
+    deviceName: "Web browser",
+    expiresAt: 1735689600000,
+  });
+  expect(link).not.toContain("+");
+  expect(link).toContain("n=Web%20browser");
+  expect(parseWebPairingLink(link ?? "")?.deviceName).toBe("Web browser");
+});
+
+it("sanitizes the device name before it is encoded", () => {
     expect(sanitizeWebPairingDeviceName("  Vincent\nBrowser\u0007 ")).toBe("Vincent Browser");
     expect(sanitizeWebPairingDeviceName("x".repeat(80))).toHaveLength(60);
     expect(sanitizeWebPairingDeviceName("")).toBe("Web browser");

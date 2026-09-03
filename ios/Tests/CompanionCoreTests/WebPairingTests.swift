@@ -136,6 +136,25 @@ final class WebPairingTests: XCTestCase {
         }
     }
 
+    func testFormEncodedSpacesAndLiteralPlusInDeviceNameRoundTrip() throws {
+        let hash = String(repeating: "a", count: 64)
+        let rid = String(repeating: "b", count: 22)
+        let exp = String(Int64(Date().timeIntervalSince1970 * 1000) + 120_000)
+        // URLSearchParams emits spaces as "+" — the phone must read them back.
+        let form = try XCTUnwrap(URL(string:
+            "openmausbot://web-pair?v=1&hub=https://hub-vbot.posival.com&hid=hub-1&rid=\(rid)&ch=\(hash)&n=Web+browser&exp=\(exp)"
+        ))
+        XCTAssertEqual(WebPairingRequest.parse(form)?.deviceName, "Web browser")
+        let percent = try XCTUnwrap(URL(string:
+            "openmausbot://web-pair?v=1&hub=https://hub-vbot.posival.com&hid=hub-1&rid=\(rid)&ch=\(hash)&n=Web%20browser&exp=\(exp)"
+        ))
+        XCTAssertEqual(WebPairingRequest.parse(percent)?.deviceName, "Web browser")
+        let literalPlus = try XCTUnwrap(URL(string:
+            "openmausbot://web-pair?v=1&hub=https://hub-vbot.posival.com&hid=hub-1&rid=\(rid)&ch=\(hash)&n=a%2Bb&exp=\(exp)"
+        ))
+        XCTAssertEqual(WebPairingRequest.parse(literalPlus)?.deviceName, "a+b")
+    }
+
     func testExpiredWebPairCodeRejectsWithRefreshCopy() throws {
         let hash = String(repeating: "a", count: 64)
         let rid = String(repeating: "b", count: 22)

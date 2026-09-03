@@ -93,7 +93,10 @@ export function serializeWebPairingLink(input: WebPairingLinkPayload): string | 
   url.searchParams.set("ch", payload.challengeHash);
   url.searchParams.set("n", payload.deviceName);
   url.searchParams.set("exp", String(payload.expiresAt));
-  return url.toString();
+  // URLSearchParams encodes spaces as "+". Swift's URLComponents — and any
+  // strict RFC 3986 reader — decodes "+" literally, so emit %20 instead:
+  // both encoders' parsers read it back as a space.
+  return url.toString().replace(/\+/g, "%20");
 }
 
 export function parseWebPairingLink(text: string): WebPairingLinkPayload | null {
