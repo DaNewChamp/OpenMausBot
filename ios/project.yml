@@ -46,6 +46,11 @@ targets:
         # cursor / communication placeholder on devices that upgraded in
         # place. Bump this name when the leading banner glyph is stale.
         ASSETCATALOG_COMPILER_APPICON_NAME: VBotMark
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER: "V Bot 77 App App Store"
     info:
       path: App/Info.plist
       properties:
@@ -142,6 +147,11 @@ targets:
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
         SKIP_INSTALL: true
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER: "V Bot 77 Widgets App Store"
     info:
       path: Widgets/Info.plist
       properties:
@@ -169,6 +179,11 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SKIP_INSTALL: true
         CODE_SIGN_ENTITLEMENTS: Share/OpenMausCompanionShare.entitlements
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER: "V Bot 77 Share App Store"
     info:
       path: Share/Info.plist
       properties:
