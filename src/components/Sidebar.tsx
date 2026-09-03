@@ -1363,6 +1363,17 @@ export function Sidebar({
           <div />
         )}
         <div className="relative flex items-center" style={windowNoDragStyle}>
+          {web && (
+            <button
+              onClick={() => dispatch({ type: "showTeamMap" })}
+              data-web-team-map-entry
+              aria-label="Team map"
+              title="Team map"
+              className="shell-control flex items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+            >
+              <Network size={20} strokeWidth={2} />
+            </button>
+          )}
           <button
             ref={importReturnRef}
             onClick={() => setPlusOpen((o) => !o)}
