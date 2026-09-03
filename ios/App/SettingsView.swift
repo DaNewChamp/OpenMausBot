@@ -1,5 +1,6 @@
 // Settings stays status-first. Network details and destructive pairing
 // controls live one level deeper so the everyday screen remains calm.
+import PhotosUI
 import SwiftUI
 import CompanionCore
 import UIKit
@@ -1094,7 +1095,7 @@ struct AccountSheet: View {
                     Text("Your profile")
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(Color.primary)
-                    Text("Choose your avatar icon")
+                    Text("Choose your photo or icon")
                         .font(.subheadline)
                         .foregroundStyle(Color.secondary)
                         .lineLimit(2)
@@ -1147,7 +1148,17 @@ struct AccountSheet: View {
 
 struct AccountProfileView: View {
     @AppStorage(PrefKey.accountAvatarSymbol) private var storedSymbol = AccountAvatarSymbol.person.rawValue
+    @AppStorage(AccountAvatarPhotoStore.revisionDefaultsKey) private var photoRevision = 0
+    @State private var photoItem: PhotosPickerItem?
+    @State private var cropData: Data?
+    @State private var showingCrop = false
+    @State private var photoError: String?
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
+
+    private var hasPhoto: Bool {
+        _ = photoRevision
+        return AccountAvatarPhotoStore.isAvailable()
+    }
 
     var body: some View {
         ScrollView {
@@ -1162,6 +1173,39 @@ struct AccountProfileView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+                    Text(AvatarPhotoPresentation.ownerLocalCopy)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                VStack(spacing: 0) {
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        Text(AvatarPhotoPresentation.photoActionTitle(hasPhoto: hasPhoto))
+                            .font(.body)
+                            .frame(maxWidth: .infinity, minHeight: VBotSurface.Hit.row, alignment: .leading)
+                            .padding(.horizontal, 18)
+                    }
+                    .accessibilityHint(AvatarPhotoPresentation.uploadPhotoHint)
+
+                    if hasPhoto {
+                        VBotHairline().padding(.leading, 18)
+                        Button(AvatarPhotoPresentation.removePhotoTitle, role: .destructive) {
+                            try? AccountAvatarPhotoStore.removePhoto()
+                        }
+                        .font(.body)
+                        .frame(maxWidth: .infinity, minHeight: VBotSurface.Hit.row, alignment: .leading)
+                        .padding(.horizontal, 18)
+                        .accessibilityHint(AvatarPhotoPresentation.removePhotoHint)
+                    }
+                }
+                .vbotCard()
+
+                if let photoError {
+                    Text(photoError)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 LazyVGrid(columns: columns, spacing: 12) {
@@ -1200,6 +1244,59 @@ struct AccountProfileView: View {
         .navigationTitle("Profile")
         .navigationBarTitleDisplayMode(.inline)
         .vbotCanvas()
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            Task { await openCrop(item) }
+        }
+        .sheet(isPresented: $showingCrop, onDismiss: dismissCrop) {
+            if let cropData {
+                AvatarCropEditor(
+                    imageData: cropData,
+                    previewMask: .circle,
+                    onCancel: {
+                        showingCrop = false
+                    },
+                    onUsePhoto: { jpeg in
+                        do {
+                            try AccountAvatarPhotoStore.savePhoto(jpeg)
+                            photoError = nil
+                        } catch {
+                            photoError = "That photo could not be saved."
+                        }
+                        showingCrop = false
+                    }
+                )
+            }
+        }
+    }
+
+    private func openCrop(_ item: PhotosPickerItem) async {
+        defer { photoItem = nil }
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                photoError = "Choose a PNG, JPEG, GIF, or WebP image."
+                return
+            }
+            guard let inspection = AvatarCropExport.inspect(data) else {
+                photoError = "Choose a PNG, JPEG, GIF, or WebP image."
+                return
+            }
+            guard AvatarPhotoPresentation.canEdit(isAnimated: inspection.isAnimated) else {
+                photoError = AvatarPhotoPresentation.animatedRejectionMessage
+                return
+            }
+            cropData = data
+            showingCrop = true
+            photoError = nil
+        } catch {
+            if error.isCancellation { return }
+            photoError = "Choose a PNG, JPEG, GIF, or WebP image."
+        }
+    }
+
+    private func dismissCrop() {
+        cropData = nil
+        photoItem = nil
     }
 }
 

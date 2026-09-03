@@ -63,6 +63,10 @@ struct RootView: View {
 #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-open-provider-settings") {
                 ProviderSettingsPreviewHost()
+            } else if ProcessInfo.processInfo.arguments.contains("-open-account-profile") {
+                NavigationStack { AccountProfileView() }
+            } else if ProcessInfo.processInfo.arguments.contains("-open-crop-editor") {
+                AvatarCropPreviewHost()
             } else if HermesSetupPreviewPolicy.isEnabled(arguments: ProcessInfo.processInfo.arguments) {
                 NavigationStack { HermesSetupView() }
             } else {

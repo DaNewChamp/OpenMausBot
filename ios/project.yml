@@ -96,7 +96,7 @@ targets:
         NSMicrophoneUsageDescription: >-
           V Bot listens while you dictate a message to a bot.
         NSPhotoLibraryUsageDescription: >-
-          V Bot lets you pick a photo to attach to a message.
+          V Bot lets you pick a photo to attach to a message or use as an avatar.
         NSPhotoLibraryAddUsageDescription: >-
           V Bot saves desktop screenshots to your photo library when you tap Save.
         NSSpeechRecognitionUsageDescription: >-

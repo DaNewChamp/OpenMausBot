@@ -22,6 +22,9 @@ struct AgentProfileView: View {
     @State private var voice: String
     @State private var speakReplies: Bool
     @State private var photo: PhotosPickerItem?
+    @State private var cropDraft: Data?
+    @State private var showingAvatarCrop = false
+    @State private var uploadingAvatar = false
     @State private var prompt = ""
     @State private var voices: [Voice] = []
     @State private var config: ConfigStatus?
@@ -164,7 +167,7 @@ struct AgentProfileView: View {
                         .tint(Color.primary)
                         .padding(22)
                         .background(VBotSurface.card, in: Circle())
-                        .accessibilityLabel("Saving")
+                        .accessibilityLabel(uploadingAvatar ? AvatarPhotoPresentation.uploadingLabel : "Saving")
                 }
             }
             .task {
@@ -213,7 +216,7 @@ struct AgentProfileView: View {
             }
             .onChange(of: photo) { _, item in
                 guard let item else { return }
-                Task { await upload(item) }
+                Task { await prepareCrop(item) }
             }
             .onChange(of: notifications) { _, _ in
                 guard !busy else { return }
@@ -237,6 +240,24 @@ struct AgentProfileView: View {
             }
             .sheet(isPresented: $showingRoutines) {
                 TasksRoutinesSheet()
+            }
+            .sheet(isPresented: $showingAvatarCrop, onDismiss: {
+                cropDraft = nil
+                photo = nil
+            }) {
+                if let cropDraft {
+                    AvatarCropEditor(
+                        imageData: cropDraft,
+                        previewMask: botCropPreviewMask,
+                        onCancel: {
+                            showingAvatarCrop = false
+                        },
+                        onUsePhoto: { jpeg in
+                            showingAvatarCrop = false
+                            Task { await persistCroppedAvatar(jpeg) }
+                        }
+                    )
+                }
             }
         }
     }
@@ -1399,9 +1420,16 @@ struct AgentProfileView: View {
         }
     }
 
-    private func upload(_ item: PhotosPickerItem) async {
-        busy = true
-        defer { busy = false; photo = nil }
+    private var botCropPreviewMask: AvatarCropPreviewMask {
+        switch crop {
+        case .rounded: return .rounded
+        case .square: return .square
+        case .circle, .mascot: return .circle
+        }
+    }
+
+    private func prepareCrop(_ item: PhotosPickerItem) async {
+        defer { photo = nil }
         let data: Data
         do {
             guard let loaded = try await item.loadTransferable(type: Data.self) else { return }
@@ -1411,16 +1439,33 @@ struct AgentProfileView: View {
             session.actionError = "Choose a PNG, JPEG, GIF, or WebP image."
             return
         }
-        guard let mime = Self.imageMIME(data) else {
+        guard let inspection = AvatarCropExport.inspect(data) else {
             session.actionError = "Choose a PNG, JPEG, GIF, or WebP image."
             return
         }
-        if data.count > 10 * 1_024 * 1_024 {
+        guard AvatarPhotoPresentation.canEdit(isAnimated: inspection.isAnimated) else {
+            session.actionError = AvatarPhotoPresentation.animatedRejectionMessage
+            return
+        }
+        cropDraft = data
+        showingAvatarCrop = true
+    }
+
+    private func persistCroppedAvatar(_ jpeg: Data) async {
+        busy = true
+        uploadingAvatar = true
+        defer { busy = false; uploadingAvatar = false }
+        if jpeg.count > AvatarPhotoPresentation.botUploadLimitBytes {
             session.actionError = "That image is larger than 10 MB."
             return
         }
         let intendedCrop = crop == .mascot ? AvatarCrop.circle : crop
-        if let updated = await session.uploadAvatar(data, mime: mime, for: current, crop: intendedCrop) {
+        if let updated = await session.uploadAvatar(
+            jpeg,
+            mime: AvatarPhotoPresentation.exportMIME,
+            for: current,
+            crop: intendedCrop
+        ) {
             crop = updated.displayedAvatarCrop == .mascot ? intendedCrop : updated.displayedAvatarCrop
             baseline.crop = crop
         }
@@ -1475,17 +1520,6 @@ struct AgentProfileView: View {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             session.actionError = "The generated audio could not be played."
         }
-    }
-
-    private static func imageMIME(_ data: Data) -> String? {
-        let bytes = [UInt8](data.prefix(12))
-        if bytes.starts(with: [0x89, 0x50, 0x4e, 0x47]) { return "image/png" }
-        if bytes.starts(with: [0xff, 0xd8, 0xff]) { return "image/jpeg" }
-        if bytes.starts(with: Array("GIF8".utf8)) { return "image/gif" }
-        if bytes.count >= 12,
-           String(bytes: bytes[0..<4], encoding: .ascii) == "RIFF",
-           String(bytes: bytes[8..<12], encoding: .ascii) == "WEBP" { return "image/webp" }
-        return nil
     }
 
     private func synchronizeForm(with bot: Bot) {
