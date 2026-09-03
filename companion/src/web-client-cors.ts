@@ -50,7 +50,12 @@ export function webClientPreflightHeaders(
     .map((entry) => entry.trim().toLowerCase())
     .filter(Boolean);
   if (headers.some((name) => !ALLOWED_PREFLIGHT_HEADERS.has(name))) return null;
-  return corsResponseHeaders(origin);
+  // The browser only fires the actual request when every header it asked
+  // about is echoed back here — validating the list is not enough.
+  return {
+    ...corsResponseHeaders(origin),
+    ...(headers.length ? { "access-control-allow-headers": headers.join(", ") } : {}),
+  };
 }
 
 export function corsResponseHeaders(origin: string): Record<string, string> {

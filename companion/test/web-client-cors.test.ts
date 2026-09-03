@@ -49,8 +49,12 @@ describe("web client companion CORS", () => {
     ).toEqual({
       "access-control-allow-origin": "https://app.openmausbot.com",
       "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "authorization, content-type",
       vary: "Origin",
     });
+    expect(
+      webClientPreflightHeaders("https://app.openmausbot.com", "POST", null),
+    ).not.toHaveProperty("access-control-allow-headers");
     expect(webClientPreflightHeaders("https://app.openmausbot.com", "TRACE", "content-type")).toBeNull();
     expect(
       webClientPreflightHeaders("https://app.openmausbot.com", "GET", "x-evil-header"),
