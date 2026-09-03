@@ -20,7 +20,7 @@ export type WebPairingStatus = "pending" | "approved" | "redeemed" | "cancelled"
 
 interface WebPairingReplay {
   pairRequestId: string;
-  result: { device: unknown; token: string };
+  result: { device: MintedDevice; token: string };
 }
 
 interface WebPairingRecord {
@@ -56,7 +56,8 @@ export interface WebPairingRegistryOptions {
 }
 
 type ErrorResult = { error: string; status: number };
-type MintDevice = (name: unknown) => { device: unknown; token: string } | { error: string };
+type MintedDevice = { id: string; name: string };
+type MintDevice = (name: unknown) => { device: MintedDevice; token: string } | { error: string };
 
 const sha256Hex = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -217,7 +218,7 @@ export class WebPairingRegistry {
     pairRequestId: unknown;
     mintDevice: MintDevice;
     now?: number;
-  }): { pending: true } | { device: unknown; token: string } | ErrorResult {
+  }): { pending: true } | { device: MintedDevice; token: string } | ErrorResult {
     const now = input.now ?? Date.now();
     this.prune(now);
     const requestId = typeof input.requestId === "string" ? input.requestId : "";

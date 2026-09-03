@@ -149,7 +149,7 @@ describe("web pairing HTTP helpers", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("registerWebPairingRequest posts only public fields to the configured hub origin", async () => {
-    const fetchMock = vi.fn(async () => ({
+    const fetchMock = vi.fn(async (_input: string, _init?: RequestInit) => ({
       ok: true,
       status: 201,
       json: async () => ({ status: "pending", expiresAt: 1, hubId: "h", hubOrigin: "https://hub.example" }),
@@ -161,8 +161,10 @@ describe("web pairing HTTP helpers", () => {
       challengeHash: "a".repeat(64),
       deviceName: "Browser",
     });
-    expect(String(fetchMock.mock.calls[0]![0])).toBe("https://hub.example/api/web-pairing/requests");
-    expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).not.toHaveProperty("redeemSecret");
+    const first = fetchMock.mock.calls[0];
+    expect(first).toBeTruthy();
+    expect(String(first?.[0])).toBe("https://hub.example/api/web-pairing/requests");
+    expect(JSON.parse(String(first?.[1]?.body))).not.toHaveProperty("redeemSecret");
   });
 
   it("exports cancel and redeem helpers used by the session", async () => {

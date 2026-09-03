@@ -146,7 +146,7 @@ export interface ProxyOptions {
     hubId: () => string;
     hubOrigin: (req: IncomingMessage) => string | null;
     registry: WebPairingRegistry;
-    mintDevice: (name: unknown) => { token: string; device: unknown } | { error: string };
+    mintDevice: (name: unknown) => { token: string; device: { id: string; name: string } } | { error: string };
   };
 }
 
