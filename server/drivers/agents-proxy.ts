@@ -36,7 +36,6 @@
 //   OMB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
 import { AsyncLocalStorage } from "node:async_hooks";
 import readline from "node:readline";
-import { pathToFileURL } from "node:url";
 
 import { CREDENTIAL_TARGETS, isCredentialTargetId } from "../../shared/credential-request.ts";
 
@@ -768,12 +767,7 @@ async function handle(msg: Json) {
 function isDirectRun(): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
-  if (entry.endsWith("agents-proxy.ts") || entry.endsWith("agents-proxy.js")) return true;
-  try {
-    return import.meta.url === pathToFileURL(entry).href;
-  } catch {
-    return false;
-  }
+  return entry.endsWith("agents-proxy.ts") || entry.endsWith("agents-proxy.js");
 }
 
 if (isDirectRun()) {
