@@ -27,14 +27,6 @@ import CompanionCore
 
 @MainActor
 final class MessageSpeaker: NSObject, ObservableObject {
-    enum Phase: Equatable {
-        case idle
-        case preparing(messageId: String)
-        case speaking(messageId: String)
-    }
-
-    @Published private(set) var phase: Phase = .idle
-
     /// Live output amplitude 0...1 while a clip plays, for the orb.
     var onAmplitude: ((Float) -> Void)?
 
@@ -69,51 +61,28 @@ final class MessageSpeaker: NSObject, ObservableObject {
             }
     }
 
-    func isPreparing(messageId: String) -> Bool {
-        phase == .preparing(messageId: messageId)
-    }
-
-    func isSpeaking(messageId: String) -> Bool {
-        phase == .speaking(messageId: messageId)
-    }
-
-    /// The same intent twice: speak this message, or make it be quiet.
-    func toggle(message: Message, voiceId: String?, session: Session) {
-        if isPreparing(messageId: message.id) || isSpeaking(messageId: message.id) {
-            stop()
-            return
-        }
-        speak(message: message, voiceId: voiceId, session: session)
-    }
-
     func stop() {
         generation += 1
         settlePlayer()
-        phase = .idle
     }
-
-    /// The synthetic message id voice mode's phase reports under — there is
-    /// no `Message` for the bot's spoken reply, just text.
-    static let voiceModeMessageId = "voice-mode"
 
     /// Voice mode: speak arbitrary text — the bot's settled reply — with
     /// the configured engine, and return when the last clip finishes or the
-    /// run is stopped. Same one-audible-clip-at-a-time, same generation
-    /// token as any speak; `stop()` interrupts it the same way.
+    /// run is stopped. One audible clip at a time, one generation token;
+    /// `stop()` interrupts it the same way.
     func speakForVoiceMode(text: String, voiceId: String?, session: Session) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         generation += 1
         let gen = generation
         settlePlayer()
-        phase = .speaking(messageId: Self.voiceModeMessageId)
         // Pause the mic before the playback route is negotiated, not after.
         dictation?.stop()
         let settings = VoiceOutputSettings.load()
         var failure: String?
         switch settings.engine {
         case .hub:
-            await run(messageId: Self.voiceModeMessageId, text: trimmed, voiceId: voiceId, generation: gen, session: session)
+            await run(text: trimmed, voiceId: voiceId, generation: gen, session: session)
             return
         case .onDevice:
             do {
@@ -142,22 +111,7 @@ final class MessageSpeaker: NSObject, ObservableObject {
         finish(generation: gen)
     }
 
-    private func speak(message: Message, voiceId: String?, session: Session) {
-        let text = message.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !text.isEmpty else { return }
-        generation += 1
-        let gen = generation
-        settlePlayer()
-        phase = .preparing(messageId: message.id)
-        // Pause the mic before the playback route is negotiated, not after.
-        dictation?.stop()
-        Task { @MainActor in
-            await self.run(messageId: message.id, text: text, voiceId: voiceId, generation: gen, session: session)
-        }
-    }
-
     private func run(
-        messageId: String,
         text: String,
         voiceId: String?,
         generation gen: Int,
@@ -181,7 +135,6 @@ final class MessageSpeaker: NSObject, ObservableObject {
                     return
                 }
                 guard gen == generation else { return }
-                phase = .speaking(messageId: messageId)
                 do {
                     try await play(audio)
                 } catch {
@@ -200,7 +153,6 @@ final class MessageSpeaker: NSObject, ObservableObject {
     private func finish(generation gen: Int) {
         guard gen == generation else { return }
         settlePlayer()
-        phase = .idle
     }
 
     private func play(_ audio: Data) async throws {
