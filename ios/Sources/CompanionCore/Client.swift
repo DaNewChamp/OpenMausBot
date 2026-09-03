@@ -1030,6 +1030,34 @@ public struct CompanionClient: Sendable {
         throw PairingRouteError(attemptedHosts: attemptedRoutes)
     }
 
+    /// Paired-bearer approval of a browser QR. Never called from parse; the
+    /// confirmation UI must collect an explicit Approve tap first.
+    public func approveWebPairing(_ request: WebPairingRequest) async throws {
+        struct Body: Encodable {
+            let requestId: String
+            let challengeHash: String
+            let hubId: String
+            let hubOrigin: String
+            let deviceName: String
+            let expiresAt: Int64
+        }
+        let _: WebPairingApproveResponse = try await send(
+            try makeRequest(
+                "POST",
+                "/api/web-pairing/requests/\(request.requestId)/approve",
+                encodedBody: Body(
+                    requestId: request.requestId,
+                    challengeHash: request.challengeHash,
+                    hubId: request.hubId,
+                    hubOrigin: request.hubOrigin,
+                    deviceName: request.deviceName,
+                    expiresAt: request.expiresAt
+                )
+            ),
+            as: WebPairingApproveResponse.self
+        )
+    }
+
     /// Probe every candidate together, but respect the advertised security
     /// order. A quick cleartext LAN response must not outrank an encrypted
     /// tailnet route that answers a moment later. A lower-priority result is

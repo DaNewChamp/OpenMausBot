@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { Loader2, Menu, RotateCcw, ShieldCheck, Users, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Loader2, Menu, QrCode, RotateCcw, ShieldCheck, Users, X } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
 import { BotAvatar } from "@/components/Avatar";
@@ -24,11 +25,25 @@ import {
   type PairFailureKind,
   type WebClientSessionSnapshot,
 } from "@/lib/web-client-session";
+import { WEB_PAIRING_POLL_MS, WebPairingQrSession } from "@/lib/web-pairing-session";
+
+export const WEB_PAIR_GATE_COPY = {
+  title: "Pair this browser",
+  enterCode: "Enter pairing code",
+  scanQr: "Scan QR code",
+  pairingCode: "Pairing code",
+  deviceName: "Device name",
+  scanHint: "Scan this code with an already-paired iPhone to approve this browser.",
+  waiting: "Waiting for your iPhone to approve…",
+  expired: "This code expired. Refresh to generate a new one.",
+  refresh: "Refresh code",
+} as const;
 
 /**
  * Hub pairing is the only way in. There is no account service behind this
  * client — no directory of systems, no email code — so the gate asks for the
- * one thing that actually works: a pairing code from the hub itself.
+ * one thing that actually works: a pairing code from the hub itself, or a QR
+ * that an already-paired iPhone can approve.
  */
 export function WebClientGate({
   session,
@@ -37,15 +52,21 @@ export function WebClientGate({
   session: WebClientSessionSnapshot;
   onSessionChange: (next: WebClientSessionSnapshot) => void;
 }) {
+  const [mode, setMode] = useState<"code" | "qr">("code");
   const [hubUrl, setHubUrl] = useState(() => defaultWebHubUrl());
   const [credential, setCredential] = useState("");
   const [deviceName, setDeviceName] = useState("Web browser");
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<{ message: string; kind: PairFailureKind } | null>(null);
-  // One idempotency key per pairing attempt. It is held across retries of the
-  // same attempt so a resubmit cannot burn a second slot on the hub's pairing
-  // window, and replaced only when the user genuinely starts over.
   const [pairRequestId, setPairRequestId] = useState<string | null>(null);
+  const [qrLink, setQrLink] = useState<string | null>(null);
+  const [qrExpired, setQrExpired] = useState(false);
+  const [qrGeneration, setQrGeneration] = useState(0);
+  const qrSessionRef = useRef<WebPairingQrSession | null>(null);
+  const onSessionChangeRef = useRef(onSessionChange);
+  onSessionChangeRef.current = onSessionChange;
+  const deviceNameRef = useRef(deviceName);
+  deviceNameRef.current = deviceName;
 
   const windowClosed = failure?.kind === "window-closed";
 
@@ -63,12 +84,9 @@ export function WebClientGate({
       });
       onSessionChange({ ...session, hub });
     } catch (e) {
-      // The hub's own sentences reach the user untouched; only genuinely
-      // unknown failures (network, non-JSON) get this client's wording.
       const message = e instanceof Error ? e.message : "Pairing could not finish.";
       const kind = e instanceof HubPairError ? e.kind : "unknown";
       setFailure({ message, kind });
-      // A burned window means the next submit is a new attempt, not a retry.
       if (kind === "window-closed") setPairRequestId(null);
     } finally {
       setBusy(false);
@@ -81,17 +99,193 @@ export function WebClientGate({
     setPairRequestId(createPairRequestId());
   };
 
+  useEffect(() => {
+    if (mode !== "qr") {
+      const previous = qrSessionRef.current;
+      qrSessionRef.current = null;
+      if (previous) void previous.dispose();
+      setQrLink(null);
+      setQrExpired(false);
+      return;
+    }
+    const qrSession = new WebPairingQrSession();
+    qrSessionRef.current = qrSession;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    void (async () => {
+      try {
+        await qrSession.start({ baseUrl: hubUrl, deviceName: deviceNameRef.current });
+        if (cancelled || qrSessionRef.current !== qrSession) {
+          await qrSession.dispose();
+          return;
+        }
+        setQrLink(qrSession.link);
+        const tick = async () => {
+          if (cancelled || qrSessionRef.current !== qrSession) return;
+          const result = await qrSession.pollOnce();
+          if (cancelled || qrSessionRef.current !== qrSession) return;
+          if (result === "paired") {
+            onSessionChangeRef.current({ ...session, hub: loadWebClientSession().hub });
+            return;
+          }
+          if (result === "pending") {
+            timer = setTimeout(() => void tick(), WEB_PAIRING_POLL_MS);
+            return;
+          }
+          setQrExpired(true);
+        };
+        await tick();
+      } catch (e) {
+        if (cancelled) return;
+        const message = e instanceof Error ? e.message : "Pairing could not finish.";
+        const kind = e instanceof HubPairError ? e.kind : "unknown";
+        setFailure({ message, kind });
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      if (qrSessionRef.current === qrSession) qrSessionRef.current = null;
+      void qrSession.dispose();
+    };
+  }, [mode, qrGeneration, hubUrl, session]);
+
   return (
     <div data-web-client-gate className="flex min-h-screen items-center justify-center bg-app px-4 py-8 text-ink">
       <div className="w-full max-w-md rounded-2xl border border-hairline/50 bg-panel p-5 shadow-2xl shadow-black/40 sm:p-6">
         <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-ink-secondary">V Bot · Web</div>
-        <h1 className="mt-2 text-[22px] font-semibold tracking-tight">Pair this browser</h1>
+        <h1 className="mt-2 text-[22px] font-semibold tracking-tight">{WEB_PAIR_GATE_COPY.title}</h1>
         <p className="mt-2 text-[13px] leading-relaxed text-ink-secondary">
-          Open Phone settings on your computer to start pairing, then enter the code it shows.
+          Open Phone settings on your computer to start pairing, then enter the code it shows — or scan the QR
+          code with an already-paired iPhone.
         </p>
 
-        <div data-web-pair-form className="mt-6 flex flex-col gap-4">
-          <label className="flex flex-col gap-1.5 text-[13px]">
+        <div className="mt-5 grid grid-cols-2 gap-2" role="tablist" aria-label="Pairing method">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "code"}
+            data-web-pair-tab="code"
+            className={
+              mode === "code"
+                ? "rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-accent-ink"
+                : "rounded-lg bg-control px-3 py-2 text-[13px] font-medium text-ink transition hover:bg-raised"
+            }
+            onClick={() => setMode("code")}
+          >
+            {WEB_PAIR_GATE_COPY.enterCode}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "qr"}
+            data-web-pair-tab="qr"
+            className={
+              mode === "qr"
+                ? "inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-accent-ink"
+                : "inline-flex items-center justify-center gap-1.5 rounded-lg bg-control px-3 py-2 text-[13px] font-medium text-ink transition hover:bg-raised"
+            }
+            onClick={() => setMode("qr")}
+          >
+            <QrCode size={14} />
+            {WEB_PAIR_GATE_COPY.scanQr}
+          </button>
+        </div>
+
+        {mode === "code" ? (
+          <div data-web-pair-form data-web-pair-mode="code" className="mt-6 flex flex-col gap-4">
+            <label className="flex flex-col gap-1.5 text-[13px]">
+              {WEB_PAIR_GATE_COPY.pairingCode}
+              <input
+                name="credential"
+                className="rounded-lg bg-inset px-3 py-2"
+                value={credential}
+                onChange={(event) => setCredential(event.target.value)}
+                autoComplete="one-time-code"
+                spellCheck={false}
+              />
+            </label>
+            <label className="flex flex-col gap-1.5 text-[13px]">
+              {WEB_PAIR_GATE_COPY.deviceName}
+              <input
+                name="deviceName"
+                className="rounded-lg bg-inset px-3 py-2"
+                value={deviceName}
+                onChange={(event) => setDeviceName(event.target.value)}
+              />
+            </label>
+
+            {failure && (
+              <div
+                role="alert"
+                data-pair-failure={failure.kind}
+                className={
+                  failure.kind === "wrong-code" || failure.kind === "unknown"
+                    ? "text-[13px] leading-relaxed text-danger"
+                    : "rounded-xl border border-hairline/60 bg-inset px-3 py-3 text-[13px] leading-relaxed"
+                }
+              >
+                <p className={failure.kind === "wrong-code" || failure.kind === "unknown" ? "" : "font-medium text-ink"}>
+                  {failure.message}
+                </p>
+                {failure.kind === "wrong-code" && (
+                  <p className="mt-1 text-ink-secondary">
+                    Check the code on your computer and try again. Pairing closes after five wrong codes.
+                  </p>
+                )}
+                {windowClosed && (
+                  <>
+                    <p className="mt-1 text-ink-secondary">
+                      That pairing window is closed, so retyping the same code will not work. Start pairing again on
+                      your computer, then enter the new code here.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={startOver}
+                      className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-control px-3 py-2 text-[13px] font-medium text-ink transition hover:bg-raised"
+                    >
+                      <RotateCcw size={14} />
+                      Start over with a new code
+                    </button>
+                  </>
+                )}
+                {failure.kind === "device-limit" && (
+                  <p className="mt-1 text-ink-secondary">
+                    Your code is fine — the hub already has as many paired devices as it allows. Remove one on the hub
+                    (this browser cannot do it yet), then pair again.
+                  </p>
+                )}
+                {failure.kind === "save-failed" && (
+                  <p className="mt-1 text-ink-secondary">The hub could not store this device. Try again in a moment.</p>
+                )}
+              </div>
+            )}
+
+            <button
+              type="button"
+              disabled={busy || windowClosed || !credential.trim()}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-accent-ink disabled:opacity-50"
+              onClick={() => void pairDirect()}
+            >
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+              Pair this browser
+            </button>
+          </div>
+        ) : (
+          <WebPairQrPane
+            link={qrLink}
+            expired={qrExpired}
+            onRefresh={() => {
+              setQrExpired(false);
+              setQrLink(null);
+              setQrGeneration((generation) => generation + 1);
+            }}
+          />
+        )}
+
+        <details className="mt-5 text-[12px] text-ink-secondary">
+          <summary className="cursor-pointer">Advanced</summary>
+          <label className="mt-3 flex flex-col gap-1.5 text-[13px] text-ink">
             Hub address
             <input
               name="hubUrl"
@@ -103,84 +297,43 @@ export function WebClientGate({
               spellCheck={false}
             />
           </label>
-          <label className="flex flex-col gap-1.5 text-[13px]">
-            Pairing code or invitation
-            <input
-              name="credential"
-              className="rounded-lg bg-inset px-3 py-2"
-              value={credential}
-              onChange={(event) => setCredential(event.target.value)}
-              autoComplete="one-time-code"
-              spellCheck={false}
-            />
-          </label>
-          <label className="flex flex-col gap-1.5 text-[13px]">
-            Device name
-            <input
-              name="deviceName"
-              className="rounded-lg bg-inset px-3 py-2"
-              value={deviceName}
-              onChange={(event) => setDeviceName(event.target.value)}
-            />
-          </label>
-
-          {failure && (
-            <div
-              role="alert"
-              data-pair-failure={failure.kind}
-              className={
-                failure.kind === "wrong-code" || failure.kind === "unknown"
-                  ? "text-[13px] leading-relaxed text-danger"
-                  : "rounded-xl border border-hairline/60 bg-inset px-3 py-3 text-[13px] leading-relaxed"
-              }
-            >
-              <p className={failure.kind === "wrong-code" || failure.kind === "unknown" ? "" : "font-medium text-ink"}>
-                {failure.message}
-              </p>
-              {failure.kind === "wrong-code" && (
-                <p className="mt-1 text-ink-secondary">
-                  Check the code on your computer and try again. Pairing closes after five wrong codes.
-                </p>
-              )}
-              {windowClosed && (
-                <>
-                  <p className="mt-1 text-ink-secondary">
-                    That pairing window is closed, so retyping the same code will not work. Start pairing again on
-                    your computer, then enter the new code here.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={startOver}
-                    className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-control px-3 py-2 text-[13px] font-medium text-ink transition hover:bg-raised"
-                  >
-                    <RotateCcw size={14} />
-                    Start over with a new code
-                  </button>
-                </>
-              )}
-              {failure.kind === "device-limit" && (
-                <p className="mt-1 text-ink-secondary">
-                  Your code is fine — the hub already has as many paired devices as it allows. Remove one on the hub
-                  (this browser cannot do it yet), then pair again.
-                </p>
-              )}
-              {failure.kind === "save-failed" && (
-                <p className="mt-1 text-ink-secondary">The hub could not store this device. Try again in a moment.</p>
-              )}
-            </div>
-          )}
-
-          <button
-            type="button"
-            disabled={busy || windowClosed || !credential.trim()}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-accent-ink disabled:opacity-50"
-            onClick={() => void pairDirect()}
-          >
-            {busy ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-            Pair this browser
-          </button>
-        </div>
+        </details>
       </div>
+    </div>
+  );
+}
+
+export function WebPairQrPane({
+  link,
+  expired,
+  onRefresh,
+}: {
+  link: string | null;
+  expired: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <div data-web-pair-qr data-web-pair-mode="qr" className="mt-6 flex flex-col items-center gap-4">
+      <p className="text-center text-[13px] leading-relaxed text-ink-secondary">{WEB_PAIR_GATE_COPY.scanHint}</p>
+      {expired ? (
+        <p className="text-center text-[13px] text-ink">{WEB_PAIR_GATE_COPY.expired}</p>
+      ) : link ? (
+        <div className="rounded-2xl bg-white p-3.5" aria-label="Browser pairing QR code">
+          <QRCodeSVG value={link} size={180} level="M" bgColor="#ffffff" fgColor="#111111" />
+        </div>
+      ) : (
+        <Loader2 size={22} className="animate-spin text-ink-secondary" />
+      )}
+      {!expired && link && <p className="text-[12px] text-ink-secondary">{WEB_PAIR_GATE_COPY.waiting}</p>}
+      <button
+        type="button"
+        data-web-pair-refresh
+        onClick={onRefresh}
+        className="inline-flex items-center gap-1.5 rounded-lg bg-control px-3 py-2 text-[13px] font-medium text-ink transition hover:bg-raised"
+      >
+        <RotateCcw size={14} />
+        {WEB_PAIR_GATE_COPY.refresh}
+      </button>
     </div>
   );
 }

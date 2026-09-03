@@ -725,6 +725,7 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // locally; it never becomes a newly exposed harness route.
   { method: "GET", path: /^\/api\/companion\/endpoints$/ },
   { method: "POST", path: /^\/api\/pairing-invitations$/ },
+  { method: "POST", path: /^\/api\/web-pairing\/requests\/[A-Za-z0-9_-]{22,128}\/approve$/ },
 
   // the fleet, and making a bot
   { method: "GET", path: /^\/api\/bots$/ },
@@ -863,6 +864,42 @@ export function isBridgeDaemonRoute(method: string, path: string): boolean {
   );
 }
 
+const WEB_PAIRING_ID = "([A-Za-z0-9_-]{22,128})";
+const WEB_PAIRING_REGISTER = /^\/api\/web-pairing\/requests$/;
+const WEB_PAIRING_APPROVE = new RegExp(`^/api/web-pairing/requests/${WEB_PAIRING_ID}/approve$`);
+const WEB_PAIRING_REDEEM = new RegExp(`^/api/web-pairing/requests/${WEB_PAIRING_ID}/redeem$`);
+const WEB_PAIRING_CANCEL = new RegExp(`^/api/web-pairing/requests/${WEB_PAIRING_ID}$`);
+
+export type WebPairingRoute =
+  | { action: "register" }
+  | { action: "approve"; requestId: string }
+  | { action: "redeem"; requestId: string }
+  | { action: "cancel"; requestId: string };
+
+export function matchWebPairingRoute(method: string, path: string): WebPairingRoute | null {
+  if (method === "POST" && WEB_PAIRING_REGISTER.test(path)) return { action: "register" };
+  if (method === "POST") {
+    const approve = path.match(WEB_PAIRING_APPROVE);
+    if (approve?.[1]) return { action: "approve", requestId: approve[1] };
+    const redeem = path.match(WEB_PAIRING_REDEEM);
+    if (redeem?.[1]) return { action: "redeem", requestId: redeem[1] };
+  }
+  if (method === "DELETE") {
+    const cancel = path.match(WEB_PAIRING_CANCEL);
+    if (cancel?.[1]) return { action: "cancel", requestId: cancel[1] };
+  }
+  return null;
+}
+
+export function isPublicWebPairingRoute(method: string, path: string): boolean {
+  const route = matchWebPairingRoute(method, path);
+  return route?.action === "register" || route?.action === "redeem" || route?.action === "cancel";
+}
+
+export function isWebPairingApproveRoute(method: string, path: string): boolean {
+  return matchWebPairingRoute(method, path)?.action === "approve";
+}
+
 /** Why this request may not go through, or null when it may.
  *
  * Default deny: the answer for anything not on the list is "no route", which
@@ -872,6 +909,7 @@ export function isBridgeDaemonRoute(method: string, path: string): boolean {
 export function denyReason({ path, method, authenticated }: RouteRequest): Denial | null {
   // Pairing is the one thing a device does before it has a credential.
   if (method === "POST" && path === "/api/pair") return null;
+  if (isPublicWebPairingRoute(method, path)) return null;
   // Liveness is the other: it exists to be the first thing anyone curls when
   // pairing will not work, and behind the token check it answered 401 to
   // exactly the person it was for — which reads as "broken" rather than

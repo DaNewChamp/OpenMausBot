@@ -34,6 +34,17 @@ describe("credentials", () => {
     });
   });
 
+  it("lets a browser create, poll, and cancel a web pairing request without a device token", () => {
+    const id = "a".repeat(22);
+    expect(ask("POST", "/api/web-pairing/requests", false)).toBeNull();
+    expect(ask("POST", `/api/web-pairing/requests/${id}/redeem`, false)).toBeNull();
+    expect(ask("DELETE", `/api/web-pairing/requests/${id}`, false)).toBeNull();
+    expect(ask("POST", `/api/web-pairing/requests/${id}/approve`, false)?.status).toBe(401);
+    expect(ask("POST", `/api/web-pairing/requests/${id}/approve`, true)).toBeNull();
+    expect(ask("GET", "/api/web-pairing/requests", false)?.status).toBe(401);
+    expect(ask("GET", `/api/web-pairing/requests/${id}`, true)?.status).toBe(404);
+  });
+
   it("lets anyone curl liveness — it is the unauthenticated smoke test", () => {
     expect(ask("GET", "/api/health", false)).toBeNull();
     // the bypass is one method on one path, not a family
@@ -97,6 +108,7 @@ describe("what the app may do", () => {
     ["POST", "/api/vbot/bots/bot-alpha/steer"],
     ["POST", "/api/vbot/bots/bot-alpha/stop"],
     ["GET", "/api/companion/endpoints"],
+    ["POST", "/api/web-pairing/requests/aaaaaaaaaaaaaaaaaaaaaa/approve"],
     ["GET", "/api/bots"],
     ["POST", "/api/bots"],
     ["POST", "/api/bots/bot_123/messages"],

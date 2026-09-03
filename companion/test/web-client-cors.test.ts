@@ -15,12 +15,16 @@ describe("web client companion CORS", () => {
     expect([...origins]).toEqual(["https://app.openmausbot.com", "http://127.0.0.1:5199"]);
   });
 
-  it("allows pairing and authenticated hub routes but not bridge or pairing-invitation mint", () => {
+  it("allows pairing and authenticated hub routes but not bridge, pairing-invitation mint, or web-pairing approval", () => {
     expect(isBrowserSafeCompanionRoute("POST", "/api/pair", false)).toBe(true);
     expect(isBrowserSafeCompanionRoute("GET", "/api/events", true)).toBe(true);
     expect(isBrowserSafeCompanionRoute("POST", "/api/pairing-invitations", true)).toBe(false);
     expect(isBrowserSafeCompanionRoute("POST", "/api/bridge/register", true)).toBe(false);
     expect(isBrowserSafeCompanionRoute("GET", "/api/bots", false)).toBe(false);
+    expect(isBrowserSafeCompanionRoute("POST", "/api/web-pairing/requests", false)).toBe(true);
+    expect(isBrowserSafeCompanionRoute("POST", "/api/web-pairing/requests/aaaaaaaaaaaaaaaaaaaaaa/redeem", false)).toBe(true);
+    expect(isBrowserSafeCompanionRoute("DELETE", "/api/web-pairing/requests/aaaaaaaaaaaaaaaaaaaaaa", false)).toBe(true);
+    expect(isBrowserSafeCompanionRoute("POST", "/api/web-pairing/requests/aaaaaaaaaaaaaaaaaaaaaa/approve", true)).toBe(false);
   });
 
   it("builds preflight headers only for allowlisted methods and headers", () => {

@@ -28,6 +28,7 @@ import {
   PAIRING_INVITATION_CHALLENGE_PATTERN,
   PairingInvitationRegistry,
 } from "../../server/pairing-invitations.ts";
+import { WebPairingRegistry } from "../../server/web-pairing-requests.ts";
 import { createAddressWatcher } from "./advertise-watch.ts";
 import { createControlServer, hostCandidates } from "./control.ts";
 import { createConnectedDeviceTracker } from "./connected-devices.ts";
@@ -129,6 +130,7 @@ const hubDataDir = process.env.OMB_DATA_DIR ?? join(homedir(), ".openmausbot");
 const hubIdentity = readHubIdentity({ dataDir: hubDataDir });
 const hubId = hubIdentity.status === "ok" ? hubIdentity.identity.id : "unavailable";
 const pairingInvitations = new PairingInvitationRegistry(companionDataDir);
+const webPairingRequests = new WebPairingRegistry();
 devices.setRevokeListener((deviceId) => pairingInvitations.invalidateForDevice(deviceId));
 
 const redeemCredential = (
@@ -200,6 +202,16 @@ const proxy = createProxyHandler({
       };
     },
     webClientOrigins: WEB_CLIENT_ORIGINS,
+    webPairing: {
+      hubId: () => hubId,
+      hubOrigin: (req) => {
+        if (hostedUrl) return hostedUrl;
+        const host = req.headers.host;
+        return host ? `http://${host}` : null;
+      },
+      registry: webPairingRequests,
+      mintDevice: (name) => devices.mintDevice(name),
+    },
     serverName: machineName,
     // Recomputed per pairing rather than cached: addresses change when the
     // machine joins another network, and a pairing is exactly the moment the

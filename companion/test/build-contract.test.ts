@@ -58,7 +58,9 @@ describe("companion build contract", () => {
     expect(existsSync(join(dist, "index.js"))).toBe(true);
     expect(existsSync(join(dist, "shared", "hub-identity.mjs"))).toBe(true);
     expect(existsSync(join(dist, "shared", "fleet-presentation.js"))).toBe(true);
+    expect(existsSync(join(dist, "shared", "web-pairing-link.js"))).toBe(true);
     expect(existsSync(join(dist, "server", "pairing-invitations.js"))).toBe(true);
+    expect(existsSync(join(dist, "server", "web-pairing-requests.js"))).toBe(true);
     expect(existsSync(join(dist, "server", "atomic.js"))).toBe(true);
     expect(existsSync(join(dist, "companion", "src", "index.js"))).toBe(false);
   });
@@ -98,7 +100,9 @@ describe("companion build contract", () => {
   it("does not emit JavaScript beside the companion build inputs", () => {
     expect(sourceTreeHasEmittedJs(join(root, "companion", "src"))).toBe(false);
     expect(existsSync(join(root, "shared", "fleet-presentation.js"))).toBe(false);
+    expect(existsSync(join(root, "shared", "web-pairing-link.js"))).toBe(false);
     expect(existsSync(join(root, "server", "pairing-invitations.js"))).toBe(false);
+    expect(existsSync(join(root, "server", "web-pairing-requests.js"))).toBe(false);
     expect(existsSync(join(root, "server", "atomic.js"))).toBe(false);
   });
 
@@ -113,7 +117,9 @@ describe("companion build contract", () => {
           "-e",
           `await import('./companion/shared/hub-identity.mjs');
            await import('./companion/shared/fleet-presentation.js');
-           await import('./companion/server/pairing-invitations.js');`,
+           await import('./companion/server/pairing-invitations.js');
+           await import('./companion/server/web-pairing-requests.js');
+           await import('./companion/shared/web-pairing-link.js');`,
         ],
         { cwd: staging, encoding: "utf8", timeout: 10_000 },
       );
