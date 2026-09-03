@@ -27,6 +27,18 @@ describe("web client companion CORS", () => {
     expect(isBrowserSafeCompanionRoute("POST", "/api/web-pairing/requests/aaaaaaaaaaaaaaaaaaaaaa/approve", true)).toBe(false);
   });
 
+  it("lets an authenticated browser answer a 1:1 approval card, and only that", () => {
+    expect(isBrowserSafeCompanionRoute("POST", "/api/bots/bot_123/respond", true)).toBe(true);
+    expect(isBrowserSafeCompanionRoute("POST", "/api/bots/bot_123/respond", false)).toBe(false);
+    expect(isBrowserSafeCompanionRoute("PATCH", "/api/bots/bot_123/respond", true)).toBe(false);
+    expect(isBrowserSafeCompanionRoute("POST", "/api/bots/bot_123/respond/extra", true)).toBe(false);
+    // the chained always-allow grant is the broad bot PATCH — still closed
+    expect(isBrowserSafeCompanionRoute("PATCH", "/api/bots/bot_123", true)).toBe(false);
+    // pairing approve and invitation mint stay non-browser regardless
+    expect(isBrowserSafeCompanionRoute("POST", "/api/web-pairing/requests/aaaaaaaaaaaaaaaaaaaaaa/approve", true)).toBe(false);
+    expect(isBrowserSafeCompanionRoute("POST", "/api/pairing-invitations", true)).toBe(false);
+  });
+
   it("builds preflight headers only for allowlisted methods and headers", () => {
     expect(
       webClientPreflightHeaders(

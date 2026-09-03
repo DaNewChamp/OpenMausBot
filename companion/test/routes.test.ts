@@ -115,6 +115,7 @@ describe("what the app may do", () => {
     ["POST", "/api/bots/bot_123/messages"],
     ["POST", "/api/bots/bot_123/interrupt"],
     ["POST", "/api/bots/bot_123/read"],
+    ["POST", "/api/bots/bot_123/respond"],
     ["POST", "/api/bots/bot_123/always-allow"],
     ["POST", "/api/bots/bot_123/messages/msg_2/edit"],
     ["POST", "/api/bots/bot_123/active-branch"],
@@ -288,6 +289,17 @@ describe("what it may not", () => {
   it("does not serve the desktop UI", () => {
     expect(ask("GET", "/")?.status).toBe(404);
     expect(ask("GET", "/index.html")?.status).toBe(404);
+  });
+
+  it("answers a 1:1 approval card without opening the broad bot PATCH", () => {
+    expect(allowed("POST", "/api/bots/bot_123/respond")).toBe(true);
+    expect(ask("POST", "/api/bots/bot_123/respond", false)?.status).toBe(401);
+    expect(allowed("PATCH", "/api/bots/bot_123/respond")).toBe(false);
+    expect(allowed("POST", "/api/bots/bot_123/respond/extra")).toBe(false);
+    // the "always allow" grant the web client chains after respond is the
+    // broad bot PATCH, which stays closed; the narrow grant route is the door
+    expect(allowed("PATCH", "/api/bots/bot_123")).toBe(false);
+    expect(allowed("POST", "/api/bots/bot_123/always-allow")).toBe(true);
   });
 
   it("opens only a fresh cloud viewer, not the cloud computer control API", () => {
