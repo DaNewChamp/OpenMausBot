@@ -606,6 +606,69 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(state.hermesSubagents.first?.status, .completed)
         XCTAssertEqual(state.hermesSubagents.first?.promoteEligible, true)
         XCTAssertEqual(state.hermesSubagents.first?.transcriptThreadId, "thread-temp-1")
+        XCTAssertEqual(state.hermesSubagents.first?.updatedAt, 1_700_000_002_000)
+    }
+
+    func testHermesSubagentUpsertIsMonotonicAndHydratePreservesServerUpdatedAt() throws {
+        var state = CompanionState()
+        let completed = try JSONDecoder().decode(
+            StreamFrame.self,
+            from: Data(#"""
+            {"kind":"hermes.subagent","seq":3,"activity":{
+              "activityId":"act-1","parentThreadId":"parent-thread","title":"Draft review",
+              "status":"completed","transcriptThreadId":"thread-temp-1","promoteEligible":true,
+              "updatedAt":1700000002000}}
+            """#.utf8)
+        )
+        let staleStarted = try JSONDecoder().decode(
+            StreamFrame.self,
+            from: Data(#"""
+            {"kind":"hermes.subagent","seq":1,"activity":{
+              "activityId":"act-1","parentThreadId":"parent-thread","title":"Draft review",
+              "status":"started","transcriptThreadId":"thread-temp-1","promoteEligible":false,
+              "updatedAt":1700000000000}}
+            """#.utf8)
+        )
+        state.apply(completed.frame)
+        state.apply(staleStarted.frame)
+        XCTAssertEqual(state.hermesSubagents.count, 1)
+        XCTAssertEqual(state.hermesSubagents.first?.status, .completed)
+        XCTAssertEqual(state.hermesSubagents.first?.updatedAt, 1_700_000_002_000)
+        XCTAssertEqual(state.hermesSubagents.first?.promoteEligible, true)
+
+        let staleHydrate = try JSONDecoder().decode(
+            Fleet.self,
+            from: Data(#"""
+            {"bots":[],"groups":[],"hermesSubagents":[{
+              "activityId":"act-1","parentThreadId":"parent-thread","title":"Draft review",
+              "status":"started","transcriptThreadId":"thread-temp-1","promoteEligible":false
+            }]}
+            """#.utf8)
+        )
+        state.hydrate(staleHydrate)
+        XCTAssertEqual(state.hermesSubagents.count, 1)
+        XCTAssertEqual(state.hermesSubagents.first?.status, .completed)
+        XCTAssertEqual(state.hermesSubagents.first?.updatedAt, 1_700_000_002_000)
+
+        let serverHydrate = try JSONDecoder().decode(
+            Fleet.self,
+            from: Data(#"""
+            {"bots":[],"groups":[],"hermesSubagents":[{
+              "activityId":"act-1","parentThreadId":"parent-thread","title":"Draft review",
+              "status":"completed","transcriptThreadId":"thread-temp-1","promoteEligible":true,
+              "updatedAt":1700000002000
+            }]}
+            """#.utf8)
+        )
+        var fresh = CompanionState()
+        fresh.hydrate(serverHydrate)
+        XCTAssertEqual(fresh.hermesSubagents.first?.updatedAt, 1_700_000_002_000)
+        XCTAssertEqual(fresh.hermesSubagents.first?.status, .completed)
+        let now = Date(timeIntervalSince1970: 1_700_000_060)
+        XCTAssertTrue(HermesSubagentPresentationPolicy.showsInLivePill(
+            try XCTUnwrap(fresh.hermesSubagents.first),
+            now: now
+        ))
     }
 }
 

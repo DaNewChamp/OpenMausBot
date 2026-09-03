@@ -199,7 +199,7 @@ public struct CompanionState: Sendable {
         for room in rooms where room.busyBotId == nil {
             streamSealed.insert(room.threadId)
         }
-        hermesSubagents = fleet.hermesSubagents
+        hermesSubagents = Self.mergeHermesSubagents(existing: hermesSubagents, incoming: fleet.hermesSubagents)
     }
 
     /// Prepend an older page fetched for scrollback.
@@ -407,11 +407,7 @@ public struct CompanionState: Sendable {
             apply(runtime: event)
 
         case let .hermesSubagent(activity):
-            if let index = hermesSubagents.firstIndex(where: { $0.activityId == activity.activityId }) {
-                hermesSubagents[index] = activity
-            } else {
-                hermesSubagents.append(activity)
-            }
+            upsertHermesSubagent(activity)
 
         case let .screen(botId, png, mime):
             screens[botId] = ScreenFrame(png: png, mime: mime)
@@ -703,6 +699,69 @@ public struct CompanionState: Sendable {
         }
         appearanceOverrides.set(override, for: stableID)
         return merged
+    }
+
+    mutating func upsertHermesSubagent(_ incoming: HermesSubagentActivity) {
+        if let index = hermesSubagents.firstIndex(where: { $0.activityId == incoming.activityId }) {
+            guard HermesSubagentFoldPolicy.shouldReplace(
+                existing: hermesSubagents[index],
+                incoming: incoming
+            ) else { return }
+            var next = incoming
+            if next.updatedAt == nil {
+                next.updatedAt = hermesSubagents[index].updatedAt
+            }
+            hermesSubagents[index] = next
+        } else {
+            hermesSubagents.append(incoming)
+        }
+    }
+
+    private static func mergeHermesSubagents(
+        existing: [HermesSubagentActivity],
+        incoming: [HermesSubagentActivity]
+    ) -> [HermesSubagentActivity] {
+        var merged = existing
+        for activity in incoming {
+            if let index = merged.firstIndex(where: { $0.activityId == activity.activityId }) {
+                guard HermesSubagentFoldPolicy.shouldReplace(
+                    existing: merged[index],
+                    incoming: activity
+                ) else { continue }
+                var next = activity
+                if next.updatedAt == nil {
+                    next.updatedAt = merged[index].updatedAt
+                }
+                merged[index] = next
+            } else {
+                merged.append(activity)
+            }
+        }
+        return merged
+    }
+}
+
+public enum HermesSubagentFoldPolicy: Sendable {
+    public static func shouldReplace(
+        existing: HermesSubagentActivity,
+        incoming: HermesSubagentActivity
+    ) -> Bool {
+        let existingAt = existing.updatedAt ?? 0
+        let incomingAt = incoming.updatedAt ?? 0
+        if incomingAt > existingAt { return true }
+        if incomingAt < existingAt { return false }
+        if incoming.updatedAt == nil, existing.updatedAt != nil { return false }
+        return statusRank(incoming.status) >= statusRank(existing.status)
+    }
+
+    private static func statusRank(_ status: HermesSubagentActivity.Status) -> Int {
+        switch status {
+        case .unknown: return 0
+        case .started: return 1
+        case .updated: return 2
+        case .completed: return 3
+        case .promoted: return 4
+        }
     }
 }
 
