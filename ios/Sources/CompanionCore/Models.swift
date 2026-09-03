@@ -1919,6 +1919,45 @@ public struct NotificationTarget: Equatable, Sendable {
     }
 }
 
+/// One imported Agent Skill from `GET /api/bots/{id}/skills`. Fields the
+/// harness may omit stay optional so a listing still decodes.
+public struct BotSkill: Codable, Hashable, Identifiable, Sendable {
+    public var name: String
+    public var description: String?
+    public var enabled: Bool?
+    public var source: String?
+    public var sha256: String?
+    public var importedAt: String?
+    public var license: String?
+    public var compatibility: String?
+    public var warnings: [String]?
+    public var skippedFiles: [String]?
+
+    public var id: String { name }
+}
+
+public struct StagedSkillFile: Codable, Hashable, Sendable {
+    public var path: String
+    public var content: String
+}
+
+public struct StagedSkillWrite: Codable, Hashable, Identifiable, Sendable {
+    public var id: String
+    public var action: String
+    public var name: String
+    public var gist: String?
+    public var source: String?
+    public var files: [StagedSkillFile]?
+    public var warnings: [String]?
+    public var skippedFiles: [String]?
+    public var createdAt: String?
+}
+
+public struct BotSkillsResponse: Codable, Hashable, Sendable {
+    public var skills: [BotSkill]
+    public var staged: [StagedSkillWrite]?
+}
+
 // MARK: - Connected apps
 
 public struct ConnectorCard: Codable, Hashable, Identifiable, Sendable {

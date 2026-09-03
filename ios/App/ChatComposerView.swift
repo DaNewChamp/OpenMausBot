@@ -31,6 +31,7 @@ struct ChatComposerView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationTypography) private var chatTypography
     @AppStorage("busySendDefault") private var busySendDefault = BusySendDefault.steer.rawValue
+    @State private var libraryCommands: [CommandSkillItem] = []
 
     private static let maxAttachmentCount = AttachmentComposerCopy.maxCount
 
@@ -157,9 +158,7 @@ struct ChatComposerView: View {
                 CommandSkillHUDView(
                     text: $draft,
                     isVisible: $showCommandHUD,
-                    commands: current.isBot
-                        ? CommandSkillHUDView.defaultCommands
-                        : CommandSkillHUDView.defaultCommands.filter { $0.id != "computer" && $0.id != "tasks" },
+                    commands: slashCommands,
                     accentColor: MausPalette.color(current.color)
                 ) { command in
                     switch command.id {
@@ -259,6 +258,28 @@ struct ChatComposerView: View {
         .padding(.top, 6)
         .padding(.bottom, 8)
         .background(VBotSurface.background.ignoresSafeArea(.container, edges: .bottom))
+        .task(id: current.stableID) {
+            await loadLibrarySkills()
+        }
+    }
+
+    private var slashCommands: [CommandSkillItem] {
+        var commands = current.isBot
+            ? CommandSkillHUDView.defaultCommands
+            : CommandSkillHUDView.defaultCommands.filter { $0.id != "computer" && $0.id != "tasks" }
+        if current.isBot {
+            commands.append(contentsOf: libraryCommands)
+        }
+        return commands
+    }
+
+    private func loadLibrarySkills() async {
+        guard case let .bot(bot) = current else {
+            libraryCommands = []
+            return
+        }
+        let skills = await session.loadBotSkills(botId: bot.id, quietly: true) ?? []
+        libraryCommands = skills.map(CommandSkillItem.library)
     }
 
     private func insertMention(_ name: String) {
