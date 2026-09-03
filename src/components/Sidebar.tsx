@@ -1284,12 +1284,19 @@ export function Sidebar({
   const visibleBots = matchingBots
     .filter((bot) => !bot.chiefOfStaff && !bot.section)
     .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
+  // Pinned bots leave their sections and lead the roster: pinning is a
+  // statement about importance, not about which section they live in.
+  const pinnedBots = [...visibleBots, ...sectionedBots].filter((b) => b.pinned);
   const visibleGroups = rosterGroups(
     state.groups.filter((g) => !q || g.name.toLowerCase().includes(q)),
     showBotChannels,
   );
-  const sectionedGroups = visibleGroups.filter((g) => g.section);
-  const unsectionedGroups = visibleGroups.filter((g) => !g.section);
+  const sectionedGroups = visibleGroups
+    .filter((g) => g.section)
+    .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
+  const unsectionedGroups = visibleGroups
+    .filter((g) => !g.section)
+    .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
   // sections keep first-appearance order within the current list; a section
   // whose members all moved away (or fell out of the filter) simply vanishes
   const sectionNames: string[] = [];
@@ -1499,6 +1506,17 @@ export function Sidebar({
           {unsectionedChief && (
             <PinnedChiefCard bot={unsectionedChief} density={density} onMenu={setMenu} />
           )}
+          {pinnedBots.length > 0 && density !== "icons" && <SectionDivider name="Pinned" />}
+          {pinnedBots.map((b) => (
+            <BotListItem
+              key={b.id}
+              bot={b}
+              density={density}
+              onMenu={setMenu}
+              onArchive={(bot) => void archiveBot(bot)}
+              archiveDisabled={activeBotCount <= 1}
+            />
+          ))}
           {unsectionedGroups.length > 0 && density !== "icons" && (
             web ? (
               <div className="px-2 pb-0.5 pt-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-secondary">Rooms</div>
@@ -1507,7 +1525,7 @@ export function Sidebar({
           {unsectionedGroups.map((g) => (
             <GroupListItem key={g.id} group={g} density={density} onMenu={setRoomMenu} />
           ))}
-          {visibleBots.map((b) => (
+          {visibleBots.filter((b) => !b.pinned).map((b) => (
             <BotListItem
               key={b.id}
               bot={b}
@@ -1538,7 +1556,7 @@ export function Sidebar({
                   <GroupListItem key={g.id} group={g} density={density} onMenu={setRoomMenu} />
                 ))}
               {sectionedBots
-                .filter((b) => b.section === name)
+                .filter((b) => b.section === name && !b.pinned)
                 .map((b) => (
                   <BotListItem
                     key={b.id}

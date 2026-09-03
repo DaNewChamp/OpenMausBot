@@ -162,6 +162,8 @@ describe("what the app may do", () => {
     ["PATCH", "/api/routines/routine_1"],
     ["DELETE", "/api/routines/routine_1"],
     ["POST", "/api/routines/routine_1/run"],
+    ["POST", "/api/routine-runs/run_1/cancel"],
+    ["POST", "/api/routine-runs/run_1/seen"],
     ["GET", "/api/connectors/catalog"],
     ["GET", "/api/connectors/connected"],
     ["GET", "/api/connectors"],

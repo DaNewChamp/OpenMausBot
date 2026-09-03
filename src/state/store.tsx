@@ -160,6 +160,8 @@ export interface Group {
   bulletin: string;
   unread: boolean;
   createdAt: number;
+  /** hub-side roster pin; pinned rooms lead their roster section */
+  pinned?: boolean;
   /** auto-created bot⇄bot channel (ask_bot exchanges mirror here) */
   dm?: boolean;
   busyBotId?: string | null;
