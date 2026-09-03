@@ -77,6 +77,27 @@ final class MessageSpeaker: NSObject, ObservableObject {
         phase = .idle
     }
 
+    /// The synthetic message id voice mode's phase reports under — there is
+    /// no `Message` for the bot's spoken reply, just text.
+    static let voiceModeMessageId = "voice-mode"
+
+    /// Voice mode: speak arbitrary text — the bot's settled reply — and
+    /// return when the last clip finishes or the run is stopped. Same
+    /// prepare/speak pipeline, same one-audible-clip-at-a-time, same
+    /// generation token as a message speak; `stop()` interrupts it the
+    /// same way.
+    func speakForVoiceMode(text: String, voiceId: String?, session: Session) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        generation += 1
+        let gen = generation
+        settlePlayer()
+        phase = .speaking(messageId: Self.voiceModeMessageId)
+        // Pause the mic before the playback route is negotiated, not after.
+        dictation?.stop()
+        await run(messageId: Self.voiceModeMessageId, text: trimmed, voiceId: voiceId, generation: gen, session: session)
+    }
+
     private func speak(message: Message, voiceId: String?, session: Session) {
         let text = message.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !text.isEmpty else { return }
