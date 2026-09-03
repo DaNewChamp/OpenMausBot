@@ -130,7 +130,9 @@ const hubDataDir = process.env.OMB_DATA_DIR ?? join(homedir(), ".openmausbot");
 const hubIdentity = readHubIdentity({ dataDir: hubDataDir });
 const hubId = hubIdentity.status === "ok" ? hubIdentity.identity.id : "unavailable";
 const pairingInvitations = new PairingInvitationRegistry(companionDataDir);
-const webPairingRequests = new WebPairingRegistry();
+const webPairingRequests = new WebPairingRegistry({
+  debug: (message) => console.warn(`[web-pair] ${message}`),
+});
 devices.setRevokeListener((deviceId) => pairingInvitations.invalidateForDevice(deviceId));
 
 const redeemCredential = (

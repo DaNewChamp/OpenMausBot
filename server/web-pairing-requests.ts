@@ -53,6 +53,8 @@ export interface WebPairingRegistryOptions {
   maxPendingPerOrigin?: number;
   maxRegistersPerOrigin?: number;
   maxAttempts?: number;
+  /** Field-level rejection reasons for the operator log. Never secrets. */
+  debug?: (message: string) => void;
 }
 
 type ErrorResult = { error: string; status: number };
@@ -93,6 +95,7 @@ export class WebPairingRegistry {
   private readonly maxPendingPerOrigin: number;
   private readonly maxRegistersPerOrigin: number;
   private readonly maxAttempts: number;
+  private readonly debug?: (message: string) => void;
 
   constructor(options: WebPairingRegistryOptions = {}) {
     this.ttlMs = options.ttlMs ?? WEB_PAIRING_TTL_MS;
@@ -100,6 +103,7 @@ export class WebPairingRegistry {
     this.maxPendingPerOrigin = options.maxPendingPerOrigin ?? MAX_PENDING_WEB_PAIRING_PER_ORIGIN;
     this.maxRegistersPerOrigin = options.maxRegistersPerOrigin ?? MAX_WEB_PAIRING_REGISTERS_PER_ORIGIN;
     this.maxAttempts = options.maxAttempts ?? MAX_WEB_PAIRING_ATTEMPTS;
+    this.debug = options.debug;
   }
 
   private prune(now: number) {
@@ -211,7 +215,12 @@ export class WebPairingRegistry {
     this.prune(now);
     const requestId = typeof input.requestId === "string" ? input.requestId : "";
     const record = this.records.get(requestId);
-    if (!record || record.status !== "pending" || record.expiresAt <= now) return generic();
+    if (!record || record.status !== "pending" || record.expiresAt <= now) {
+      this.debug?.(
+        `approve reject id=${requestId.slice(0, 8)}: ${!record ? "unknown request" : record.expiresAt <= now ? `expired ${now - record.expiresAt}ms ago` : `status=${record.status}`}`,
+      );
+      return generic();
+    }
     const challengeHash = typeof input.challengeHash === "string" ? input.challengeHash : "";
     const hubId = typeof input.hubId === "string" ? input.hubId : "";
     const hubOrigin = typeof input.hubOrigin === "string" ? canonicalOriginOrError(input.hubOrigin) : null;
@@ -221,7 +230,19 @@ export class WebPairingRegistry {
     const hubOk = record.hubId === hubId && hubOrigin === record.hubOrigin;
     const nameOk = record.deviceName === deviceName;
     const expiryOk = record.expiresAt === expiresAt;
-    if (!hashOk || !hubOk || !nameOk || !expiryOk) return generic();
+    if (!hashOk || !hubOk || !nameOk || !expiryOk) {
+      this.debug?.(
+        `approve reject id=${requestId.slice(0, 8)}: ${[
+          !hashOk && "challengeHash",
+          !hubOk && (record.hubId !== hubId ? "hubId" : "hubOrigin"),
+          !nameOk && `deviceName "${deviceName}"`,
+          !expiryOk && `expiresAt ${Number.isFinite(expiresAt) ? expiresAt : "not-a-number"}`,
+        ]
+          .filter(Boolean)
+          .join(" + ")} mismatch`,
+      );
+      return generic();
+    }
     record.status = "approved";
     return { ok: true };
   }
