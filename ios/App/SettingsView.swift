@@ -15,6 +15,11 @@ struct SettingsView: View {
     @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.reduced.rawValue
     @AppStorage(PrefKey.islandIntro) private var islandIntro = IslandIntro.oncePerBot.rawValue
     @AppStorage(PrefKey.voiceIsland) private var voiceIsland = true
+    @AppStorage(VoiceOutputSettings.engineKey) private var ttsEngine = VoiceOutputEngine.onDevice.rawValue
+    @AppStorage(VoiceOutputSettings.customBaseURLKey) private var ttsCustomBaseURL = ""
+    @AppStorage(VoiceOutputSettings.customAPIKeyKey) private var ttsCustomAPIKey = ""
+    @AppStorage(VoiceOutputSettings.customModelKey) private var ttsCustomModel = VoiceOutputSettings.customModelDefault
+    @AppStorage(VoiceOutputSettings.customVoiceKey) private var ttsCustomVoice = VoiceOutputSettings.customVoiceDefault
     @State private var permissionDefault: PermissionMode = .ask
     @State private var permissionPolicyLoaded = false
     @State private var approvalReviewer: ApprovalReviewerStatus?
@@ -285,6 +290,15 @@ struct SettingsView: View {
         }
     }
 
+    private var ttsEngineCaption: String {
+        let engine = VoiceOutputEngine(rawValue: ttsEngine) ?? .onDevice
+        if engine == .customEndpoint,
+           ttsCustomBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return engine.caption + " Add the base URL below."
+        }
+        return engine.caption
+    }
+
     private var chatPreferencesSection: some View {
         VBotSurfaceGroup(
             title: "Chat",
@@ -327,6 +341,43 @@ struct SettingsView: View {
                 Text("While a live voice session is open, show its state — listening, thinking, speaking — with a stop button.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            VBotHairline().padding(.leading, 16)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Voice output")
+                    .font(.body)
+                Picker("Voice output", selection: $ttsEngine) {
+                    ForEach(VoiceOutputEngine.allCases, id: \.rawValue) { engine in
+                        Text(engine.label).tag(engine.rawValue)
+                    }
+                }
+                .pickerStyle(.menu)
+                Text(ttsEngineCaption)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if ttsEngine == VoiceOutputEngine.customEndpoint.rawValue {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("Base URL", text: $ttsCustomBaseURL)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        SecureField("API key (optional)", text: $ttsCustomAPIKey)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        TextField("Model", text: $ttsCustomModel)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        TextField("Voice", text: $ttsCustomVoice)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+                    .font(.callout)
+                    .textFieldStyle(.roundedBorder)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)

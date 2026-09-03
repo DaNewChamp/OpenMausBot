@@ -28,11 +28,20 @@ final class VoiceModeController: ObservableObject {
     @Published private(set) var replyText = ""
     /// Live mic level for the orb, 0...~0.5 in a normal room.
     @Published private(set) var micLevel: Float = 0
+    /// Live voice-output level for the orb while a reply is spoken,
+    /// 0...1 — real playback metering, not a stand-in pulse.
+    @Published private(set) var voiceLevel: Float = 0
     /// Mute: replies are read on screen but never spoken.
     @Published var isMuted = false
+    /// Why the island is not live, when it is not — surfaced on the voice
+    /// screen instead of failing silently.
+    @Published private(set) var islandNote: String?
 
     private let dictation = SpeechDictation()
     private let speaker = MessageSpeaker()
+    /// Attack/release smoothing between the raw frames and the orb.
+    private var micFollower = LevelFollower()
+    private var voiceFollower = LevelFollower(attack: 0.6, release: 0.28)
     private weak var session: Session?
     private let chat: Chat
     private var island: VoiceIsland?
@@ -79,6 +88,10 @@ final class VoiceModeController: ObservableObject {
         self.session = session
         self.onRequestClose = onRequestClose
         speaker.dictation = dictation
+        speaker.onAmplitude = { [weak self] level in
+            guard let self else { return }
+            self.voiceLevel = self.voiceFollower.observe(level)
+        }
         openedWithPendingApproval = session.state.pendingApprovals.contains { $0.threadId == threadId }
         didShutdown = false
         Self.active = self
@@ -91,7 +104,7 @@ final class VoiceModeController: ObservableObject {
                 shape: liveBot?.mascotShape?.rawValue,
                 threadId: threadId
             )
-            island.start()
+            islandNote = island.start()
             island.update(phase)
             self.island = island
         }
@@ -129,8 +142,13 @@ final class VoiceModeController: ObservableObject {
         interruptionObserver = nil
         dictation.stop()
         speaker.stop()
+        micFollower.reset()
+        voiceFollower.reset()
+        micLevel = 0
+        voiceLevel = 0
         island?.end()
         island = nil
+        islandNote = nil
         phase = .idle
     }
 
@@ -208,7 +226,10 @@ final class VoiceModeController: ObservableObject {
         phase = .listening
         heard = ""
         replyText = ""
+        micFollower.reset()
         micLevel = 0
+        voiceFollower.reset()
+        voiceLevel = 0
         island?.update(phase)
         dictation.onLevel = { [weak self] level in
             self?.micLevel = level
@@ -227,6 +248,8 @@ final class VoiceModeController: ObservableObject {
         }
         phase = .thinking
         island?.update(phase)
+        voiceFollower.reset()
+        voiceLevel = 0
         sentAt = Date()
         sawBusy = false
         preSendBotLineId = session.state

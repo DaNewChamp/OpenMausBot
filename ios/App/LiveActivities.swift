@@ -10,9 +10,12 @@ import Combine
 import Foundation
 import CompanionCore
 import UIKit
+import os
 
 @MainActor
 final class LiveActivityCoordinator {
+    static let log = Logger(subsystem: "com.posival.openmausmobile", category: "live-activities")
+
     private var cancellable: AnyCancellable?
     private var tracked: [String: BackgroundPresencePolicy.TrackedBot] = [:]
     private var isBackground = false
@@ -141,11 +144,17 @@ final class LiveActivityCoordinator {
             shape: bot.shape
         )
         let content = contentState(from: presentation)
-        _ = try? Activity.request(
-            attributes: attributes,
-            content: content,
-            pushType: nil
-        )
+        do {
+            _ = try Activity.request(
+                attributes: attributes,
+                content: content,
+                pushType: nil
+            )
+        } catch {
+            LiveActivityCoordinator.log.error(
+                "activity request for \(bot.botId, privacy: .public) failed: \(error.localizedDescription, privacy: .public)"
+            )
+        }
         if notificationsEnabled,
            bot.kind == .needsYou,
            let activity = Activity<BotActivityAttributes>.activities.first(where: { $0.attributes.botId == bot.botId }) {
