@@ -8,6 +8,8 @@ import { Store, type BotRecord } from "./store.ts";
 
 const PROJECTION_FILE = join(DATA_DIR, "hermes-agent-projection.json");
 const SECRETISH = /token|HERMES_HOME|\/Users\/|sk-/i;
+const SAFE_PUBLIC_TITLE = "Temporary agent";
+const MAX_PUBLIC_TITLE_LENGTH = 80;
 
 export type HermesSubagentEventType =
   | "subagent.started"
@@ -52,6 +54,14 @@ export function resetHermesProjectionStoreForTests(): void {
   forceUnreadable = false;
 }
 
+function publicTitle(name: unknown): string {
+  const trimmed = typeof name === "string" ? name.trim() : "";
+  if (!trimmed) return SAFE_PUBLIC_TITLE;
+  const bounded = trimmed.slice(0, MAX_PUBLIC_TITLE_LENGTH);
+  if (SECRETISH.test(bounded) || SECRETISH.test(JSON.stringify(bounded))) return SAFE_PUBLIC_TITLE;
+  return bounded;
+}
+
 function loadProjectionFile(): { state: "available"; value: ProjectionFile } | { state: "unavailable" } {
   if (forceUnreadable) return { state: "unavailable" };
   if (!existsSync(PROJECTION_FILE)) return { state: "available", value: { agents: {} } };
@@ -88,14 +98,14 @@ function eventFor(record: ProjectionRecord, type: HermesSubagentEventType): Herm
     activityId: record.activityId,
     hermesAgentId: record.hermesAgentId,
     parentBotId: record.parentBotId,
-    title: record.name,
+    title: publicTitle(record.name),
     persistent: record.kind === "persistent" || record.status === "promoted",
     transcriptThreadId: record.transcriptThreadId,
     status: record.status,
     ...(record.botId ? { botId: record.botId } : {}),
   };
-  if (SECRETISH.test(JSON.stringify(event))) {
-    throw new Error("Hermes subagent event contained secret-shaped values");
+  if (SECRETISH.test(JSON.stringify({ ...event, hermesAgentId: undefined, parentBotId: undefined }))) {
+    event.title = SAFE_PUBLIC_TITLE;
   }
   return event;
 }
@@ -119,10 +129,11 @@ export function projectHermesAgent(
   },
 ): { botId?: string; activityId: string; transcriptThreadId: string; event: HermesSubagentEvent } {
   const file = requireStore();
+  const safeName = publicTitle(input.name);
   const existing = file.agents[input.hermesAgentId];
   if (existing) {
     existing.status = existing.status === "started" ? "updated" : existing.status;
-    existing.name = input.name;
+    existing.name = safeName;
     existing.updatedAt = Date.now();
     saveProjectionFile(file);
     return {
@@ -140,7 +151,7 @@ export function projectHermesAgent(
     activityId,
     parentBotId: input.parentBotId,
     parentThreadId: input.parentThreadId,
-    name: input.name,
+    name: safeName,
     transcriptThreadId: newId(),
     status: "started",
     updatedAt: Date.now(),
@@ -149,7 +160,7 @@ export function projectHermesAgent(
   if (input.kind === "persistent") {
     const bot = store.createBot(
       {
-        name: input.name,
+        name: safeName,
         reportsToBotId: input.parentBotId,
         hermesProvenance: {
           hermesAgentId: input.hermesAgentId,
@@ -258,14 +269,14 @@ function publicActivity(record: ProjectionRecord, now = Date.now()): PublicHerme
   const activity: PublicHermesSubagentActivity = {
     activityId: record.activityId,
     parentThreadId: record.parentThreadId,
-    title: record.name,
+    title: publicTitle(record.name),
     status: record.status,
     transcriptThreadId: record.transcriptThreadId,
     promoteEligible: record.kind === "temporary" && record.status === "completed",
     updatedAt: record.updatedAt || now,
   };
-  if (SECRETISH.test(JSON.stringify(activity))) {
-    throw new Error("Hermes subagent event contained secret-shaped values");
+  if (SECRETISH.test(JSON.stringify({ title: activity.title }))) {
+    activity.title = SAFE_PUBLIC_TITLE;
   }
   return activity;
 }

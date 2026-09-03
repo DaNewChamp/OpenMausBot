@@ -186,4 +186,33 @@ describe("Hermes agent projection", () => {
     ).toThrow(/unavailable/i);
     expect(store.bots.filter((bot) => bot.name === "Researcher")).toHaveLength(0);
   });
+
+  it("sanitizes secretish titles before persist and broadcast instead of throwing", async () => {
+    const { projectHermesAgent, listProjectedHermesActivities, projectedHermesSubagentFrame } = await import(
+      "./hermes-agent-projection.ts"
+    );
+    const store = new Store(selection);
+    const parent = store.createBot({ name: "Chief" }, { seedMessages: false });
+    const started = projectHermesAgent(store, {
+      hermesAgentId: "moa-temp-title",
+      kind: "temporary",
+      name: "Review token sk-ant-secret-value /Users/vincent/.hermes",
+      parentBotId: parent.id,
+      parentThreadId: parent.threadId,
+    });
+    expect(started.event.title).toBe("Temporary agent");
+    expect(JSON.stringify(started)).not.toMatch(/sk-ant-secret-value|\/Users\/vincent/i);
+
+    expect(() => listProjectedHermesActivities()).not.toThrow();
+    const listed = listProjectedHermesActivities();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.title).toBe("Temporary agent");
+    expect(JSON.stringify(listed)).not.toMatch(/sk-ant-secret-value|HERMES_HOME|\/Users\/vincent|token/i);
+
+    expect(() => projectedHermesSubagentFrame(started.activityId)).not.toThrow();
+    const frame = projectedHermesSubagentFrame(started.activityId);
+    expect(frame?.activity.title).toBe("Temporary agent");
+    expect(frame?.activity.status).toBe("started");
+    expect(JSON.stringify(frame)).not.toMatch(/sk-ant-secret-value|\/Users\/vincent|token/i);
+  });
 });
