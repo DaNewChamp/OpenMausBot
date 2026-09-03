@@ -26,6 +26,13 @@ import {
   type WebClientSessionSnapshot,
 } from "@/lib/web-client-session";
 import { WEB_PAIRING_POLL_MS, WebPairingQrSession } from "@/lib/web-pairing-session";
+import {
+  formatQrCountdown,
+  hubUnreachableCopy,
+  isHubUnreachableMessage,
+  QR_CANCEL_LABEL,
+  secondsRemaining,
+} from "@/lib/web-pairing-gate";
 
 export const WEB_PAIR_GATE_COPY = {
   title: "Pair this browser",
@@ -37,6 +44,7 @@ export const WEB_PAIR_GATE_COPY = {
   waiting: "Waiting for your iPhone to approve…",
   expired: "This code expired. Refresh to generate a new one.",
   refresh: "Refresh code",
+  cancel: QR_CANCEL_LABEL,
 } as const;
 
 /**
@@ -61,8 +69,10 @@ export function WebClientGate({
   const [qrError, setQrError] = useState<string | null>(null);
   const [pairRequestId, setPairRequestId] = useState<string | null>(null);
   const [qrLink, setQrLink] = useState<string | null>(null);
+  const [qrExpiresAt, setQrExpiresAt] = useState<number | null>(null);
   const [qrExpired, setQrExpired] = useState(false);
   const [qrGeneration, setQrGeneration] = useState(0);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const qrSessionRef = useRef<WebPairingQrSession | null>(null);
   const onSessionChangeRef = useRef(onSessionChange);
   onSessionChangeRef.current = onSessionChange;
@@ -106,6 +116,7 @@ export function WebClientGate({
       qrSessionRef.current = null;
       if (previous) void previous.dispose();
       setQrLink(null);
+      setQrExpiresAt(null);
       setQrExpired(false);
       setQrError(null);
       return;
@@ -122,6 +133,7 @@ export function WebClientGate({
           return;
         }
         setQrLink(qrSession.link);
+        setQrExpiresAt(qrSession.expiresAt);
         setQrError(null);
         const tick = async () => {
           if (cancelled || qrSessionRef.current !== qrSession) return;
@@ -277,17 +289,33 @@ export function WebClientGate({
           <WebPairQrPane
             link={qrLink}
             expired={qrExpired}
-            error={qrError}
+            expiresAt={qrExpiresAt}
+            error={
+              qrError && isHubUnreachableMessage(qrError)
+                ? hubUnreachableCopy({ hubUrl, advancedOpen })
+                : qrError
+            }
             onRefresh={() => {
               setQrError(null);
               setQrExpired(false);
               setQrLink(null);
+              setQrExpiresAt(null);
               setQrGeneration((generation) => generation + 1);
+            }}
+            onCancel={() => {
+              const session = qrSessionRef.current;
+              qrSessionRef.current = null;
+              if (session) void session.dispose();
+              setQrError(null);
+              setQrExpired(false);
+              setQrLink(null);
+              setQrExpiresAt(null);
+              setMode("code");
             }}
           />
         )}
 
-        <details className="mt-5 text-[12px] text-ink-secondary">
+        <details className="mt-5 text-[12px] text-ink-secondary" onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
           <summary className="cursor-pointer">Advanced</summary>
           <label className="mt-3 flex flex-col gap-1.5 text-[13px] text-ink">
             Hub address
@@ -311,19 +339,41 @@ export function WebPairQrPane({
   link,
   expired,
   error,
+  expiresAt,
+  now: nowProp,
   onRefresh,
+  onCancel,
 }: {
   link: string | null;
   expired: boolean;
   error?: string | null;
+  expiresAt?: number | null;
+  now?: number;
   onRefresh: () => void;
+  onCancel: () => void;
 }) {
+  const [clock, setClock] = useState(() => nowProp ?? Date.now());
+  useEffect(() => {
+    if (nowProp != null) {
+      setClock(nowProp);
+      return;
+    }
+    setClock(Date.now());
+    const id = setInterval(() => setClock(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, [nowProp, expiresAt]);
+
+  const remaining = expiresAt != null ? secondsRemaining(expiresAt, clock) : null;
+  const timedOut = remaining === 0;
+  const showExpired = expired || timedOut;
+  const countdown = remaining != null && remaining > 0 ? formatQrCountdown(remaining) : "";
+
   return (
     <div data-web-pair-qr data-web-pair-mode="qr" className="mt-6 flex flex-col items-center gap-4">
       <p className="text-center text-[13px] leading-relaxed text-ink-secondary">{WEB_PAIR_GATE_COPY.scanHint}</p>
       {error ? (
         <p role="alert" className="text-center text-[13px] text-danger">{error}</p>
-      ) : expired ? (
+      ) : showExpired ? (
         <p className="text-center text-[13px] text-ink">{WEB_PAIR_GATE_COPY.expired}</p>
       ) : link ? (
         <div className="rounded-2xl bg-white p-3.5" aria-label="Browser pairing QR code">
@@ -332,16 +382,31 @@ export function WebPairQrPane({
       ) : (
         <Loader2 size={22} className="animate-spin text-ink-secondary" />
       )}
-      {!expired && link && <p className="text-[12px] text-ink-secondary">{WEB_PAIR_GATE_COPY.waiting}</p>}
-      <button
-        type="button"
-        data-web-pair-refresh
-        onClick={onRefresh}
-        className="inline-flex items-center gap-1.5 rounded-lg bg-control px-3 py-2 text-[13px] font-medium text-ink transition hover:bg-raised"
-      >
-        <RotateCcw size={14} />
-        {WEB_PAIR_GATE_COPY.refresh}
-      </button>
+      {!error && !showExpired && countdown ? (
+        <p data-web-pair-countdown={remaining ?? undefined} aria-live="polite" className="text-[12px] tabular-nums text-ink">
+          {countdown}
+        </p>
+      ) : null}
+      {!error && !showExpired && link && <p className="text-[12px] text-ink-secondary">{WEB_PAIR_GATE_COPY.waiting}</p>}
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <button
+          type="button"
+          data-web-pair-refresh
+          onClick={onRefresh}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-control px-3 py-2 text-[13px] font-medium text-ink transition hover:bg-raised"
+        >
+          <RotateCcw size={14} />
+          {WEB_PAIR_GATE_COPY.refresh}
+        </button>
+        <button
+          type="button"
+          data-web-pair-cancel
+          onClick={onCancel}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-control px-3 py-2 text-[13px] font-medium text-ink transition hover:bg-raised"
+        >
+          {WEB_PAIR_GATE_COPY.cancel}
+        </button>
+      </div>
     </div>
   );
 }

@@ -8,9 +8,15 @@ import {
   assertHubApiReady,
   canCallHubApi,
   clearHubConnection,
+  DEFAULT_WEB_HUB_URL,
   setHubApiBase,
   setHubDeviceToken,
 } from "@/lib/web-client-session";
+import {
+  hubUnreachableCopy,
+  QR_UNREACHABLE_CHECK_ADDRESS,
+  QR_UNREACHABLE_DEFAULT,
+} from "@/lib/web-pairing-gate";
 import { serializeWebPairingLink } from "../../shared/web-pairing-link";
 
 describe("WebClientShell", () => {
@@ -35,7 +41,7 @@ describe("WebClientShell", () => {
     expect(html.indexOf("Hub address")).toBeGreaterThan(html.indexOf("Advanced"));
   });
 
-  it("renders a QR from the versioned web-pair link and offers refresh after expiry", () => {
+  it("renders a QR countdown, Cancel / Start over, expired refresh, and default-hub unreachable copy", () => {
     const link = serializeWebPairingLink({
       version: 1,
       hubOrigin: "https://hub-vbot.posival.com",
@@ -45,26 +51,72 @@ describe("WebClientShell", () => {
       deviceName: "Web browser",
       expiresAt: Date.now() + 60_000,
     });
+    const now = 1_700_000_000_000;
     const qr = renderToStaticMarkup(
-      createElement(WebPairQrPane, { link, expired: false, onRefresh: () => undefined }),
+      createElement(WebPairQrPane, {
+        link,
+        expired: false,
+        expiresAt: now + 87_000,
+        now,
+        onRefresh: () => undefined,
+        onCancel: () => undefined,
+      }),
     );
     expect(qr).toContain("svg");
     expect(qr).toContain(WEB_PAIR_GATE_COPY.scanHint);
     expect(qr).toContain(WEB_PAIR_GATE_COPY.waiting);
     expect(qr).toContain(WEB_PAIR_GATE_COPY.refresh);
+    expect(qr).toContain("Expires in 87 seconds");
+    expect(qr).toContain(WEB_PAIR_GATE_COPY.cancel);
+    expect(qr).toContain("data-web-pair-cancel");
+    expect(qr).not.toMatch(/redeemSecret|omb_/i);
     const expired = renderToStaticMarkup(
-      createElement(WebPairQrPane, { link: null, expired: true, onRefresh: () => undefined }),
+      createElement(WebPairQrPane, {
+        link: null,
+        expired: true,
+        expiresAt: now - 1,
+        now,
+        onRefresh: () => undefined,
+        onCancel: () => undefined,
+      }),
     );
     expect(expired).toContain(WEB_PAIR_GATE_COPY.expired);
+    expect(expired).toContain(WEB_PAIR_GATE_COPY.refresh);
+    expect(expired).toContain(WEB_PAIR_GATE_COPY.cancel);
+    expect(expired).not.toContain("Expires in");
+    const timedOut = renderToStaticMarkup(
+      createElement(WebPairQrPane, {
+        link,
+        expired: false,
+        expiresAt: now - 1,
+        now,
+        onRefresh: () => undefined,
+        onCancel: () => undefined,
+      }),
+    );
+    expect(timedOut).toContain(WEB_PAIR_GATE_COPY.expired);
+    expect(timedOut).not.toContain("Expires in");
     const failed = renderToStaticMarkup(
       createElement(WebPairQrPane, {
         link: null,
         expired: false,
-        error: "Could not reach that hub. Check the address and your connection.",
+        error: hubUnreachableCopy({ hubUrl: DEFAULT_WEB_HUB_URL, advancedOpen: false }),
         onRefresh: () => undefined,
+        onCancel: () => undefined,
       }),
     );
-    expect(failed).toContain("Could not reach that hub");
+    expect(failed).toContain(QR_UNREACHABLE_DEFAULT);
+    expect(failed).not.toMatch(/address/i);
+    const customHub = renderToStaticMarkup(
+      createElement(WebPairQrPane, {
+        link: null,
+        expired: false,
+        error: hubUnreachableCopy({ hubUrl: "https://hub.example:8810", advancedOpen: false }),
+        onRefresh: () => undefined,
+        onCancel: () => undefined,
+      }),
+    );
+    expect(customHub).toContain(QR_UNREACHABLE_CHECK_ADDRESS);
   });
 
   it("defines the compact Grok desktop chrome instead of section navigation", () => {

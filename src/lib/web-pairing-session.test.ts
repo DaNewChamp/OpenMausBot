@@ -148,6 +148,43 @@ describe("web pairing browser session", () => {
     expect(await session.pollOnce()).toBe("expired");
     expect(session.secrets).toBeNull();
   });
+
+  it("start-over dispose DELETE-cancels with redeemSecret and drops the local secret", async () => {
+    const calls: Array<{ url: string; method?: string; body: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body ? JSON.parse(String(init.body)) : null;
+        calls.push({ url, method: init?.method, body });
+        if (url.endsWith("/api/web-pairing/requests") && init?.method === "POST") {
+          return {
+            ok: true,
+            status: 201,
+            json: async () => ({
+              status: "pending",
+              expiresAt: Date.now() + 60_000,
+              hubId: "hub-1",
+              hubOrigin: "https://hub-vbot.posival.com",
+            }),
+          };
+        }
+        if (init?.method === "DELETE") return { ok: true, status: 204, json: async () => ({}) };
+        throw new Error(url);
+      }),
+    );
+    const session = new WebPairingQrSession();
+    await session.start({ baseUrl: "https://hub-vbot.posival.com", deviceName: "Web browser" });
+    const requestId = session.secrets!.requestId;
+    const redeemSecret = session.secrets!.redeemSecret;
+    await session.dispose();
+    expect(session.secrets).toBeNull();
+    expect(session.link).toBeNull();
+    expect(session.expiresAt).toBeNull();
+    const cancel = calls.find((call) => call.method === "DELETE");
+    expect(cancel?.url).toContain(requestId);
+    expect(cancel?.body).toEqual({ redeemSecret });
+  });
 });
 
 describe("web pairing HTTP helpers", () => {
