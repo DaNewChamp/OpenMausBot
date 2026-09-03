@@ -162,7 +162,7 @@ describe("bridge route trust boundary", () => {
     expect(registry.getJob(job.id)?.status).toBe("running");
   });
 
-  it("authenticates Hermes tools with the calling bridge and stays loopback-only", async () => {
+  it("authenticates Hermes tools with the calling bridge through the host or companion", async () => {
     const registry = new BridgeRegistry();
     const { code } = registry.startPairing();
     const first = registry.register({ name: "mini", code, capabilities: ["hermes"] });
@@ -181,9 +181,21 @@ describe("bridge route trust boundary", () => {
       "/api/bridge/hermes-tools",
       companion.json,
       registry,
-      { direct: false, companion: true, operator: false },
+      {
+        direct: false,
+        companion: true,
+        operator: false,
+        hermesTools: async (input) => {
+          calls.push(input);
+          return { status: 200, body: { text: "No other bots in this section yet." } };
+        },
+      },
     );
-    expect(companion.result().status).toBe(403);
+    expect(companion.result()).toEqual({
+      status: 200,
+      body: { text: "No other bots in this section yet." },
+    });
+    expect(calls).toEqual([{ bridgeId: first.bridgeId, name: "list_bots", botScope: "bot-chief", args: {} }]);
 
     const unauthorized = jsonSink();
     await handleBridgeRoutes(
@@ -227,7 +239,7 @@ describe("bridge route trust boundary", () => {
       },
     );
     expect(missingScope.result().status).toBe(400);
-    expect(calls).toEqual([]);
+    expect(calls).toHaveLength(1);
 
     const permitted = jsonSink();
     await handleBridgeRoutes(
@@ -254,7 +266,10 @@ describe("bridge route trust boundary", () => {
       status: 200,
       body: { text: "No other bots in this section yet." },
     });
-    expect(calls).toEqual([{ bridgeId: first.bridgeId, name: "list_bots", botScope: "bot-chief", args: {} }]);
+    expect(calls).toEqual([
+      { bridgeId: first.bridgeId, name: "list_bots", botScope: "bot-chief", args: {} },
+      { bridgeId: first.bridgeId, name: "list_bots", botScope: "bot-chief", args: {} },
+    ]);
     expect(JSON.stringify(permitted.result().body)).not.toMatch(/bridgeToken|Bearer|OMB_COMMS/i);
 
     const otherBridge = jsonSink();
@@ -279,6 +294,6 @@ describe("bridge route trust boundary", () => {
       },
     );
     expect(otherBridge.result().status).toBe(403);
-    expect(calls[1]?.bridgeId).toBe(second.bridgeId);
+    expect(calls[2]?.bridgeId).toBe(second.bridgeId);
   });
 });

@@ -172,7 +172,7 @@ export async function handleBridgeRoutes(
   }
 
   if (method === "POST" && path === "/api/bridge/hermes-tools") {
-    if (!opts.direct) return json(res, 403, { error: "Hermes tools are loopback-only" }), true;
+    if (!opts.direct && !opts.companion) return json(res, 403, { error: "Hermes tools require the harness host or companion" }), true;
     if (!opts.hermesTools) return json(res, 503, { error: "Hermes tools are unavailable" }), true;
     const body = await readJson(req);
     const { parseHermesBridgeToolRequest } = await import("./hermes-bridge-tools.ts");
