@@ -122,6 +122,7 @@ import {
   houseStyleEnabled,
   houseStyleInstructions,
   PERMISSION_MODES,
+  type AppConfig,
   type PermissionMode,
 } from "./config.ts";
 import { ComputerControl } from "./computer-control.ts";
@@ -8051,6 +8052,36 @@ const server = createServer(async (req, res) => {
     }
     if (method === "GET" && path === "/api/config") {
       return json(res, 200, configStatus());
+    }
+    // Phone-writable config slices. Deliberately narrow: the broad
+    // /api/config writer stays computer-only.
+    if (method === "PATCH" && path === "/api/config/house-style") {
+      const body = await readBody(req);
+      const section: Record<string, unknown> = {};
+      if (body.enabled !== undefined) {
+        if (typeof body.enabled !== "boolean") return json(res, 400, { error: "enabled must be true or false" });
+        section.enabled = body.enabled;
+      }
+      if (body.instructions !== undefined) {
+        if (typeof body.instructions !== "string") return json(res, 400, { error: "instructions must be a string" });
+        section.instructions = body.instructions.slice(0, 4000);
+      }
+      if (!Object.keys(section).length) return json(res, 400, { error: "nothing to save" });
+      saveConfig({ houseStyle: section } as Partial<AppConfig>);
+      Object.assign(cfg, loadConfig());
+      broadcast({ kind: "config", ...configStatus() });
+      return json(res, 200, { houseStyle: { enabled: houseStyleEnabled(cfg), instructions: houseStyleInstructions(cfg) } });
+    }
+    if (method === "PATCH" && path === "/api/config/zai-key") {
+      const body = await readBody(req);
+      const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+      if (!apiKey) return json(res, 400, { error: "apiKey required" });
+      if (apiKey.length > 4096) return json(res, 400, { error: "apiKey is too long" });
+      saveConfig({ zai: { apiKey } } as Partial<AppConfig>);
+      Object.assign(cfg, loadConfig());
+      await reloadProviders();
+      broadcast({ kind: "config", ...configStatus() });
+      return json(res, 200, { zai: { configured: Boolean(cfg.zai?.apiKey) } });
     }
     if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
       const body = await readBody(req);

@@ -164,6 +164,8 @@ describe("what the app may do", () => {
     ["POST", "/api/routines/routine_1/run"],
     ["POST", "/api/routine-runs/run_1/cancel"],
     ["POST", "/api/routine-runs/run_1/seen"],
+    ["PATCH", "/api/config/house-style"],
+    ["PATCH", "/api/config/zai-key"],
     ["GET", "/api/connectors/catalog"],
     ["GET", "/api/connectors/connected"],
     ["GET", "/api/connectors"],
@@ -425,6 +427,8 @@ describe("what it may not", () => {
     expect(allowed("PATCH", "/api/bots/bot_123/model/extra")).toBe(false);
     expect(allowed("PATCH", "/api/bots/bot_123/profile/execution-policy")).toBe(false);
     expect(allowed("PUT", "/api/config")).toBe(false);
+    expect(allowed("PATCH", "/api/config")).toBe(false);
+    expect(allowed("PATCH", "/api/config/unrelated")).toBe(false);
     expect(allowed("GET", "/api/attachments/../config.json")).toBe(false);
     expect(allowed("POST", "/api/routine-runs/run_1/cancel")).toBe(true);
     expect(allowed("POST", "/api/routine-runs/run_1/seen")).toBe(true);

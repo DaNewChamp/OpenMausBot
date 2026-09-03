@@ -813,6 +813,10 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "POST", path: /^\/api\/routine-runs\/[\w-]+\/cancel$/ },
   { method: "POST", path: /^\/api\/routine-runs\/[\w-]+\/seen$/ },
 
+  // Phone-writable config slices; the broad /api/config writer stays closed.
+  { method: "PATCH", path: /^\/api\/config\/house-style$/ },
+  { method: "PATCH", path: /^\/api\/config\/zai-key$/ },
+
   // Scrubbed bridge roster + revoke. Job audit/cancel stay off this list.
   { method: "GET", path: /^\/api\/bridges$/ },
   { method: "DELETE", path: /^\/api\/bridges\/[\w-]+$/ },
