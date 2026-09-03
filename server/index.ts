@@ -70,6 +70,7 @@ import {
 } from "./bot-hierarchy.ts";
 import { canReachPeerBot, visiblePeerBots } from "./peer-comms-scope.ts";
 import { botSelfAwarenessCatalog, botSelfAwarenessPersona } from "./bot-self-awareness.ts";
+import { houseStylePreamble } from "./house-style.ts";
 import {
   createRoomForChief,
   createRoutineForBot,
@@ -118,6 +119,8 @@ import {
   NATIVE_DIR,
   customMcpServers,
   defaultPermissionMode,
+  houseStyleEnabled,
+  houseStyleInstructions,
   PERMISSION_MODES,
   type PermissionMode,
 } from "./config.ts";
@@ -2328,17 +2331,21 @@ async function startTurn(
   });
 
   const manager = bot.reportsToBotId ? store.bot(bot.reportsToBotId) : null;
-  const persona = botSelfAwarenessPersona({
-    id: bot.id,
-    name: bot.name,
-    title: bot.title,
-    description: bot.description,
-    section: bot.section,
-    chiefOfStaff: bot.chiefOfStaff,
-    reportsToBotId: bot.reportsToBotId,
-    reportsToName: manager?.name,
-    reportsToTitle: manager?.title,
-  });
+  // House style leads every hub-assembled system prompt; the bot's own
+  // instructions follow and win when they say otherwise.
+  const persona =
+    houseStylePreamble(cfg, bot.description) +
+    botSelfAwarenessPersona({
+      id: bot.id,
+      name: bot.name,
+      title: bot.title,
+      description: bot.description,
+      section: bot.section,
+      chiefOfStaff: bot.chiefOfStaff,
+      reportsToBotId: bot.reportsToBotId,
+      reportsToName: manager?.name,
+      reportsToTitle: manager?.title,
+    });
 
   // busy flips immediately so the composer locks; the dispatch itself runs
   // in the background — box provisioning can take ~90s and must never
@@ -3125,6 +3132,9 @@ async function runGroupMemberTurn(
   );
   const roomManager = bot.reportsToBotId ? store.bot(bot.reportsToBotId) : null;
   const system = [
+    // House style leads every hub-assembled system prompt; the bot's own
+    // instructions follow and win when they say otherwise.
+    houseStylePreamble(cfg, bot.description),
     botSelfAwarenessPersona(
       {
         id: bot.id,
@@ -4192,6 +4202,11 @@ function configStatus() {
     },
     features: { skillRecorder: skillRecorderEnabled(cfg) },
     permissions: { defaultMode: defaultPermissionMode(cfg) },
+    // not a secret — the hub owner edits this text in settings
+    houseStyle: {
+      enabled: houseStyleEnabled(cfg),
+      instructions: houseStyleInstructions(cfg),
+    },
   };
 }
 

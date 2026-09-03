@@ -320,6 +320,9 @@ export interface ConfigStatus {
   features?: { skillRecorder: boolean; browser?: boolean };
   /** Named browser sessions available to bots in the desktop app. */
   browserProfiles?: BrowserProfile[];
+  /** Hub-wide voice instructions applied to every bot. Absent on servers
+   * that predate the setting. */
+  houseStyle?: { enabled: boolean; instructions: string };
 }
 
 export interface BrowserProfile {
@@ -330,7 +333,7 @@ export interface BrowserProfile {
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "composio" | "box" | "vps" | "rooms" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile" | "features" | "browserProfiles"
+  "xai" | "composio" | "box" | "vps" | "rooms" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile" | "features" | "browserProfiles" | "houseStyle"
 >;
 
 export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
@@ -347,6 +350,7 @@ export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
     profile: frame.profile,
     features: frame.features,
     browserProfiles: frame.browserProfiles,
+    houseStyle: frame.houseStyle,
   };
 }
 
