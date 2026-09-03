@@ -64,3 +64,22 @@ struct AnswerApprovalIntent: LiveActivityIntent {
         return .result()
     }
 }
+
+/// Stop the live voice session from the island or the lock screen. The app
+/// wires `handler` while a voice session is up; the widget copy never
+/// performs anything itself.
+struct StopVoiceModeIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Stop"
+    static var isDiscoverable = false
+
+    init() {}
+
+    /// Set by the app when the voice session opens. Nil in the widget
+    /// extension.
+    nonisolated(unsafe) static var handler: (() async -> Void)?
+
+    func perform() async throws -> some IntentResult {
+        await Self.handler?()
+        return .result()
+    }
+}

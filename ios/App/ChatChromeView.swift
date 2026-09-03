@@ -20,6 +20,7 @@ struct ChatChromeView: View {
     @Binding var showingProfile: Bool
     @Binding var showingModelPicker: Bool
     @Binding var showingComputer: Bool
+    @Binding var showingVoice: Bool
     @Binding var groupProfileRoom: Room?
 
     @EnvironmentObject private var session: Session
@@ -85,6 +86,24 @@ struct ChatChromeView: View {
             Spacer(minLength: ConversationLayoutPolicy.chromeButtonGap)
 
             if case .bot = current {
+                Button {
+                    Haptics.selection()
+                    showingVoice = true
+                } label: {
+                    Image(systemName: "waveform")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(Color.primary)
+                        .frame(
+                            width: ConversationLayoutPolicy.chromeButtonDiameter,
+                            height: ConversationLayoutPolicy.chromeButtonDiameter
+                        )
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .glassCircle()
+                .fixedSize()
+                .accessibilityLabel("Live voice with \(current.name)")
+
                 Button {
                     Haptics.selection()
                     showingComputer = true

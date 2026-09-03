@@ -84,7 +84,12 @@ final class LiveActivityCoordinator {
         }
 
         if !isBackground, hydrated {
+            // The voice session's activity is not this fold's to reconcile:
+            // VoiceIsland starts and ends it with the full-screen cover, and
+            // keeping it out of the namespace here means a hydrated
+            // foreground sync can never tear it down mid-sentence.
             let activeIds = Set(Activity<BotActivityAttributes>.activities.map(\.attributes.botId))
+                .subtracting([VoiceIsland.botId])
             let wantedIds = Set(wanted.map(\.botId))
             for botId in BackgroundPresencePolicy.reconcileForeground(
                 wantedIds: wantedIds,

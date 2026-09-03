@@ -15,6 +15,7 @@ enum PrefKey {
     static let activityDetail = "companion.prefs.activityDetail"
     static let activityDetailOverrides = "companion.prefs.activityDetailOverrides"
     static let quickReplies = "companion.prefs.quickReplies"
+    static let voiceIsland = "companion.prefs.voiceIsland"
 }
 
 struct ActivityDetailOverridePicker: View {

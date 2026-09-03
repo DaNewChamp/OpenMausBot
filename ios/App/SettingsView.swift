@@ -14,6 +14,7 @@ struct SettingsView: View {
     @AppStorage("companion.showBotChannels") private var showBotChannels = false
     @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.reduced.rawValue
     @AppStorage(PrefKey.islandIntro) private var islandIntro = IslandIntro.oncePerBot.rawValue
+    @AppStorage(PrefKey.voiceIsland) private var voiceIsland = true
     @State private var permissionDefault: PermissionMode = .ask
     @State private var permissionPolicyLoaded = false
     @State private var approvalReviewer: ApprovalReviewerStatus?
@@ -312,6 +313,20 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            VBotHairline().padding(.leading, 16)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle(isOn: $voiceIsland) {
+                    Text("Live voice in the Dynamic Island")
+                        .font(.body)
+                }
+                Text("While a live voice session is open, show its state — listening, thinking, speaking — with a stop button.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)

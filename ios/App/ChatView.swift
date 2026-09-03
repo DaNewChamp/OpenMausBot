@@ -33,6 +33,7 @@ struct ChatView: View {
     @State private var composerRequestGate = ComposerRequestGate()
     @State private var showingTasks = false
     @State private var showingComputer = false
+    @State private var showingVoice = false
     @State private var showingModelPicker = false
     @State private var showingProfile = false
     @State private var showCommandHUD = false
@@ -148,6 +149,9 @@ struct ChatView: View {
                 }
                 .ignoresSafeArea()
             }
+            .fullScreenCover(isPresented: $showingVoice) {
+                VoiceModesView(chat: current)
+            }
             .onChange(of: photoItems) { _, items in
                 guard !items.isEmpty else { return }
                 photoItems = []
@@ -222,6 +226,14 @@ struct ChatView: View {
             }
             .onChange(of: showingComputer) { _, shown in
                 if shown { dictation.stop() }
+            }
+            .onChange(of: showingVoice) { _, shown in
+                // Voice mode owns the mic and the voice pipeline while it is
+                // up; the composer's captures must not fight it for either.
+                if shown {
+                    dictation.stop()
+                    speaker.stop()
+                }
             }
             .onChange(of: showingTasks) { _, shown in
                 if shown { dictation.stop() }
@@ -375,6 +387,7 @@ struct ChatView: View {
                 showingProfile: $showingProfile,
                 showingModelPicker: $showingModelPicker,
                 showingComputer: $showingComputer,
+                showingVoice: $showingVoice,
                 groupProfileRoom: $groupProfileRoom
             )
         }
