@@ -100,6 +100,7 @@ final class Session: ObservableObject {
     @Published private(set) var notificationAuthorizationResolved = false
     /// A short-lived desktop handoff waiting for PairingView to present it.
     @Published private(set) var pairingInvite: PairingInvite?
+    @Published var pendingWebPairing: WebPairingRequest?
     /// Pairing may be opened while another computer is still saved.
     @Published private(set) var pairingRequested = false
 
@@ -538,19 +539,41 @@ final class Session: ObservableObject {
             consumeShareInbox()
             return
         }
-        guard connection == nil || pairingRequested else {
-            actionError = "This phone is already paired. Unpair it in Settings before connecting it to another computer."
+        switch WebPairingScanPolicy.outcome(
+            for: url,
+            isPaired: connection != nil,
+            pairingRequested: pairingRequested,
+            pairedOrigins: connection.map { WebPairingScanPolicy.authorizedOrigins(for: $0) } ?? []
+        ) {
+        case .confirmWebPairing(let request):
+            pendingWebPairing = request
+        case .beginFirstDevicePair(let invite):
+            pairingInvite = CompanionPairingInvitePolicy.nextInvite(
+                current: pairingInvite,
+                after: .received(invite)
+            )
+            pairingRequested = true
+        case .reject(let message):
+            actionError = message
+        }
+    }
+
+    func denyWebPairing() {
+        pendingWebPairing = nil
+    }
+
+    func approveWebPairing() async {
+        guard let request = pendingWebPairing, let client else {
+            pendingWebPairing = nil
             return
         }
-        guard let invite = PairingInvite.parse(url) else {
-            actionError = "That pairing invitation is not valid. Start pairing again on your computer."
-            return
+        do {
+            try await client.approveWebPairing(request)
+            pendingWebPairing = nil
+            Haptics.success()
+        } catch {
+            actionError = error.localizedDescription
         }
-        pairingInvite = CompanionPairingInvitePolicy.nextInvite(
-            current: pairingInvite,
-            after: .received(invite)
-        )
-        pairingRequested = true
     }
 
     func beginPairing() { pairingRequested = true }

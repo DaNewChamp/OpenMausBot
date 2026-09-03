@@ -1,79 +1,42 @@
-import {
-  ControlPlaneError,
-  createControlPlaneClient,
-  decodeFleetResponse,
-  normalizeControlPlaneURL,
-// @ts-expect-error shared runtime module has no generated types
-} from "../../shared/control-plane-client.mjs";
 import { clearClientCookie, getClientCookie, setClientCookie } from "./web-client-cookies";
-import { isWebClientMode, webClientSearch } from "./web-client-mode";
 
 const HUB_URL_COOKIE = "vbot_w_hub";
 const HUB_NAME_COOKIE = "vbot_w_hub_name";
 const HUB_MAX_AGE = 365 * 24 * 60 * 60;
-const DEFAULT_CONTROL_PLANE = "https://accounts.openmausbot.com";
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
-export interface WebAccountUser {
-  id: string;
-  email: string;
-  name: string | null;
-  emailVerified: boolean;
-}
+/**
+ * The hosted V Bot hub. Client and hub are deliberately different origins —
+ * the web client ships from vbot.posival.com while the hub answers on
+ * hub-vbot.posival.com — so the pairing form defaults to the hub rather than
+ * to the page origin. The field stays editable for self-hosted hubs.
+ */
+export const DEFAULT_WEB_HUB_URL = "https://hub-vbot.posival.com";
 
-export interface WebFleetInstallation {
+/** The device row the hub returns from POST /api/pair. */
+export interface WebHubDevice {
   id: string;
-  clientInstanceId: string;
   name: string;
-  platform: string;
-  runtimeProfile: string;
-  appVersion: string | null;
-  capabilities: string[];
-  lastSeenAt: number | null;
-  online: boolean;
-  endpoint: { url: string; status: string } | null;
+  createdAt: number | string | null;
+  lastSeenAt: number | string | null;
+  cloudDesktopAccess: boolean;
+  localVmAccess: boolean;
 }
 
 export interface WebHubConnection {
   baseUrl: string;
   deviceToken: string;
   deviceName: string;
+  /** The paired device record, kept whole for a later "paired devices" view. */
+  device: WebHubDevice | null;
 }
 
 export interface WebClientSessionSnapshot {
-  account: WebAccountUser | null;
-  accountToken: string | null;
-  fleet: WebFleetInstallation[];
   hub: WebHubConnection | null;
-  controlPlaneUrl: string;
-  pocketIdEnabled: boolean;
 }
 
 let hubApiBase = "";
 let hubDeviceToken: string | null = null;
-let accountTokenMemory: string | null = null;
-
-function isAllowedControlPlaneOrigin(origin: string): boolean {
-  try {
-    const url = new URL(origin);
-    const loopback = LOOPBACK_HOSTS.has(url.hostname);
-    if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) return false;
-    if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) return false;
-    if (origin === DEFAULT_CONTROL_PLANE) return true;
-    return loopback;
-  } catch {
-    return false;
-  }
-}
-
-export function resolveControlPlaneUrl(search = globalThis.location?.search ?? ""): string {
-  const override = new URLSearchParams(search).get("controlPlane");
-  if (override) {
-    const normalized = normalizeControlPlaneURL(override);
-    if (normalized && isAllowedControlPlaneOrigin(normalized)) return normalized;
-  }
-  return DEFAULT_CONTROL_PLANE;
-}
+let hubDevice: WebHubDevice | null = null;
 
 export function setHubApiBase(base: string) {
   hubApiBase = base.replace(/\/$/, "");
@@ -91,12 +54,9 @@ export function getHubDeviceToken(): string | null {
   return hubDeviceToken;
 }
 
-export function setAccountToken(token: string | null) {
-  accountTokenMemory = token;
-}
-
-export function getAccountToken(): string | null {
-  return accountTokenMemory;
+/** The paired device record. Memory only, like the device token itself. */
+export function getHubDevice(): WebHubDevice | null {
+  return hubDevice;
 }
 
 export function hubApiUrl(path: string): string {
@@ -111,13 +71,6 @@ export function canCallHubApi(): boolean {
 export function assertHubApiReady(): void {
   if (!canCallHubApi()) {
     throw new Error("Complete hub pairing before using the hub API.");
-  }
-}
-
-export function assertAccountDiscoveryOnly(path: string, search = webClientSearch()): void {
-  if (!isWebClientMode(search)) return;
-  if (!accountDiscoveryOnly(path, search)) {
-    throw new ControlPlaneError("hub_pairing_required", 403);
   }
 }
 
@@ -140,12 +93,27 @@ export function normalizeHubBaseUrl(value: string): string | null {
   }
 }
 
-export function persistAccountSession(token: string) {
-  setAccountToken(token);
+/** What the pairing form pre-fills as the hub address. */
+export function defaultWebHubUrl(hostname?: string): string {
+  // No argument is the web form default. Keep the explicit hostname behavior
+  // for callers/tests that want to distinguish the hosted client from local preview.
+  if (hostname === undefined || hostname === "vbot.posival.com") return DEFAULT_WEB_HUB_URL;
+  return "";
 }
 
-export function clearAccountSession() {
-  setAccountToken(null);
+/**
+ * Bot records carry avatars as the hub-relative `/api/attachments/<file>`.
+ * The browser client runs on a different origin than the hub, so the bare
+ * filename is re-hung off the paired hub's API base; on desktop, where the
+ * base is empty, this is the same same-origin path as before. Only names the
+ * attachment server itself could have generated resolve, so a hostile bot
+ * record cannot turn into an arbitrary remote or script-capable image.
+ */
+export function hubAttachmentUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const name = value.replaceAll("\\", "/").split("/").pop() ?? "";
+  if (!/^[A-Za-z0-9._-]+\.(?:png|jpe?g|gif|webp)$/.test(name)) return null;
+  return hubApiUrl(`/api/attachments/${encodeURIComponent(name)}`);
 }
 
 export function persistHubConnection(connection: WebHubConnection) {
@@ -153,6 +121,7 @@ export function persistHubConnection(connection: WebHubConnection) {
   setClientCookie(HUB_NAME_COOKIE, connection.deviceName, HUB_MAX_AGE);
   setHubApiBase(connection.baseUrl);
   setHubDeviceToken(connection.deviceToken);
+  hubDevice = connection.device;
 }
 
 export function clearHubConnection() {
@@ -160,88 +129,10 @@ export function clearHubConnection() {
   clearClientCookie(HUB_NAME_COOKIE);
   setHubApiBase("");
   setHubDeviceToken(null);
+  hubDevice = null;
 }
 
-export function pocketIdCallbackURL(controlPlaneUrl: string, returnTo: string): string {
-  const base = controlPlaneUrl.replace(/\/$/, "");
-  return `${base}/web-client/complete?redirect=${encodeURIComponent(returnTo)}`;
-}
-
-const WEB_AUTH_HANDOFF_TYPE = "omb_web_auth_code";
-
-export function isWebAuthHandoffMessage(
-  data: unknown,
-  origin: string,
-  controlPlaneOrigin: string,
-): data is { type: typeof WEB_AUTH_HANDOFF_TYPE; code: string } {
-  if (origin !== controlPlaneOrigin) return false;
-  if (typeof data !== "object" || data === null) return false;
-  const record = data as { type?: unknown; code?: unknown };
-  return record.type === WEB_AUTH_HANDOFF_TYPE && typeof record.code === "string" && record.code.length >= 32;
-}
-
-export function waitForWebAuthHandoff(
-  controlPlaneUrl: string,
-  appOrigin: string,
-  timeoutMs = 120_000,
-): Promise<string> {
-  const controlPlaneOrigin = controlPlaneUrl.replace(/\/$/, "");
-  let appOriginNormalized: string;
-  try {
-    appOriginNormalized = new URL(appOrigin).origin;
-  } catch {
-    return Promise.reject(new Error("Sign-in could not finish."));
-  }
-  return new Promise((resolve, reject) => {
-    const timer = globalThis.setTimeout(() => {
-      cleanup();
-      reject(new Error("Sign-in timed out."));
-    }, timeoutMs);
-    const onMessage = (event: MessageEvent) => {
-      if (event.origin !== controlPlaneOrigin) return;
-      if (!isWebAuthHandoffMessage(event.data, event.origin, controlPlaneOrigin)) return;
-      cleanup();
-      resolve(event.data.code);
-    };
-    const cleanup = () => {
-      globalThis.clearTimeout(timer);
-      globalThis.removeEventListener("message", onMessage);
-    };
-    if (globalThis.location?.origin !== appOriginNormalized) {
-      cleanup();
-      reject(new Error("Sign-in could not finish."));
-      return;
-    }
-    globalThis.addEventListener("message", onMessage);
-  });
-}
-
-export async function exchangeWebAuthCode(baseURL: string, code: string): Promise<string> {
-  const path = "/web-client/exchange";
-  assertAccountDiscoveryOnly(path);
-  const response = await fetch(`${baseURL.replace(/\/$/, "")}${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", origin: globalThis.location?.origin ?? baseURL },
-    body: JSON.stringify({ code }),
-  });
-  const payload = (await response.json().catch(() => null)) as { accountToken?: string; error?: string } | null;
-  if (!response.ok || typeof payload?.accountToken !== "string") {
-    throw new ControlPlaneError(payload?.error ?? "request_failed", response.status);
-  }
-  persistAccountSession(payload.accountToken);
-  return payload.accountToken;
-}
-
-export async function completeWebAuthHandoff(baseURL: string, code: string): Promise<string> {
-  return exchangeWebAuthCode(baseURL, code);
-}
-
-export async function bootstrapWebClientAuth(_baseURL: string) {
-  return null;
-}
-
-export function loadWebClientSession(search = globalThis.location?.search ?? ""): WebClientSessionSnapshot {
-  const controlPlaneUrl = resolveControlPlaneUrl(search);
+export function loadWebClientSession(): WebClientSessionSnapshot {
   const hubUrl = readStoredHubUrl();
   if (hubUrl) setHubApiBase(hubUrl);
   const hub = hubDeviceToken && hubApiBase
@@ -249,182 +140,144 @@ export function loadWebClientSession(search = globalThis.location?.search ?? "")
         baseUrl: hubApiBase,
         deviceToken: hubDeviceToken,
         deviceName: getClientCookie(HUB_NAME_COOKIE) ?? "Web client",
+        device: hubDevice,
       }
     : null;
-  return {
-    account: null,
-    accountToken: accountTokenMemory,
-    fleet: [],
-    hub,
-    controlPlaneUrl,
-    pocketIdEnabled: false,
-  };
+  return { hub };
 }
 
-export function createWebControlPlaneClient(baseURL: string) {
-  return createControlPlaneClient({
-    baseURL,
-    fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      assertAccountDiscoveryOnly(new URL(url).pathname);
-      return fetch(input, init);
-    },
-  });
+/** The hub's contract for `pairRequestId`. */
+export const PAIR_REQUEST_ID_PATTERN = /^[A-Za-z0-9._-]{16,128}$/;
+
+const PAIR_REQUEST_ID_ALPHABET =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-";
+
+export function isPairRequestId(value: string): boolean {
+  return PAIR_REQUEST_ID_PATTERN.test(value);
 }
 
-export async function requestAccountOtp(baseURL: string, email: string) {
-  const client = createWebControlPlaneClient(baseURL);
-  return client.requestOTP(email);
+/**
+ * A client-generated idempotency key for one pairing attempt. The caller
+ * holds it across retries of the same attempt and mints a fresh one only
+ * when the user genuinely starts over, so a retried submit can never consume
+ * a second slot on the hub's pairing window.
+ */
+export function createPairRequestId(length = 32): string {
+  const size = Math.min(128, Math.max(16, Math.trunc(length)));
+  const bytes = new Uint8Array(size);
+  const source = globalThis.crypto;
+  if (source?.getRandomValues) source.getRandomValues(bytes);
+  else for (let index = 0; index < size; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+  let id = "";
+  // 64-character alphabet, so the byte -> character fold stays unbiased.
+  for (const byte of bytes) id += PAIR_REQUEST_ID_ALPHABET[byte % PAIR_REQUEST_ID_ALPHABET.length];
+  return id;
 }
 
-export async function verifyAccountOtp(baseURL: string, email: string, otp: string) {
-  const client = createWebControlPlaneClient(baseURL);
-  const result = await client.verifyOTP(email, otp);
-  persistAccountSession(result.accountToken);
-  return result;
+/**
+ * How the form should treat a refused pairing:
+ * - `wrong-code`: retypeable mistake, same window still open.
+ * - `window-closed`: the hub's pairing window is gone; only a new code helps.
+ * - `device-limit`: nothing wrong with the code, the hub is full.
+ * - `save-failed`: the hub could not persist the device.
+ * - `unknown`: network trouble or a sentence we do not recognise.
+ */
+export type PairFailureKind =
+  | "wrong-code"
+  | "window-closed"
+  | "device-limit"
+  | "save-failed"
+  | "unknown";
+
+export function classifyPairFailure(message: string): PairFailureKind {
+  const text = message.trim().toLowerCase();
+  if (text.startsWith("no pairing is in progress")) return "window-closed";
+  if (text.startsWith("too many incorrect codes")) return "window-closed";
+  if (text.startsWith("that pairing credential is not right")) return "wrong-code";
+  if (text.startsWith("too many paired devices")) return "device-limit";
+  if (text.startsWith("could not save the pairing")) return "save-failed";
+  return "unknown";
 }
 
-export async function fetchAccountUser(baseURL: string, accountToken: string): Promise<WebAccountUser> {
-  const client = createWebControlPlaneClient(baseURL);
-  const user = await client.me(accountToken);
-  return {
-    id: user.id,
-    email: user.email,
-    name: user.name ?? null,
-    emailVerified: user.emailVerified,
-  };
-}
+/**
+ * A refused pairing. `fromHub` marks the sentences the hub itself wrote:
+ * those are shown to the user verbatim, because they say more than any
+ * wording this client could substitute.
+ */
+export class HubPairError extends Error {
+  readonly kind: PairFailureKind;
+  readonly fromHub: boolean;
 
-export async function fetchFleet(baseURL: string, accountToken: string): Promise<WebFleetInstallation[]> {
-  const client = createWebControlPlaneClient(baseURL);
-  const installations = await client.listFleet(accountToken);
-  return installations.map((installation: {
-    id: string;
-    clientInstanceId: string;
-    name: string;
-    platform: string;
-    runtimeProfile: string;
-    appVersion: string | null;
-    capabilities: readonly string[];
-    lastSeenAt: number | null;
-    online: boolean;
-    endpoint: { url: string; status: string } | null;
-  }) => ({
-    id: installation.id,
-    clientInstanceId: installation.clientInstanceId,
-    name: installation.name,
-    platform: installation.platform,
-    runtimeProfile: installation.runtimeProfile,
-    appVersion: installation.appVersion,
-    capabilities: [...installation.capabilities],
-    lastSeenAt: installation.lastSeenAt,
-    online: installation.online,
-    endpoint: installation.endpoint
-      ? { url: installation.endpoint.url, status: installation.endpoint.status }
-      : null,
-  }));
-}
-
-export async function probePocketId(baseURL: string): Promise<boolean> {
-  const path = "/api/auth/sign-in/social";
-  assertAccountDiscoveryOnly(path);
-  try {
-    const response = await fetch(`${baseURL.replace(/\/$/, "")}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", origin: baseURL },
-      body: JSON.stringify({ provider: "pocketid", callbackURL: globalThis.location?.origin ?? baseURL }),
-    });
-    if (!response.ok) return false;
-    const payload = (await response.json().catch(() => null)) as { url?: string } | null;
-    return typeof payload?.url === "string" && payload.url.startsWith("http");
-  } catch {
-    return false;
+  constructor(message: string, options: { kind?: PairFailureKind; fromHub?: boolean } = {}) {
+    super(message);
+    this.name = "HubPairError";
+    this.fromHub = options.fromHub ?? false;
+    this.kind = options.kind ?? (this.fromHub ? classifyPairFailure(message) : "unknown");
   }
-}
-
-export async function startPocketIdSignIn(baseURL: string, callbackURL: string): Promise<string> {
-  const path = "/api/auth/sign-in/social";
-  assertAccountDiscoveryOnly(path);
-  const response = await fetch(`${baseURL.replace(/\/$/, "")}${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", origin: baseURL },
-    body: JSON.stringify({ provider: "pocketid", callbackURL }),
-  });
-  const payload = (await response.json().catch(() => null)) as { url?: string } | null;
-  if (!response.ok || typeof payload?.url !== "string") {
-    throw new ControlPlaneError("request_failed", response.status);
-  }
-  return payload.url;
 }
 
 export interface PairDirectInput {
   baseUrl: string;
   credential: string;
   deviceName: string;
+  /** Optional per the hub, but always sent: it makes a retry idempotent. */
   pairRequestId?: string;
+}
+
+function normalizeHubDevice(value: unknown): WebHubDevice | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== "string" || typeof record.name !== "string") return null;
+  const stamp = (input: unknown) =>
+    typeof input === "number" || typeof input === "string" ? input : null;
+  return {
+    id: record.id,
+    name: record.name,
+    createdAt: stamp(record.createdAt),
+    lastSeenAt: stamp(record.lastSeenAt),
+    cloudDesktopAccess: record.cloudDesktopAccess === true,
+    localVmAccess: record.localVmAccess === true,
+  };
 }
 
 export async function pairDirectHub(input: PairDirectInput): Promise<WebHubConnection> {
   const baseUrl = normalizeHubBaseUrl(input.baseUrl);
-  if (!baseUrl) throw new Error("Enter a valid hub address.");
+  if (!baseUrl) throw new HubPairError("Enter a valid hub address.");
+  const pairRequestId =
+    input.pairRequestId && isPairRequestId(input.pairRequestId) ? input.pairRequestId : undefined;
   const body = JSON.stringify({
     credential: input.credential,
     deviceName: input.deviceName,
-    pairRequestId: input.pairRequestId,
+    ...(pairRequestId ? { pairRequestId } : {}),
   });
-  const response = await fetch(`${baseUrl}/api/pair`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/api/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+  } catch {
+    throw new HubPairError("Could not reach that hub. Check the address and your connection.");
+  }
   const payload = (await response.json().catch(() => ({}))) as {
-    token?: string;
-    error?: string;
-    device?: { name?: string };
+    token?: unknown;
+    error?: unknown;
+    device?: unknown;
   };
   if (!response.ok || typeof payload.token !== "string") {
-    throw new Error(payload.error ?? "Pairing could not finish.");
+    // The hub writes these sentences for people; pass them through untouched
+    // and keep the generic wording for the cases it never spoke to.
+    const hubMessage = typeof payload.error === "string" && payload.error.trim() ? payload.error.trim() : null;
+    throw new HubPairError(hubMessage ?? "Pairing could not finish.", { fromHub: Boolean(hubMessage) });
   }
+  const device = normalizeHubDevice(payload.device);
   const connection: WebHubConnection = {
     baseUrl,
     deviceToken: payload.token,
-    deviceName: payload.device?.name ?? input.deviceName,
+    deviceName: device?.name ?? input.deviceName,
+    device,
   };
   persistHubConnection(connection);
   return connection;
-}
-
-export function accountDiscoveryOnly(path: string, search = webClientSearch()): boolean {
-  if (!isWebClientMode(search)) return false;
-  return path === "/v1/me" || path === "/v1/fleet" || path.startsWith("/api/auth/") || path === "/web-client/exchange";
-}
-
-export function decodeFleetPayload(payload: unknown): WebFleetInstallation[] | null {
-  const installations = decodeFleetResponse(payload);
-  if (!installations) return null;
-  return installations.map((installation: {
-    id: string;
-    clientInstanceId: string;
-    name: string;
-    platform: string;
-    runtimeProfile: string;
-    appVersion: string | null;
-    capabilities: readonly string[];
-    lastSeenAt: number | null;
-    online: boolean;
-    endpoint: { url: string; status: string } | null;
-  }) => ({
-    id: installation.id,
-    clientInstanceId: installation.clientInstanceId,
-    name: installation.name,
-    platform: installation.platform,
-    runtimeProfile: installation.runtimeProfile,
-    appVersion: installation.appVersion,
-    capabilities: [...installation.capabilities],
-    lastSeenAt: installation.lastSeenAt,
-    online: installation.online,
-    endpoint: installation.endpoint
-      ? { url: installation.endpoint.url, status: installation.endpoint.status }
-      : null,
-  }));
 }

@@ -11,7 +11,9 @@
   "include": [
     "companion/src/**/*",
     "shared/fleet-presentation.ts",
+    "shared/web-pairing-link.ts",
     "server/pairing-invitations.ts",
+    "server/web-pairing-requests.ts",
     "server/atomic.ts"
   ],
   "exclude": [

@@ -79,7 +79,13 @@ struct PairingView: View {
             }
             .fullScreenCover(isPresented: $showingScanner) {
                 PairingScannerSheet { payload in
-                    guard let url = URL(string: payload), let invite = PairingInvite.parse(url) else {
+                    guard let url = URL(string: payload) else {
+                        return "That isn't a V Bot pairing QR code."
+                    }
+                    if WebPairingRequest.parse(url) != nil {
+                        return "Scan this code after this iPhone is already paired."
+                    }
+                    guard let invite = PairingInvite.parse(url) else {
                         return "That isn't a V Bot pairing QR code."
                     }
                     accept(invite)

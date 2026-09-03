@@ -1187,27 +1187,27 @@ export function ChatView({ bot }: { bot: Bot }) {
         )}
         style={drag}
       >
-        <div className="flex min-w-0 items-center gap-2.5" style={noDrag}>
-          <button
-            onClick={() => dispatch({ type: "toggleSettings", open: true })}
-            className="shell-control flex shrink-0 items-center justify-center rounded-lg hover:bg-raised/50"
-            title="Open agent profile"
-            aria-label={`Open ${bot.name}'s profile`}
-          >
-            <BotAvatar
-              bot={bot}
-              state={stateForBot({ ...bot, messages })}
-              size={32}
-              motion={mascotMotion?.kind ?? "none"}
-              motionKey={mascotMotion?.nonce ?? 0}
-            />
-          </button>
+        <button
+          type="button"
+          onClick={() => dispatch({ type: "toggleSettings", open: true })}
+          className="flex min-w-0 items-center gap-2.5 rounded-lg px-1 py-0.5 text-left hover:bg-raised/50"
+          style={noDrag}
+          title="Open agent profile"
+          aria-label={`Open ${bot.name}'s profile`}
+        >
+          <BotAvatar
+            bot={bot}
+            state={stateForBot({ ...bot, messages })}
+            size={32}
+            motion={mascotMotion?.kind ?? "none"}
+            motionKey={mascotMotion?.nonce ?? 0}
+          />
           <div className="min-w-0 truncate text-[15px] font-semibold text-ink">
             {bot.name}
             <span className="font-medium text-ink-secondary"> · {modelSuffix(bot.modelSelection)}</span>
             {bot.busy ? <Loader2 size={14} className="ml-1.5 inline animate-spin text-ink-secondary" /> : null}
           </div>
-        </div>
+        </button>
         <ChatHeaderMenu
           bot={bot}
           messages={messages}

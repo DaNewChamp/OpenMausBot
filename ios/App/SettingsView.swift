@@ -19,6 +19,7 @@ struct SettingsView: View {
     @State private var approvalReviewer: ApprovalReviewerStatus?
     @State private var approvalReviewerLoaded = false
     @State private var enablingNotifications = false
+    @State private var showingBrowserScanner = false
     private let onConnect: (() -> Void)?
     private let onOpenChat: ((Chat) -> Void)?
 
@@ -51,6 +52,18 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .vbotCanvas()
         .tint(Color.accentColor)
+        .fullScreenCover(isPresented: $showingBrowserScanner) {
+            PairingScannerSheet { payload in
+                guard let url = URL(string: payload) else {
+                    return "That isn't a V Bot pairing QR code."
+                }
+                guard WebPairingRequest.parse(url) != nil else {
+                    return "That isn't a browser pairing QR code."
+                }
+                session.receivePairingURL(url)
+                return nil
+            }
+        }
         .task {
             await session.refreshNotificationAuthorization()
             if let policy = await session.permissionPolicy() {
@@ -75,6 +88,18 @@ struct SettingsView: View {
                         status: computerStatusText,
                         connected: session.status == .live
                     )
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .frame(minHeight: VBotSurface.Hit.row)
+
+                VBotHairline().padding(.leading, 16)
+
+                Button {
+                    Haptics.selection()
+                    showingBrowserScanner = true
+                } label: {
+                    Label("Approve a browser", systemImage: "qrcode.viewfinder")
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 16)

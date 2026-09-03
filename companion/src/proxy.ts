@@ -13,6 +13,8 @@
 // serve. Nothing upstream has to change, or even know this exists.
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 
+import type { WebPairingRegistry } from "../../server/web-pairing-requests.ts";
+
 import { bearerToken } from "./devices.ts";
 import {
   COMPANION_ENDPOINT_KINDS,
@@ -65,6 +67,8 @@ import {
   computerDestinationBotId,
   groupSetupRoomId,
   groupUnreadRoomId,
+  matchWebPairingRoute,
+  isPublicWebPairingRoute,
 } from "./routes.ts";
 import {
   appendViewerAccessQuery,
@@ -137,6 +141,13 @@ export interface ProxyOptions {
   } | { error: string };
   /** Exact browser origins allowed to call paired companion routes over CORS. */
   webClientOrigins?: ReadonlySet<string>;
+  /** Browser QR approval: public register/redeem/cancel, paired-only approve. */
+  webPairing?: {
+    hubId: () => string;
+    hubOrigin: (req: IncomingMessage) => string | null;
+    registry: WebPairingRegistry;
+    mintDevice: (name: unknown) => { token: string; device: { id: string; name: string } } | { error: string };
+  };
 }
 
 export interface CompanionEndpointSnapshot {
@@ -377,6 +388,9 @@ export function createProxyHandler(options: ProxyOptions) {
     if (allowedOrigin && !isBrowserSafeCompanionRoute(method, path, Boolean(device))) {
       return sendJson(res, 403, { error: "forbidden: cross-origin request" });
     }
+    if (isPublicWebPairingRoute(method, path) && !allowedOrigin) {
+      return sendJson(res, 403, { error: "forbidden: cross-origin request" });
+    }
     if (denial) return sendJson(res, denial.status, { error: denial.error });
 
     // Pairing a phone grants the ordinary companion surface, not a browser
@@ -453,6 +467,76 @@ export function createProxyHandler(options: ProxyOptions) {
         },
         challenge: created.challenge,
       });
+    }
+
+    const webPairingRoute = matchWebPairingRoute(method, path);
+    if (webPairingRoute) {
+      const webPairing = options.webPairing;
+      if (!webPairing) return sendJson(res, 404, { error: `no route: ${method} ${path}` });
+      const hubId = webPairing.hubId();
+      const hubOrigin = webPairing.hubOrigin(req);
+      if (!hubId || hubId === "unavailable" || !hubOrigin) {
+        return sendJson(res, 403, { error: "web pairing is unavailable" });
+      }
+      if (webPairingRoute.action === "approve" && !device) {
+        return sendJson(res, 401, { error: "pair this device from Phone settings in OpenMausBot on your computer" });
+      }
+      readJson(req, 64 * 1024, true).then(
+        (body) => {
+          if (webPairingRoute.action === "register") {
+            const created = webPairing.registry.register({
+              requestId: body.requestId,
+              challengeHash: body.challengeHash,
+              deviceName: body.deviceName,
+              origin: allowedOrigin,
+              hubId,
+              hubOrigin,
+            });
+            if ("error" in created) return sendJson(res, created.status, { error: created.error });
+            return sendJson(res, 201, created);
+          }
+          if (webPairingRoute.action === "approve") {
+            const approved = webPairing.registry.approve({
+              requestId: webPairingRoute.requestId,
+              challengeHash: body.challengeHash,
+              hubId: body.hubId,
+              hubOrigin: body.hubOrigin,
+              deviceName: body.deviceName,
+              expiresAt: body.expiresAt,
+            });
+            if ("error" in approved) return sendJson(res, approved.status, { error: approved.error });
+            return sendJson(res, 200, { ok: true });
+          }
+          if (webPairingRoute.action === "redeem") {
+            const redeemed = webPairing.registry.redeem({
+              requestId: webPairingRoute.requestId,
+              redeemSecret: body.redeemSecret,
+              pairRequestId: body.pairRequestId,
+              mintDevice: webPairing.mintDevice,
+            });
+            if ("error" in redeemed) return sendJson(res, redeemed.status, { error: redeemed.error });
+            if ("pending" in redeemed) return sendJson(res, 202, { status: "pending" });
+            return sendJson(res, 201, { ...redeemed, serverName: options.serverName() });
+          }
+          const cancelled = webPairing.registry.cancel({
+            requestId: webPairingRoute.requestId,
+            redeemSecret: body.redeemSecret,
+          });
+          if ("error" in cancelled) return sendJson(res, cancelled.status, { error: cancelled.error });
+          if (res.headersSent) {
+            res.destroy();
+            return;
+          }
+          const corsOrigin = corsByResponse.get(res);
+          res.writeHead(204, {
+            ...PRIVATE_RESPONSE_HEADERS,
+            ...(corsOrigin ? corsResponseHeaders(corsOrigin) : {}),
+          });
+          res.end();
+        },
+        (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
+      return;
     }
 
     if (isHermesSetupConnect(method, path) || isHermesSetupSignIn(method, path)) {

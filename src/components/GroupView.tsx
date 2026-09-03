@@ -824,7 +824,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
     </section>
   );
 }
-export function GroupView({ group }: { group: Group }) {
+export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: () => void }) {
   const { state, dispatch } = useStore();
   const stream = useStreaming();
   const streaming = stream.streaming[group.threadId];
@@ -1002,7 +1002,18 @@ export function GroupView({ group }: { group: Group }) {
         )}
         style={drag}
       >
-        <span className="text-[15px] font-semibold text-ink">{headerTitle}</span>
+        {onOpenInfo ? (
+          <button
+            type="button"
+            onClick={onOpenInfo}
+            aria-label={`Open info for ${headerTitle}`}
+            className="truncate rounded-lg px-1.5 py-1 text-left text-[15px] font-semibold text-ink hover:bg-raised/50"
+          >
+            {headerTitle}
+          </button>
+        ) : (
+          <span className="truncate text-[15px] font-semibold text-ink">{headerTitle}</span>
+        )}
         <div className="flex items-center gap-1.5" style={noDrag}>
           <button
             type="button"

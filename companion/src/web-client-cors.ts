@@ -1,4 +1,4 @@
-import { denyReason, isBridgeDaemonRoute } from "./routes.ts";
+import { denyReason, isBridgeDaemonRoute, isPublicWebPairingRoute, isWebPairingApproveRoute } from "./routes.ts";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -28,7 +28,9 @@ export function isBrowserSafeCompanionRoute(
 ): boolean {
   if (isBridgeDaemonRoute(method, path)) return false;
   if (method === "POST" && path === "/api/pairing-invitations") return false;
+  if (isWebPairingApproveRoute(method, path)) return false;
   if (method === "POST" && path === "/api/pair") return true;
+  if (isPublicWebPairingRoute(method, path)) return true;
   if (!authenticated) return false;
   return denyReason({ path, method, authenticated }) === null;
 }

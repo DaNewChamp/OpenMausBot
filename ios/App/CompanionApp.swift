@@ -103,6 +103,17 @@ struct RootView: View {
         } message: { message in
             Text(message)
         }
+        .sheet(item: Binding(
+            get: { session.pendingWebPairing },
+            set: { if $0 == nil { session.denyWebPairing() } }
+        )) { request in
+            WebPairingApprovalSheet(
+                request: request,
+                hubName: session.connection.map { ConnectionPresentationPolicy.displayName(for: $0) } ?? "this hub",
+                onApprove: { Task { await session.approveWebPairing() } },
+                onDeny: session.denyWebPairing
+            )
+        }
     }
 
     @ViewBuilder
