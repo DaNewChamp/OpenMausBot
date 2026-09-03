@@ -1,0 +1,24 @@
+{
+  "name": "Vi Bot",
+  "short_name": "Vi Bot",
+  "description": "V Bot desktop client",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/",
+  "background_color": "#070707",
+  "theme_color": "#070707",
+  "icons": [
+    {
+      "src": "/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
