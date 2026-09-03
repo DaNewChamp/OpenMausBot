@@ -3,7 +3,9 @@
 // Same engine as the desktop helper (`electron/resources/speech-helper.swift`):
 // `SFSpeechRecognizer` on an `AVAudioEngine` tap, partials streamed into the
 // text field, press to stop. Composer mode, not call mode — there is no
-// silence endpointing. The phone is better at this than the Mac was: the
+// silence endpointing there. (`startVoiceSession` arms one for live voice
+// mode, which is the one place a turn should end on its own.) The phone is
+// better at this than the Mac was: the
 // recognizer is in the same process as the field, so there is no helper
 // binary, no TCC bundle dance, and no `open -W`.
 //
@@ -47,6 +49,14 @@ final class SpeechDictation: ObservableObject {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var tapInstalled = false
     private var stopping = false
+    /// Live mic level (RMS, 0...1) for voice mode's orb. Nil handler = the
+    /// composer, which wants nothing per-frame.
+    var onLevel: ((Float) -> Void)?
+    /// Voice mode's endpointing: fired once per capture when the silence
+    /// gate runs out. Composer mode never sets it — there is deliberately
+    /// no silence endpointing there.
+    var onSilence: (() -> Void)?
+    private var silenceGate: VoiceSilenceGate?
     /// Bumped on every start/stop so an authorization that finishes after
     /// the user already cancelled cannot open the mic.
     private var generation = 0
@@ -69,6 +79,13 @@ final class SpeechDictation: ObservableObject {
         generation += 1
         let gen = generation
         startTask = Task { await actuallyStart(generation: gen) }
+    }
+
+    /// Voice mode's entry: a fresh base, silence endpointing armed, mic
+    /// levels reported per frame. The composer keeps using `toggle`.
+    func startVoiceSession() {
+        silenceGate = VoiceSilenceGate(limit: VoiceSessionPolicy.silenceLimit)
+        start(base: "")
     }
 
     func stop() {
@@ -172,8 +189,23 @@ final class SpeechDictation: ObservableObject {
         guard format.channelCount > 0 else {
             throw CaptureError.silentInput
         }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             request.append(buffer)
+            guard let self else { return }
+            let level = Self.rms(of: buffer)
+            Task { @MainActor in
+                guard gen == self.generation, self.isListening, !self.stopping else { return }
+                self.onLevel?(level)
+                guard var gate = self.silenceGate else { return }
+                // One finalize per capture: nil the gate before firing so a
+                // late frame cannot call onSilence twice.
+                if gate.observe(level: level) {
+                    self.silenceGate = nil
+                    self.onSilence?()
+                } else {
+                    self.silenceGate = gate
+                }
+            }
         }
         tapInstalled = true
         engine.prepare()
@@ -243,7 +275,26 @@ final class SpeechDictation: ObservableObject {
         recognitionRequest = nil
         audioEngine = nil
         recognizer = nil
+        silenceGate = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    /// Root mean square of the buffer, 0...1-ish. Voice mode's orb and its
+    /// silence gate both want levels, not words.
+    private static func rms(of buffer: AVAudioPCMBuffer) -> Float {
+        guard let channelData = buffer.floatChannelData else { return 0 }
+        let frames = Int(buffer.frameLength)
+        let channels = Int(buffer.format.channelCount)
+        guard frames > 0, channels > 0 else { return 0 }
+        var sum: Float = 0
+        for channel in 0..<channels {
+            let samples = channelData[channel]
+            for frame in 0..<frames {
+                let value = samples[frame]
+                sum += value * value
+            }
+        }
+        return sqrt(sum / Float(frames * channels))
     }
 
     private enum CaptureError: Error {

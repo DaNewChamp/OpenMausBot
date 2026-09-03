@@ -42,6 +42,10 @@ struct BotActivityWidget: Widget {
                         AnswerButtons(context: context, requestId: requestId)
                             .padding(.top, 4)
                     }
+                    if context.state.kind == "voice" {
+                        StopVoiceButton()
+                            .padding(.top, 4)
+                    }
                 }
             } compactLeading: {
                 MausFaceStill(color: context.attributes.color, state: MausState(rawValue: context.state.face) ?? .idle, size: 24, shape: context.attributes.shape ?? "droplet")
@@ -71,6 +75,11 @@ struct BotActivityWidget: Widget {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(MausPalette.color(context.attributes.color))
                 .accessibilityLabel("Finished")
+        case "voice":
+            Image(systemName: "waveform")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+                .accessibilityLabel("Live voice")
         default:
             Circle().fill(MausPalette.color(context.attributes.color)).frame(width: 8, height: 8)
         }
@@ -102,6 +111,10 @@ private struct LockScreenView: View {
                     .accessibilityLabel(context.state.line)
                 if context.state.kind == "needsYou", let requestId = context.state.requestId, !context.state.options.isEmpty {
                     AnswerButtons(context: context, requestId: requestId)
+                        .padding(.top, 4)
+                }
+                if context.state.kind == "voice" {
+                    StopVoiceButton()
                         .padding(.top, 4)
                 }
             }
@@ -143,6 +156,23 @@ private struct AnswerButtons: View {
                 .accessibilityHint("Answers from the lock screen")
             }
         }
+    }
+}
+
+/// The live voice session's stop pill. Same door as the approval buttons: a
+/// LiveActivityIntent that runs in the app's own process.
+private struct StopVoiceButton: View {
+    var body: some View {
+        Button(intent: StopVoiceModeIntent()) {
+            Label("Stop", systemImage: "stop.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 36)
+                .background(Capsule().fill(Color.white.opacity(0.16)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Stop voice mode")
     }
 }
 
