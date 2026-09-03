@@ -293,8 +293,10 @@ struct AgentProfileView: View {
                     showingMedia = true
                 }
                 .disabled(!canEdit)
-                Button("Model & voice", systemImage: "slider.horizontal.3") {
-                    showingModelPicker = true
+                if !isHermesBot {
+                    Button("Model & voice", systemImage: "slider.horizontal.3") {
+                        showingModelPicker = true
+                    }
                 }
                 Divider()
                 Button(
@@ -935,25 +937,34 @@ struct AgentProfileView: View {
         VStack(alignment: .leading, spacing: 10) {
             profileSectionLabel("Model & voice")
             VStack(alignment: .leading, spacing: 14) {
-                Button {
-                    showingModelPicker = true
-                } label: {
-                    modelSelectionSummary
-                }
-                .buttonStyle(.plain)
-                .disabled(!canEdit && instances.isEmpty)
-
-                Toggle(isOn: $fastMode) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Fast mode")
-                        Text(ModelSelectionPolicy.fastModeHint)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                if isHermesBot {
+                    // Hermes runs its own catalog on the gateway; presenting
+                    // the provider picker here would read as a switch that
+                    // does nothing.
+                    Text("Model is chosen by Hermes on your computer.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Button {
+                        showingModelPicker = true
+                    } label: {
+                        modelSelectionSummary
                     }
-                }
-                .disabled(!canEdit || modelSwitchBlocked)
-                .onChange(of: fastMode) { _, enabled in
-                    Task { _ = await session.updateFastMode(enabled, for: current) }
+                    .buttonStyle(.plain)
+                    .disabled(!canEdit && instances.isEmpty)
+
+                    Toggle(isOn: $fastMode) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Fast mode")
+                            Text(ModelSelectionPolicy.fastModeHint)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .disabled(!canEdit || modelSwitchBlocked)
+                    .onChange(of: fastMode) { _, enabled in
+                        Task { _ = await session.updateFastMode(enabled, for: current) }
+                    }
                 }
 
                 if voiceConfigured || !canEdit {
