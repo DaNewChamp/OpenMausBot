@@ -1,13 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import {
-  Loader2,
-  Mail,
-  Menu,
-  ShieldCheck,
-  Users,
-  Wifi,
-  X,
-} from "lucide-react";
+import { useEffect, useState } from "react";
+import { Loader2, Menu, RotateCcw, ShieldCheck, Users, X } from "lucide-react";
 import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
 import { BotAvatar } from "@/components/Avatar";
@@ -24,24 +16,20 @@ import { webClientLayout } from "@/lib/web-client-layout";
 import { stateForBot } from "@/lib/mascot";
 import {
   canCallHubApi,
-  clearAccountSession,
-  completeWebAuthHandoff,
+  createPairRequestId,
   defaultWebHubUrl,
-  fetchAccountUser,
-  fetchFleet,
+  HubPairError,
   loadWebClientSession,
   pairDirectHub,
-  persistAccountSession,
-  pocketIdCallbackURL,
-  probePocketId,
-  requestAccountOtp,
-  startPocketIdSignIn,
-  verifyAccountOtp,
-  waitForWebAuthHandoff,
+  type PairFailureKind,
   type WebClientSessionSnapshot,
-  type WebFleetInstallation,
 } from "@/lib/web-client-session";
 
+/**
+ * Hub pairing is the only way in. There is no account service behind this
+ * client — no directory of systems, no email code — so the gate asks for the
+ * one thing that actually works: a pairing code from the hub itself.
+ */
 export function WebClientGate({
   session,
   onSessionChange,
@@ -49,283 +37,149 @@ export function WebClientGate({
   session: WebClientSessionSnapshot;
   onSessionChange: (next: WebClientSessionSnapshot) => void;
 }) {
-  const [mode, setMode] = useState<"choose" | "account" | "direct">("choose");
-  const [email, setEmail] = useState("");
-  const [otp, setOtp] = useState("");
-  const [otpSent, setOtpSent] = useState(false);
   const [hubUrl, setHubUrl] = useState(() => defaultWebHubUrl());
   const [credential, setCredential] = useState("");
   const [deviceName, setDeviceName] = useState("Web browser");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [fleet, setFleet] = useState<WebFleetInstallation[]>(session.fleet);
-  const [selectedHub, setSelectedHub] = useState<WebFleetInstallation | null>(null);
+  const [failure, setFailure] = useState<{ message: string; kind: PairFailureKind } | null>(null);
+  // One idempotency key per pairing attempt. It is held across retries of the
+  // same attempt so a resubmit cannot burn a second slot on the hub's pairing
+  // window, and replaced only when the user genuinely starts over.
+  const [pairRequestId, setPairRequestId] = useState<string | null>(null);
 
-  useEffect(() => {
-    void probePocketId(session.controlPlaneUrl).then((enabled) => {
-      onSessionChange({ ...session, pocketIdEnabled: enabled });
-    });
-  }, [session.controlPlaneUrl]);
-
-  const refreshAccount = useCallback(async (token: string) => {
-    const user = await fetchAccountUser(session.controlPlaneUrl, token);
-    const installations = await fetchFleet(session.controlPlaneUrl, token);
-    setFleet(installations);
-    onSessionChange({ ...session, account: user, accountToken: token, fleet: installations });
-  }, [onSessionChange, session]);
-
-  useEffect(() => {
-    if (!session.accountToken || session.account) return;
-    void refreshAccount(session.accountToken).catch(() => {
-      clearAccountSession();
-      onSessionChange({ ...session, account: null, accountToken: null, fleet: [] });
-    });
-  }, [refreshAccount, session]);
-
-  const signInWithOtp = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      if (!otpSent) {
-        await requestAccountOtp(session.controlPlaneUrl, email);
-        setOtpSent(true);
-      } else {
-        const verified = await verifyAccountOtp(session.controlPlaneUrl, email, otp);
-        persistAccountSession(verified.accountToken);
-        await refreshAccount(verified.accountToken);
-        setMode("account");
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Sign-in could not finish.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const signInWithPocketId = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const returnTo = `${globalThis.location?.origin ?? ""}${globalThis.location?.pathname ?? "/"}${globalThis.location?.search || "?client=web"}`;
-      const callbackURL = pocketIdCallbackURL(session.controlPlaneUrl, returnTo);
-      const url = await startPocketIdSignIn(session.controlPlaneUrl, callbackURL);
-      const appOrigin = globalThis.location?.origin ?? "";
-      const handoff = waitForWebAuthHandoff(session.controlPlaneUrl, appOrigin);
-      const popup = globalThis.open("", "omb_pocketid", "width=520,height=720");
-      if (!popup) {
-        throw new Error("Allow pop-ups to finish PocketID sign-in.");
-      }
-      popup.location.href = url;
-      const code = await handoff;
-      popup.close();
-      const token = await completeWebAuthHandoff(session.controlPlaneUrl, code);
-      persistAccountSession(token);
-      await refreshAccount(token);
-      setMode("account");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "PocketID sign-in is not available right now. Use email instead.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const pairSelectedHub = async () => {
-    if (!selectedHub?.endpoint?.url) {
-      setError("That system is not reachable yet. Pair directly with its address instead.");
-      return;
-    }
-    setMode("direct");
-    setHubUrl(selectedHub.endpoint.url);
-  };
+  const windowClosed = failure?.kind === "window-closed";
 
   const pairDirect = async () => {
+    const requestId = pairRequestId ?? createPairRequestId();
+    if (requestId !== pairRequestId) setPairRequestId(requestId);
     setBusy(true);
-    setError(null);
+    setFailure(null);
     try {
       const hub = await pairDirectHub({
         baseUrl: hubUrl,
         credential,
         deviceName,
+        pairRequestId: requestId,
       });
       onSessionChange({ ...session, hub });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Pairing could not finish.");
+      // The hub's own sentences reach the user untouched; only genuinely
+      // unknown failures (network, non-JSON) get this client's wording.
+      const message = e instanceof Error ? e.message : "Pairing could not finish.";
+      const kind = e instanceof HubPairError ? e.kind : "unknown";
+      setFailure({ message, kind });
+      // A burned window means the next submit is a new attempt, not a retry.
+      if (kind === "window-closed") setPairRequestId(null);
     } finally {
       setBusy(false);
     }
+  };
+
+  const startOver = () => {
+    setFailure(null);
+    setCredential("");
+    setPairRequestId(createPairRequestId());
   };
 
   return (
     <div data-web-client-gate className="flex min-h-screen items-center justify-center bg-app px-4 py-8 text-ink">
       <div className="w-full max-w-md rounded-2xl border border-hairline/50 bg-panel p-5 shadow-2xl shadow-black/40 sm:p-6">
         <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-ink-secondary">V Bot · Web</div>
-        <h1 className="mt-2 text-[22px] font-semibold tracking-tight">V Bot on the web</h1>
+        <h1 className="mt-2 text-[22px] font-semibold tracking-tight">Pair this browser</h1>
         <p className="mt-2 text-[13px] leading-relaxed text-ink-secondary">
-          Account sign-in discovers your systems. Hub pairing still requires a code, QR, or invitation from the hub.
+          Open Phone settings on your computer to start pairing, then enter the code it shows.
         </p>
 
-        {mode === "choose" && (
-          <div className="mt-5 flex flex-col gap-2.5">
-            <button
-              type="button"
-              className="rounded-xl bg-accent px-4 py-3 text-left text-[13px] font-semibold text-accent-ink transition hover:brightness-110"
-              onClick={() => setMode("account")}
-            >
-              Sign in to find my systems
-            </button>
-            <button
-              type="button"
-              className="rounded-xl bg-control px-4 py-3 text-left text-[13px] font-medium text-ink transition hover:bg-raised"
-              onClick={() => setMode("direct")}
-            >
-              Pair directly
-            </button>
-          </div>
-        )}
+        <div data-web-pair-form className="mt-6 flex flex-col gap-4">
+          <label className="flex flex-col gap-1.5 text-[13px]">
+            Hub address
+            <input
+              name="hubUrl"
+              className="rounded-lg bg-inset px-3 py-2"
+              value={hubUrl}
+              onChange={(event) => setHubUrl(event.target.value)}
+              placeholder={defaultWebHubUrl()}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <label className="flex flex-col gap-1.5 text-[13px]">
+            Pairing code or invitation
+            <input
+              name="credential"
+              className="rounded-lg bg-inset px-3 py-2"
+              value={credential}
+              onChange={(event) => setCredential(event.target.value)}
+              autoComplete="one-time-code"
+              spellCheck={false}
+            />
+          </label>
+          <label className="flex flex-col gap-1.5 text-[13px]">
+            Device name
+            <input
+              name="deviceName"
+              className="rounded-lg bg-inset px-3 py-2"
+              value={deviceName}
+              onChange={(event) => setDeviceName(event.target.value)}
+            />
+          </label>
 
-        {mode === "account" && (
-          <div className="mt-6 flex flex-col gap-4">
-            {!session.account ? (
-              <>
-                <label className="flex flex-col gap-1.5 text-[13px]">
-                  Email
-                  <input
-                    className="rounded-lg bg-inset px-3 py-2"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                    autoComplete="email"
-                  />
-                </label>
-                {otpSent && (
-                  <label className="flex flex-col gap-1.5 text-[13px]">
-                    Code
-                    <input
-                      className="rounded-lg bg-inset px-3 py-2 tracking-[0.2em]"
-                      value={otp}
-                      onChange={(event) => setOtp(event.target.value)}
-                      inputMode="numeric"
-                    />
-                  </label>
-                )}
-                <div className="flex flex-wrap gap-2">
+          {failure && (
+            <div
+              role="alert"
+              data-pair-failure={failure.kind}
+              className={
+                failure.kind === "wrong-code" || failure.kind === "unknown"
+                  ? "text-[13px] leading-relaxed text-danger"
+                  : "rounded-xl border border-hairline/60 bg-inset px-3 py-3 text-[13px] leading-relaxed"
+              }
+            >
+              <p className={failure.kind === "wrong-code" || failure.kind === "unknown" ? "" : "font-medium text-ink"}>
+                {failure.message}
+              </p>
+              {failure.kind === "wrong-code" && (
+                <p className="mt-1 text-ink-secondary">
+                  Check the code on your computer and try again. Pairing closes after five wrong codes.
+                </p>
+              )}
+              {windowClosed && (
+                <>
+                  <p className="mt-1 text-ink-secondary">
+                    That pairing window is closed, so retyping the same code will not work. Start pairing again on
+                    your computer, then enter the new code here.
+                  </p>
                   <button
                     type="button"
-                    disabled={busy}
-                    className="inline-flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-accent-ink disabled:opacity-50"
-                    onClick={() => void signInWithOtp()}
+                    onClick={startOver}
+                    className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-control px-3 py-2 text-[13px] font-medium text-ink transition hover:bg-raised"
                   >
-                    {busy ? <Loader2 size={14} className="animate-spin" /> : <Mail size={14} />}
-                    {otpSent ? "Verify code" : "Email me a code"}
+                    <RotateCcw size={14} />
+                    Start over with a new code
                   </button>
-                  {session.pocketIdEnabled && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      className="rounded-lg bg-control px-3 py-2 text-[13px] font-medium"
-                      onClick={() => void signInWithPocketId()}
-                    >
-                      Sign in with PocketID
-                    </button>
-                  )}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="rounded-xl bg-inset px-3 py-3 text-[13px]">
-                  Signed in as <span className="font-medium">{session.account.email}</span>
-                </div>
-                <div className="flex flex-col gap-2">
-                  {fleet.map((installation) => (
-                    <button
-                      key={installation.id}
-                      type="button"
-                      className={`rounded-xl border px-3 py-3 text-left text-[13px] ${
-                        selectedHub?.id === installation.id ? "border-accent bg-accent/10" : "border-border bg-inset"
-                      }`}
-                      onClick={() => setSelectedHub(installation)}
-                    >
-                      <div className="font-medium">{installation.name}</div>
-                      <div className="mt-1 flex items-center gap-2 text-ink-secondary">
-                        <Wifi size={13} />
-                        {installation.online ? "Online" : "Offline"}
-                        {installation.endpoint?.status === "ready" ? " · Ready" : " · Needs setup"}
-                      </div>
-                    </button>
-                  ))}
-                  {!fleet.length && (
-                    <p className="text-[13px] text-ink-secondary">No owned systems yet.</p>
-                  )}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-accent-ink"
-                    onClick={() => void pairSelectedHub()}
-                  >
-                    Continue to hub pairing
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-lg bg-control px-3 py-2 text-[13px]"
-                    onClick={() => {
-                      clearAccountSession();
-                      onSessionChange({ ...session, account: null, accountToken: null, fleet: [] });
-                    }}
-                  >
-                    Sign out
-                  </button>
-                </div>
-              </>
-            )}
-            <button type="button" className="text-[12px] text-ink-secondary" onClick={() => setMode("choose")}>
-              Back
-            </button>
-          </div>
-        )}
+                </>
+              )}
+              {failure.kind === "device-limit" && (
+                <p className="mt-1 text-ink-secondary">
+                  Your code is fine — the hub already has as many paired devices as it allows. Remove one on the hub
+                  (this browser cannot do it yet), then pair again.
+                </p>
+              )}
+              {failure.kind === "save-failed" && (
+                <p className="mt-1 text-ink-secondary">The hub could not store this device. Try again in a moment.</p>
+              )}
+            </div>
+          )}
 
-        {mode === "direct" && (
-          <div className="mt-6 flex flex-col gap-4">
-            <label className="flex flex-col gap-1.5 text-[13px]">
-              Hub address
-              <input
-                className="rounded-lg bg-inset px-3 py-2"
-                value={hubUrl}
-                onChange={(event) => setHubUrl(event.target.value)}
-                placeholder="https://your-hub.example"
-              />
-            </label>
-            <label className="flex flex-col gap-1.5 text-[13px]">
-              Pairing code or invitation
-              <input
-                className="rounded-lg bg-inset px-3 py-2"
-                value={credential}
-                onChange={(event) => setCredential(event.target.value)}
-              />
-            </label>
-            <label className="flex flex-col gap-1.5 text-[13px]">
-              Device name
-              <input
-                className="rounded-lg bg-inset px-3 py-2"
-                value={deviceName}
-                onChange={(event) => setDeviceName(event.target.value)}
-              />
-            </label>
-            <button
-              type="button"
-              disabled={busy}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-accent-ink disabled:opacity-50"
-              onClick={() => void pairDirect()}
-            >
-              {busy ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-              Pair this browser
-            </button>
-            <button type="button" className="text-[12px] text-ink-secondary" onClick={() => setMode("choose")}>
-              Back
-            </button>
-          </div>
-        )}
-
-        {error && <p className="mt-4 text-[13px] text-danger">{error}</p>}
+          <button
+            type="button"
+            disabled={busy || windowClosed || !credential.trim()}
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-accent-ink disabled:opacity-50"
+            onClick={() => void pairDirect()}
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+            Pair this browser
+          </button>
+        </div>
       </div>
     </div>
   );
