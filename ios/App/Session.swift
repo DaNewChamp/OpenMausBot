@@ -2005,7 +2005,7 @@ final class Session: ObservableObject {
     @discardableResult
     func sendLocalVmInput(for bot: Bot, body: [String: Any]) async -> String? {
         guard localVmAccess, let client else {
-            return "Enable Local VM access for this phone in OpenMausBot → Settings → Companion."
+            return "Enable Local VM access for this phone in Vi Bot → Settings → Companion."
         }
         do {
             let result = try await client.localVmInput(botId: bot.id, body: body)
@@ -2030,7 +2030,7 @@ final class Session: ObservableObject {
         if code == 403,
            let message,
            message.contains("Local VM access is managed per phone") {
-            return "This phone needs an updated companion on your Mac. Open OpenMausBot on the computer, then restart the sidecar or redeploy the hosted runtime."
+            return "This phone needs an updated companion on your Mac. Open Vi Bot on the computer, then restart the sidecar or redeploy the hosted runtime."
         }
         return error.localizedDescription
     }

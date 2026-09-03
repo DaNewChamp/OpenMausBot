@@ -1,0 +1,317 @@
+2026-09-03 18:55:26 +0000 [MT] Initial pipeline context: <IDEDistributionProcessingPipelineContext: 0x819aec900; archive(resolved)="<IDEArchive: 0x81c118380>", distributionTask(resolved)="2", distributionDestination(resolved)="1", distributionMethod(resolved)="<IDEDistributionMethodDevelopmentSigned: 0x81a353a80>", team(resolved)="<IDEProvisioningBasicTeam: 0x819a03b60; teamID='LT58RNRW7E', teamName='(null)'>">
+	Chain (14, self inclusive):
+	<IDEDistributionProcessingPipelineContext: 0x819aec900; archive = "<IDEArchive: 0x81c118380>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x81a353a80>", team="<IDEProvisioningBasicTeam: 0x819a03b60; teamID='LT58RNRW7E', teamName='(null)'>">
+	<IDEDistributionProcessingPipelineContext: 0x819aecc00; archive = "<IDEArchive: 0x81c118380>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x81a353a80>", team="<IDEProvisioningBasicTeam: 0x819a03b60; teamID='LT58RNRW7E', teamName='(null)'>">
+	<IDEDistributionContext: 0x81c216f80; archive = "<IDEArchive: 0x81c118380>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x81a353a80>", team="<IDEProvisioningBasicTeam: 0x819a03b60; teamID='LT58RNRW7E', teamName='(null)'>">
+	<IDEDistributionContext: 0x81c216080; archive = "<IDEArchive: 0x81c118380>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x81a353a80>", team="<IDEProvisioningBasicTeam: 0x819a03b60; teamID='LT58RNRW7E', teamName='(null)'>">
+	<IDEDistributionContext: 0x81c215e00; archive = "<IDEArchive: 0x81c118380>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x81a353a80>", team="<IDEProvisioningBasicTeam: 0x819a03b60; teamID='LT58RNRW7E', teamName='(null)'>">
+	<IDEDistributionContext: 0x81c215b80; archive = "<IDEArchive: 0x81c118380>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x81a353a80>", team="<IDEProvisioningBasicTeam: 0x819a03b60; teamID='LT58RNRW7E', teamName='(null)'>">
+	<IDEDistributionContext: 0x81c215680; archive = "<IDEArchive: 0x81c118380>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x81a353a80>", team="<IDEProvisioningBasicTeam: 0x819a03b60; teamID='LT58RNRW7E', teamName='(null)'>">
+	<IDEDistributionContext: 0x81c215400; archive = "<IDEArchive: 0x81c118380>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x81a353a80>", team="<IDEProvisioningBasicTeam: 0x819a03b60; teamID='LT58RNRW7E', teamName='(null)'>">
+	<IDEDistributionContext: 0x81c215180; archive = "<IDEArchive: 0x81c118380>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x81a353a80>", team="<IDEProvisioningBasicTeam: 0x819a03b60; teamID='LT58RNRW7E', teamName='(null)'>">
+	<IDEDistributionContext: 0x81c214f00; archive = "<IDEArchive: 0x81c118380>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x81a353a80>", team="(null)">
+	<IDEDistributionContext: 0x81c214c80; archive = "<IDEArchive: 0x81c118380>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x81a353a80>", team="(null)">
+	<IDEDistributionContext: 0x81c214a00; archive = "<IDEArchive: 0x81c118380>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x81a353a80>", team="(null)">
+	<IDEDistributionContext: 0x81c214280; archive = "<IDEArchive: 0x81c118380>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x81a353a80>", team="(null)">
+	<IDEDistributionContext: 0x102bbb4d0; archive = "<IDEArchive: 0x81c118380>", distributionMethod="(null)", team="(null)">
+</IDEDistributionProcessingPipelineContext: 0x819aec900>
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionCreateDestRootStep
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionCopyItemStep
+2026-09-03 18:55:26 +0000 [MT] Running /usr/bin/ditto '-V' '/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app' '/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root/Payload/OpenMausCompanion.app'
+2026-09-03 18:55:26 +0000  >>> Copying /Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app 
+2026-09-03 18:55:26 +0000  copying file ./OpenMausCompanion ... 
+2026-09-03 18:55:26 +0000  6914384 bytes for ./OpenMausCompanion
+2026-09-03 18:55:26 +0000  copying file ./_CodeSignature/CodeResources ... 
+6847 bytes for ./_CodeSignature/CodeResources
+copying file ./StorePreview.json ... 
+12730 bytes for ./StorePreview.json
+2026-09-03 18:55:26 +0000  copying file ./Metadata.appintents/version.json ... 
+2026-09-03 18:55:26 +0000  52 bytes for ./Metadata.appintents/version.json
+2026-09-03 18:55:26 +0000  copying file ./Metadata.appintents/extract.actionsdata ... 
+2026-09-03 18:55:26 +0000  3399 bytes for ./Metadata.appintents/extract.actionsdata
+2026-09-03 18:55:26 +0000  copying file ./PlugIns/OpenMausCompanionShare.appex/_CodeSignature/CodeResources ... 
+2026-09-03 18:55:26 +0000  2040 bytes for ./PlugIns/OpenMausCompanionShare.appex/_CodeSignature/CodeResources
+2026-09-03 18:55:26 +0000  copying file ./PlugIns/OpenMausCompanionShare.appex/OpenMausCompanionShare ... 
+2026-09-03 18:55:26 +0000  2191920 bytes for ./PlugIns/OpenMausCompanionShare.appex/OpenMausCompanionShare
+2026-09-03 18:55:26 +0000  copying file ./PlugIns/OpenMausCompanionShare.appex/embedded.mobileprovision ... 
+2026-09-03 18:55:26 +0000  20905 bytes for ./PlugIns/OpenMausCompanionShare.appex/embedded.mobileprovision
+2026-09-03 18:55:26 +0000  copying file ./PlugIns/OpenMausCompanionShare.appex/Info.plist ... 
+2026-09-03 18:55:26 +0000  1239 bytes for ./PlugIns/OpenMausCompanionShare.appex/Info.plist
+2026-09-03 18:55:26 +0000  copying file ./PlugIns/OpenMausCompanionWidgets.appex/_CodeSignature/CodeResources ... 
+2026-09-03 18:55:26 +0000  2554 bytes for ./PlugIns/OpenMausCompanionWidgets.appex/_CodeSignature/CodeResources
+2026-09-03 18:55:26 +0000  copying file ./PlugIns/OpenMausCompanionWidgets.appex/Metadata.appintents/version.json ... 
+2026-09-03 18:55:26 +0000  52 bytes for ./PlugIns/OpenMausCompanionWidgets.appex/Metadata.appintents/version.json
+2026-09-03 18:55:26 +0000  copying file ./PlugIns/OpenMausCompanionWidgets.appex/Metadata.appintents/extract.actionsdata ... 
+2026-09-03 18:55:26 +0000  3420 bytes for ./PlugIns/OpenMausCompanionWidgets.appex/Metadata.appintents/extract.actionsdata
+2026-09-03 18:55:26 +0000  copying file ./PlugIns/OpenMausCompanionWidgets.appex/OpenMausCompanionWidgets ... 
+2026-09-03 18:55:26 +0000  242912 bytes for ./PlugIns/OpenMausCompanionWidgets.appex/OpenMausCompanionWidgets
+2026-09-03 18:55:26 +0000  copying file ./PlugIns/OpenMausCompanionWidgets.appex/embedded.mobileprovision ... 
+2026-09-03 18:55:26 +0000  20460 bytes for ./PlugIns/OpenMausCompanionWidgets.appex/embedded.mobileprovision
+2026-09-03 18:55:26 +0000  copying file ./PlugIns/OpenMausCompanionWidgets.appex/Info.plist ... 
+2026-09-03 18:55:26 +0000  901 bytes for ./PlugIns/OpenMausCompanionWidgets.appex/Info.plist
+2026-09-03 18:55:26 +0000  copying file ./VBotMark60x60@2x.png ... 
+2026-09-03 18:55:26 +0000  18901 bytes for ./VBotMark60x60@2x.png
+2026-09-03 18:55:26 +0000  copying file ./Assets.car ... 
+2026-09-03 18:55:26 +0000  502872 bytes for ./Assets.car
+2026-09-03 18:55:26 +0000  copying file ./PrivacyInfo.xcprivacy ... 
+2026-09-03 18:55:26 +0000  630 bytes for ./PrivacyInfo.xcprivacy
+2026-09-03 18:55:26 +0000  copying file ./embedded.mobileprovision ... 
+2026-09-03 18:55:26 +0000  20863 bytes for ./embedded.mobileprovision
+2026-09-03 18:55:26 +0000  copying file ./VBotMark76x76@2x~ipad.png ... 
+2026-09-03 18:55:26 +0000  26126 bytes for ./VBotMark76x76@2x~ipad.png
+2026-09-03 18:55:26 +0000  copying file ./Info.plist ... 
+2026-09-03 18:55:26 +0000  2486 bytes for ./Info.plist
+2026-09-03 18:55:26 +0000  copying file ./PkgInfo ... 
+2026-09-03 18:55:26 +0000  8 bytes for ./PkgInfo
+2026-09-03 18:55:26 +0000 [MT] /usr/bin/ditto exited with 0
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionEmbedProfileStep
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionInfoPlistStep
+2026-09-03 18:55:26 +0000 [MT] Skipping step: IDEDistributionInfoPlistStep because it said so
+2026-09-03 18:55:26 +0000 [MT] Skipping step: IDEDistributionInfoPlistStep because it said so
+2026-09-03 18:55:26 +0000 [MT] Skipping step: IDEDistributionInfoPlistStep because it said so
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionAppThinningPlistStep
+2026-09-03 18:55:26 +0000 [MT] Skipping step: IDEDistributionAppThinningPlistStep because it said so
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionSymbolsStep
+2026-09-03 18:55:26 +0000 [MT] Skipping step: IDEDistributionSymbolsStep because it said so
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionAppThinningStep
+2026-09-03 18:55:26 +0000 [MT] Skipping step: IDEDistributionAppThinningStep because it said so
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionArchThinningStep
+2026-09-03 18:55:26 +0000 [MT] Archs to thin for item /Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex are []
+2026-09-03 18:55:26 +0000 [MT] Archs to thin for item /Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex are []
+2026-09-03 18:55:26 +0000 [MT] Archs to thin for item /Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app are []
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionODRStep
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionStripXattrsStep
+2026-09-03 18:55:26 +0000 [MT] Skipping stripping extended attributes because the codesign step will strip them.
+2026-09-03 18:55:26 +0000 [MT] Skipping stripping extended attributes because the codesign step will strip them.
+2026-09-03 18:55:26 +0000 [MT] Skipping stripping extended attributes because the codesign step will strip them.
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionCodesignStep
+2026-09-03 18:55:26 +0000 [MT] Entitlements for <IDEDistributionItem: 0x8199fcae0; bundleID='com.posival.openmausmobile.share', path='<DVTFilePath:0x81c118cb0:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x8199fca80; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x8199836c0; name='Apple Development: VINCENT LEWIS POSIVAL (CAK9FW8466)', hash='94EAF7D0D11218BD660EEAE2475B65F98AD19BDA', serialNumber='39CA0EE0C772F25CD71890745C87988B', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2026-08-21 21:52:53 +0000''>', entitlements='{
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile.share";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "com.apple.security.application-groups" =     (
+        "group.com.posival.openmausmobile"
+    );
+    "get-task-allow" = 1;
+}', teamID='LT58RNRW7E', identifier='com.posival.openmausmobile.share', executablePath='<DVTFilePath:0x81c118d20:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex/OpenMausCompanionShare'>', hardenedRuntime='0'>'>: {
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile.share";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "com.apple.security.application-groups" =     (
+        "group.com.posival.openmausmobile"
+    );
+    "get-task-allow" = 1;
+}
+2026-09-03 18:55:26 +0000 [MT] Associated App Clip Identifiers Filter: Skipping because "com.apple.developer.associated-appclip-app-identifiers" is not present
+2026-09-03 18:55:26 +0000 [MT] Entitlements for <IDEDistributionItem: 0x8199fcae0; bundleID='com.posival.openmausmobile.share', path='<DVTFilePath:0x81c118cb0:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x8199fca80; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x819980fc0; name='Apple Development: VINCENT LEWIS POSIVAL (CAK9FW8466)', hash='94EAF7D0D11218BD660EEAE2475B65F98AD19BDA', serialNumber='39CA0EE0C772F25CD71890745C87988B', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2026-08-21 21:52:53 +0000''>', entitlements='{
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile.share";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "com.apple.security.application-groups" =     (
+        "group.com.posival.openmausmobile"
+    );
+    "get-task-allow" = 1;
+}', teamID='LT58RNRW7E', identifier='com.posival.openmausmobile.share', executablePath='<DVTFilePath:0x81c118d20:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex/OpenMausCompanionShare'>', hardenedRuntime='0'>'> are: {
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile.share";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "com.apple.security.application-groups" =     (
+        "group.com.posival.openmausmobile"
+    );
+    "get-task-allow" = 1;
+}
+2026-09-03 18:55:26 +0000 [MT] Writing entitlements for <IDEDistributionItem: 0x8199fcae0; bundleID='com.posival.openmausmobile.share', path='<DVTFilePath:0x81c118cb0:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x8199fca80; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x819980fc0; name='Apple Development: VINCENT LEWIS POSIVAL (CAK9FW8466)', hash='94EAF7D0D11218BD660EEAE2475B65F98AD19BDA', serialNumber='39CA0EE0C772F25CD71890745C87988B', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2026-08-21 21:52:53 +0000''>', entitlements='{
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile.share";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "com.apple.security.application-groups" =     (
+        "group.com.posival.openmausmobile"
+    );
+    "get-task-allow" = 1;
+}', teamID='LT58RNRW7E', identifier='com.posival.openmausmobile.share', executablePath='<DVTFilePath:0x81c118d20:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex/OpenMausCompanionShare'>', hardenedRuntime='0'>'> to: /var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/entitlements~~~P1YcxO
+2026-09-03 18:55:26 +0000 [MT] invoking codesign: <NSConcreteTask: 0x81c6a2da0; launchPath='/usr/bin/codesign', arguments='(
+    "-f",
+    "-s",
+    94EAF7D0D11218BD660EEAE2475B65F98AD19BDA,
+    "--entitlements",
+    "/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/entitlements~~~P1YcxO",
+    "--preserve-metadata=identifier,flags,runtime,launch-constraints,library-constraints",
+    "--generate-entitlement-der",
+    "--strip-disallowed-xattrs",
+    "-vvv",
+    "/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root/Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex"
+)'>
+2026-09-03 18:55:26 +0000 [MT] codesign output: /var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root/Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex: replacing existing signature
+/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root/Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex: signed bundle with Mach-O thin (arm64) [com.posival.openmausmobile.share]
+2026-09-03 18:55:26 +0000 [MT] Entitlements for <IDEDistributionItem: 0x8199fcb40; bundleID='com.posival.openmausmobile.widgets', path='<DVTFilePath:0x81c118e00:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x8199fcba0; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x8199836c0; name='Apple Development: VINCENT LEWIS POSIVAL (CAK9FW8466)', hash='94EAF7D0D11218BD660EEAE2475B65F98AD19BDA', serialNumber='39CA0EE0C772F25CD71890745C87988B', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2026-08-21 21:52:53 +0000''>', entitlements='{
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile.widgets";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "get-task-allow" = 1;
+}', teamID='LT58RNRW7E', identifier='com.posival.openmausmobile.widgets', executablePath='<DVTFilePath:0x81c118f50:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/OpenMausCompanionWidgets'>', hardenedRuntime='0'>'>: {
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile.widgets";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "get-task-allow" = 1;
+}
+2026-09-03 18:55:26 +0000 [MT] Associated App Clip Identifiers Filter: Skipping because "com.apple.developer.associated-appclip-app-identifiers" is not present
+2026-09-03 18:55:26 +0000 [MT] Entitlements for <IDEDistributionItem: 0x8199fcb40; bundleID='com.posival.openmausmobile.widgets', path='<DVTFilePath:0x81c118e00:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x8199fcba0; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x819980fc0; name='Apple Development: VINCENT LEWIS POSIVAL (CAK9FW8466)', hash='94EAF7D0D11218BD660EEAE2475B65F98AD19BDA', serialNumber='39CA0EE0C772F25CD71890745C87988B', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2026-08-21 21:52:53 +0000''>', entitlements='{
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile.widgets";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "get-task-allow" = 1;
+}', teamID='LT58RNRW7E', identifier='com.posival.openmausmobile.widgets', executablePath='<DVTFilePath:0x81c118f50:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/OpenMausCompanionWidgets'>', hardenedRuntime='0'>'> are: {
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile.widgets";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "get-task-allow" = 1;
+}
+2026-09-03 18:55:26 +0000 [MT] Writing entitlements for <IDEDistributionItem: 0x8199fcb40; bundleID='com.posival.openmausmobile.widgets', path='<DVTFilePath:0x81c118e00:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x8199fcba0; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x819980fc0; name='Apple Development: VINCENT LEWIS POSIVAL (CAK9FW8466)', hash='94EAF7D0D11218BD660EEAE2475B65F98AD19BDA', serialNumber='39CA0EE0C772F25CD71890745C87988B', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2026-08-21 21:52:53 +0000''>', entitlements='{
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile.widgets";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "get-task-allow" = 1;
+}', teamID='LT58RNRW7E', identifier='com.posival.openmausmobile.widgets', executablePath='<DVTFilePath:0x81c118f50:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/OpenMausCompanionWidgets'>', hardenedRuntime='0'>'> to: /var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/entitlements~~~WZFKwc
+2026-09-03 18:55:26 +0000 [MT] invoking codesign: <NSConcreteTask: 0x81c6a2ee0; launchPath='/usr/bin/codesign', arguments='(
+    "-f",
+    "-s",
+    94EAF7D0D11218BD660EEAE2475B65F98AD19BDA,
+    "--entitlements",
+    "/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/entitlements~~~WZFKwc",
+    "--preserve-metadata=identifier,flags,runtime,launch-constraints,library-constraints",
+    "--generate-entitlement-der",
+    "--strip-disallowed-xattrs",
+    "-vvv",
+    "/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root/Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex"
+)'>
+2026-09-03 18:55:26 +0000 [MT] codesign output: /var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root/Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex: replacing existing signature
+/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root/Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex: signed bundle with Mach-O thin (arm64) [com.posival.openmausmobile.widgets]
+2026-09-03 18:55:26 +0000 [MT] Entitlements for <IDEDistributionItem: 0x8199fcc00; bundleID='com.posival.openmausmobile', path='<DVTFilePath:0x81c1183f0:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x8199fcc60; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x8199836c0; name='Apple Development: VINCENT LEWIS POSIVAL (CAK9FW8466)', hash='94EAF7D0D11218BD660EEAE2475B65F98AD19BDA', serialNumber='39CA0EE0C772F25CD71890745C87988B', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2026-08-21 21:52:53 +0000''>', entitlements='{
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "com.apple.security.application-groups" =     (
+        "group.com.posival.openmausmobile"
+    );
+    "get-task-allow" = 1;
+}', teamID='LT58RNRW7E', identifier='com.posival.openmausmobile', executablePath='<DVTFilePath:0x81c1188c0:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/OpenMausCompanion'>', hardenedRuntime='0'>'>: {
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "com.apple.security.application-groups" =     (
+        "group.com.posival.openmausmobile"
+    );
+    "get-task-allow" = 1;
+}
+2026-09-03 18:55:26 +0000 [MT] Associated App Clip Identifiers Filter: Skipping because "com.apple.developer.associated-appclip-app-identifiers" is not present
+2026-09-03 18:55:26 +0000 [MT] Entitlements for <IDEDistributionItem: 0x8199fcc00; bundleID='com.posival.openmausmobile', path='<DVTFilePath:0x81c1183f0:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x8199fcc60; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x819980fc0; name='Apple Development: VINCENT LEWIS POSIVAL (CAK9FW8466)', hash='94EAF7D0D11218BD660EEAE2475B65F98AD19BDA', serialNumber='39CA0EE0C772F25CD71890745C87988B', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2026-08-21 21:52:53 +0000''>', entitlements='{
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "com.apple.security.application-groups" =     (
+        "group.com.posival.openmausmobile"
+    );
+    "get-task-allow" = 1;
+}', teamID='LT58RNRW7E', identifier='com.posival.openmausmobile', executablePath='<DVTFilePath:0x81c1188c0:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/OpenMausCompanion'>', hardenedRuntime='0'>'> are: {
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "com.apple.security.application-groups" =     (
+        "group.com.posival.openmausmobile"
+    );
+    "get-task-allow" = 1;
+}
+2026-09-03 18:55:26 +0000 [MT] Writing entitlements for <IDEDistributionItem: 0x8199fcc00; bundleID='com.posival.openmausmobile', path='<DVTFilePath:0x81c1183f0:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x8199fcc60; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x819980fc0; name='Apple Development: VINCENT LEWIS POSIVAL (CAK9FW8466)', hash='94EAF7D0D11218BD660EEAE2475B65F98AD19BDA', serialNumber='39CA0EE0C772F25CD71890745C87988B', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2026-08-21 21:52:53 +0000''>', entitlements='{
+    "application-identifier" = "LT58RNRW7E.com.posival.openmausmobile";
+    "com.apple.developer.team-identifier" = LT58RNRW7E;
+    "com.apple.security.application-groups" =     (
+        "group.com.posival.openmausmobile"
+    );
+    "get-task-allow" = 1;
+}', teamID='LT58RNRW7E', identifier='com.posival.openmausmobile', executablePath='<DVTFilePath:0x81c1188c0:'/Users/Vincent/Github/.worktrees/vbot-int-qr-pairing/build/archive-wifi.xcarchive/Products/Applications/OpenMausCompanion.app/OpenMausCompanion'>', hardenedRuntime='0'>'> to: /var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/entitlements~~~ZKsAib
+2026-09-03 18:55:26 +0000 [MT] invoking codesign: <NSConcreteTask: 0x81c6a2ee0; launchPath='/usr/bin/codesign', arguments='(
+    "-f",
+    "-s",
+    94EAF7D0D11218BD660EEAE2475B65F98AD19BDA,
+    "--entitlements",
+    "/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/entitlements~~~ZKsAib",
+    "--preserve-metadata=identifier,flags,runtime,launch-constraints,library-constraints",
+    "--generate-entitlement-der",
+    "--strip-disallowed-xattrs",
+    "-vvv",
+    "/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root/Payload/OpenMausCompanion.app"
+)'>
+2026-09-03 18:55:26 +0000 [MT] codesign output: /var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root/Payload/OpenMausCompanion.app: replacing existing signature
+/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root/Payload/OpenMausCompanion.app: signed app bundle with Mach-O thin (arm64) [com.posival.openmausmobile]
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionZipODRItemStep
+2026-09-03 18:55:26 +0000 [MT] Skipping step: IDEDistributionZipODRItemStep because it said so
+2026-09-03 18:55:26 +0000 [MT] Skipping step: IDEDistributionZipODRItemStep because it said so
+2026-09-03 18:55:26 +0000 [MT] Skipping step: IDEDistributionZipODRItemStep because it said so
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionCreateIPAStep
+2026-09-03 18:55:26 +0000 [MT] Running /usr/bin/ditto '-V' '-c' '-k' '--norsrc' '/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root' '/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Packages/OpenMausCompanion.ipa'
+2026-09-03 18:55:26 +0000  >>> Copying /var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root 
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/OpenMausCompanion ... 
+2026-09-03 18:55:26 +0000  6914384 bytes for ./Payload/OpenMausCompanion.app/OpenMausCompanion
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/_CodeSignature/CodeResources ... 
+2026-09-03 18:55:26 +0000  6847 bytes for ./Payload/OpenMausCompanion.app/_CodeSignature/CodeResources
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/StorePreview.json ... 
+2026-09-03 18:55:26 +0000  12730 bytes for ./Payload/OpenMausCompanion.app/StorePreview.json
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/Metadata.appintents/version.json ... 
+2026-09-03 18:55:26 +0000  52 bytes for ./Payload/OpenMausCompanion.app/Metadata.appintents/version.json
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/Metadata.appintents/extract.actionsdata ... 
+2026-09-03 18:55:26 +0000  3399 bytes for ./Payload/OpenMausCompanion.app/Metadata.appintents/extract.actionsdata
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex/_CodeSignature/CodeResources ... 
+2026-09-03 18:55:26 +0000  2040 bytes for ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex/_CodeSignature/CodeResources
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex/OpenMausCompanionShare ... 
+2026-09-03 18:55:26 +0000  2191920 bytes for ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex/OpenMausCompanionShare
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex/embedded.mobileprovision ... 
+2026-09-03 18:55:26 +0000  20905 bytes for ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex/embedded.mobileprovision
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex/Info.plist ... 
+2026-09-03 18:55:26 +0000  1239 bytes for ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex/Info.plist
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/_CodeSignature/CodeResources ... 
+2026-09-03 18:55:26 +0000  2554 bytes for ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/_CodeSignature/CodeResources
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/Metadata.appintents/version.json ... 
+2026-09-03 18:55:26 +0000  52 bytes for ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/Metadata.appintents/version.json
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/Metadata.appintents/extract.actionsdata ... 
+2026-09-03 18:55:26 +0000  3420 bytes for ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/Metadata.appintents/extract.actionsdata
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/OpenMausCompanionWidgets ... 
+2026-09-03 18:55:26 +0000  242912 bytes for ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/OpenMausCompanionWidgets
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/embedded.mobileprovision ... 
+2026-09-03 18:55:26 +0000  20460 bytes for ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/embedded.mobileprovision
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/Info.plist ... 
+2026-09-03 18:55:26 +0000  901 bytes for ./Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex/Info.plist
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/VBotMark60x60@2x.png ... 
+2026-09-03 18:55:26 +0000  18901 bytes for ./Payload/OpenMausCompanion.app/VBotMark60x60@2x.png
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/Assets.car ... 
+2026-09-03 18:55:26 +0000  502872 bytes for ./Payload/OpenMausCompanion.app/Assets.car
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/PrivacyInfo.xcprivacy ... 
+2026-09-03 18:55:26 +0000  630 bytes for ./Payload/OpenMausCompanion.app/PrivacyInfo.xcprivacy
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/embedded.mobileprovision ... 
+2026-09-03 18:55:26 +0000  20863 bytes for ./Payload/OpenMausCompanion.app/embedded.mobileprovision
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/VBotMark76x76@2x~ipad.png ... 
+2026-09-03 18:55:26 +0000  26126 bytes for ./Payload/OpenMausCompanion.app/VBotMark76x76@2x~ipad.png
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/Info.plist ... 
+2026-09-03 18:55:26 +0000  2486 bytes for ./Payload/OpenMausCompanion.app/Info.plist
+2026-09-03 18:55:26 +0000  copying file ./Payload/OpenMausCompanion.app/PkgInfo ... 
+2026-09-03 18:55:26 +0000  8 bytes for ./Payload/OpenMausCompanion.app/PkgInfo
+2026-09-03 18:55:26 +0000 [MT] /usr/bin/ditto exited with 0
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionAppStoreInformationStep
+2026-09-03 18:55:26 +0000 [MT] Skipping step: IDEDistributionAppStoreInformationStep because it said so
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionGenerateProcessedDistributionItems
+2026-09-03 18:55:26 +0000 [MT] IDEDistributionItem init <DVTFilePath:0x81c603640:'/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root/Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionShare.appex'>
+2026-09-03 18:55:26 +0000 [MT] IDEDistributionItem init <DVTFilePath:0x81c6036b0:'/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root/Payload/OpenMausCompanion.app/PlugIns/OpenMausCompanionWidgets.appex'>
+2026-09-03 18:55:26 +0000 [MT] IDEDistributionItem init <DVTFilePath:0x81c6025a0:'/var/folders/x1/90qrnqsn2mq8v6z02xm6g_q00000gp/T/XcodeDistPipeline.~~~oiDWpq/Root/Payload/OpenMausCompanion.app'>
+2026-09-03 18:55:26 +0000 [MT] Processing step: IDEDistributionCreateManifestStep

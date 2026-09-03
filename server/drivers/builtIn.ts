@@ -18,6 +18,7 @@ import { CustomAcpDriver } from "./acp/custom.ts";
 import { OpenAICompatDriver } from "./openai-compat.ts";
 import { PiDriver } from "./pi.ts";
 import { MinimaxDriver } from "./minimax.ts";
+import { ZaiDriver } from "./zai.ts";
 import { GrokReconstructedDriver } from "./grok-reconstructed.ts";
 
 export const BUILT_IN_DRIVERS: readonly AnyProviderDriver[] = [
@@ -39,4 +40,5 @@ export const BUILT_IN_DRIVERS: readonly AnyProviderDriver[] = [
   AntigravityDriver,
   BoxAgentDriver,
   MinimaxDriver,
+  ZaiDriver,
 ];

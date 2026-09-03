@@ -308,6 +308,7 @@ export interface ConfigStatus {
   rooms: { turnTimeoutMinutes: number };
   localVm: { mode: "shared" | "per-bot"; maxInstances: number };
   opencodeGo?: { configured: boolean };
+  zai?: { configured: boolean };
   /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
    * a voice, which is what it takes to actually speak. The key itself is
    * never echoed back. */
@@ -333,7 +334,7 @@ export interface BrowserProfile {
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "composio" | "box" | "vps" | "rooms" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile" | "features" | "browserProfiles" | "houseStyle"
+  "xai" | "composio" | "box" | "vps" | "rooms" | "localVm" | "opencodeGo" | "zai" | "tts" | "imageGen" | "profile" | "features" | "browserProfiles" | "houseStyle"
 >;
 
 export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
@@ -345,6 +346,7 @@ export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
     rooms: frame.rooms,
     localVm: frame.localVm,
     opencodeGo: frame.opencodeGo,
+    zai: frame.zai,
     tts: frame.tts,
     imageGen: frame.imageGen,
     profile: frame.profile,
