@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   DATA_DIR,
+  DEFAULT_HOUSE_STYLE_INSTRUCTIONS,
   defaultPermissionMode,
+  houseStyleEnabled,
+  houseStyleInstructions,
   instanceConfigs,
   isValidSshAlias,
   loadConfig,
@@ -114,6 +117,19 @@ describe("configuration boundaries", () => {
     expect(() => parseConfigPatch({
       approvalReviewer: { mode: "always", instanceId: "openaiCompat", model: "llama", key: "sk-secret" },
     })).toThrow();
+  });
+
+  it("keeps house style on with the shipped text and accepts an owner override", () => {
+    expect(houseStyleEnabled({})).toBe(true);
+    expect(houseStyleInstructions({})).toBe(DEFAULT_HOUSE_STYLE_INSTRUCTIONS);
+    expect(parseConfigPatch({ houseStyle: { enabled: false, instructions: "Always rhyme." } })).toEqual({
+      houseStyle: { enabled: false, instructions: "Always rhyme." },
+    });
+    expect(houseStyleEnabled({ houseStyle: { enabled: false } })).toBe(false);
+    expect(houseStyleInstructions({ houseStyle: { instructions: "  Always rhyme.  " } })).toBe("Always rhyme.");
+    expect(houseStyleInstructions({ houseStyle: { instructions: "   " } })).toBe(DEFAULT_HOUSE_STYLE_INSTRUCTIONS);
+    expect(() => parseConfigPatch({ houseStyle: { instructions: 42 } })).toThrow("houseStyle.instructions");
+    expect(() => parseConfigPatch({ houseStyle: { enabled: "yes" } })).toThrow("houseStyle.enabled");
   });
 
   it.each([0, 1.5, 5, "2", null])("rejects an invalid per-bot VM limit: %j", (maxInstances) => {

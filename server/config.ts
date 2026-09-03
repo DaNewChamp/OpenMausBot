@@ -75,6 +75,13 @@ const permissionConfigSchema = z.object({
   /** App-wide default for permission requests. Per-bot overrides win. */
   defaultMode: z.enum(PERMISSION_MODES).optional(),
 });
+const MAX_HOUSE_STYLE_INSTRUCTIONS = 4_000;
+const houseStyleConfigSchema = z.object({
+  /** Global voice instructions prepended to every bot's prompt. Absent = on
+   * with the shipped default text. */
+  enabled: z.boolean().optional(),
+  instructions: z.string().max(MAX_HOUSE_STYLE_INSTRUCTIONS).optional(),
+});
 const APPROVAL_REVIEWER_MODES = ["off", "when-unclear", "always"] as const;
 const approvalReviewerConfigSchema = z.object({
   /** When to ask a model to rewrite the display-only approval summary. */
@@ -133,6 +140,7 @@ const appConfigSchema = z.object({
   features: featureConfigSchema.optional(),
   permissions: permissionConfigSchema.optional(),
   approvalReviewer: approvalReviewerConfigSchema.optional(),
+  houseStyle: houseStyleConfigSchema.optional(),
   vbot: vbotConfigSchema.optional(),
   bridgeSshTargets: bridgeSshTargetsConfigSchema.optional(),
   instances: instanceConfigMapSchema.optional(),
@@ -166,6 +174,10 @@ export interface AppConfig {
     instanceId?: string;
     model?: string;
   };
+  /** Hub-wide voice instructions prepended to every bot's prompt. A bot's
+   * own instructions win when they say otherwise (see server/house-style.ts
+   * for the opt-out marker). */
+  houseStyle?: { enabled?: boolean; instructions?: string };
   /** V Bot engine selection. OpenMaus remains the default fallback. */
   vbot?: {
     primaryEngine?: "openmaus" | "grokReconstructed";
@@ -225,6 +237,23 @@ export function skillRecorderEnabled(cfg: AppConfig): boolean {
  * safest mode until an owner explicitly chooses another behavior. */
 export function defaultPermissionMode(cfg: AppConfig): PermissionMode {
   return cfg.permissions?.defaultMode ?? "ask";
+}
+
+/** The shipped global voice instructions. Written to sound the way it asks
+ * bots to sound: no em dashes, no AI-isms, no corporate hedging. */
+export const DEFAULT_HOUSE_STYLE_INSTRUCTIONS =
+  'Sound like a real person talking. Plain words, contractions, short sentences. No em dashes. No AI-isms ("I\'m an AI", "Great question", "As an AI", "I cannot", disclaimers nobody asked for). No emoji unless the person uses them first. Get to the point, answer what was actually asked, and it\'s fine to have a personality.';
+
+/** House style is on unless the hub owner turned it off. */
+export function houseStyleEnabled(cfg: AppConfig): boolean {
+  return cfg.houseStyle?.enabled !== false;
+}
+
+/** The effective global instructions: the saved text when the owner wrote
+ * one, otherwise the shipped default. */
+export function houseStyleInstructions(cfg: AppConfig): string {
+  const saved = cfg.houseStyle?.instructions?.trim();
+  return saved ? saved : DEFAULT_HOUSE_STYLE_INSTRUCTIONS;
 }
 
 /** Hermes Bot Chat is an opt-in adapter separate from generic Hermes ACP. */
@@ -371,7 +400,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     /* first write */
   }
   const checkedPatch = appConfigSchema.partial().parse(patch);
-  for (const key of ["xai", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm", "features", "permissions", "approvalReviewer", "vbot"] as const) {
+  for (const key of ["xai", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm", "features", "permissions", "approvalReviewer", "houseStyle", "vbot"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);
