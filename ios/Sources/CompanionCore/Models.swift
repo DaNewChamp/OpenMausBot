@@ -1421,16 +1421,14 @@ public struct ZAIKeyPatch: Encodable, Sendable {
     }
 }
 
-/// The narrow slice of desktop configuration the phone may change. Sections
-/// left nil are omitted, so the server only saves what was set.
-public struct ConfigPatch: Encodable, Sendable {
-    public var houseStyle: HouseStylePatch?
-    public var zai: ZAIKeyPatch?
+/// Server answer for the house-style save: the effective stored values.
+public struct HouseStyleEnvelope: Decodable, Sendable {
+    public let houseStyle: HouseStyleStatus
+}
 
-    public init(houseStyle: HouseStylePatch? = nil, zai: ZAIKeyPatch? = nil) {
-        self.houseStyle = houseStyle
-        self.zai = zai
-    }
+/// Server answer for a key save: the configured checkmark, never the key.
+public struct ZAIKeyEnvelope: Decodable, Sendable {
+    public let zai: ConfigFlag
 }
 
 public struct Profile: Codable, Hashable, Sendable {

@@ -52,24 +52,30 @@ final class HouseStyleConfigTests: XCTestCase {
         XCTAssertNil(status.xai?.configured)
     }
 
-    func testHouseStylePatchEncodesOnlyItsSection() throws {
-        let data = try JSONEncoder().encode(ConfigPatch(
-            houseStyle: HouseStylePatch(enabled: false, instructions: "No greetings.")
-        ))
+    func testHouseStylePatchEncodesTheNarrowBody() throws {
+        let data = try JSONEncoder().encode(HouseStylePatch(enabled: false, instructions: "No greetings."))
         let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        XCTAssertEqual(Set(body.keys), ["houseStyle"])
-        let houseStyle = try XCTUnwrap(body["houseStyle"] as? [String: Any])
-        XCTAssertEqual(houseStyle["enabled"] as? Bool, false)
-        XCTAssertEqual(houseStyle["instructions"] as? String, "No greetings.")
+        XCTAssertEqual(Set(body.keys), ["enabled", "instructions"])
+        XCTAssertEqual(body["enabled"] as? Bool, false)
+        XCTAssertEqual(body["instructions"] as? String, "No greetings.")
     }
 
-    func testAKeyPatchEncodesWriteOnlyAndEmptyPatchesEncodeEmpty() throws {
-        let keyData = try JSONEncoder().encode(ConfigPatch(zai: ZAIKeyPatch(apiKey: "zai-key")))
+    func testAKeyPatchIsWriteOnlyAndEnvelopesDecodeServerAnswers() throws {
+        let keyData = try JSONEncoder().encode(ZAIKeyPatch(apiKey: "zai-key"))
         let keyBody = try XCTUnwrap(try JSONSerialization.jsonObject(with: keyData) as? [String: Any])
-        XCTAssertEqual(Set(keyBody.keys), ["zai"])
-        XCTAssertEqual((keyBody["zai"] as? [String: Any])?["apiKey"] as? String, "zai-key")
+        XCTAssertEqual(Set(keyBody.keys), ["apiKey"])
+        XCTAssertEqual(keyBody["apiKey"] as? String, "zai-key")
 
-        let emptyData = try JSONEncoder().encode(ConfigPatch())
-        XCTAssertTrue(try XCTUnwrap(JSONSerialization.jsonObject(with: emptyData) as? [String: Any]).isEmpty)
+        let houseJSON = """
+        {"houseStyle": {"enabled": false, "instructions": "No greetings."}}
+        """
+        let house = try JSONDecoder().decode(HouseStyleEnvelope.self, from: Data(houseJSON.utf8))
+        XCTAssertEqual(house.houseStyle.enabled, false)
+
+        let zaiJSON = """
+        {"zai": {"configured": true}}
+        """
+        let zai = try JSONDecoder().decode(ZAIKeyEnvelope.self, from: Data(zaiJSON.utf8))
+        XCTAssertEqual(zai.zai.configured, true)
     }
 }

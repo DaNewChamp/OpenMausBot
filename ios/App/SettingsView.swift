@@ -660,15 +660,9 @@ struct SettingsView: View {
     private func saveHouseStyle() async {
         guard houseStyleLoaded, !houseStyleSaving else { return }
         houseStyleSaving = true
-        if let saved = await session.updateConfig(
-            ConfigPatch(houseStyle: HouseStylePatch(
-                enabled: houseStyleEnabled,
-                instructions: houseStyleInstructions
-            ))
-        ) {
-            config = saved
-            houseStyleEnabled = saved.houseStyle?.enabled ?? houseStyleEnabled
-            houseStyleInstructions = saved.houseStyle?.instructions ?? houseStyleInstructions
+        if let saved = await session.saveHouseStyle(enabled: houseStyleEnabled, instructions: houseStyleInstructions) {
+            houseStyleEnabled = saved.enabled
+            houseStyleInstructions = saved.instructions ?? houseStyleInstructions
         }
         houseStyleSaving = false
     }
@@ -677,8 +671,8 @@ struct SettingsView: View {
         let key = zaiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty, !zaiKeySaving else { return }
         zaiKeySaving = true
-        if let saved = await session.updateConfig(ConfigPatch(zai: ZAIKeyPatch(apiKey: key))) {
-            config = saved
+        if let flag = await session.saveZaiKey(key) {
+            config?.zai = flag
             zaiKeyDraft = ""
         }
         zaiKeySaving = false

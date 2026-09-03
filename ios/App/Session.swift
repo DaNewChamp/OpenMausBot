@@ -2990,9 +2990,15 @@ final class Session: ObservableObject {
         return try? await client.config()
     }
 
-    func updateConfig(_ patch: ConfigPatch) async -> ConfigStatus? {
+    func saveHouseStyle(enabled: Bool, instructions: String) async -> HouseStyleStatus? {
         guard let client else { return nil }
-        do { return try await client.setConfig(patch) }
+        do { return try await client.setHouseStyle(enabled: enabled, instructions: instructions) }
+        catch { actionError = error.localizedDescription; return nil }
+    }
+
+    func saveZaiKey(_ apiKey: String) async -> ConfigFlag? {
+        guard let client else { return nil }
+        do { return try await client.setZaiKey(apiKey) }
         catch { actionError = error.localizedDescription; return nil }
     }
 

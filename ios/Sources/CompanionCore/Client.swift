@@ -1310,8 +1310,18 @@ public struct CompanionClient: Sendable {
     /// Write the narrow slice of desktop configuration the phone owns. The
     /// server answers with the same status the desktop settings page reads,
     /// so callers can fold the response straight back into their state.
-    public func setConfig(_ patch: ConfigPatch) async throws -> ConfigStatus {
-        try await send(try makeRequest("PATCH", "/api/config", encodedBody: patch), as: ConfigStatus.self)
+    public func setHouseStyle(enabled: Bool, instructions: String) async throws -> HouseStyleStatus {
+        try await send(
+            try makeRequest("PATCH", "/api/config/house-style", encodedBody: HouseStylePatch(enabled: enabled, instructions: instructions)),
+            as: HouseStyleEnvelope.self
+        ).houseStyle
+    }
+
+    public func setZaiKey(_ apiKey: String) async throws -> ConfigFlag {
+        try await send(
+            try makeRequest("PATCH", "/api/config/zai-key", encodedBody: ZAIKeyPatch(apiKey: apiKey)),
+            as: ZAIKeyEnvelope.self
+        ).zai
     }
 
     /// Read the app-wide permission default from the paired computer. This
