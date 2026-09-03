@@ -517,6 +517,58 @@ describe("Hermes profile mcp_servers registration", () => {
     expect(launch.args.join(" ")).not.toMatch(/token|OMB_COMMS|Bearer|sk-|HERMES_HOME/i);
   });
 
+  it("preserves a pre-existing secret-shaped Hermes value without scanning or emitting it", async () => {
+    const { installHermesVbotConnector, hermesProfileConfigPath } = await import("./hermes-vbot-mcp.ts");
+    const hermesHome = profileHome("secret-preserve");
+    const sidecarPath = join(hermesHome, "..", "hermes-vbot-mcp.json");
+    const secret = "sk-ant-unrelated-secret-value-123456";
+    writeFileSync(
+      join(hermesHome, "config.yaml"),
+      `# keep this comment\nmodel:\n  default: z-ai/glm-5.2\ncustom:\n  api_key: ${secret}\n`,
+    );
+    const result = installHermesVbotConnector({
+      configPath: sidecarPath,
+      hermesHome,
+      profile: "default",
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-chief",
+      hubDisplayName: "Mac mini",
+    });
+    const yamlPath = hermesProfileConfigPath(hermesHome);
+    const text = readFileSync(yamlPath, "utf8");
+    const parsed = parseYaml(text) as {
+      model?: { default?: string };
+      custom?: { api_key?: string };
+      mcp_servers?: Record<string, { args?: string[] }>;
+    };
+    expect(parsed.custom?.api_key).toBe(secret);
+    expect(text).toContain(secret);
+    expect(text).toContain("# keep this comment");
+    expect(parsed.model).toEqual({ default: "z-ai/glm-5.2" });
+    expect(parsed.mcp_servers?.vbot?.args).toEqual(expect.arrayContaining(["--bot-scope", "bot-chief"]));
+    const sidecar = readFileSync(sidecarPath, "utf8");
+    expect(sidecar).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toMatch(/token|OMB_COMMS|Bearer|sk-|HERMES_HOME/i);
+    expect(sidecar).not.toMatch(/token|OMB_COMMS|Bearer|sk-|HERMES_HOME/i);
+    try {
+      installHermesVbotConnector({
+        configPath: sidecarPath,
+        hermesHome,
+        profile: "default",
+        socketPath: "/tmp/vbot.sock",
+        botScope: "bot-research",
+        hubDisplayName: "Mac mini",
+      });
+      throw new Error("expected a scope conflict");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toMatch(/scope|conflict|already bound/i);
+      expect(message).not.toContain(secret);
+      expect(JSON.stringify({ message, result })).not.toContain(secret);
+    }
+  });
+
   it("registers isolated per-profile bot scopes and rejects a bot already bound to another profile", async () => {
     const { installHermesVbotConnector, hermesProfileConfigPath } = await import("./hermes-vbot-mcp.ts");
     const root = mkdtempSync(join(tmpdir(), "vbot-hermes-profiles-"));

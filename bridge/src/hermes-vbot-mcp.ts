@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import readline from "node:readline";
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { parse as parseYaml, parseDocument, stringify as stringifyYaml } from "yaml";
 
 import { writeFileAtomic } from "../../server/atomic.ts";
 import { connectHermesVbotConnector, type JsonRpcRequest, type JsonRpcSuccess } from "./hermes-vbot-connector.ts";
@@ -430,6 +430,36 @@ function assertWritableLaunch(command: string, args: string[]): void {
   }
 }
 
+function assertGeneratedConnectorSafe(parts: unknown[]): void {
+  const generated = parts.map((part) => typeof part === "string" ? part : JSON.stringify(part)).join("\n");
+  if (SECRETISH.test(generated)) {
+    throw new Error("refusing to write secret-shaped Hermes connector metadata");
+  }
+}
+
+function writeHermesVbotYamlEntry(
+  configPath: string,
+  existingText: string,
+  entry: { command: string; args: string[] },
+): void {
+  assertWritableLaunch(entry.command, entry.args);
+  assertGeneratedConnectorSafe([
+    entry.command,
+    ...entry.args,
+    stringifyYaml({ command: entry.command, args: entry.args }),
+  ]);
+  let serialized: string;
+  if (!existingText.trim()) {
+    serialized = stringifyYaml({ mcp_servers: { vbot: entry } }, { indent: 2 }).trimEnd() + "\n";
+  } else {
+    const doc = parseDocument(existingText);
+    doc.setIn(["mcp_servers", "vbot"], entry);
+    const text = String(doc);
+    serialized = text.endsWith("\n") ? text : `${text}\n`;
+  }
+  writeFileAtomic(configPath, serialized, { mode: 0o600 });
+}
+
 function rejectScopeConflict(bindings: HermesVbotConnectorBinding[], profile: string, botScope: string): void {
   for (const binding of bindings) {
     if (binding.profile === profile && binding.botScope !== botScope) {
@@ -490,6 +520,7 @@ export function installHermesVbotConnector(input: {
   }
 
   let yamlDoc: Record<string, unknown> | undefined;
+  let yamlSource = "";
   let hermesConfigPath: string | undefined;
   if (input.hermesHome) {
     try {
@@ -506,6 +537,9 @@ export function installHermesVbotConnector(input: {
       throw new Error("Hermes profile is unavailable");
     }
     yamlDoc = mapping.state === "available" ? { ...mapping.value } : {};
+    if (mapping.state === "available") {
+      yamlSource = readFileSync(hermesConfigPath, "utf8");
+    }
     const servers = yamlDoc.mcp_servers;
     if (servers !== undefined && !isRecord(servers)) {
       throw new Error("Hermes profile is unavailable");
@@ -535,17 +569,10 @@ export function installHermesVbotConnector(input: {
   ];
 
   if (yamlDoc && hermesConfigPath) {
-    const servers = isRecord(yamlDoc.mcp_servers) ? { ...yamlDoc.mcp_servers } : {};
-    servers.vbot = {
+    writeHermesVbotYamlEntry(hermesConfigPath, yamlSource, {
       command: launch.command,
       args: launch.args,
-    };
-    const nextYaml = { ...yamlDoc, mcp_servers: servers };
-    const serializedYaml = stringifyYaml(nextYaml, { indent: 2 }).trimEnd() + "\n";
-    if (SECRETISH.test(serializedYaml) || "mcpServers" in nextYaml) {
-      throw new Error("refusing to write secret-shaped Hermes connector metadata");
-    }
-    writeFileAtomic(hermesConfigPath, serializedYaml, { mode: 0o600 });
+    });
   }
 
   mkdirSync(dirname(input.configPath), { recursive: true, mode: 0o700 });
@@ -565,9 +592,18 @@ export function installHermesVbotConnector(input: {
     bindings: nextBindings,
   };
   const serialized = `${JSON.stringify(nextSidecar, null, 2)}\n`;
-  if (SECRETISH.test(serialized)) {
-    throw new Error("refusing to write secret-shaped Hermes connector metadata");
-  }
+  assertGeneratedConnectorSafe([
+    launch.command,
+    ...launch.args,
+    input.hubDisplayName,
+    profile,
+    JSON.stringify({
+      command: launch.command,
+      args: launch.args,
+      metadata: { hub: input.hubDisplayName, profile },
+      bindings: nextBindings,
+    }),
+  ]);
   writeFileAtomic(input.configPath, serialized, { mode: 0o600 });
   return { adopted, configPath: input.configPath, hermesConfigPath };
 }
