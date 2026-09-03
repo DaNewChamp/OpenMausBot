@@ -2985,6 +2985,18 @@ final class Session: ObservableObject {
         catch { actionError = error.localizedDescription; return nil }
     }
 
+    func prepareSpeech(text: String, voiceId: String?) async -> TtsPreparation? {
+        guard let client else { return nil }
+        do { return try await client.prepareSpeech(text: text, voiceId: voiceId) }
+        catch { actionError = error.localizedDescription; return nil }
+    }
+
+    func speakUtterance(_ text: String, voiceId: String?) async -> Data? {
+        guard let client else { return nil }
+        do { return try await client.speak(text: text, voiceId: voiceId) }
+        catch { actionError = error.localizedDescription; return nil }
+    }
+
     func configStatus() async -> ConfigStatus? {
         guard let client else { return nil }
         return try? await client.config()

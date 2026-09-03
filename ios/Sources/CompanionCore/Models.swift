@@ -2369,6 +2369,14 @@ struct VoiceListResponse: Codable, Sendable {
     var error: String?
 }
 
+/// `/api/tts/prepare`: the harness decides readiness and splits long text
+/// into utterances short enough for the synthesis provider. Both fields are
+/// optional so a leaner desktop answer still decodes.
+public struct TtsPreparation: Codable, Hashable, Sendable {
+    public var ready: Bool?
+    public var utterances: [String]?
+}
+
 struct AttachmentResponse: Codable, Sendable {
     var path: String
     var mime: String

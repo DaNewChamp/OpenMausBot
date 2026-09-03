@@ -1672,6 +1672,39 @@ public struct CompanionClient: Sendable {
         return data
     }
 
+    /// Readiness plus the message split into bounded utterances. The same
+    /// split the desktop renderer consumes before asking for audio.
+    public func prepareSpeech(text: String, voiceId: String?) async throws -> TtsPreparation {
+        try await send(
+            try makeRequest("POST", "/api/tts/prepare", body: Self.speechBody(text: text, voiceId: voiceId)),
+            as: TtsPreparation.self
+        )
+    }
+
+    /// Synthesize one prepared utterance. Unlike a voice preview the text is
+    /// not clipped here: the harness hard-caps a speak request at 500
+    /// characters, and anything sent through `prepareSpeech` is already
+    /// within that ceiling.
+    public func speak(text: String, voiceId: String?) async throws -> Data {
+        let request = try makeRequest(
+            "POST", "/api/tts/speak",
+            body: Self.speechBody(text: text, voiceId: voiceId)
+        )
+        let (data, response) = try await perform(request)
+        try Self.check(response, data)
+        return data
+    }
+
+    /// The wire shape both desktop and phone send: voiceId omitted means the
+    /// workspace default voice, not "no voice".
+    private static func speechBody(text: String, voiceId: String?) -> [String: Any] {
+        var body: [String: Any] = ["text": text]
+        if let voiceId, !voiceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            body["voiceId"] = voiceId
+        }
+        return body
+    }
+
     public func createRoutine(_ input: RoutineInput) async throws -> Routine {
         guard input.schedule.type != .unknown else {
             throw APIError.transport("Choose a supported schedule before saving this routine.")
