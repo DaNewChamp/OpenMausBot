@@ -670,6 +670,86 @@ final class StoreTests: XCTestCase {
             now: now
         ))
     }
+
+    func testFleetHydrateRemovesSubagentsAbsentFromServerSnapshot() throws {
+        var state = CompanionState()
+        state.hydrate(Fleet(bots: [], groups: [], hermesSubagents: [
+            HermesSubagentActivity(
+                activityId: "act-keep",
+                parentThreadId: "parent-thread",
+                title: "Keep me",
+                status: .completed,
+                transcriptThreadId: "thread-keep",
+                promoteEligible: true,
+                updatedAt: 1_700_000_002_000
+            ),
+            HermesSubagentActivity(
+                activityId: "act-gone",
+                parentThreadId: "parent-thread",
+                title: "Promoted away",
+                status: .promoted,
+                transcriptThreadId: "thread-gone",
+                promoteEligible: false,
+                updatedAt: 1_700_000_003_000
+            ),
+        ]))
+        XCTAssertEqual(Set(state.hermesSubagents.map(\.activityId)), ["act-keep", "act-gone"])
+
+        state.hydrate(Fleet(bots: [], groups: [], hermesSubagents: [
+            HermesSubagentActivity(
+                activityId: "act-keep",
+                parentThreadId: "parent-thread",
+                title: "Keep me",
+                status: .completed,
+                transcriptThreadId: "thread-keep",
+                promoteEligible: true,
+                updatedAt: 1_700_000_002_000
+            ),
+        ]))
+        XCTAssertEqual(state.hermesSubagents.map(\.activityId), ["act-keep"])
+        XCTAssertEqual(state.hermesSubagents.first?.status, .completed)
+    }
+
+    func testFleetHydrateKeepsMonotonicFoldForRetainedSubagentIds() throws {
+        var state = CompanionState()
+        state.hydrate(Fleet(bots: [], groups: [], hermesSubagents: [
+            HermesSubagentActivity(
+                activityId: "act-1",
+                parentThreadId: "parent-thread",
+                title: "Draft review",
+                status: .completed,
+                transcriptThreadId: "thread-temp-1",
+                promoteEligible: true,
+                updatedAt: 1_700_000_002_000
+            ),
+            HermesSubagentActivity(
+                activityId: "act-gone",
+                parentThreadId: "parent-thread",
+                title: "Deleted",
+                status: .completed,
+                transcriptThreadId: "thread-gone",
+                promoteEligible: true,
+                updatedAt: 1_700_000_004_000
+            ),
+        ]))
+
+        state.hydrate(Fleet(bots: [], groups: [], hermesSubagents: [
+            HermesSubagentActivity(
+                activityId: "act-1",
+                parentThreadId: "parent-thread",
+                title: "Draft review",
+                status: .started,
+                transcriptThreadId: "thread-temp-1",
+                promoteEligible: false,
+                updatedAt: 1_700_000_000_000
+            ),
+        ]))
+
+        XCTAssertEqual(state.hermesSubagents.map(\.activityId), ["act-1"])
+        XCTAssertEqual(state.hermesSubagents.first?.status, .completed)
+        XCTAssertEqual(state.hermesSubagents.first?.updatedAt, 1_700_000_002_000)
+        XCTAssertEqual(state.hermesSubagents.first?.promoteEligible, true)
+    }
 }
 
 // MARK: - Live text

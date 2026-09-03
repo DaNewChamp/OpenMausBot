@@ -721,23 +721,26 @@ public struct CompanionState: Sendable {
         existing: [HermesSubagentActivity],
         incoming: [HermesSubagentActivity]
     ) -> [HermesSubagentActivity] {
-        var merged = existing
-        for activity in incoming {
-            if let index = merged.firstIndex(where: { $0.activityId == activity.activityId }) {
-                guard HermesSubagentFoldPolicy.shouldReplace(
-                    existing: merged[index],
-                    incoming: activity
-                ) else { continue }
-                var next = activity
-                if next.updatedAt == nil {
-                    next.updatedAt = merged[index].updatedAt
-                }
-                merged[index] = next
-            } else {
-                merged.append(activity)
+        let existingById = Dictionary(
+            existing.map { ($0.activityId, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return incoming.map { activity in
+            guard let current = existingById[activity.activityId] else {
+                return activity
             }
+            guard HermesSubagentFoldPolicy.shouldReplace(
+                existing: current,
+                incoming: activity
+            ) else {
+                return current
+            }
+            var next = activity
+            if next.updatedAt == nil {
+                next.updatedAt = current.updatedAt
+            }
+            return next
         }
-        return merged
     }
 }
 
