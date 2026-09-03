@@ -355,6 +355,54 @@ describe("bot runtime binding domain", () => {
     if (sidecar.state === "available") expect(sidecar.value.has(bot.id)).toBe(false);
   });
 
+  it("clears an absent runtimeBinding when sidecar persistence fails after the bot is patched", async () => {
+    const { planBotRuntimeRebind, applyBotRuntimeRebind, resolveBotRuntimeBinding } = await import(
+      "./bot-runtime-binding.ts"
+    );
+    const store = new Store(selection);
+    const bot = store.createBot({ name: "Specialist", modelSelection: selection() });
+    expect(store.bot(bot.id)!.runtimeBinding).toBeUndefined();
+    const planned = planBotRuntimeRebind({
+      bot: store.bot(bot.id)!,
+      requested: localHermes,
+      contextMode: "none",
+      endpoint: { state: "available", endpointId: "local:coder", capabilityRevision: "rev-1" },
+    });
+    expect(planned).toMatchObject({ ok: true });
+    if (planned.ok !== true) return;
+    const originalPatch = store.patchBot.bind(store);
+    const originalWrite = atomic.writeFileAtomic;
+    store.patchBot = ((id, patch) => {
+      const updated = originalPatch(id, patch);
+      if (patch.runtimeBinding) {
+        vi.spyOn(atomic, "writeFileAtomic").mockImplementation((path, data, options) => {
+          if (String(path).includes("hermes-bindings.json")) {
+            throw new Error("sidecar write failed");
+          }
+          return originalWrite(path, data, options);
+        });
+      }
+      return updated;
+    }) as typeof store.patchBot;
+    try {
+      await expect(
+        applyBotRuntimeRebind(planned.plan, {
+          store,
+          endpoint: { state: "available", endpointId: "local:coder", capabilityRevision: "rev-1" },
+        }),
+      ).rejects.toMatchObject({ code: "state_unavailable" });
+    } finally {
+      vi.restoreAllMocks();
+      store.patchBot = originalPatch;
+    }
+    const current = store.bot(bot.id)!;
+    expect(current.runtimeBinding).toBeUndefined();
+    expect(resolveBotRuntimeBinding(current)).toEqual({ state: "available", value: providerClaude });
+    const sidecar = loadHermesBindings();
+    expect(sidecar.state).toBe("available");
+    if (sidecar.state === "available") expect(sidecar.value.has(bot.id)).toBe(false);
+  });
+
   it("reverses a Hermes binding back to the previous provider runtime", async () => {
     const { planBotRuntimeRebind, applyBotRuntimeRebind, resolveBotRuntimeBinding } = await import(
       "./bot-runtime-binding.ts"

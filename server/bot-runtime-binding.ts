@@ -383,7 +383,6 @@ export async function applyBotRuntimeRebind(
   const previousBinding = bot.runtimeBinding;
   const previousModel = bot.modelSelection;
   try {
-    persistSidecars(bot.id, plan.next);
     const patch: Partial<BotRecord> = { runtimeBinding: plan.next };
     if (plan.next.kind === "provider") {
       patch.modelSelection = {
@@ -393,20 +392,21 @@ export async function applyBotRuntimeRebind(
     }
     const updated = deps.store.patchBot(bot.id, patch);
     if (!updated) throw new RuntimeRebindError("bot_not_found", "Bot is unavailable");
-    if (!identitiesAgree(updated, plan.next)) {
+    persistSidecars(bot.id, plan.next);
+    const reconciled = deps.store.bot(bot.id);
+    if (!reconciled || !identitiesAgree(reconciled, plan.next)) {
       throw new RuntimeRebindError("state_unavailable", "Runtime identity is unavailable");
     }
-    return updated;
+    return reconciled;
   } catch (error) {
     try {
       restoreSidecars(bot.id, snapshot);
+      const current = deps.store.bot(bot.id);
       if (previousBinding) {
         deps.store.patchBot(bot.id, { runtimeBinding: previousBinding, modelSelection: previousModel });
-      } else {
-        const current = deps.store.bot(bot.id);
-        if (current?.runtimeBinding) {
-          deps.store.patchBot(bot.id, { modelSelection: previousModel });
-        }
+      } else if (current) {
+        delete current.runtimeBinding;
+        deps.store.patchBot(bot.id, { modelSelection: previousModel });
       }
     } catch {
       throw new RuntimeRebindError("state_unavailable", "Runtime identity is unavailable");
