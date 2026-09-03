@@ -2363,6 +2363,11 @@ async function startTurn(
       // turn must never silently fall back to the stored provider instance.
       if (hermesBinding || hermesBindingError || hermesBridgeBinding || hermesBridgeBindingError) {
         const adapterTurnId = randomUUID();
+        // Hermes agents keep their own instructions on the gateway; the hub
+        // contributes only the house-style block, and a bot whose own
+        // instructions carry the opt-out marker stays out.
+        const houseStyleForHermes = houseStylePreamble(cfg, bot.description);
+        const hermesTurnText = houseStyleForHermes ? `${houseStyleForHermes}\n\n${turnText}` : turnText;
         const adapterInstanceId = hermesBotInstanceId(cfg);
         if (hermesBridgeBinding || hermesBridgeBindingError) {
           if (!hermesBridgeBinding) {
@@ -2381,7 +2386,7 @@ async function startTurn(
               registry: bridges,
               binding: hermesBridgeBinding,
               payload: {
-                text: turnText,
+                text: hermesTurnText,
                 threadId,
                 turnId: adapterTurnId,
                 model,
@@ -2424,7 +2429,7 @@ async function startTurn(
         try {
           await hermesEngine.send({
             profile: hermesBinding.profile,
-            text: turnText,
+            text: hermesTurnText,
             model,
             threadId,
             turnId: adapterTurnId,
