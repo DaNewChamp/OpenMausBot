@@ -140,6 +140,7 @@ describe("bridge build contract", () => {
 
   it("emits a flat runtime tree with vendored shared/server modules", () => {
     expect(existsSync(join(dist, "index.js"))).toBe(true);
+    expect(existsSync(join(dist, "yaml.js"))).toBe(true);
     expect(existsSync(join(dist, "hermes.js"))).toBe(true);
     expect(existsSync(join(dist, "hermes-runtime.js"))).toBe(true);
     expect(existsSync(join(dist, "shared", "bridge-hermes-contract.js"))).toBe(true);
@@ -220,6 +221,54 @@ describe("bridge build contract", () => {
       expect(connect.status).toBe(1);
       expect(connect.stderr).toMatch(/usage: connect --url/);
       expect(connect.stderr).not.toMatch(/ERR_MODULE_NOT_FOUND/);
+    } finally {
+      rmSync(staging, { recursive: true, force: true });
+    }
+  });
+
+  it("runs hermes-connector-install from an isolated copied tree without resolving yaml from the repo", () => {
+    const staging = mkdtempSync(join(tmpdir(), "omb-bridge-yaml-smoke-"));
+    try {
+      const isolated = join(staging, "bridge");
+      cpSync(dist, isolated, { recursive: true });
+      expect(existsSync(join(isolated, "node_modules"))).toBe(false);
+      const hermesHome = join(staging, "hermes-home");
+      mkdirSync(hermesHome, { recursive: true, mode: 0o700 });
+      writeFileSync(join(hermesHome, "config.yaml"), "model:\n  default: z-ai/glm-5.2\n");
+      const sidecarPath = join(staging, "hermes-vbot-mcp.json");
+      const installed = spawnSync(
+        process.execPath,
+        [
+          join(isolated, "index.js"),
+          "hermes-connector-install",
+          "--hub",
+          "Mac mini",
+          "--bot-scope",
+          "bot-chief",
+          "--profile-home",
+          hermesHome,
+          "--config",
+          sidecarPath,
+          "--socket",
+          join(staging, "vbot.sock"),
+        ],
+        {
+          cwd: staging,
+          encoding: "utf8",
+          timeout: 10_000,
+          env: {
+            PATH: process.env.PATH,
+            HOME: staging,
+            USERPROFILE: staging,
+          },
+        },
+      );
+      expect(installed.status, installed.stderr || installed.stdout).toBe(0);
+      expect(installed.stderr).not.toMatch(/ERR_MODULE_NOT_FOUND|Cannot find package 'yaml'|Cannot find module 'yaml'/i);
+      expect(installed.stdout).toMatch(/installed Hermes V Bot connector/);
+      const yamlText = readFileSync(join(hermesHome, "config.yaml"), "utf8");
+      expect(yamlText).toMatch(/mcp_servers:/);
+      expect(yamlText).toContain("bot-chief");
     } finally {
       rmSync(staging, { recursive: true, force: true });
     }

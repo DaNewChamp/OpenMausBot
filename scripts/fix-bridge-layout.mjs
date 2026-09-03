@@ -1,3 +1,4 @@
+import { build } from "esbuild";
 import {
   existsSync,
   readdirSync,
@@ -67,7 +68,25 @@ function runtimeRelativeJs(entry) {
 function rewriteBridgeImports(source) {
   return source
     .replaceAll("../../server/", "./server/")
-    .replaceAll("../../shared/", "./shared/");
+    .replaceAll("../../shared/", "./shared/")
+    .replaceAll(/from ["']yaml["']/g, 'from "./yaml.js"')
+    .replaceAll(/import ["']yaml["']/g, 'import "./yaml.js"');
+}
+
+async function vendorYaml() {
+  const yamlBrowser = join(root, "node_modules", "yaml", "browser", "index.js");
+  if (!existsSync(yamlBrowser)) {
+    console.error("yaml dependency missing");
+    process.exit(1);
+  }
+  await build({
+    entryPoints: [yamlBrowser],
+    bundle: true,
+    format: "esm",
+    platform: "neutral",
+    outfile: join(out, "yaml.js"),
+    logLevel: "silent",
+  });
 }
 
 function listDir(dir) {
@@ -109,6 +128,8 @@ if (!existsSync(entry)) {
   console.error(`bridge entry missing: ${entry}`);
   process.exit(1);
 }
+
+await vendorYaml();
 
 const runtime = runtimeRelativeJs(entry);
 
