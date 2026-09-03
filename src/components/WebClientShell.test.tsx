@@ -56,6 +56,15 @@ describe("WebClientShell", () => {
       createElement(WebPairQrPane, { link: null, expired: true, onRefresh: () => undefined }),
     );
     expect(expired).toContain(WEB_PAIR_GATE_COPY.expired);
+    const failed = renderToStaticMarkup(
+      createElement(WebPairQrPane, {
+        link: null,
+        expired: false,
+        error: "Could not reach that hub. Check the address and your connection.",
+        onRefresh: () => undefined,
+      }),
+    );
+    expect(failed).toContain("Could not reach that hub");
   });
 
   it("defines the compact Grok desktop chrome instead of section navigation", () => {

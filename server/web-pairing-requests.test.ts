@@ -81,6 +81,13 @@ describe("WebPairingRegistry", () => {
     expect(register(registry, { origin: "https://app.openmausbot.com" }).result).toMatchObject({ status: 429 });
   });
 
+  it("lets an origin register again after the rate window expires", () => {
+    const registry = new WebPairingRegistry({ maxRegistersPerOrigin: 1, maxPendingPerOrigin: 8 });
+    expect(register(registry, { now: 1_000 }).result).toHaveProperty("status", "pending");
+    expect(register(registry, { now: 1_000 }).result).toMatchObject({ status: 429 });
+    expect(register(registry, { now: 1_000 + WEB_PAIRING_TTL_MS }).result).toHaveProperty("status", "pending");
+  });
+
   it("approves only the exact stored tuple and then lets the browser redeem once", () => {
     const devices = new DeviceRegistry();
     const registry = new WebPairingRegistry();

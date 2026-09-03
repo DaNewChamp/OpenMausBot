@@ -275,7 +275,9 @@ export function WebClientGate({
           <WebPairQrPane
             link={qrLink}
             expired={qrExpired}
+            error={failure?.message ?? null}
             onRefresh={() => {
+              setFailure(null);
               setQrExpired(false);
               setQrLink(null);
               setQrGeneration((generation) => generation + 1);
@@ -306,16 +308,20 @@ export function WebClientGate({
 export function WebPairQrPane({
   link,
   expired,
+  error,
   onRefresh,
 }: {
   link: string | null;
   expired: boolean;
+  error?: string | null;
   onRefresh: () => void;
 }) {
   return (
     <div data-web-pair-qr data-web-pair-mode="qr" className="mt-6 flex flex-col items-center gap-4">
       <p className="text-center text-[13px] leading-relaxed text-ink-secondary">{WEB_PAIR_GATE_COPY.scanHint}</p>
-      {expired ? (
+      {error ? (
+        <p role="alert" className="text-center text-[13px] text-danger">{error}</p>
+      ) : expired ? (
         <p className="text-center text-[13px] text-ink">{WEB_PAIR_GATE_COPY.expired}</p>
       ) : link ? (
         <div className="rounded-2xl bg-white p-3.5" aria-label="Browser pairing QR code">

@@ -87,7 +87,7 @@ function canonicalOriginOrError(value: string): string | null {
 
 export class WebPairingRegistry {
   private readonly records = new Map<string, WebPairingRecord>();
-  private readonly registerCounts = new Map<string, number>();
+  private readonly registerTimes = new Map<string, number[]>();
   private readonly ttlMs: number;
   private readonly maxPending: number;
   private readonly maxPendingPerOrigin: number;
@@ -114,6 +114,20 @@ export class WebPairingRegistry {
   private pendingRecords(now: number): WebPairingRecord[] {
     this.prune(now);
     return [...this.records.values()].filter((record) => record.status === "pending" || record.status === "approved");
+  }
+
+  private originRegisterCount(origin: string, now: number): number {
+    const fresh = (this.registerTimes.get(origin) ?? []).filter((at) => now - at < this.ttlMs);
+    this.registerTimes.set(origin, fresh);
+    return fresh.length;
+  }
+
+  private presentedSecretMatches(redeemSecret: unknown, expectedHash: string | undefined): boolean {
+    const presented = typeof redeemSecret === "string" ? sha256Hex(redeemSecret) : sha256Hex("");
+    const expected = expectedHash && isWebPairingChallengeHash(expectedHash) ? expectedHash : "0".repeat(64);
+    const comparable = isWebPairingChallengeHash(presented) ? presented : "0".repeat(64);
+    const digestOk = sameWebPairingDigest(expected, comparable);
+    return Boolean(expectedHash) && isWebPairingChallengeHash(presented) && digestOk;
   }
 
   listPublic(now = Date.now()): PublicWebPairingRequest[] {
@@ -158,7 +172,7 @@ export class WebPairingRegistry {
 
     const pending = this.pendingRecords(now);
     const originPending = pending.filter((record) => record.origin === origin).length;
-    const originRegisters = this.registerCounts.get(origin) ?? 0;
+    const originRegisters = this.originRegisterCount(origin, now);
     if (
       pending.length >= this.maxPending ||
       originPending >= this.maxPendingPerOrigin ||
@@ -180,7 +194,7 @@ export class WebPairingRegistry {
       status: "pending",
       createdAt: now,
     });
-    this.registerCounts.set(origin, originRegisters + 1);
+    this.registerTimes.set(origin, [...(this.registerTimes.get(origin) ?? []), now]);
     return { status: "pending", expiresAt, hubId, hubOrigin };
   }
 
@@ -222,17 +236,15 @@ export class WebPairingRegistry {
     const now = input.now ?? Date.now();
     this.prune(now);
     const requestId = typeof input.requestId === "string" ? input.requestId : "";
-    const redeemSecret = typeof input.redeemSecret === "string" ? input.redeemSecret : "";
     const pairRequestId =
       typeof input.pairRequestId === "string" && /^[A-Za-z0-9._-]{16,128}$/.test(input.pairRequestId)
         ? input.pairRequestId
         : null;
     const record = this.records.get(requestId);
-    const presentedHash = redeemSecret ? sha256Hex(redeemSecret) : "";
+    const secretOk = this.presentedSecretMatches(input.redeemSecret, record?.challengeHash);
     if (!record || record.expiresAt <= now || record.status === "cancelled" || record.status === "failed" || record.status === "expired") {
       return generic();
     }
-    const secretOk = isWebPairingChallengeHash(presentedHash) && sameWebPairingDigest(record.challengeHash, presentedHash);
     if (!secretOk) {
       record.attemptsLeft -= 1;
       if (record.attemptsLeft <= 0) record.status = "failed";
@@ -263,11 +275,9 @@ export class WebPairingRegistry {
     const now = input.now ?? Date.now();
     this.prune(now);
     const requestId = typeof input.requestId === "string" ? input.requestId : "";
-    const redeemSecret = typeof input.redeemSecret === "string" ? input.redeemSecret : "";
     const record = this.records.get(requestId);
-    const presentedHash = redeemSecret ? sha256Hex(redeemSecret) : "";
+    const secretOk = this.presentedSecretMatches(input.redeemSecret, record?.challengeHash);
     if (!record) return generic();
-    const secretOk = isWebPairingChallengeHash(presentedHash) && sameWebPairingDigest(record.challengeHash, presentedHash);
     if (!secretOk) {
       record.attemptsLeft -= 1;
       if (record.attemptsLeft <= 0) record.status = "failed";

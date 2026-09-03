@@ -29,21 +29,19 @@ function bytesToBase64Url(bytes: Uint8Array): string {
 
 function randomUrlSafe(byteCount: number): string {
   const bytes = new Uint8Array(byteCount);
-  const source = globalThis.crypto;
-  if (source?.getRandomValues) source.getRandomValues(bytes);
-  else for (let i = 0; i < byteCount; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  if (!globalThis.crypto?.getRandomValues) {
+    throw new HubPairError("This browser cannot generate pairing secrets.");
+  }
+  globalThis.crypto.getRandomValues(bytes);
   return bytesToBase64Url(bytes);
 }
 
 async function sha256Hex(value: string): Promise<string> {
-  const encoded = new TextEncoder().encode(value);
-  const subtle = globalThis.crypto?.subtle;
-  if (subtle) {
-    const digest = await subtle.digest("SHA-256", encoded);
-    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  if (!globalThis.crypto?.subtle) {
+    throw new HubPairError("This browser cannot generate pairing secrets.");
   }
-  const { createHash } = await import("node:crypto");
-  return createHash("sha256").update(value).digest("hex");
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export async function createWebPairingSecrets(): Promise<WebPairingSecrets> {

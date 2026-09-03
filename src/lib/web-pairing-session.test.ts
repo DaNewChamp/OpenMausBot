@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -22,6 +24,9 @@ describe("web pairing browser session", () => {
   });
 
   it("mints a 128-bit request id and 256-bit redeem secret whose hash is the public commitment", async () => {
+    const source = readFileSync(fileURLToPath(new URL("./web-pairing-session.ts", import.meta.url)), "utf8");
+    expect(source).not.toMatch(/node:crypto/);
+    expect(source).not.toMatch(/Math\.random/);
     const secrets = await createWebPairingSecrets();
     expect(secrets.requestId.length).toBeGreaterThanOrEqual(22);
     expect(Buffer.from(secrets.redeemSecret, "base64url").length).toBeGreaterThanOrEqual(32);
