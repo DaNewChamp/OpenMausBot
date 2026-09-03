@@ -467,6 +467,14 @@ public struct HermesSetupPresentation: Equatable, Sendable {
 /// Maps the safe server projection to calm, actionable copy. This stays
 /// outside SwiftUI so old clients and focused tests share the same language.
 public enum HermesSetupPresentationPolicy {
+    public static let controlPlaneCopy =
+        "V Bot is the control plane. Hermes is an optional runtime installed on a paired computer."
+    public static let defaultForNewBotsTitle = "Default for new Hermes bots"
+    public static let defaultForNewBotsDetail =
+        "New Hermes bots use this computer and profile. Existing bots keep their current runtime until you change them one at a time."
+    public static let persistDefaultOnGlobalSelection = true
+    public static let globalDefaultSelectionConvertsExistingBots = false
+
     public static func presentation(
         status: HermesSetupStatus?,
         isLoading: Bool

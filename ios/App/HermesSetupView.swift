@@ -13,7 +13,6 @@ struct HermesSetupView: View {
     @State private var loading = true
     @State private var connecting = false
     @State private var connectTask: Task<Void, Never>?
-    @State private var pendingConversion: HermesEndpointOption?
 
     init(onOpenChat: ((Chat) -> Void)? = nil) {
         self.onOpenChat = onOpenChat
@@ -29,10 +28,6 @@ struct HermesSetupView: View {
     private var availableProfiles: [HermesSetupProfile] {
         guard let status else { return [] }
         return HermesSetupPresentationPolicy.availableProfiles(status)
-    }
-
-    private var connectedProfiles: [HermesSetupProfile] {
-        status?.profiles.filter { $0.botId?.isEmpty == false } ?? []
     }
 
     var body: some View {
@@ -58,9 +53,6 @@ struct HermesSetupView: View {
             connectTask?.cancel()
             connectTask = nil
         }
-        .sheet(item: $pendingConversion) { endpoint in
-            conversionSheet(endpoint)
-        }
     }
 
     private var stateCard: some View {
@@ -82,6 +74,10 @@ struct HermesSetupView: View {
                     }
                     Spacer(minLength: 0)
                 }
+
+                Text(HermesSetupPresentationPolicy.controlPlaneCopy)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
 
                 Text(presentation.message)
                     .font(.subheadline)
@@ -179,7 +175,10 @@ struct HermesSetupView: View {
     }
 
     private var defaultRuntimeCard: some View {
-        VBotSurfaceGroup(title: "Default Hermes runtime") {
+        VBotSurfaceGroup(
+            title: HermesSetupPresentationPolicy.defaultForNewBotsTitle,
+            footer: HermesSetupPresentationPolicy.defaultForNewBotsDetail
+        ) {
             VStack(alignment: .leading, spacing: 10) {
                 if let current = session.defaultHermesEndpoint() {
                     Text(current.label)
@@ -191,15 +190,14 @@ struct HermesSetupView: View {
                 }
                 ForEach(hermesEndpoints) { endpoint in
                     Button(endpoint.label) {
-                        if HermesConversionConfirmationPolicy.shouldPersistDefaultOnEndpointSelection() {
+                        if HermesSetupPresentationPolicy.persistDefaultOnGlobalSelection {
                             session.setDefaultHermesEndpoint(endpoint)
                         }
-                        pendingConversion = HermesConversionSheetPolicy.pendingConversion(
-                            selected: endpoint,
-                            connectedProfiles: connectedProfiles
-                        )
+                        for item in HermesConversionSheetPolicy.globalDefaultRequests(endpoint: endpoint) {
+                            session.configureHermesRuntime(botId: item.botId, request: item.request)
+                        }
                     }
-                    .disabled(session.defaultHermesEndpoint()?.id == endpoint.id && pendingConversion == nil)
+                    .disabled(session.defaultHermesEndpoint()?.id == endpoint.id)
                 }
             }
             .padding(16)
@@ -230,47 +228,6 @@ struct HermesSetupView: View {
         }
         .font(.subheadline)
         .disabled(!HermesRuntimePresentationPolicy.isEnabled(key, in: manifest))
-    }
-
-    private func conversionSheet(_ endpoint: HermesEndpointOption) -> some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(HermesRuntimePresentationPolicy.conversionSummary(
-                    botName: connectedProfiles.first?.displayName ?? "This bot",
-                    sourceLabel: "Current runtime",
-                    destinationLabel: endpoint.label
-                ))
-                Text("Name, avatar, rooms, history, and fleet grants stay. A restart may be required.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Convert") {
-                    let requests = HermesConversionSheetPolicy.applyRequests(
-                        endpoint: endpoint,
-                        botIds: connectedProfiles.compactMap(\.botId)
-                    )
-                    for item in requests {
-                        session.configureHermesRuntime(botId: item.botId, request: item.request)
-                    }
-                    if HermesConversionConfirmationPolicy.shouldPersistDefaultOnConfirmedConversion() {
-                        session.setDefaultHermesEndpoint(endpoint)
-                    }
-                    pendingConversion = nil
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(connectedProfiles.allSatisfy { ($0.botId ?? "").isEmpty })
-            }
-            .padding()
-            .navigationTitle("Convert runtime")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        pendingConversion = HermesConversionConfirmationPolicy.draftEndpointAfterCancel()
-                    }
-                }
-            }
-        }
-        .presentationDetents([.medium])
     }
 
     private func profileRow(

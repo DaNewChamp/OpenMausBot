@@ -14,7 +14,7 @@ final class HermesConversionConfirmationPolicyTests: XCTestCase {
 
     func testSetupEndpointTapFollowsSharedConfirmationPolicy() {
         XCTAssertFalse(HermesConversionConfirmationPolicy.shouldPersistDefaultOnEndpointSelection())
-        XCTAssertTrue(HermesConversionConfirmationPolicy.shouldPersistDefaultOnConfirmedConversion())
+        XCTAssertFalse(HermesConversionConfirmationPolicy.shouldPersistDefaultOnConfirmedConversion())
         XCTAssertNil(HermesConversionConfirmationPolicy.draftEndpointAfterCancel())
     }
 
@@ -51,7 +51,7 @@ final class HermesConversionConfirmationPolicyTests: XCTestCase {
             computerName: "Mac mini",
             profile: "research"
         )
-        XCTAssertTrue(HermesConversionConfirmationPolicy.shouldPersistDefaultOnConfirmedConversion())
+        XCTAssertFalse(HermesConversionConfirmationPolicy.shouldPersistDefaultOnConfirmedConversion())
         XCTAssertEqual(
             HermesConversionConfirmationPolicy.endpointForConfirmedConversion(
                 draft: draft,

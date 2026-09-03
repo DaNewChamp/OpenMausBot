@@ -309,6 +309,15 @@ public enum HermesConversionSheetPolicy: Sendable {
             .filter { !$0.isEmpty }
             .map { ($0, request) }
     }
+
+    /// Global default selection never converts existing bots. Keep
+    /// `applyRequests` for per-bot conversion compatibility.
+    public static func globalDefaultRequests(
+        endpoint: HermesEndpointOption
+    ) -> [(botId: String, request: HermesRuntimeRebindRequest)] {
+        _ = endpoint
+        return []
+    }
 }
 
 public struct HermesRuntimeRebindRequest: Encodable, Hashable, Sendable, Equatable {
@@ -369,6 +378,21 @@ public struct HermesRuntimeRebindRequest: Encodable, Hashable, Sendable, Equatab
 
 public enum HermesRuntimePresentationPolicy: Sendable {
     public static let persistsAsynchronouslyBeforeBack = true
+    public static let perBotSectionTitle = "AI runtime"
+    public static let useHermesForThisBotTitle = "Use Hermes for this bot"
+
+    public static func currentRuntimeLabel(
+        isHermes: Bool,
+        endpointLabel: String?,
+        providerLabel: String
+    ) -> String {
+        if isHermes {
+            let endpoint = endpointLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return endpoint.isEmpty ? "Hermes" : endpoint
+        }
+        let provider = providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return provider.isEmpty ? "Provider runtime" : provider
+    }
 
     public static func endpointLabel(computerName: String, profile: String) -> String {
         let computer = computerName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -387,7 +411,7 @@ public enum HermesRuntimePresentationPolicy: Sendable {
     }
 
     public static func conversionSummary(botName: String, sourceLabel: String, destinationLabel: String) -> String {
-        "Convert \(botName) from \(sourceLabel) to \(destinationLabel). Name, rooms, and history stay."
+        "Convert \(botName) from \(sourceLabel) to \(destinationLabel). Only this bot changes. Name, avatar, rooms, and history stay."
     }
 
     public static func pickerRows(_ endpoints: [HermesEndpointOption]) -> [HermesRuntimePickerRow] {

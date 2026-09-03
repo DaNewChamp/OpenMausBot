@@ -117,13 +117,21 @@ struct ChatModelPickerSheet: View {
 
     private var hermesConversionSheet: some View {
         NavigationStack {
+            let endpoint = HermesConversionConfirmationPolicy.endpointForConfirmedConversion(
+                draft: selectedHermesEndpoint,
+                persistedDefault: session.defaultHermesEndpoint()
+            )
+            let copy = HermesConversionConfirmationPolicy.confirmationCopy(
+                botName: current.name,
+                computerName: endpoint?.computerName ?? "",
+                profile: endpoint?.profile ?? ""
+            )
             VStack(alignment: .leading, spacing: 16) {
-                Text(HermesRuntimePresentationPolicy.conversionSummary(
-                    botName: current.name,
-                    sourceLabel: ModelSelectionPolicy.subscriptionModelLabel(current.modelSelection.model),
-                    destinationLabel: selectedHermesEndpoint?.label ?? session.defaultHermesEndpoint()?.label ?? "Hermes"
-                ))
-                Text(HermesConversionConfirmationPolicy.preservedSummary)
+                Text(copy.summary)
+                Text(copy.onlyThisBot)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(copy.preserved)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 DisclosureGroup(HermesConversionConfirmationPolicy.contextHandoffTitle) {
@@ -136,10 +144,6 @@ struct ChatModelPickerSheet: View {
                 .font(.subheadline.weight(.medium))
                 Spacer()
                 Button("Convert") {
-                    let endpoint = HermesConversionConfirmationPolicy.endpointForConfirmedConversion(
-                        draft: selectedHermesEndpoint,
-                        persistedDefault: session.defaultHermesEndpoint()
-                    )
                     showingHermesConversion = false
                     guard let endpoint else { return }
                     if HermesConversionConfirmationPolicy.shouldPersistDefaultOnConfirmedConversion() {

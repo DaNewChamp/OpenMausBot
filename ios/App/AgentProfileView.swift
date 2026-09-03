@@ -350,7 +350,7 @@ struct AgentProfileView: View {
     private var hermesEndpointSection: some View {
         if isHermesBot {
             VStack(alignment: .leading, spacing: 10) {
-                profileSectionLabel("Hermes endpoint")
+                profileSectionLabel("Hermes computer")
                 VStack(alignment: .leading, spacing: 0) {
                     if hermesLoading && hermesStatus == nil {
                         ProgressView()
@@ -800,29 +800,43 @@ struct AgentProfileView: View {
 
     private var hermesRuntimeSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            profileSectionLabel("Hermes runtime")
-            VStack(alignment: .leading, spacing: 12) {
-                Text(selectedHermesEndpoint?.label ?? "Provider runtime")
-                    .font(.body.weight(.medium))
-                Text("Converts this bot in place. Name, rooms, and history stay.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Button("Convert to Hermes…") {
-                    showingHermesConversion = true
-                }
-                .disabled(!canEdit || !ModelSelectionPolicy.allowsHermesRuntimeSwitch(working: current.busy == true))
-                Button("Use provider runtime") {
-                    session.configureHermesRuntime(
-                        botId: current.id,
-                        request: HermesRuntimeRebindRequest(
-                            kind: "provider",
-                            instanceId: current.modelSelection.instanceId,
-                            model: current.modelSelection.model
+                profileSectionLabel(HermesRuntimePresentationPolicy.perBotSectionTitle)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Current runtime")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text(
+                        HermesRuntimePresentationPolicy.currentRuntimeLabel(
+                            isHermes: isHermesBot,
+                            endpointLabel: selectedHermesEndpoint?.label ?? session.defaultHermesEndpoint()?.label,
+                            providerLabel: ModelSelectionPolicy.subscriptionModelLabel(current.modelSelection.model)
                         )
                     )
+                    .font(.body.weight(.medium))
+                    if !session.hermesEndpointOptions.isEmpty {
+                        ForEach(session.hermesEndpointOptions) { endpoint in
+                            Button(endpoint.label) {
+                                selectedHermesEndpoint = endpoint
+                            }
+                            .disabled(selectedHermesEndpoint?.id == endpoint.id)
+                        }
+                    }
+                    Button(HermesRuntimePresentationPolicy.useHermesForThisBotTitle) {
+                        showingHermesConversion = true
+                    }
+                    .disabled(!canEdit || !ModelSelectionPolicy.allowsHermesRuntimeSwitch(working: current.busy == true))
+                    Button("Use provider runtime") {
+                        session.configureHermesRuntime(
+                            botId: current.id,
+                            request: HermesRuntimeRebindRequest(
+                                kind: "provider",
+                                instanceId: current.modelSelection.instanceId,
+                                model: current.modelSelection.model
+                            )
+                        )
+                    }
+                    .disabled(!canEdit || current.busy == true)
                 }
-                .disabled(!canEdit || current.busy == true)
-            }
             .padding(18)
             .profileCard()
         }
@@ -831,13 +845,21 @@ struct AgentProfileView: View {
 
     private var hermesConversionSheet: some View {
         NavigationStack {
+            let endpoint = HermesConversionConfirmationPolicy.endpointForConfirmedConversion(
+                draft: selectedHermesEndpoint,
+                persistedDefault: session.defaultHermesEndpoint()
+            )
+            let copy = HermesConversionConfirmationPolicy.confirmationCopy(
+                botName: current.name,
+                computerName: endpoint?.computerName ?? "",
+                profile: endpoint?.profile ?? ""
+            )
             VStack(alignment: .leading, spacing: 16) {
-                Text(HermesRuntimePresentationPolicy.conversionSummary(
-                    botName: current.name,
-                    sourceLabel: ModelSelectionPolicy.subscriptionModelLabel(current.modelSelection.model),
-                    destinationLabel: selectedHermesEndpoint?.label ?? session.defaultHermesEndpoint()?.label ?? "Hermes"
-                ))
-                Text(HermesConversionConfirmationPolicy.preservedSummary)
+                Text(copy.summary)
+                Text(copy.onlyThisBot)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(copy.preserved)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 DisclosureGroup(HermesConversionConfirmationPolicy.contextHandoffTitle) {
@@ -850,10 +872,6 @@ struct AgentProfileView: View {
                 .font(.subheadline.weight(.medium))
                 Spacer()
                 Button("Convert") {
-                    let endpoint = HermesConversionConfirmationPolicy.endpointForConfirmedConversion(
-                        draft: selectedHermesEndpoint,
-                        persistedDefault: session.defaultHermesEndpoint()
-                    )
                     showingHermesConversion = false
                     guard let endpoint else { return }
                     if HermesConversionConfirmationPolicy.shouldPersistDefaultOnConfirmedConversion() {
