@@ -436,8 +436,7 @@ public enum HermesSubagentPresentationPolicy: Sendable {
         parentThreadId: String
     ) -> [HermesSubagentActivity] {
         activities.filter {
-            retainedInParentHistory($0)
-                && ($0.parentThreadId == parentThreadId || $0.transcriptThreadId == parentThreadId)
+            retainedInParentHistory($0) && $0.parentThreadId == parentThreadId
         }
     }
 
@@ -456,7 +455,8 @@ public enum HermesSubagentPresentationPolicy: Sendable {
                     title: activity.title,
                     transcriptThreadId: navigationThreadId(for: activity),
                     accessibilityLabel: "\(activity.title), completed temporary agent",
-                    accessibilityHint: "Opens the retained transcript"
+                    accessibilityHint: "Opens the retained transcript",
+                    isButton: true
                 )
             }
     }
@@ -469,18 +469,21 @@ public struct HermesParentHistoryAnchor: Equatable, Identifiable, Sendable {
     public let transcriptThreadId: String
     public let accessibilityLabel: String
     public let accessibilityHint: String
+    public let isButton: Bool
 
     public init(
         activityId: String,
         title: String,
         transcriptThreadId: String,
         accessibilityLabel: String,
-        accessibilityHint: String
+        accessibilityHint: String,
+        isButton: Bool
     ) {
         self.activityId = activityId
         self.title = title
         self.transcriptThreadId = transcriptThreadId
         self.accessibilityLabel = accessibilityLabel
         self.accessibilityHint = accessibilityHint
+        self.isButton = isButton
     }
 }

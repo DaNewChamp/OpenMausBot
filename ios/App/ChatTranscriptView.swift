@@ -496,6 +496,7 @@ struct ChatTranscriptView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(anchor.accessibilityLabel)
         .accessibilityHint(anchor.accessibilityHint)
+        .accessibilityAddTraits(anchor.isButton ? .isButton : [])
         .disabled(onOpenTemporaryTranscript == nil || activity == nil)
     }
 

@@ -204,6 +204,52 @@ struct HomeActivityPresentationTests {
         )
     }
 
+    @Test
+    func parentHistoryAnchorsAppearOnlyOnTheParentTranscript() {
+        let nowMs = 1_700_000_060_000.0
+        let now = Date(timeIntervalSince1970: nowMs / 1000)
+        let completed = HermesSubagentActivity(
+            activityId: "act-stale",
+            parentThreadId: "parent-thread",
+            title: "Older review",
+            status: .completed,
+            transcriptThreadId: "thread-temp-stale",
+            promoteEligible: true,
+            updatedAt: nowMs - 61_000
+        )
+
+        #expect(
+            HermesSubagentPresentationPolicy.parentHistoryActivities(
+                [completed],
+                parentThreadId: "parent-thread"
+            ).map(\.activityId) == ["act-stale"]
+        )
+        #expect(
+            HermesSubagentPresentationPolicy.parentHistoryActivities(
+                [completed],
+                parentThreadId: completed.transcriptThreadId
+            ).isEmpty
+        )
+
+        let parentAnchors = HermesSubagentPresentationPolicy.parentHistoryAnchors(
+            [completed],
+            parentThreadId: "parent-thread",
+            now: now
+        )
+        #expect(parentAnchors.map(\.activityId) == ["act-stale"])
+        let anchor = parentAnchors[0]
+        #expect(anchor.accessibilityLabel == "Older review, completed temporary agent")
+        #expect(anchor.accessibilityHint == "Opens the retained transcript")
+        #expect(anchor.isButton)
+        #expect(
+            HermesSubagentPresentationPolicy.parentHistoryAnchors(
+                [completed],
+                parentThreadId: completed.transcriptThreadId,
+                now: now
+            ).isEmpty
+        )
+    }
+
     private func fixtureState() throws -> CompanionState {
         let url = try #require(
             Bundle.module.url(forResource: "bots-paged", withExtension: "json", subdirectory: "Fixtures")
