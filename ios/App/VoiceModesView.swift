@@ -36,6 +36,13 @@ struct VoiceModesView: View {
                 orb
                 statusLine
                     .padding(.top, 36)
+                if let islandNote = controller.islandNote {
+                    Text(islandNote)
+                        .font(.footnote)
+                        .foregroundStyle(Color.white.opacity(0.5))
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 10)
+                }
                 Spacer()
                 bottomBar
             }
@@ -129,12 +136,15 @@ struct VoiceModesView: View {
             } label: {
                 Image(systemName: controller.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                     .font(.body.weight(.medium))
-                    .foregroundStyle(controller.isMuted ? Color.white.opacity(0.45) : Color.white)
+                    .foregroundStyle(controller.isMuted ? Color.white.opacity(0.55) : Color.white)
                     .frame(width: 44, height: 44)
-                    .background(Circle().fill(Color.white.opacity(0.10)))
+                    .background(
+                        Circle().fill(Color.white.opacity(controller.isMuted ? 0.24 : 0.10))
+                    )
                     .contentShape(Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(VoiceControlButtonStyle(reduceMotion: reduceMotion))
+            .animation(reduceMotion ? nil : .snappy(duration: 0.24, extraBounce: 0.1), value: controller.isMuted)
             .accessibilityLabel(controller.isMuted ? "Unmute replies" : "Mute replies")
 
             Button {
@@ -148,7 +158,7 @@ struct VoiceModesView: View {
                     .background(Circle().fill(Color.white.opacity(0.10)))
                     .contentShape(Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(VoiceControlButtonStyle(reduceMotion: reduceMotion))
             .accessibilityLabel("Close voice mode")
         }
         .padding(.top, 8)
@@ -156,23 +166,57 @@ struct VoiceModesView: View {
     }
 
     private var composer: some View {
-        TextField("Message \(chat.name)…", text: $typed, axis: .vertical)
-            .lineLimit(1...4)
-            .font(.body)
-            .foregroundStyle(Color.white)
-            .tint(Color.white)
-            .focused($composerFocused)
-            .textInputAutocapitalization(.sentences)
-            .submitLabel(.send)
-            .padding(.horizontal, 18)
-            .frame(minHeight: 44)
-            .background(Capsule().fill(Color.white.opacity(0.10)))
-            .onSubmit { sendTyped() }
+        HStack(spacing: 10) {
+            TextField("Message \(chat.name)…", text: $typed, axis: .vertical)
+                .lineLimit(1...4)
+                .font(.body)
+                .foregroundStyle(Color.white)
+                .tint(Color.white)
+                .focused($composerFocused)
+                .textInputAutocapitalization(.sentences)
+                .submitLabel(.send)
+                .padding(.horizontal, 18)
+                .frame(minHeight: 44)
+                .background(Capsule().fill(Color.white.opacity(0.10)))
+                .onSubmit { sendTyped() }
+            Button {
+                Haptics.selection()
+                sendTyped()
+            } label: {
+                Image(systemName: "arrow.up")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Color.black)
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(Color.white))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(VoiceControlButtonStyle(reduceMotion: reduceMotion))
+            .opacity(typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.35 : 1)
+            .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeOut(duration: 0.18), value: typed.isEmpty)
+            .disabled(typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityLabel("Send message")
+        }
     }
 
     private func sendTyped() {
         controller.sendTyped(typed)
         typed = ""
+    }
+}
+
+/// Press feedback for the bottom bar: sink and dim on touch-down, spring
+/// back on release. Reduce Motion gets opacity only — no scale, no spring.
+private struct VoiceControlButtonStyle: ButtonStyle {
+    let reduceMotion: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.9 : 1)
+            .opacity(configuration.isPressed ? 0.6 : 1)
+            .animation(
+                reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.22, extraBounce: 0.14),
+                value: configuration.isPressed
+            )
     }
 }
 

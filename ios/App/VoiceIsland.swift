@@ -6,8 +6,9 @@
 // always ends with it. The stop button in the island lands in this process
 // via a LiveActivityIntent, same door AnswerApprovalIntent opens.
 import ActivityKit
-import Foundation
 import CompanionCore
+import Foundation
+import os
 
 @MainActor
 final class VoiceIsland {
@@ -15,6 +16,8 @@ final class VoiceIsland {
     /// coordinator must never reconcile it away, so it stays out of that
     /// fold's namespace.
     static let botId = "voice"
+
+    private static let log = Logger(subsystem: "com.posival.openmausmobile", category: "voice-island")
 
     private let name: String
     private let color: String
@@ -29,8 +32,16 @@ final class VoiceIsland {
         self.threadId = threadId
     }
 
-    func start() {
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+    /// Starts the activity. Returns a user-facing note when the island
+    /// could not go live — the system toggle is off, or the request threw —
+    /// so the failure is never a silent nothing. The session works either
+    /// way; only the island is missing.
+    func start() -> String? {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            let note = "Live Activities are off for V Bot — turn them on in Settings to see the island."
+            Self.log.error("voice island not requested: \(note, privacy: .public)")
+            return note
+        }
         StopVoiceModeIntent.handler = {
             await MainActor.run {
                 VoiceModeController.active?.close()
@@ -43,11 +54,17 @@ final class VoiceIsland {
             color: color,
             shape: shape
         )
-        activity = try? Activity.request(
-            attributes: attributes,
-            content: content(for: .idle),
-            pushType: nil
-        )
+        do {
+            activity = try Activity.request(
+                attributes: attributes,
+                content: content(for: .idle),
+                pushType: nil
+            )
+            return nil
+        } catch {
+            Self.log.error("voice island request failed: \(error.localizedDescription, privacy: .public)")
+            return "Live Activity could not start: \(error.localizedDescription)"
+        }
     }
 
     func update(_ phase: VoiceSessionPhase) {

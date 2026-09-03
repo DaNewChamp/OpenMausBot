@@ -33,6 +33,9 @@ final class VoiceModeController: ObservableObject {
     @Published private(set) var voiceLevel: Float = 0
     /// Mute: replies are read on screen but never spoken.
     @Published var isMuted = false
+    /// Why the island is not live, when it is not — surfaced on the voice
+    /// screen instead of failing silently.
+    @Published private(set) var islandNote: String?
 
     private let dictation = SpeechDictation()
     private let speaker = MessageSpeaker()
@@ -101,7 +104,7 @@ final class VoiceModeController: ObservableObject {
                 shape: liveBot?.mascotShape?.rawValue,
                 threadId: threadId
             )
-            island.start()
+            islandNote = island.start()
             island.update(phase)
             self.island = island
         }
@@ -145,6 +148,7 @@ final class VoiceModeController: ObservableObject {
         voiceLevel = 0
         island?.end()
         island = nil
+        islandNote = nil
         phase = .idle
     }
 
