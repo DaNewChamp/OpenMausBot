@@ -76,13 +76,30 @@ struct CommActivityPresentationTests {
         let row = try #require(CommActivityPresentation(message: message))
         #expect(row.isCenteredCaption)
         #expect(!row.usesBubbleChrome)
-        #expect(!row.showsPeerAvatar)
+        #expect(row.showsPeerAvatar)
         #expect(!row.showsChevron)
         #expect(row.minimumHitTarget >= 44)
-        #expect(row.visualFontSizePoints < 15)
-        #expect(row.accessibilityLabel == "Messaged CIO")
+        #expect(row.visualFontSizePoints == 12)
+        #expect(row.captionText == "Messaged @CIO")
+        #expect(row.captionText == row.title)
+        #expect(row.accessibilityLabel == "Messaged @CIO")
         #expect(row.accessibilityHint == "Opens the conversation with CIO")
         #expect(row.unavailableAccessibilityLabel == nil)
+    }
+
+    @Test
+    func testCaptionKeepsToolMetadataModelReasoningSuffix() throws {
+        let data = Data(#"{"id":"m-suffix","role":"bot","kind":"activity","at":1,"tool":{"name":"Messaged @CIO · gpt-5.4 · high"},"comm":{"groupId":"room-1","withBotId":"cio","withName":"CIO","withColor":"blue"}}"#.utf8)
+        let message = try JSONDecoder().decode(Message.self, from: data)
+        let row = try #require(CommActivityPresentation(message: message))
+        #expect(row.title == "Messaged @CIO · gpt-5.4 · high")
+        #expect(row.captionText == "Messaged @CIO · gpt-5.4 · high")
+        #expect(row.captionText == row.title)
+        #expect(row.captionText != "Messaged CIO")
+        #expect(row.showsPeerAvatar)
+        #expect(!row.usesBubbleChrome)
+        #expect(!row.showsChevron)
+        #expect(row.accessibilityLabel == "Messaged @CIO · gpt-5.4 · high")
     }
 
     @Test
@@ -91,8 +108,11 @@ struct CommActivityPresentationTests {
         let message = try JSONDecoder().decode(Message.self, from: data)
         let row = try #require(CommActivityPresentation(message: message, destinationAvailable: false))
         #expect(row.isCenteredCaption)
+        #expect(row.showsPeerAvatar)
         #expect(row.minimumHitTarget >= 44)
-        #expect(row.accessibilityLabel == "Messaged Risk, conversation unavailable")
+        #expect(row.title == "Messaged @Risk")
+        #expect(row.captionText == "Messaged @Risk")
+        #expect(row.accessibilityLabel == "Messaged @Risk, conversation unavailable")
         #expect(row.accessibilityHint == "The conversation with Risk is no longer available")
     }
 }

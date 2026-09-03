@@ -20,14 +20,14 @@ public struct CommActivityPresentation: Equatable, Sendable {
     public let showsRunning = false
     public let isCenteredCaption = true
     public let usesBubbleChrome = false
-    public let showsPeerAvatar = false
+    public let showsPeerAvatar = true
     public let showsChevron = false
     public let minimumHitTarget: CGFloat = 44
     /// Visual caption stays small; the 44pt hit target is padding, not type.
     public let visualFontSizePoints: CGFloat = 12
 
     public var captionText: String {
-        "Messaged \(peerName)"
+        title
     }
 
     public var accessibilityLabel: String {

@@ -1609,6 +1609,10 @@ struct CommActivityRow: View {
     let comm: CommChip
     let onOpen: (CommChip) -> Void
 
+    @EnvironmentObject private var session: Session
+
+    private var peer: Bot? { session.state.bot(presentation.peerBotId) }
+
     var body: some View {
         rowContent
             .accessibilityElement(children: .combine)
@@ -1630,14 +1634,28 @@ struct CommActivityRow: View {
     }
 
     private var contentLabel: some View {
-        Text(presentation.captionText)
-            .font(.system(size: presentation.visualFontSizePoints, weight: .regular))
-            .foregroundStyle(Color.secondary)
-            .multilineTextAlignment(.center)
-            .lineLimit(2)
-            .truncationMode(.tail)
-            .frame(maxWidth: .infinity, minHeight: presentation.minimumHitTarget)
-            .contentShape(Rectangle())
+        HStack(spacing: 6) {
+            if presentation.showsPeerAvatar {
+                peerAvatar
+            }
+            Text(presentation.captionText)
+                .font(.system(size: presentation.visualFontSizePoints, weight: .regular))
+                .foregroundStyle(Color.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .truncationMode(.tail)
+        }
+        .frame(maxWidth: .infinity, minHeight: presentation.minimumHitTarget)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var peerAvatar: some View {
+        if let peer {
+            BotAvatarView(bot: peer, size: 14, state: .happy, animated: false)
+        } else {
+            MausAvatar(color: comm.withColor, size: 14, state: .happy, animated: false)
+        }
     }
 }
 
