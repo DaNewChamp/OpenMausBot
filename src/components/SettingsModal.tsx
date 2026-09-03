@@ -18,6 +18,7 @@ import { SkinPicker } from "./SkinPicker";
 import { RoomTurnTimeoutSettings } from "./RoomTurnTimeoutSettings";
 import { ApprovalReviewerSettings } from "./ApprovalReviewerSettings";
 import { TranscriptionSettings } from "./TranscriptionSettings";
+import { HouseStyleSettings } from "./HouseStyleSettings";
 import { cn } from "@/lib/cn";
 
 const SECTIONS: Array<{
@@ -26,7 +27,7 @@ const SECTIONS: Array<{
   icon: typeof User;
   keywords: string[];
 }> = [
-  { id: "general", label: "General", icon: User, keywords: ["profile", "name", "email", "skin", "theme", "appearance", "analytics", "updates", "approval", "reviewer"] },
+  { id: "general", label: "General", icon: User, keywords: ["profile", "name", "email", "skin", "theme", "appearance", "analytics", "updates", "approval", "reviewer", "house style", "voice", "instructions", "persona"] },
   { id: "connections", label: "Connections", icon: KeyRound, keywords: ["keys", "api", "composio", "box", "xai", "vps"] },
   { id: "engines", label: "Engines", icon: Terminal, keywords: ["models", "claude", "grok", "providers", "cli"] },
   { id: "companion", label: "Phone", icon: Smartphone, keywords: ["companion", "phone", "pair", "mobile"] },
@@ -395,6 +396,12 @@ export function SettingsModal() {
                   subtitle="Optionally rewrite approval cards in plain language. The local explanation still decides risk, and you still approve or deny."
                 >
                   <ApprovalReviewerSettings />
+                </Card>
+                <Card
+                  title="House style"
+                  subtitle="One voice for every bot: a global instruction block each bot receives before its own instructions."
+                >
+                  <HouseStyleSettings />
                 </Card>
                 <ExperimentalFeaturesRow />
                 <UpdatesRow />
