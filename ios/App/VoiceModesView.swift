@@ -1,10 +1,14 @@
 // Live voice mode: the full-screen black surface and the orb.
 //
-// ChatGPT's shape — a glowing orb that carries the state, a line or two of
-// transcript under it, and a bottom bar with a composer, a mute, and a way
-// out. The surface is black regardless of scheme: it is a different room,
-// not a themed screen, and the ink on it is white for the same reason.
-// Everything that moves obeys Reduce Motion by falling back to a still orb.
+// ChatGPT's shape — an orb that carries the state and moves with the
+// actual voice, a line or two of transcript under it, and a bottom bar
+// with a composer, a mute, and a way out. The surface is black regardless
+// of scheme: it is a different room, not a themed screen, and the ink on
+// it is white for the same reason. The orb is monochrome to match: white
+// and gray on black, with no accent color anywhere. While listening it
+// swells with the real microphone level; while speaking it pulses with
+// the real voice output. Everything that moves obeys Reduce Motion by
+// falling back to a still orb whose states are opacity only.
 import SwiftUI
 import CompanionCore
 
@@ -54,7 +58,12 @@ struct VoiceModesView: View {
     // MARK: - The orb
 
     private var orb: some View {
-        VoiceOrb(phase: controller.phase, level: controller.micLevel, reduceMotion: reduceMotion)
+        VoiceOrb(
+            phase: controller.phase,
+            level: controller.micLevel,
+            voiceLevel: controller.voiceLevel,
+            reduceMotion: reduceMotion
+        )
             .frame(width: 190, height: 190)
             .contentShape(Circle())
             .onTapGesture {
@@ -169,35 +178,69 @@ struct VoiceModesView: View {
 
 // MARK: - The orb itself
 
-/// Indigo/violet radial core with a soft outer bloom. The animations are
-/// the state: idle breathes dim, listening pulses with the mic, thinking
-/// spins a highlight around the rim, speaking swells gently.
+/// White and gray on black. The motion is the voice: while listening the
+/// core swells with the smoothed microphone level, while speaking it
+/// pulses with the real playback amplitude, thinking orbits a highlight
+/// around the rim, idle breathes dim. Reduce Motion keeps the level out
+/// of the geometry entirely — phases become fixed opacity steps.
 struct VoiceOrb: View {
     let phase: VoiceSessionPhase
     let level: Float
+    let voiceLevel: Float
     let reduceMotion: Bool
 
     @State private var breathing = false
     @State private var orbiting = false
-    @State private var speakingPulse = false
+
+    /// The amplitude driving this phase, normalized to 0...1. Mic RMS in a
+    /// lively room tops out around 0.45; voice output arrives clamped.
+    private var activeLevel: CGFloat {
+        let raw: Float
+        switch phase {
+        case .listening: raw = level / 0.45
+        case .speaking: raw = voiceLevel
+        case .idle, .thinking: raw = 0
+        }
+        return CGFloat(min(max(raw, 0), 1))
+    }
 
     private var coreScale: CGFloat {
+        if reduceMotion { return 1 }
         switch phase {
         case .idle:
             return breathing ? 1.0 : 1.02
         case .listening:
-            return 1.0 + CGFloat(min(level, 0.5)) * 0.12
+            return 1.0 + (breathing ? 0.01 : 0.0) + activeLevel * 0.16
         case .thinking:
             return 1.0
         case .speaking:
-            return speakingPulse ? 1.05 : 1.0
+            return 1.0 + activeLevel * 0.13
         }
     }
 
     private var coreOpacity: Double {
+        if reduceMotion {
+            switch phase {
+            case .idle: return 0.4
+            case .listening: return 0.9
+            case .thinking: return 0.65
+            case .speaking: return 0.95
+            }
+        }
         switch phase {
-        case .idle: return 0.5
-        default: return 1.0
+        case .idle: return 0.45
+        case .listening, .speaking, .thinking: return 1.0
+        }
+    }
+
+    /// The bloom behind the core: loud is bright. Idle keeps a faint ash.
+    private var glowOpacity: Double {
+        guard !reduceMotion else { return phase == .idle ? 0.1 : 0.2 }
+        switch phase {
+        case .idle: return 0.12
+        case .thinking: return 0.28
+        case .listening, .speaking:
+            return 0.22 + Double(activeLevel) * 0.4
         }
     }
 
@@ -207,13 +250,13 @@ struct VoiceOrb: View {
                 .fill(
                     RadialGradient(
                         colors: [
-                            Color(hex: "#C7D2FE").opacity(0.9),
-                            Color(hex: "#818CF8"),
-                            Color(hex: "#6D5DF6"),
-                            Color(hex: "#7C3AED"),
-                            Color(hex: "#2E1065"),
+                            Color.white.opacity(0.98),
+                            Color(hex: "#E8E8E8"),
+                            Color(hex: "#9A9A9A"),
+                            Color(hex: "#3D3D3D"),
+                            Color(hex: "#141414"),
                         ],
-                        center: .init(x: 0.4, y: 0.35),
+                        center: .init(x: 0.42, y: 0.34),
                         startRadius: 4,
                         endRadius: 98
                     )
@@ -229,7 +272,7 @@ struct VoiceOrb: View {
                             lineWidth: 1.5
                         )
                 }
-                .shadow(color: Color(hex: "#7C3AED").opacity(0.55), radius: 44)
+                .shadow(color: Color.white.opacity(glowOpacity), radius: 44)
 
             if phase == .thinking {
                 Circle()
@@ -244,15 +287,11 @@ struct VoiceOrb: View {
                     )
                     .padding(9)
             }
-
-            if phase == .speaking {
-                SpeakingBars()
-                    .padding(58)
-            }
         }
         .scaleEffect(coreScale)
         .opacity(coreOpacity)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: level)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: level)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: voiceLevel)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.9), value: phase)
         .onAppear { runAnimations() }
         .onChange(of: phase) { _, _ in runAnimations() }
@@ -261,54 +300,25 @@ struct VoiceOrb: View {
     private func runAnimations() {
         breathing = false
         orbiting = false
-        speakingPulse = false
         guard !reduceMotion else { return }
         switch phase {
         case .idle:
-            withAnimation(.easeInOut(duration: 3.2).repeatForever(autoreverses: true)) {
+            withAnimation(.easeInOut(duration: 3.4).repeatForever(autoreverses: true)) {
                 breathing = true
             }
         case .listening:
-            withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
+            // The level does the moving here; a still core reads as dead
+            // mic, so silence keeps the idle breath.
+            withAnimation(.easeInOut(duration: 3.4).repeatForever(autoreverses: true)) {
                 breathing = true
             }
         case .thinking:
-            withAnimation(.linear(duration: 2.4).repeatForever(autoreverses: false)) {
+            withAnimation(.linear(duration: 2.6).repeatForever(autoreverses: false)) {
                 orbiting = true
             }
         case .speaking:
-            withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) {
-                speakingPulse = true
-            }
+            // Voice amplitude drives the swell; no synthetic pulse.
+            break
         }
-    }
-}
-
-/// Amplitude bars inside the orb while the voice plays. The clip's real
-/// loudness is not worth a metering tap on the shared player — five bars
-/// breathing out of phase read as "speaking" at a glance.
-private struct SpeakingBars: View {
-    @State private var up = false
-
-    private let specs: [(height: CGFloat, delay: Double)] = [
-        (0.35, 0.0), (0.75, 0.12), (1.0, 0.24), (0.6, 0.36), (0.3, 0.48),
-    ]
-
-    var body: some View {
-        HStack(spacing: 5) {
-            ForEach(Array(specs.enumerated()), id: \.offset) { index, spec in
-                Capsule()
-                    .fill(Color.white.opacity(0.9))
-                    .frame(width: 5, height: 46)
-                    .scaleEffect(y: up ? spec.height : 0.2, anchor: .center)
-                    .animation(
-                        up
-                            ? .easeInOut(duration: 0.42 + Double(index) * 0.05).repeatForever(autoreverses: true).delay(spec.delay)
-                            : .easeInOut(duration: 0.2),
-                        value: up
-                    )
-            }
-        }
-        .onAppear { up = true }
     }
 }
