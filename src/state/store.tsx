@@ -1792,13 +1792,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         api("/api/routines")
           .then(({ routines, runs }) => alive && rawDispatch({ type: "routinesHydrated", routines, runs }))
           .catch(() => {}),
-        // The hub's proxy refuses /api/webhooks to browsers, so the web
-        // client skips the fetch instead of logging a 403 on every load.
-        ...(isWebClientMode() ? [] : [
-          api("/api/webhooks")
-            .then(({ webhooks, attempts, ingress }) => alive && rawDispatch({ type: "webhooksHydrated", webhooks, attempts: attempts ?? [], ingress }))
-            .catch(() => {}),
-        ]),
+        api("/api/webhooks")
+          .then(({ webhooks, attempts, ingress }) => alive && rawDispatch({ type: "webhooksHydrated", webhooks, attempts: attempts ?? [], ingress }))
+          .catch(() => {}),
       ]);
 
     // A snapshot and the live fold have to meet at a defined boundary. Start

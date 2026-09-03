@@ -800,6 +800,19 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // workspace ElevenLabs key; the phone receives labels or audio only.
   { method: "GET", path: /^\/api\/tts\/voices$/ },
   { method: "POST", path: /^\/api\/tts\/speak$/ },
+  { method: "POST", path: /^\/api\/tts\/prepare$/ },
+
+  // Webhooks: the paired client owns the full surface — create, rotate,
+  // test, edit, delete. Rotation breaks whatever was sending to it, which
+  // is the sender's problem to notice, same as on the desktop.
+  { method: "GET", path: /^\/api\/webhooks$/ },
+  { method: "POST", path: /^\/api\/webhooks$/ },
+  { method: "POST", path: /^\/api\/webhooks\/[\w-]+\/(rotate|test)$/ },
+  { method: "PATCH", path: /^\/api\/webhooks\/[\w-]+$/ },
+  { method: "DELETE", path: /^\/api\/webhooks\/[\w-]+$/ },
+
+  // Connected apps: disconnecting an account joins the library surface.
+  { method: "DELETE", path: /^\/api\/connectors\/[\w-]+\/accounts\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/ },
 
   // Routines create ordinary tasks using an existing agent configuration.
   // Webhook management remains explicitly denied below.
@@ -850,16 +863,8 @@ const EXPLAINED: ReadonlyArray<{ path: RegExp; error: string }> = [
   { path: /^\/api\/local-computer(\/|$)/, error: "the Local VM is set up on your computer" },
   {
     path: /^\/api\/bots\/[\w-]+\/local-computer(\/|$)/,
-    error: "Local VM access is managed per phone in OpenMausBot → Settings → Companion",
+    error: "Local VM access is managed per phone in Vi Bot → Settings → Companion",
   },
-  {
-    // Creating one exposes an endpoint to the internet, and rotating a
-    // secret breaks whatever was sending to it. Neither belongs on a device
-    // that lives in a pocket.
-    path: /^\/api\/webhooks(\/|$)/,
-    error: "webhooks are set up on your computer",
-  },
-  { path: /^\/api\/connectors(\/|$)/, error: "connected apps are set up on your computer" },
   {
     path: /^\/api\/routines(\/|$)/,
     error: "this routine operation is only available on your computer",

@@ -227,9 +227,6 @@ describe("what it may not", () => {
       ["GET", "/api/devices"],
       ["GET", "/api/companion"],
       ["POST", "/api/local-computer/start"],
-      ["POST", "/api/webhooks"],
-      ["POST", "/api/webhooks/wh_1/rotate"],
-      ["DELETE", "/api/connectors/gmail"],
       ["POST", "/api/teams/import"],
     ] as Array<[string, string]>) {
       const denial = ask(method, path);
@@ -437,9 +434,10 @@ describe("what it may not", () => {
     expect(allowed("POST", "/api/routine-runs/run_1/cancel/extra")).toBe(false);
     expect(allowed("DELETE", "/api/connectors/slack")).toBe(false);
     expect(allowed("GET", "/api/connectors/connected/all")).toBe(false);
-    // revocation is a Mac-only affordance: the phone can list and add
-    // accounts but the account DELETE route is deliberately not allowed
-    expect(allowed("DELETE", "/api/connectors/slack/accounts/ca_123")).toBe(false);
+    // disconnecting an account joins the library surface; removing a whole
+    // service stays computer-only
+    expect(allowed("DELETE", "/api/connectors/slack/accounts/ca_123")).toBe(true);
+    expect(allowed("DELETE", "/api/connectors/slack")).toBe(false);
     expect(allowed("GET", "/api/bots/bot_123/connector-cards/msg_2/authorize")).toBe(false);
     expect(allowed("POST", "/api/bots/bot_123/connector-cards/msg_2/status")).toBe(false);
     expect(allowed("POST", "/api/bots/bot_123/connector-cards/msg_2/authorize/extra")).toBe(false);
