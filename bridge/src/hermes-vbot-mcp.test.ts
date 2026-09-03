@@ -222,7 +222,7 @@ describe("Hermes V Bot MCP facade", () => {
     expect(tools.find((tool) => tool.name === "list_bots")).toEqual({
       name: "list_bots",
       description:
-        "List the other bots (agents) in your OpenMausBot section you can message, with their model and whether they're busy. Call this before ask_bot or delegate_bot to discover who's available.",
+        "List the other bots (agents) you can message, with their section, model, and whether they're busy. Call this before ask_bot or delegate_bot to discover who's available.",
       inputSchema: { type: "object", properties: {} },
     });
     expect(tools.find((tool) => tool.name === "ask_bot")?.inputSchema).toEqual({
@@ -419,7 +419,7 @@ describe("Hermes V Bot MCP facade", () => {
     expect(tools.find((tool) => tool.name === "list_bots")).toEqual({
       name: "list_bots",
       description:
-        "List the other bots (agents) in your OpenMausBot section you can message, with their model and whether they're busy. Call this before ask_bot or delegate_bot to discover who's available.",
+        "List the other bots (agents) you can message, with their section, model, and whether they're busy. Call this before ask_bot or delegate_bot to discover who's available.",
       inputSchema: { type: "object", properties: {} },
     });
     expect(tools.find((tool) => tool.name === "ask_bot")?.inputSchema).toEqual({
@@ -498,6 +498,7 @@ describe("Hermes profile mcp_servers registration", () => {
     const parsed = parseYaml(text) as {
       model?: { default?: string };
       mcp_servers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
+      platform_toolsets?: { cli?: string[] };
       mcpServers?: unknown;
     };
     expect(parsed.model).toEqual({ default: "z-ai/glm-5.2" });
@@ -512,9 +513,32 @@ describe("Hermes profile mcp_servers registration", () => {
       "bot-chief",
     ]));
     expect(parsed.mcp_servers?.vbot?.env).toBeUndefined();
+    expect(parsed.platform_toolsets?.cli).toContain("vbot");
     expect(text).not.toMatch(/mcpServers|token|OMB_COMMS|Bearer|sk-|HERMES_HOME/i);
     expect(JSON.stringify(result)).not.toMatch(/token|OMB_COMMS|Bearer|sk-|HERMES_HOME/i);
     expect(launch.args.join(" ")).not.toMatch(/token|OMB_COMMS|Bearer|sk-|HERMES_HOME/i);
+  });
+
+  it("enables V Bot for Hermes gateway sessions while preserving existing CLI toolsets", async () => {
+    const { installHermesVbotConnector, hermesProfileConfigPath } = await import("./hermes-vbot-mcp.ts");
+    const hermesHome = profileHome("gateway-tools");
+    const sidecarPath = join(hermesHome, "..", "hermes-vbot-mcp.json");
+    writeFileSync(
+      join(hermesHome, "config.yaml"),
+      "platform_toolsets:\n  cli:\n    - web\n",
+    );
+    installHermesVbotConnector({
+      configPath: sidecarPath,
+      hermesHome,
+      profile: "default",
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-chief",
+      hubDisplayName: "Mac mini",
+    });
+    const parsed = parseYaml(readFileSync(hermesProfileConfigPath(hermesHome), "utf8")) as {
+      platform_toolsets?: { cli?: string[] };
+    };
+    expect(parsed.platform_toolsets?.cli).toEqual(["web", "vbot"]);
   });
 
   it("preserves a pre-existing secret-shaped Hermes value without scanning or emitting it", async () => {

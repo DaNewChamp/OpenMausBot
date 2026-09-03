@@ -445,6 +445,18 @@ function assertGeneratedConnectorSafe(parts: unknown[]): void {
   }
 }
 
+function yamlNodeValue(value: unknown): unknown {
+  if (
+    value &&
+    typeof value === "object" &&
+    "toJSON" in value &&
+    typeof (value as { toJSON?: unknown }).toJSON === "function"
+  ) {
+    return (value as { toJSON: () => unknown }).toJSON();
+  }
+  return value;
+}
+
 function writeHermesVbotYamlEntry(
   configPath: string,
   existingText: string,
@@ -458,10 +470,17 @@ function writeHermesVbotYamlEntry(
   ]);
   let serialized: string;
   if (!existingText.trim()) {
-    serialized = stringifyYaml({ mcp_servers: { vbot: entry } }, { indent: 2 }).trimEnd() + "\n";
+    serialized = stringifyYaml({
+      mcp_servers: { vbot: entry },
+      platform_toolsets: { cli: ["vbot"] },
+    }, { indent: 2 }).trimEnd() + "\n";
   } else {
     const doc = parseDocument(existingText);
     doc.setIn(["mcp_servers", "vbot"], entry);
+    const cli = yamlNodeValue(doc.getIn(["platform_toolsets", "cli"]));
+    const enabled = Array.isArray(cli) ? cli.map(String) : [];
+    if (!enabled.includes("vbot")) enabled.push("vbot");
+    doc.setIn(["platform_toolsets", "cli"], enabled);
     const text = String(doc);
     serialized = text.endsWith("\n") ? text : `${text}\n`;
   }
@@ -550,6 +569,14 @@ export function installHermesVbotConnector(input: {
     }
     const servers = yamlDoc.mcp_servers;
     if (servers !== undefined && !isRecord(servers)) {
+      throw new Error("Hermes profile is unavailable");
+    }
+    const platformToolsets = yamlDoc.platform_toolsets;
+    if (platformToolsets !== undefined && !isRecord(platformToolsets)) {
+      throw new Error("Hermes profile is unavailable");
+    }
+    const cliToolsets = isRecord(platformToolsets) ? platformToolsets.cli : undefined;
+    if (cliToolsets !== undefined && (!Array.isArray(cliToolsets) || cliToolsets.some((value) => typeof value !== "string"))) {
       throw new Error("Hermes profile is unavailable");
     }
     const existingVbot = isRecord(servers) ? servers.vbot : undefined;
