@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// The renderer-neutral description of a bot-to-bot communication activity.
@@ -15,11 +16,40 @@ public struct CommActivityPresentation: Equatable, Sendable {
     /// exchange. A missing room is still useful context, but it must not
     /// present a dead navigation affordance.
     public let destinationAvailable: Bool
+    public let peerName: String
     public let showsRunning = false
+    public let isCenteredCaption = true
+    public let usesBubbleChrome = false
+    public let showsPeerAvatar = false
+    public let showsChevron = false
+    public let minimumHitTarget: CGFloat = 44
+    /// Visual caption stays small; the 44pt hit target is padding, not type.
+    public let visualFontSizePoints: CGFloat = 12
+
+    public var captionText: String {
+        "Messaged \(peerName)"
+    }
+
+    public var accessibilityLabel: String {
+        destinationAvailable
+            ? captionText
+            : "\(captionText), conversation unavailable"
+    }
+
+    public var unavailableAccessibilityLabel: String? {
+        destinationAvailable ? nil : accessibilityLabel
+    }
+
+    public var accessibilityHint: String {
+        destinationAvailable
+            ? "Opens the conversation with \(peerName)"
+            : "The conversation with \(peerName) is no longer available"
+    }
 
     public init?(message: Message, destinationAvailable: Bool = true) {
         guard message.kind == .activity, let comm = message.comm else { return nil }
         peerBotId = comm.withBotId
+        peerName = comm.withName
         let candidate = message.tool?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         title = candidate.isEmpty ? "Messaged @\(comm.withName)" : candidate
         groupId = comm.groupId

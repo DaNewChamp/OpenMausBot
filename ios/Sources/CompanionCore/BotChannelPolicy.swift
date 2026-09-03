@@ -59,4 +59,64 @@ public enum BotChannelPolicy {
         if openingRoomId == current.roomId { return current }
         return nil
     }
+
+    public enum NavigationAction: Equatable, Sendable {
+        case openDedicatedReadOnly(perspectiveBotId: String)
+        case showParticipantPicker
+        case openSharedRoom(perspectiveBotId: String)
+        case unavailable
+    }
+
+    /// Dedicated 1:1 bot transcripts keep ordinary bubbles; the compact
+    /// Messaged caption lives only on the parent chat indicator.
+    public static let dedicatedTranscriptUsesNormalBubbles = true
+
+    public static func isDedicatedReadOnlyConversation(_ room: Room) -> Bool {
+        isBotChannel(room) && room.memberIds.count == 2
+    }
+
+    public static func showsParticipantPicker(room: Room) -> Bool {
+        isBotChannel(room) && room.memberIds.count > 2
+    }
+
+    public static func hidesComposer(for room: Room) -> Bool {
+        isDedicatedReadOnlyConversation(room)
+    }
+
+    public static func navigationAction(
+        room: Room?,
+        invokingBotId: String?,
+        counterpartBotId: String
+    ) -> NavigationAction {
+        guard let room else { return .unavailable }
+        let perspective = perspectiveBotId(
+            memberIds: room.memberIds,
+            invokingBotId: invokingBotId,
+            counterpartBotId: counterpartBotId
+        )
+        if isBotChannel(room) {
+            if room.memberIds.count == 2 {
+                return .openDedicatedReadOnly(perspectiveBotId: perspective)
+            }
+            if room.memberIds.count > 2 {
+                return .showParticipantPicker
+            }
+            return .unavailable
+        }
+        return .openSharedRoom(perspectiveBotId: perspective)
+    }
+
+    private static func perspectiveBotId(
+        memberIds: [String],
+        invokingBotId: String?,
+        counterpartBotId: String
+    ) -> String {
+        if let invokingBotId, memberIds.contains(invokingBotId) {
+            return invokingBotId
+        }
+        if memberIds.contains(counterpartBotId) {
+            return counterpartBotId
+        }
+        return memberIds.first ?? counterpartBotId
+    }
 }

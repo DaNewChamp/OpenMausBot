@@ -96,6 +96,13 @@ struct ChatView: View {
         return max(0, session.state.unreadCount(showBotChannels: showBotChannels) - mine)
     }
 
+    private var hidesComposer: Bool {
+        if case let .room(room) = current {
+            return BotChannelPolicy.hidesComposer(for: room)
+        }
+        return false
+    }
+
     var body: some View {
         // Split across typed subviews so Release type-checking can finish.
         // Live tokens stay hidden; working/tool/activity remain, and the
@@ -322,6 +329,7 @@ struct ChatView: View {
                 )
                 .environmentObject(session)
             }
+            if !hidesComposer {
             ChatComposerView(
                 chat: current,
                 plusActions: plusActions,
@@ -351,6 +359,7 @@ struct ChatView: View {
                 onRemoveAttachment: removeAttachment
             )
             .id(composerLayoutRevision)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .overlay(alignment: .top) {
@@ -716,6 +725,12 @@ struct MessageRow: View {
     @State private var editingText = ""
     @State private var showingEdit = false
 
+    private var showsCommAsNormalBubble: Bool {
+        guard case let .room(room) = chat else { return false }
+        return BotChannelPolicy.isDedicatedReadOnlyConversation(room)
+            && BotChannelPolicy.dedicatedTranscriptUsesNormalBubbles
+    }
+
     private static let reactionChoices = ["👍", "👎", "❤️", "😂", "🎉", "😮"]
 
     private var versions: [Message] {
@@ -806,7 +821,9 @@ struct MessageRow: View {
             let destinationAvailable = message.comm.map { comm in
                 session.state.rooms.contains { $0.id == comm.groupId }
             } ?? false
-            if let row = CommActivityPresentation(message: message, destinationAvailable: destinationAvailable), let comm = message.comm {
+            if let row = CommActivityPresentation(message: message, destinationAvailable: destinationAvailable),
+               let comm = message.comm,
+               !showsCommAsNormalBubble {
                 CommActivityRow(presentation: row, comm: comm, onOpen: onOpenComm)
             } else {
                 ActivityChip(tool: message.tool)
@@ -1585,24 +1602,18 @@ struct ToolRunDisclosure: View {
     }
 }
 
-/// A settled bot-to-bot message that opens the room where the exchange lives.
-/// Communication is navigation, not a running tool receipt, so the row keeps
-/// one quiet title and the peer's identity rather than showing a spinner.
+/// A settled bot-to-bot message that opens the dedicated conversation.
+/// In the parent transcript this is a compact centered caption, not a bubble.
 struct CommActivityRow: View {
     let presentation: CommActivityPresentation
     let comm: CommChip
     let onOpen: (CommChip) -> Void
 
-    @EnvironmentObject private var session: Session
-    @Environment(\.conversationTypography) private var typography
-
-    private var peer: Bot? { session.state.bot(presentation.peerBotId) }
-
     var body: some View {
         rowContent
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(accessibilityTitle)
-            .accessibilityHint(accessibilityHint)
+            .accessibilityLabel(presentation.accessibilityLabel)
+            .accessibilityHint(presentation.accessibilityHint)
     }
 
     @ViewBuilder
@@ -1612,52 +1623,21 @@ struct CommActivityRow: View {
                 contentLabel
             }
             .buttonStyle(.plain)
+            .accessibilityAddTraits(.isButton)
         } else {
             contentLabel
         }
     }
 
     private var contentLabel: some View {
-        HStack(spacing: 6) {
-            if let peer {
-                BotAvatarView(bot: peer, size: 18, state: .happy, animated: false)
-            } else {
-                MausAvatar(color: comm.withColor, size: 18, state: .happy, animated: false)
-            }
-            Text(presentation.title)
-                .font(typography.compact)
-                .foregroundStyle(Color.secondary.opacity(0.58))
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .truncationMode(.tail)
-            if !presentation.destinationAvailable {
-                Text("Conversation unavailable")
-                    .font(typography.compact)
-                    .foregroundStyle(Color.secondary.opacity(0.5))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            if presentation.destinationAvailable {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(Color.secondary.opacity(0.45))
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 6)
-        .contentShape(Rectangle())
-    }
-
-    private var accessibilityTitle: String {
-        presentation.destinationAvailable
-            ? presentation.title
-            : "\(presentation.title), conversation unavailable"
-    }
-
-    private var accessibilityHint: String {
-        presentation.destinationAvailable
-            ? "Open the conversation with \(peer?.name ?? comm.withName)"
-            : "The conversation with \(peer?.name ?? comm.withName) is no longer available"
+        Text(presentation.captionText)
+            .font(.system(size: presentation.visualFontSizePoints, weight: .regular))
+            .foregroundStyle(Color.secondary)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, minHeight: presentation.minimumHitTarget)
+            .contentShape(Rectangle())
     }
 }
 

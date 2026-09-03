@@ -289,23 +289,31 @@ struct ChatTranscriptView: View {
                             guard let room = session.state.rooms.first(where: { $0.id == comm.groupId }) else {
                                 return
                             }
-                            if BotChannelPolicy.isBotChannel(room), room.memberIds.count == 2 {
-                                let invokingBotId: String? = {
-                                    if case let .bot(bot) = current { return bot.id }
-                                    return nil
-                                }()
+                            let invokingBotId: String? = {
+                                if case let .bot(bot) = current { return bot.id }
+                                return nil
+                            }()
+                            switch BotChannelPolicy.navigationAction(
+                                room: room,
+                                invokingBotId: invokingBotId,
+                                counterpartBotId: comm.withBotId
+                            ) {
+                            case let .openDedicatedReadOnly(perspectiveBotId),
+                                 let .openSharedRoom(perspectiveBotId):
+                                session.openBotChannel(
+                                    room: room,
+                                    perspectiveBotId: perspectiveBotId,
+                                    focusMessageId: comm.messageId
+                                )
+                                commRoom = room
+                            case .showParticipantPicker:
                                 pendingBotChannelOpen = BotChannelOpenIntent(
                                     room: room,
                                     focusMessageId: comm.messageId,
                                     invokingBotId: invokingBotId
                                 )
-                            } else {
-                                session.openBotChannel(
-                                    room: room,
-                                    perspectiveBotId: room.memberIds.first ?? comm.withBotId,
-                                    focusMessageId: comm.messageId
-                                )
-                                commRoom = room
+                            case .unavailable:
+                                break
                             }
                         },
                         onReply: { message in
