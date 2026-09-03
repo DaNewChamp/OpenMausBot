@@ -20,6 +20,7 @@ struct SettingsView: View {
     @State private var approvalReviewerLoaded = false
     @State private var enablingNotifications = false
     @State private var showingBrowserScanner = false
+    @State private var scannedBrowserURL: URL?
     private let onConnect: (() -> Void)?
     private let onOpenChat: ((Chat) -> Void)?
 
@@ -52,7 +53,11 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .vbotCanvas()
         .tint(Color.accentColor)
-        .fullScreenCover(isPresented: $showingBrowserScanner) {
+        .fullScreenCover(isPresented: $showingBrowserScanner, onDismiss: {
+            guard let url = scannedBrowserURL else { return }
+            scannedBrowserURL = nil
+            session.receivePairingURL(url)
+        }) {
             PairingScannerSheet { payload in
                 guard let url = URL(string: payload) else {
                     return "That isn't a V Bot pairing QR code."
@@ -60,7 +65,8 @@ struct SettingsView: View {
                 guard WebPairingRequest.parse(url) != nil else {
                     return "That isn't a browser pairing QR code."
                 }
-                session.receivePairingURL(url)
+                scannedBrowserURL = url
+                showingBrowserScanner = false
                 return nil
             }
         }

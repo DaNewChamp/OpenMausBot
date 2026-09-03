@@ -56,8 +56,9 @@ final class WebPairingTests: XCTestCase {
     func testApprovalRequiresAnAlreadyPairedPhoneExplicitConfirmAndTheRightHub() throws {
         let hash = String(repeating: "a", count: 64)
         let rid = String(repeating: "b", count: 22)
+        let exp = String(Int64(Date().timeIntervalSince1970 * 1000) + 120_000)
         let url = try XCTUnwrap(URL(string:
-            "openmausbot://web-pair?v=1&hub=https://hub-vbot.posival.com&hid=hub-1&rid=\(rid)&ch=\(hash)&n=Vincent%27s%20browser&exp=1735689600000"
+            "openmausbot://web-pair?v=1&hub=https://hub-vbot.posival.com&hid=hub-1&rid=\(rid)&ch=\(hash)&n=Vincent%27s%20browser&exp=\(exp)"
         ))
         let request = try XCTUnwrap(WebPairingRequest.parse(url))
         XCTAssertFalse(WebPairingScanPolicy.shouldAutoApprove(request))
@@ -132,6 +133,25 @@ final class WebPairingTests: XCTestCase {
             XCTAssertTrue(message.contains("already paired"))
         } else {
             XCTFail("already-paired phone must not auto-switch on the old pair QR")
+        }
+    }
+
+    func testExpiredWebPairCodeRejectsWithRefreshCopy() throws {
+        let hash = String(repeating: "a", count: 64)
+        let rid = String(repeating: "b", count: 22)
+        let expired = String(Int64(Date().timeIntervalSince1970 * 1000) - 1_000)
+        let url = try XCTUnwrap(URL(string:
+            "openmausbot://web-pair?v=1&hub=https://hub-vbot.posival.com&hid=hub-1&rid=\(rid)&ch=\(hash)&n=Browser&exp=\(expired)"
+        ))
+        if case .reject(let message) = WebPairingScanPolicy.outcome(
+            for: url,
+            isPaired: true,
+            pairingRequested: false,
+            pairedOrigins: ["https://hub-vbot.posival.com"]
+        ) {
+            XCTAssertTrue(message.contains("expired"), "got: \(message)")
+        } else {
+            XCTFail("an expired code must be rejected with refresh copy, not sent to the hub")
         }
     }
 

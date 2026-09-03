@@ -147,7 +147,16 @@ export function WebClientGate({
             timer = setTimeout(() => void tick(), WEB_PAIRING_POLL_MS);
             return;
           }
-          setQrExpired(true);
+          // Expired: roll a fresh code so the tab always shows a live QR.
+          try {
+            await qrSession.refresh({ baseUrl: hubUrl, deviceName: deviceNameRef.current });
+            if (cancelled || qrSessionRef.current !== qrSession) return;
+            setQrLink(qrSession.link);
+            setQrExpiresAt(qrSession.expiresAt);
+            timer = setTimeout(() => void tick(), WEB_PAIRING_POLL_MS);
+          } catch {
+            setQrExpired(true);
+          }
         };
         await tick();
       } catch (e) {

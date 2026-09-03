@@ -175,6 +175,9 @@ public enum WebPairingScanPolicy {
             guard isPaired else {
                 return .reject("Scan this code from an already-paired iPhone to approve the browser.")
             }
+            guard request.expiresAt > Int64(Date().timeIntervalSince1970 * 1000) else {
+                return .reject("This code expired. Refresh the code on the web page and scan again.")
+            }
             guard !shouldAutoApprove(request) else {
                 return .reject("This browser cannot be approved automatically.")
             }
