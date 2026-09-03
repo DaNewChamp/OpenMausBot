@@ -22,12 +22,13 @@ const statusTone = {
   idle: "bg-ink-secondary/35",
 } as const;
 
-function BotNode({ bot, chief = false }: { bot: Bot; chief?: boolean }) {
-  const { dispatch } = useStore();
+type SelectBot = (id: string) => void;
+
+function BotNode({ bot, chief = false, onSelect }: { bot: Bot; chief?: boolean; onSelect: SelectBot }) {
   const status = teamMapStatus(bot);
   return (
     <button
-      onClick={() => dispatch({ type: "select", id: bot.id })}
+      onClick={() => onSelect(bot.id)}
       className="group relative flex min-w-0 items-center gap-3 rounded-xl border border-hairline/50 bg-card px-3 py-3 text-left shadow-sm transition hover:border-accent/35 hover:bg-raised/50"
     >
       <MausAvatar
@@ -53,15 +54,14 @@ function BotNode({ bot, chief = false }: { bot: Bot; chief?: boolean }) {
   );
 }
 
-function EdgeRow({ edge, bots }: { edge: TeamMapEdge; bots: Bot[] }) {
-  const { dispatch } = useStore();
+function EdgeRow({ edge, bots, onSelect }: { edge: TeamMapEdge; bots: Bot[]; onSelect: SelectBot }) {
   const source = bots.find((bot) => bot.id === edge.sourceBotId);
   const target = bots.find((bot) => bot.id === edge.targetBotId);
   if (!source || !target) return null;
   const live = edge.state !== "connected";
   return (
     <button
-      onClick={() => dispatch({ type: "select", id: edge.groupId ?? target.id })}
+      onClick={() => onSelect(edge.groupId ?? target.id)}
       className="flex w-full items-center gap-3 rounded-xl border border-hairline/40 bg-card px-3 py-2.5 text-left transition hover:bg-raised/50"
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -283,36 +283,31 @@ function SectionContextDialog({ section, label, onClose }: { section: string; la
   );
 }
 
-export function TeamMapPage() {
-  const { state } = useStore();
-  const [snapshot, setSnapshot] = useState<TeamMapSnapshot>(EMPTY_TEAM_MAP_SNAPSHOT);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [contextEditor, setContextEditor] = useState<{ section: string; label: string } | null>(null);
-  const bots = useMemo(() => state.bots.filter((bot) => !bot.hidden), [state.bots]);
+export async function loadTeamMapSnapshot(): Promise<TeamMapSnapshot> {
+  return api("/api/team-map");
+}
+
+/** The whole team-map surface, fed by props so desktop and the paired web
+ * client render the exact same hierarchy from their own roster + snapshot. */
+export function TeamMapView({
+  bots,
+  snapshot,
+  onSelect,
+  refreshing,
+  error,
+  onRefresh,
+  onOpenContext,
+}: {
+  bots: Bot[];
+  snapshot: TeamMapSnapshot;
+  onSelect: SelectBot;
+  refreshing: boolean;
+  error: string | null;
+  onRefresh: () => void;
+  onOpenContext: (section: string, label: string) => void;
+}) {
   const sections = useMemo(() => buildTeamMapSections(bots), [bots]);
   const edges = useMemo(() => buildTeamMapEdges(bots, snapshot), [bots, snapshot]);
-
-  const refresh = useCallback(async (showSpinner = false) => {
-    if (showSpinner) setRefreshing(true);
-    try {
-      setSnapshot(await api("/api/team-map"));
-      setError(null);
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : String(requestError));
-    } finally {
-      if (showSpinner) setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void refresh();
-    }, 3_000);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
-
   const working = bots.filter((bot) => bot.busy || bot.activity === "working").length;
   const waiting = bots.filter((bot) => bot.activity === "waiting-on-you").length;
 
@@ -332,7 +327,7 @@ export function TeamMapPage() {
           </p>
         </div>
         <button
-          onClick={() => void refresh(true)}
+          onClick={onRefresh}
           disabled={refreshing}
           className="rounded-lg border border-hairline/50 bg-card p-2 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50"
           aria-label="Refresh team map"
@@ -365,7 +360,7 @@ export function TeamMapPage() {
                 <h2 className="text-[12px] font-semibold uppercase tracking-[0.08em] text-ink-secondary">{section.name}</h2>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => setContextEditor({ section: section.key, label: section.name })}
+                    onClick={() => onOpenContext(section.key, section.name)}
                     className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[10.5px] font-medium text-ink-secondary hover:bg-raised hover:text-ink"
                     aria-label={`Edit ${section.name} shared context`}
                     title="Shared context"
@@ -376,13 +371,13 @@ export function TeamMapPage() {
                 </div>
               </div>
               <div className="space-y-2">
-                {section.chiefs.map((bot) => <BotNode key={bot.id} bot={bot} chief />)}
+                {section.chiefs.map((bot) => <BotNode key={bot.id} bot={bot} chief onSelect={onSelect} />)}
                 {section.chiefs.length > 0 && section.members.length > 0 && (
                   <div className="ml-5 h-3 w-px bg-hairline" aria-hidden />
                 )}
                 {section.members.length > 0 && (
                   <div className={cn("space-y-2", section.chiefs.length > 0 && "border-l border-hairline/60 pl-3")}>
-                    {section.members.map((bot) => <BotNode key={bot.id} bot={bot} />)}
+                    {section.members.map((bot) => <BotNode key={bot.id} bot={bot} onSelect={onSelect} />)}
                   </div>
                 )}
               </div>
@@ -397,7 +392,7 @@ export function TeamMapPage() {
           </div>
           <div className="space-y-2">
             {edges.slice(0, 12).map((edge) => (
-              <EdgeRow key={`${edge.sourceBotId}:${edge.targetBotId}`} edge={edge} bots={bots} />
+              <EdgeRow key={`${edge.sourceBotId}:${edge.targetBotId}`} edge={edge} bots={bots} onSelect={onSelect} />
             ))}
             {edges.length === 0 && (
               <div className="rounded-xl border border-dashed border-hairline bg-panel px-4 py-6 text-center text-[12.5px] text-ink-secondary">
@@ -407,6 +402,49 @@ export function TeamMapPage() {
           </div>
         </section>
       </div>
+    </main>
+  );
+}
+
+export function TeamMapPage() {
+  const { state, dispatch } = useStore();
+  const [snapshot, setSnapshot] = useState<TeamMapSnapshot>(EMPTY_TEAM_MAP_SNAPSHOT);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [contextEditor, setContextEditor] = useState<{ section: string; label: string } | null>(null);
+  const bots = useMemo(() => state.bots.filter((bot) => !bot.hidden), [state.bots]);
+
+  const refresh = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setRefreshing(true);
+    try {
+      setSnapshot(await loadTeamMapSnapshot());
+      setError(null);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    } finally {
+      if (showSpinner) setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refresh();
+    }, 3_000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+
+  return (
+    <>
+      <TeamMapView
+        bots={bots}
+        snapshot={snapshot}
+        onSelect={(id) => dispatch({ type: "select", id })}
+        refreshing={refreshing}
+        error={error}
+        onRefresh={() => void refresh(true)}
+        onOpenContext={(section, label) => setContextEditor({ section, label })}
+      />
       {contextEditor && (
         <SectionContextDialog
           section={contextEditor.section}
@@ -414,6 +452,6 @@ export function TeamMapPage() {
           onClose={() => setContextEditor(null)}
         />
       )}
-    </main>
+    </>
   );
 }
