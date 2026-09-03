@@ -131,7 +131,7 @@ struct HomeActivityPresentationTests {
     }
 
     @Test
-    func livePillDropsCompletedAgentsAfterRetentionWhileParentHistoryStaysReopenable() {
+    func livePillDropsCompletedAgentsAfterRetentionWhileParentHistoryStaysReopenable() throws {
         let nowMs = 1_700_000_060_000.0
         let now = Date(timeIntervalSince1970: nowMs / 1000)
         let recent = HermesSubagentActivity(
@@ -183,6 +183,25 @@ struct HomeActivityPresentationTests {
         )
         #expect(quiet.items.isEmpty)
         #expect(HomeInChatActivityProjectionPolicy.scopedSubagents([stale], parentThreadId: "parent-thread") == [stale])
+
+        let liveAnchors = HermesSubagentPresentationPolicy.parentHistoryAnchors(
+            [recent, stale],
+            parentThreadId: "parent-thread",
+            now: now
+        )
+        #expect(liveAnchors.map(\.activityId) == ["act-stale"])
+        let anchor = try #require(liveAnchors.first)
+        #expect(anchor.transcriptThreadId == "thread-temp-stale")
+        #expect(anchor.title == "Older review")
+        #expect(anchor.accessibilityLabel == "Older review, completed temporary agent")
+        #expect(anchor.accessibilityHint == "Opens the retained transcript")
+        #expect(ChatActivityNavigationPolicy.action(fromParentThreadId: "parent-thread") == .pushFocusedTranscript)
+        #expect(
+            HermesSubagentPresentationPolicy.navigationThreadId(for: stale) == anchor.transcriptThreadId
+        )
+        #expect(
+            HomeActivityRailLayoutPolicy.composerPillPlacement(presentationState: quiet.state) == .hidden
+        )
     }
 
     private func fixtureState() throws -> CompanionState {

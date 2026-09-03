@@ -436,4 +436,47 @@ public enum HermesSubagentPresentationPolicy: Sendable {
                 && ($0.parentThreadId == parentThreadId || $0.transcriptThreadId == parentThreadId)
         }
     }
+
+    /// Compact parent-chat rows for completed temporary agents after the live
+    /// pill has expired. Navigation still uses the retained transcript thread.
+    public static func parentHistoryAnchors(
+        _ activities: [HermesSubagentActivity],
+        parentThreadId: String,
+        now: Date = Date()
+    ) -> [HermesParentHistoryAnchor] {
+        parentHistoryActivities(activities, parentThreadId: parentThreadId)
+            .filter { $0.status == .completed && !showsInLivePill($0, now: now) }
+            .map { activity in
+                HermesParentHistoryAnchor(
+                    activityId: activity.activityId,
+                    title: activity.title,
+                    transcriptThreadId: navigationThreadId(for: activity),
+                    accessibilityLabel: "\(activity.title), completed temporary agent",
+                    accessibilityHint: "Opens the retained transcript"
+                )
+            }
+    }
+}
+
+public struct HermesParentHistoryAnchor: Equatable, Identifiable, Sendable {
+    public var id: String { activityId }
+    public let activityId: String
+    public let title: String
+    public let transcriptThreadId: String
+    public let accessibilityLabel: String
+    public let accessibilityHint: String
+
+    public init(
+        activityId: String,
+        title: String,
+        transcriptThreadId: String,
+        accessibilityLabel: String,
+        accessibilityHint: String
+    ) {
+        self.activityId = activityId
+        self.title = title
+        self.transcriptThreadId = transcriptThreadId
+        self.accessibilityLabel = accessibilityLabel
+        self.accessibilityHint = accessibilityHint
+    }
 }

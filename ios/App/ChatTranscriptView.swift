@@ -17,6 +17,7 @@ struct ChatTranscriptView: View {
     @Binding var streamA11yPhase: StreamAccessibilityPhase
     let draftIsEmpty: Bool
     let onTranscriptChanged: ([Message]) -> Void
+    var onOpenTemporaryTranscript: ((Chat) -> Void)? = nil
 
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -233,6 +234,10 @@ struct ChatTranscriptView: View {
                 transcriptRow(row, in: transcript)
             }
 
+            ForEach(parentHistoryAnchors) { anchor in
+                parentHistoryAnchorRow(anchor)
+            }
+
             ChatLiveTail(
                 showWorking: showsWorkingRow,
                 accessibilityLabel: streamingAccessibilityLabel,
@@ -446,6 +451,52 @@ struct ChatTranscriptView: View {
                 followingLatest = false
             }
 #endif
+    }
+
+    private var parentHistoryAnchors: [HermesParentHistoryAnchor] {
+        HermesSubagentPresentationPolicy.parentHistoryAnchors(
+            HomeInChatActivityProjectionPolicy.scopedSubagents(
+                session.state.hermesSubagents,
+                parentThreadId: threadId
+            ),
+            parentThreadId: threadId
+        )
+    }
+
+    private func parentHistoryAnchorRow(_ anchor: HermesParentHistoryAnchor) -> some View {
+        let activity = session.state.hermesSubagents.first { $0.activityId == anchor.activityId }
+        return Button {
+            guard let activity else { return }
+            Haptics.selection()
+            onOpenTemporaryTranscript?(.bot(activity.placeholderBot()))
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "text.badge.checkmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(anchor.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text("Completed")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(anchor.accessibilityLabel)
+        .accessibilityHint(anchor.accessibilityHint)
+        .disabled(onOpenTemporaryTranscript == nil || activity == nil)
     }
 
     private func transcriptRows(in messages: [Message]) -> [ChatTranscriptRow] {

@@ -292,6 +292,12 @@ struct ChatView: View {
                 draftIsEmpty: draft.isEmpty,
                 onTranscriptChanged: { transcript in
                     session.reconcileQueueReceipts(forThread: threadId, transcript: transcript)
+                },
+                onOpenTemporaryTranscript: { chat in
+                    session.beginOpeningFromHome(chat)
+                    if ChatActivityNavigationPolicy.action(fromParentThreadId: threadId) == .pushFocusedTranscript {
+                        focusedActivityChat = chat
+                    }
                 }
             )
             if HomeActivityRailLayoutPolicy.composerPillPlacement(
