@@ -1640,6 +1640,7 @@ const CREDENTIAL_PATCH = {
   xaiApiKey: (value) => ({ xai: { key: value } }),
   boxToken: (value) => ({ box: { token: value } }),
   opencodeGoApiKey: (value) => ({ opencodeGo: { apiKey: value } }),
+  zaiApiKey: (value) => ({ zai: { apiKey: value } }),
   ttsKey: (value) => ({ tts: { key: value } }),
   openaiImageApiKey: (value) => ({ imageGen: { key: value } }),
 };

@@ -13,6 +13,7 @@ export const WORKSPACE_CREDENTIALS = [
   { section: "tts", field: "key", name: "ttsKey", env: "OMB_TTS_KEY" },
   { section: "imageGen", field: "key", name: "openaiImageApiKey", env: "OMB_OPENAI_IMAGE_KEY" },
   { section: "opencodeGo", field: "apiKey", name: "opencodeGoApiKey", env: "OPENCODE_API_KEY" },
+  { section: "zai", field: "apiKey", name: "zaiApiKey", env: "ZAI_API_KEY" },
 ];
 
 /** One boot-time sweep of config.json: move every plaintext workspace secret

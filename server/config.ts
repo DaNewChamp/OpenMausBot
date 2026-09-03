@@ -113,6 +113,8 @@ const appConfigSchema = z.object({
   mcpServers: z.record(z.string(), z.unknown()).optional(),
   xai: z.object({ key: optionalText, url: optionalText }).optional(),
   openaiCompat: z.object({ key: optionalText, url: optionalText }).optional(),
+  /** Z.ai (GLM Coding Plan) key and optional base-URL override. */
+  zai: z.object({ apiKey: optionalText, baseUrl: optionalText }).optional(),
   /** Project key used for Sessions, catalog and agent tools. userId/sessionId
    * are non-secret local identifiers used to reuse one Composio Session. */
   composio: z.object({ apiKey: optionalText, userId: optionalText, sessionId: optionalText }).optional(),
@@ -144,6 +146,7 @@ export interface AppConfig {
   mcpServers?: Record<string, unknown>;
   xai?: { key?: string; url?: string };
   openaiCompat?: { key?: string; url?: string };
+  zai?: { apiKey?: string; baseUrl?: string };
   composio?: { apiKey?: string; userId?: string; sessionId?: string };
   box?: { token?: string };
   /** A named host from the user's SSH config. Authentication stays with SSH. */
@@ -277,6 +280,9 @@ export function loadConfig(): AppConfig {
   cfg.openaiCompat = { ...cfg.openaiCompat };
   if (process.env.OPENAI_COMPAT_API_KEY !== undefined) cfg.openaiCompat.key = process.env.OPENAI_COMPAT_API_KEY;
   if (process.env.OPENAI_COMPAT_URL !== undefined) cfg.openaiCompat.url = process.env.OPENAI_COMPAT_URL;
+  cfg.zai = { ...cfg.zai };
+  if (process.env.ZAI_API_KEY !== undefined) cfg.zai.apiKey = process.env.ZAI_API_KEY;
+  if (process.env.ZAI_BASE_URL !== undefined) cfg.zai.baseUrl = process.env.ZAI_BASE_URL;
   cfg.composio = { ...cfg.composio };
   if (process.env.COMPOSIO_API_KEY !== undefined) cfg.composio.apiKey = process.env.COMPOSIO_API_KEY;
   cfg.box = { ...cfg.box };
@@ -301,6 +307,7 @@ export function syncCredentialEnv(patch: Partial<AppConfig>): void {
   const secrets: Array<[value: string | undefined, name: string]> = [
     [patch.xai?.key, "XAI_API_KEY"],
     [patch.openaiCompat?.key, "OPENAI_COMPAT_API_KEY"],
+    [patch.zai?.apiKey, "ZAI_API_KEY"],
     [patch.composio?.apiKey, "COMPOSIO_API_KEY"],
     [patch.box?.token, "BOX_TOKEN"],
     [patch.opencodeGo?.apiKey, "OPENCODE_API_KEY"],
@@ -316,6 +323,10 @@ export function syncCredentialEnv(patch: Partial<AppConfig>): void {
     if (patch.openaiCompat.url) process.env["OPENAI_COMPAT_URL"] = patch.openaiCompat.url;
     else delete process.env["OPENAI_COMPAT_URL"];
   }
+  if (patch.zai?.baseUrl !== undefined) {
+    if (patch.zai.baseUrl) process.env["ZAI_BASE_URL"] = patch.zai.baseUrl;
+    else delete process.env["ZAI_BASE_URL"];
+  }
 }
 
 /** Env names of every workspace credential this process may be holding —
@@ -327,6 +338,8 @@ export const WORKSPACE_CREDENTIAL_ENV = [
   "XAI_API_KEY",
   "OPENAI_COMPAT_API_KEY",
   "OPENAI_COMPAT_URL",
+  "ZAI_API_KEY",
+  "ZAI_BASE_URL",
   "BOX_TOKEN",
   "OPENCODE_API_KEY",
   "OMB_TTS_KEY",
@@ -355,6 +368,7 @@ export const PROVIDER_CREDENTIAL_ENV = [
   "OPENAI_API_KEY",
   "OPENCODE_API_KEY",
   "XAI_API_KEY",
+  "ZAI_API_KEY",
   "CURSOR_API_KEY",
   "CURSOR_AUTH_TOKEN",
 ] as const;
@@ -371,7 +385,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     /* first write */
   }
   const checkedPatch = appConfigSchema.partial().parse(patch);
-  for (const key of ["xai", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm", "features", "permissions", "approvalReviewer", "vbot"] as const) {
+  for (const key of ["xai", "openaiCompat", "zai", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm", "features", "permissions", "approvalReviewer", "vbot"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);
@@ -460,6 +474,8 @@ function injectedEnvironment(cfg: AppConfig, driver: string): Map<string, string
     environment.set("OPENAI_COMPAT_API_KEY", cfg.openaiCompat.key);
   if (driver === "openai-compat" && cfg.openaiCompat?.url)
     environment.set("OPENAI_COMPAT_URL", cfg.openaiCompat.url);
+  if (driver === "zai" && cfg.zai?.apiKey) environment.set("ZAI_API_KEY", cfg.zai.apiKey);
+  if (driver === "zai" && cfg.zai?.baseUrl) environment.set("ZAI_BASE_URL", cfg.zai.baseUrl);
   if (driver === "boxAgent" && cfg.box?.token) environment.set("BOX_TOKEN", cfg.box.token);
   if (driver === "opencodeGo" && cfg.opencodeGo?.apiKey) environment.set("OPENCODE_API_KEY", cfg.opencodeGo.apiKey);
   return environment;
@@ -501,6 +517,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     qwen: { driver: "qwenAgent" },
     hermes: { driver: "hermesAgent" },
     pi: { driver: "piAgent" },
+    zai: { driver: "zai" },
   };
   const CUSTOM_ONLY = {
     qwen: { driver: "qwenAgent" },
@@ -514,6 +531,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     cursor: { driver: "cursorAgent" },
     openaiCompat: { driver: "openai-compat" },
     grokReconstructed: { driver: "grokReconstructed" },
+    zai: { driver: "zai" },
     ...CUSTOM_ONLY,
   } as const;
   const configured = cfg.instances && Object.keys(cfg.instances).length ? cfg.instances : null;
@@ -549,6 +567,17 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
         const current = raw as Record<string, unknown>;
         if (typeof current.url !== "string" || !current.url.trim()) {
           entry.config = { ...current, url: cfg.openaiCompat.url };
+        }
+      }
+    }
+    if (entry.driver === "zai" && cfg.zai?.baseUrl) {
+      const raw = entry.config;
+      if (raw === undefined) {
+        entry.config = { baseUrl: cfg.zai.baseUrl };
+      } else if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+        const current = raw as Record<string, unknown>;
+        if (typeof current.baseUrl !== "string" || !current.baseUrl.trim()) {
+          entry.config = { ...current, baseUrl: cfg.zai.baseUrl };
         }
       }
     }
