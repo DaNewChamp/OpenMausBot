@@ -68,7 +68,7 @@ targets:
         NSUserActivityTypes:
           - INSendMessageIntent
         CFBundleURLTypes:
-          - CFBundleURLName: com.openmausbot.companion.pairing
+          - CFBundleURLName: com.vibot.companion.pairing
             CFBundleURLSchemes:
               - openmausbot
         # REQUIRED, and easy to lose. Without a launch screen iOS runs the
