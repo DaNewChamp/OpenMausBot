@@ -17,9 +17,10 @@ import {
 import {
   createHermesDaemonToolExecutor,
   createHermesVbotDaemonHandler,
+  hermesProfileHome,
   hermesVbotMcpLaunchSpec,
   installHermesVbotConnector,
-  parseInstalledHermesVbotConnector,
+  loadHermesVbotConnectorRegistration,
   runHermesVbotMcpStdio,
 } from "./hermes-vbot-mcp.ts";
 import { daemonHermesVbotConnectorOptions, startHermesVbotConnector } from "./hermes-vbot-connector.ts";
@@ -118,19 +119,26 @@ async function runDaemon(credentials = loadCredentials()) {
   console.log(`bridge: ${credentials.name} → ${credentials.url}`);
   const bridgeDir = process.env.OMB_BRIDGE_DIR ?? join(homedir(), ".openmausbot-bridge");
   const connectorConfigPath = join(bridgeDir, "hermes-vbot-mcp.json");
-  const installed = parseInstalledHermesVbotConnector(connectorConfigPath);
+  const loaded = loadHermesVbotConnectorRegistration(connectorConfigPath);
+  const socketPath = loaded.state === "available" ? loaded.socketPath : join(bridgeDir, "vbot.sock");
   const connector = await startHermesVbotConnector({
     ...daemonHermesVbotConnectorOptions({
       bridgeId: credentials.bridgeId,
-      socketPath: installed?.socketPath ?? join(bridgeDir, "vbot.sock"),
-      botScope: installed?.botScope ?? credentials.bridgeId,
+      socketPath,
+      botScope: loaded.state === "available" ? loaded.botScopes[0]! : "unregistered",
     }),
-    handler: createHermesVbotDaemonHandler({
+    resolveBotScopes: () => {
+      const current = loadHermesVbotConnectorRegistration(connectorConfigPath);
+      if (current.state === "unavailable") return current;
+      if (current.state === "empty") return { state: "available", botScopes: [] };
+      return { state: "available", botScopes: current.botScopes };
+    },
+    handler: (request, context) => createHermesVbotDaemonHandler({
       executeTool: createHermesDaemonToolExecutor({
         ...credentials,
-        botScope: installed?.botScope ?? "",
+        botScope: context.botScope,
       }),
-    }),
+    })(request),
   });
   const inFlight = new Map<string, InFlightJob>();
   try {
@@ -240,14 +248,18 @@ async function main() {
   if (command === "hermes-connector-install") {
     const hub = flag("--hub");
     const botScope = flag("--bot-scope");
+    const profile = flag("--profile") ?? "default";
     const bridgeDir = process.env.OMB_BRIDGE_DIR ?? join(homedir(), ".openmausbot-bridge");
     const configPath = flag("--config") ?? join(bridgeDir, "hermes-vbot-mcp.json");
     const socketPath = flag("--socket") ?? join(bridgeDir, "vbot.sock");
+    const profileHome = flag("--profile-home") ?? hermesProfileHome(profile);
     if (!hub || !botScope) {
-      throw new Error('usage: hermes-connector-install --hub "Mac mini" --bot-scope <bot-id> [--config path] [--socket path]');
+      throw new Error('usage: hermes-connector-install --hub "Mac mini" --bot-scope <bot-id> [--profile default] [--profile-home path] [--config path] [--socket path]');
     }
     const result = installHermesVbotConnector({
       configPath,
+      hermesHome: profileHome,
+      profile,
       socketPath,
       botScope,
       hubDisplayName: hub,
@@ -266,7 +278,7 @@ async function main() {
   connect --url <harness-url> --code <6-digit> [--name host]
   run
   status
-  hermes-connector-install --hub <name> --bot-scope <bot-id> [--config path] [--socket path]
+  hermes-connector-install --hub <name> --bot-scope <bot-id> [--profile default] [--profile-home path] [--config path] [--socket path]
   hermes-mcp --socket <path> --bot-scope <bot-id>
 
   OMB_BRIDGE_SHELL=1        advertise shell execution capability

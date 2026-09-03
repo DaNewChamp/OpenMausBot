@@ -1,12 +1,16 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import readline from "node:readline";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import { writeFileAtomic } from "../../server/atomic.ts";
 import { connectHermesVbotConnector, type JsonRpcRequest, type JsonRpcSuccess } from "./hermes-vbot-connector.ts";
 
 const SECRETISH = /token|OMB_COMMS|Bearer|sk-|HERMES_HOME/i;
+const PROFILE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+const LEGACY_MCP_PROFILE = "vbot";
 
 export function mcpFacadeArgv(input: { socketPath: string; botScope: string }): string[] {
   return ["--socket", input.socketPath, "--bot-scope", input.botScope];
@@ -256,17 +260,184 @@ export function peerCredentialFromBridgeIdentity(credentialsPath: string): strin
   return parsed.bridgeId;
 }
 
-export function parseInstalledHermesVbotConnector(configPath: string): { socketPath: string; botScope: string } | null {
-  if (!existsSync(configPath)) return null;
+export function hermesProfileHome(profile: string, rootHome = join(homedir(), ".hermes")): string {
+  const slug = normalizeProfile(profile);
+  if (slug === "default") return rootHome;
+  return join(rootHome, "profiles", slug);
+}
+
+export function hermesProfileConfigPath(hermesHome: string): string {
+  return join(hermesHome, "config.yaml");
+}
+
+export type HermesVbotProfileConfig =
+  | { state: "available"; socketPath: string; botScope: string }
+  | { state: "unavailable"; code: "state_unavailable" }
+  | { state: "empty" };
+
+export type HermesVbotConnectorBinding = {
+  profile: string;
+  botScope: string;
+  socketPath: string;
+};
+
+export type HermesVbotConnectorRegistration =
+  | {
+    state: "available";
+    socketPath: string;
+    botScopes: string[];
+    bindings: HermesVbotConnectorBinding[];
+  }
+  | { state: "unavailable"; code: "state_unavailable" }
+  | { state: "empty" };
+
+function normalizeProfile(value: string): string {
+  const slug = value.trim().toLowerCase();
+  if (!slug) return "default";
+  if (!PROFILE_PATTERN.test(slug) || SECRETISH.test(slug)) {
+    throw new Error("Hermes profile is unavailable");
+  }
+  return slug;
+}
+
+function unavailable(): { state: "unavailable"; code: "state_unavailable" } {
+  return { state: "unavailable", code: "state_unavailable" };
+}
+
+function stringArgs(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.some((arg) => typeof arg !== "string")) return null;
+  return value as string[];
+}
+
+function bindingFromArgs(args: string[] | null, profile: string): HermesVbotConnectorBinding | null {
+  if (!args) return null;
   try {
-    const parsed = JSON.parse(readFileSync(configPath, "utf8")) as {
-      mcpServers?: Record<string, { args?: unknown }>;
-    };
-    const args = parsed.mcpServers?.vbot?.args;
-    if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string")) return null;
-    return parseMcpFacadeArgv(args as string[]);
+    const parsed = parseMcpFacadeArgv(args);
+    return { profile, botScope: parsed.botScope, socketPath: parsed.socketPath };
   } catch {
     return null;
+  }
+}
+
+function inferredSidecarProfile(metadata: unknown): string {
+  if (!isRecord(metadata) || typeof metadata.profile !== "string") return "default";
+  const slug = metadata.profile.trim().toLowerCase();
+  if (!slug || slug === LEGACY_MCP_PROFILE) return "default";
+  if (!PROFILE_PATTERN.test(slug) || SECRETISH.test(slug)) return "default";
+  return slug;
+}
+
+type YamlMappingRead =
+  | { state: "available"; value: Record<string, unknown> }
+  | { state: "unavailable"; code: "state_unavailable" }
+  | { state: "empty" };
+
+function readYamlMapping(configPath: string): YamlMappingRead {
+  try {
+    if (!existsSync(configPath)) return { state: "empty" };
+    if (!statSync(configPath).isFile()) return unavailable();
+    const text = readFileSync(configPath, "utf8");
+    if (!text.trim()) return { state: "empty" };
+    const parsed = parseYaml(text);
+    if (!isRecord(parsed)) return unavailable();
+    return { state: "available", value: parsed };
+  } catch {
+    return unavailable();
+  }
+}
+
+export function readHermesVbotProfileConfig(configPath: string): HermesVbotProfileConfig {
+  const mapping = readYamlMapping(configPath);
+  if (mapping.state !== "available") return mapping;
+  const servers = mapping.value.mcp_servers;
+  if (servers === undefined) return { state: "empty" };
+  if (!isRecord(servers)) return unavailable();
+  const entry = servers.vbot;
+  if (entry === undefined) return { state: "empty" };
+  if (!isRecord(entry)) return unavailable();
+  const binding = bindingFromArgs(stringArgs(entry.args), "default");
+  if (!binding) return unavailable();
+  return { state: "available", socketPath: binding.socketPath, botScope: binding.botScope };
+}
+
+function parseSidecarBindings(parsed: Record<string, unknown>): HermesVbotConnectorBinding[] | null {
+  if (parsed.bindings !== undefined) {
+    if (!Array.isArray(parsed.bindings)) return null;
+    const bindings: HermesVbotConnectorBinding[] = [];
+    for (const row of parsed.bindings) {
+      if (!isRecord(row) || typeof row.profile !== "string" || typeof row.botScope !== "string" || typeof row.socketPath !== "string") {
+        return null;
+      }
+      if (!row.profile.trim() || !row.botScope.trim() || !row.socketPath.trim()) return null;
+      if (SECRETISH.test(row.profile) || SECRETISH.test(row.botScope) || SECRETISH.test(row.socketPath)) return null;
+      bindings.push({
+        profile: inferredSidecarProfile({ profile: row.profile }),
+        botScope: row.botScope,
+        socketPath: row.socketPath,
+      });
+    }
+    return bindings;
+  }
+  const args = isRecord(parsed.mcpServers)
+    ? stringArgs((parsed.mcpServers.vbot as { args?: unknown } | undefined)?.args)
+    : null;
+  const metadata = isRecord(parsed.mcpServers)
+    ? (parsed.mcpServers.vbot as { metadata?: unknown } | undefined)?.metadata
+    : undefined;
+  const binding = bindingFromArgs(args, inferredSidecarProfile(metadata));
+  return binding ? [binding] : [];
+}
+
+export function loadHermesVbotConnectorRegistration(configPath: string): HermesVbotConnectorRegistration {
+  if (!existsSync(configPath)) return { state: "empty" };
+  try {
+    if (!statSync(configPath).isFile()) return unavailable();
+    const parsed = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
+    if (!isRecord(parsed)) return unavailable();
+    const bindings = parseSidecarBindings(parsed);
+    if (!bindings) return unavailable();
+    if (bindings.length === 0) return { state: "empty" };
+    const botScopes = [...new Set(bindings.map((binding) => binding.botScope))];
+    return {
+      state: "available",
+      socketPath: bindings[0]!.socketPath,
+      botScopes,
+      bindings,
+    };
+  } catch {
+    return unavailable();
+  }
+}
+
+export function parseInstalledHermesVbotConnector(configPath: string): {
+  socketPath: string;
+  botScope: string;
+  allowedBotScopes?: string[];
+} | null {
+  const loaded = loadHermesVbotConnectorRegistration(configPath);
+  if (loaded.state !== "available") return null;
+  return {
+    socketPath: loaded.socketPath,
+    botScope: loaded.botScopes[0]!,
+    allowedBotScopes: loaded.botScopes,
+  };
+}
+
+function assertWritableLaunch(command: string, args: string[]): void {
+  parseMcpFacadeArgv(args);
+  if (args.some((arg) => SECRETISH.test(arg)) || SECRETISH.test(command)) {
+    throw new Error("refusing to write secret-shaped Hermes connector metadata");
+  }
+}
+
+function rejectScopeConflict(bindings: HermesVbotConnectorBinding[], profile: string, botScope: string): void {
+  for (const binding of bindings) {
+    if (binding.profile === profile && binding.botScope !== botScope) {
+      throw new Error("Hermes profile is already bound to another bot scope");
+    }
+    if (binding.botScope === botScope && binding.profile !== profile) {
+      throw new Error("bot is already bound to another Hermes profile");
+    }
   }
 }
 
@@ -278,18 +449,13 @@ export function installHermesVbotConnector(input: {
   command?: string;
   args?: string[];
   cliPath?: string;
-}): { adopted: boolean; configPath: string } {
-  mkdirSync(dirname(input.configPath), { recursive: true, mode: 0o700 });
-  let existing: { mcpServers?: Record<string, unknown> } = {};
-  if (existsSync(input.configPath)) {
-    try {
-      existing = JSON.parse(readFileSync(input.configPath, "utf8")) as { mcpServers?: Record<string, unknown> };
-    } catch {
-      existing = {};
-    }
+  hermesHome?: string;
+  profile?: string;
+}): { adopted: boolean; configPath: string; hermesConfigPath?: string } {
+  const profile = normalizeProfile(input.profile ?? "default");
+  if (SECRETISH.test(input.hubDisplayName) || SECRETISH.test(input.socketPath) || SECRETISH.test(input.botScope)) {
+    throw new Error("refusing to write secret-shaped Hermes connector metadata");
   }
-  const existingEntry = existing.mcpServers?.vbot as { metadata?: { profile?: string } } | undefined;
-  const adopted = Boolean(existingEntry?.metadata?.profile === "vbot");
   if (input.args) {
     parseMcpFacadeArgv(input.args);
     if (input.args.some((arg) => SECRETISH.test(arg))) {
@@ -303,29 +469,107 @@ export function installHermesVbotConnector(input: {
       socketPath: input.socketPath,
       botScope: input.botScope,
     });
-  parseMcpFacadeArgv(launch.args);
-  if (launch.args.some((arg) => SECRETISH.test(arg)) || SECRETISH.test(launch.command)) {
-    throw new Error("refusing to write secret-shaped Hermes connector metadata");
+  assertWritableLaunch(launch.command, launch.args);
+
+  const sidecarExists = existsSync(input.configPath);
+  let existingSidecar: Record<string, unknown> = {};
+  let existingBindings: HermesVbotConnectorBinding[] = [];
+  if (sidecarExists) {
+    const loaded = loadHermesVbotConnectorRegistration(input.configPath);
+    if (loaded.state === "unavailable") {
+      throw new Error("Hermes connector registration is unavailable");
+    }
+    try {
+      const parsed = JSON.parse(readFileSync(input.configPath, "utf8")) as unknown;
+      if (!isRecord(parsed)) throw new Error("Hermes connector registration is unavailable");
+      existingSidecar = parsed;
+    } catch {
+      throw new Error("Hermes connector registration is unavailable");
+    }
+    existingBindings = loaded.state === "available" ? loaded.bindings : [];
   }
-  const next = {
+
+  let yamlDoc: Record<string, unknown> | undefined;
+  let hermesConfigPath: string | undefined;
+  if (input.hermesHome) {
+    try {
+      if (!existsSync(input.hermesHome) || !statSync(input.hermesHome).isDirectory()) {
+        throw new Error("Hermes profile is unavailable");
+      }
+    } catch (error) {
+      if (error instanceof Error && /unavailable/i.test(error.message)) throw error;
+      throw new Error("Hermes profile is unavailable");
+    }
+    hermesConfigPath = hermesProfileConfigPath(input.hermesHome);
+    const mapping = readYamlMapping(hermesConfigPath);
+    if (mapping.state === "unavailable") {
+      throw new Error("Hermes profile is unavailable");
+    }
+    yamlDoc = mapping.state === "available" ? { ...mapping.value } : {};
+    const servers = yamlDoc.mcp_servers;
+    if (servers !== undefined && !isRecord(servers)) {
+      throw new Error("Hermes profile is unavailable");
+    }
+    const existingVbot = isRecord(servers) ? servers.vbot : undefined;
+    if (existingVbot !== undefined) {
+      if (!isRecord(existingVbot)) throw new Error("Hermes profile is unavailable");
+      const yamlBinding = bindingFromArgs(stringArgs(existingVbot.args), profile);
+      if (!yamlBinding) throw new Error("Hermes profile is unavailable");
+      if (yamlBinding.botScope !== input.botScope) {
+        throw new Error("Hermes profile is already bound to another bot scope");
+      }
+    }
+  }
+
+  rejectScopeConflict(existingBindings, profile, input.botScope);
+  const existingVbot = isRecord(existingSidecar.mcpServers) ? existingSidecar.mcpServers.vbot : undefined;
+  const adopted = Boolean(
+    isRecord(existingVbot)
+    && isRecord(existingVbot.metadata)
+    && existingBindings.some((binding) => binding.profile === profile && binding.botScope === input.botScope),
+  );
+
+  const nextBindings = [
+    ...existingBindings.filter((binding) => binding.profile !== profile),
+    { profile, botScope: input.botScope, socketPath: input.socketPath },
+  ];
+
+  if (yamlDoc && hermesConfigPath) {
+    const servers = isRecord(yamlDoc.mcp_servers) ? { ...yamlDoc.mcp_servers } : {};
+    servers.vbot = {
+      command: launch.command,
+      args: launch.args,
+    };
+    const nextYaml = { ...yamlDoc, mcp_servers: servers };
+    const serializedYaml = stringifyYaml(nextYaml, { indent: 2 }).trimEnd() + "\n";
+    if (SECRETISH.test(serializedYaml) || "mcpServers" in nextYaml) {
+      throw new Error("refusing to write secret-shaped Hermes connector metadata");
+    }
+    writeFileAtomic(hermesConfigPath, serializedYaml, { mode: 0o600 });
+  }
+
+  mkdirSync(dirname(input.configPath), { recursive: true, mode: 0o700 });
+  const nextSidecar = {
+    ...existingSidecar,
     mcpServers: {
-      ...(existing.mcpServers ?? {}),
+      ...(isRecord(existingSidecar.mcpServers) ? existingSidecar.mcpServers : {}),
       vbot: {
         command: launch.command,
         args: launch.args,
         metadata: {
           hub: input.hubDisplayName,
-          profile: "vbot",
+          profile,
         },
       },
     },
+    bindings: nextBindings,
   };
-  const serialized = `${JSON.stringify(next, null, 2)}\n`;
+  const serialized = `${JSON.stringify(nextSidecar, null, 2)}\n`;
   if (SECRETISH.test(serialized)) {
     throw new Error("refusing to write secret-shaped Hermes connector metadata");
   }
   writeFileAtomic(input.configPath, serialized, { mode: 0o600 });
-  return { adopted, configPath: input.configPath };
+  return { adopted, configPath: input.configPath, hermesConfigPath };
 }
 
 export async function runHermesVbotMcpStdio(input: {

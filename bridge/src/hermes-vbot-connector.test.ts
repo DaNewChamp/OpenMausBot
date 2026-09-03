@@ -128,4 +128,50 @@ describe("Hermes V Bot connector transport", () => {
     client.close();
     await server.close();
   });
+
+  it("isolates registered bot scopes and treats unreadable registration as unavailable", async () => {
+    const { startHermesVbotConnector, connectHermesVbotConnector } = await import("./hermes-vbot-connector.ts");
+    const dir = mkdtempSync(join(tmpdir(), "vbot-hermes-connector-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "vbot.sock");
+    let registration: { state: "available"; botScopes: string[] } | { state: "unavailable"; code: "state_unavailable" } = {
+      state: "available",
+      botScopes: ["bot-chief", "bot-research"],
+    };
+    const seen: string[] = [];
+    const server = await startHermesVbotConnector({
+      listen: { socketPath },
+      peerCredential: "bridge-mini",
+      botScope: "bot-chief",
+      resolveBotScopes: () => registration,
+      handler: async (request, context) => {
+        seen.push(context.botScope);
+        return { jsonrpc: "2.0", id: request.id, result: { botScope: context.botScope } };
+      },
+    });
+    const chief = await connectHermesVbotConnector({
+      socketPath,
+      peerCredential: "bridge-mini",
+      botScope: "bot-chief",
+    });
+    await expect(chief.request("tools/list")).resolves.toEqual({ botScope: "bot-chief" });
+    chief.close();
+    const research = await connectHermesVbotConnector({
+      socketPath,
+      peerCredential: "bridge-mini",
+      botScope: "bot-research",
+    });
+    await expect(research.request("tools/list")).resolves.toEqual({ botScope: "bot-research" });
+    research.close();
+    await expect(
+      connectHermesVbotConnector({ socketPath, peerCredential: "bridge-mini", botScope: "bot-outsider" }),
+    ).rejects.toMatchObject({ code: "peer_unauthenticated" });
+    registration = { state: "unavailable", code: "state_unavailable" };
+    await expect(
+      connectHermesVbotConnector({ socketPath, peerCredential: "bridge-mini", botScope: "bot-chief" }),
+    ).rejects.toMatchObject({ code: "peer_unauthenticated" });
+    expect(seen).toEqual(["bot-chief", "bot-research"]);
+    expect(JSON.stringify({ seen, registration })).not.toMatch(/token|secret|Bearer|sk-|HERMES_HOME/i);
+    await server.close();
+  });
 });

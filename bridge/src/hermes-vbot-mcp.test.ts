@@ -1,7 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { parse as parseYaml } from "yaml";
 import { afterEach, describe, expect, it } from "vitest";
 
 describe("Hermes V Bot MCP facade", () => {
@@ -29,7 +30,7 @@ describe("Hermes V Bot MCP facade", () => {
     const configPath = join(dir, "mcp.json");
     writeFileSync(configPath, JSON.stringify({
       mcpServers: {
-        "vbot": { command: "old", args: ["--socket", "/old.sock"] },
+        "vbot": { command: "old", args: ["--socket", "/old.sock", "--bot-scope", "bot-1"] },
       },
     }));
     const first = installHermesVbotConnector({
@@ -41,7 +42,7 @@ describe("Hermes V Bot MCP facade", () => {
     const second = installHermesVbotConnector({
       configPath,
       socketPath: "/tmp/vbot.sock",
-      botScope: "bot-chief",
+      botScope: "bot-1",
       hubDisplayName: "Mac mini",
     });
     const parsed = JSON.parse(readFileSync(configPath, "utf8")) as {
@@ -50,8 +51,34 @@ describe("Hermes V Bot MCP facade", () => {
     expect(Object.keys(parsed.mcpServers)).toEqual(["vbot"]);
     expect(first.adopted).toBe(false);
     expect(second.adopted).toBe(true);
-    expect(parsed.mcpServers.vbot?.args).toEqual(expect.arrayContaining(["--bot-scope", "bot-chief"]));
+    expect(parsed.mcpServers.vbot?.args).toEqual(expect.arrayContaining(["--bot-scope", "bot-1"]));
     expect(JSON.stringify(parsed)).not.toMatch(/token|OMB_COMMS|openmaus\.posival/i);
+  });
+
+  it("rejects a second bot on the same Hermes profile instead of cross-scoping", async () => {
+    const { installHermesVbotConnector } = await import("./hermes-vbot-mcp.ts");
+    const dir = mkdtempSync(join(tmpdir(), "vbot-hermes-setup-"));
+    dirs.push(dir);
+    const configPath = join(dir, "mcp.json");
+    installHermesVbotConnector({
+      configPath,
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-1",
+      profile: "default",
+      hubDisplayName: "Mac mini",
+    });
+    expect(() => installHermesVbotConnector({
+      configPath,
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-chief",
+      profile: "default",
+      hubDisplayName: "Mac mini",
+    })).toThrow(/scope|conflict|already bound/i);
+    const parsed = JSON.parse(readFileSync(configPath, "utf8")) as {
+      mcpServers: Record<string, { args?: string[] }>;
+    };
+    expect(parsed.mcpServers.vbot?.args).toEqual(expect.arrayContaining(["--bot-scope", "bot-1"]));
+    expect(JSON.stringify(parsed)).not.toMatch(/token|OMB_COMMS|Bearer|sk-|HERMES_HOME/i);
   });
 
   it("redacts secrets from facade stdout", async () => {
@@ -153,10 +180,10 @@ describe("Hermes V Bot MCP facade", () => {
         },
       },
     }));
-    expect(parseInstalledHermesVbotConnector(configPath)).toEqual({
+    expect(parseInstalledHermesVbotConnector(configPath)).toEqual(expect.objectContaining({
       socketPath: "/tmp/vbot.sock",
       botScope: "bot-chief",
-    });
+    }));
   });
 
   it("executes tools/call through the approved facade instead of a blanket tool unavailable stub", async () => {
@@ -421,6 +448,260 @@ describe("Hermes V Bot MCP facade", () => {
         required: ["bot_id", "placement"],
       },
     });
+  });
+});
+
+describe("Hermes profile mcp_servers registration", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function profileHome(label: string): string {
+    const dir = mkdtempSync(join(tmpdir(), `vbot-hermes-${label}-`));
+    dirs.push(dir);
+    const hermesHome = join(dir, "hermes-home");
+    mkdirSync(hermesHome, { recursive: true, mode: 0o700 });
+    return hermesHome;
+  }
+
+  it("writes mcp_servers into the profile config.yaml Hermes reads, not a secret-bearing sidecar-only shape", async () => {
+    const {
+      hermesProfileConfigPath,
+      installHermesVbotConnector,
+      hermesVbotMcpLaunchSpec,
+    } = await import("./hermes-vbot-mcp.ts");
+    const hermesHome = profileHome("yaml");
+    const sidecarPath = join(hermesHome, "..", "hermes-vbot-mcp.json");
+    const launch = hermesVbotMcpLaunchSpec({
+      cliPath: "/opt/vbot/dist-bridge/index.js",
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-chief",
+      execPath: "/usr/bin/node",
+      execArgv: [],
+    });
+    writeFileSync(join(hermesHome, "config.yaml"), "model:\n  default: z-ai/glm-5.2\n");
+    const result = installHermesVbotConnector({
+      configPath: sidecarPath,
+      hermesHome,
+      profile: "default",
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-chief",
+      hubDisplayName: "Mac mini",
+      command: launch.command,
+      args: launch.args,
+    });
+    const yamlPath = hermesProfileConfigPath(hermesHome);
+    expect(yamlPath).toBe(join(hermesHome, "config.yaml"));
+    expect(result.hermesConfigPath).toBe(yamlPath);
+    const text = readFileSync(yamlPath, "utf8");
+    const parsed = parseYaml(text) as {
+      model?: { default?: string };
+      mcp_servers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
+      mcpServers?: unknown;
+    };
+    expect(parsed.model).toEqual({ default: "z-ai/glm-5.2" });
+    expect(parsed.mcpServers).toBeUndefined();
+    expect(parsed.mcp_servers?.vbot?.command).toBe("/usr/bin/node");
+    expect(parsed.mcp_servers?.vbot?.args).toEqual(expect.arrayContaining([
+      "/opt/vbot/dist-bridge/index.js",
+      "hermes-mcp",
+      "--socket",
+      "/tmp/vbot.sock",
+      "--bot-scope",
+      "bot-chief",
+    ]));
+    expect(parsed.mcp_servers?.vbot?.env).toBeUndefined();
+    expect(text).not.toMatch(/mcpServers|token|OMB_COMMS|Bearer|sk-|HERMES_HOME/i);
+    expect(JSON.stringify(result)).not.toMatch(/token|OMB_COMMS|Bearer|sk-|HERMES_HOME/i);
+    expect(launch.args.join(" ")).not.toMatch(/token|OMB_COMMS|Bearer|sk-|HERMES_HOME/i);
+  });
+
+  it("registers isolated per-profile bot scopes and rejects a bot already bound to another profile", async () => {
+    const { installHermesVbotConnector, hermesProfileConfigPath } = await import("./hermes-vbot-mcp.ts");
+    const root = mkdtempSync(join(tmpdir(), "vbot-hermes-profiles-"));
+    dirs.push(root);
+    const sidecarPath = join(root, "hermes-vbot-mcp.json");
+    const defaultHome = join(root, "default");
+    const coderHome = join(root, "profiles", "coder");
+    mkdirSync(defaultHome, { recursive: true, mode: 0o700 });
+    mkdirSync(coderHome, { recursive: true, mode: 0o700 });
+    installHermesVbotConnector({
+      configPath: sidecarPath,
+      hermesHome: defaultHome,
+      profile: "default",
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-chief",
+      hubDisplayName: "Mac mini",
+    });
+    installHermesVbotConnector({
+      configPath: sidecarPath,
+      hermesHome: coderHome,
+      profile: "coder",
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-research",
+      hubDisplayName: "Mac mini",
+    });
+    expect(() => installHermesVbotConnector({
+      configPath: sidecarPath,
+      hermesHome: coderHome,
+      profile: "coder",
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-chief",
+      hubDisplayName: "Mac mini",
+    })).toThrow(/scope|conflict|already bound/i);
+    const defaultYaml = parseYaml(readFileSync(hermesProfileConfigPath(defaultHome), "utf8")) as {
+      mcp_servers?: Record<string, { args?: string[] }>;
+    };
+    const coderYaml = parseYaml(readFileSync(hermesProfileConfigPath(coderHome), "utf8")) as {
+      mcp_servers?: Record<string, { args?: string[] }>;
+    };
+    expect(defaultYaml.mcp_servers?.vbot?.args).toEqual(expect.arrayContaining(["--bot-scope", "bot-chief"]));
+    expect(coderYaml.mcp_servers?.vbot?.args).toEqual(expect.arrayContaining(["--bot-scope", "bot-research"]));
+  });
+
+  it("treats an unreadable profile config as unavailable instead of empty", async () => {
+    const { installHermesVbotConnector, readHermesVbotProfileConfig } = await import("./hermes-vbot-mcp.ts");
+    const hermesHome = profileHome("unreadable");
+    const yamlPath = join(hermesHome, "config.yaml");
+    mkdirSync(yamlPath);
+    const missing = readHermesVbotProfileConfig(join(hermesHome, "missing.yaml"));
+    expect(missing).toEqual({ state: "empty" });
+    const unreadable = readHermesVbotProfileConfig(yamlPath);
+    expect(unreadable).toEqual({ state: "unavailable", code: "state_unavailable" });
+    expect(JSON.stringify(unreadable)).not.toMatch(/token|OMB_COMMS|Bearer|sk-|HERMES_HOME|\/Users\//i);
+    expect(() => installHermesVbotConnector({
+      configPath: join(hermesHome, "..", "sidecar.json"),
+      hermesHome,
+      profile: "default",
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-chief",
+      hubDisplayName: "Mac mini",
+    })).toThrow(/unavailable/i);
+    expect(() => readFileSync(join(hermesHome, "..", "sidecar.json"), "utf8")).toThrow();
+  });
+
+  it("does not create a sidecar or treat a missing Hermes home as an empty profile", async () => {
+    const { installHermesVbotConnector, readHermesVbotProfileConfig } = await import("./hermes-vbot-mcp.ts");
+    const dir = mkdtempSync(join(tmpdir(), "vbot-hermes-missing-home-"));
+    dirs.push(dir);
+    const hermesHome = join(dir, "no-such-profile");
+    const sidecarPath = join(dir, "hermes-vbot-mcp.json");
+    expect(readHermesVbotProfileConfig(join(hermesHome, "config.yaml"))).toEqual({ state: "empty" });
+    expect(() => installHermesVbotConnector({
+      configPath: sidecarPath,
+      hermesHome,
+      profile: "coder",
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-chief",
+      hubDisplayName: "Mac mini",
+    })).toThrow(/unavailable/i);
+    expect(() => readFileSync(sidecarPath, "utf8")).toThrow();
+  });
+
+  it("keeps the legacy sidecar readable while exposing registered bot scopes without secrets", async () => {
+    const {
+      installHermesVbotConnector,
+      parseInstalledHermesVbotConnector,
+      loadHermesVbotConnectorRegistration,
+    } = await import("./hermes-vbot-mcp.ts");
+    const hermesHome = profileHome("legacy");
+    const sidecarPath = join(hermesHome, "..", "hermes-vbot-mcp.json");
+    installHermesVbotConnector({
+      configPath: sidecarPath,
+      hermesHome,
+      profile: "default",
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-chief",
+      hubDisplayName: "Mac mini",
+    });
+    const parsed = parseInstalledHermesVbotConnector(sidecarPath);
+    expect(parsed).toEqual(expect.objectContaining({
+      socketPath: "/tmp/vbot.sock",
+      botScope: "bot-chief",
+      allowedBotScopes: ["bot-chief"],
+    }));
+    expect(loadHermesVbotConnectorRegistration(sidecarPath)).toEqual(expect.objectContaining({
+      state: "available",
+      botScopes: ["bot-chief"],
+    }));
+    const sidecar = JSON.parse(readFileSync(sidecarPath, "utf8"));
+    expect(sidecar.mcpServers?.vbot?.args).toEqual(expect.arrayContaining(["--bot-scope", "bot-chief"]));
+    expect(JSON.stringify({ parsed, sidecar })).not.toMatch(/token|OMB_COMMS|Bearer|sk-|HERMES_HOME/i);
+  });
+
+  it("does not decode an unreadable sidecar as an empty registration", async () => {
+    const { loadHermesVbotConnectorRegistration, parseInstalledHermesVbotConnector } = await import("./hermes-vbot-mcp.ts");
+    const dir = mkdtempSync(join(tmpdir(), "vbot-hermes-sidecar-"));
+    dirs.push(dir);
+    const missing = join(dir, "missing.json");
+    const broken = join(dir, "broken.json");
+    writeFileSync(broken, "{");
+    expect(loadHermesVbotConnectorRegistration(missing)).toEqual({ state: "empty" });
+    expect(parseInstalledHermesVbotConnector(missing)).toBeNull();
+    expect(loadHermesVbotConnectorRegistration(broken)).toEqual({ state: "unavailable", code: "state_unavailable" });
+    expect(parseInstalledHermesVbotConnector(broken)).toBeNull();
+    expect(JSON.stringify(loadHermesVbotConnectorRegistration(broken))).not.toMatch(/token|sk-|HERMES_HOME/i);
+  });
+
+  it("list_bots and ask_bot through the facade keep per-connection bot scope", async () => {
+    const { createHermesVbotDaemonHandler, createHermesVbotPairedToolExecutor } = await import("./hermes-vbot-mcp.ts");
+    const { startHermesVbotConnector, connectHermesVbotConnector } = await import("./hermes-vbot-connector.ts");
+    const dir = mkdtempSync(join(tmpdir(), "vbot-hermes-scope-call-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "vbot.sock");
+    const seen: Array<{ name: string; botScope: string; args: Record<string, unknown> }> = [];
+    const server = await startHermesVbotConnector({
+      listen: { socketPath },
+      peerCredential: "bridge-mini",
+      botScope: "bot-chief",
+      allowedBotScopes: ["bot-chief", "bot-research"],
+      handler: (request, context) => createHermesVbotDaemonHandler({
+        executeTool: async (name, args) => {
+          seen.push({ name, botScope: context.botScope, args });
+          if (name === "list_bots") {
+            return { text: `Other bots visible to ${context.botScope}` };
+          }
+          if (name === "ask_bot") {
+            return { text: `${context.botScope} asked ${String(args.bot_id)}` };
+          }
+          return { text: `fixture ${name}` };
+        },
+      })(request),
+    });
+    const chief = await connectHermesVbotConnector({
+      socketPath,
+      peerCredential: "bridge-mini",
+      botScope: "bot-chief",
+    });
+    const research = await connectHermesVbotConnector({
+      socketPath,
+      peerCredential: "bridge-mini",
+      botScope: "bot-research",
+    });
+    const listed = await chief.request("tools/call", { name: "list_bots", arguments: {} });
+    const asked = await research.request("tools/call", {
+      name: "ask_bot",
+      arguments: { bot_id: "bot-chief", message: "status?" },
+    });
+    expect(JSON.stringify(listed)).toMatch(/bot-chief/);
+    expect(JSON.stringify(asked)).toMatch(/bot-research asked bot-chief/);
+    expect(seen).toEqual([
+      { name: "list_bots", botScope: "bot-chief", args: {} },
+      { name: "ask_bot", botScope: "bot-research", args: { bot_id: "bot-chief", message: "status?" } },
+    ]);
+    await expect(
+      connectHermesVbotConnector({ socketPath, peerCredential: "bridge-mini", botScope: "bot-outsider" }),
+    ).rejects.toMatchObject({ code: "peer_unauthenticated" });
+    const paired = createHermesVbotPairedToolExecutor(
+      { state: "available", url: "http://127.0.0.1:9", secret: "paired-secret" },
+      { botScope: "bot-chief" },
+    );
+    expect(paired).toEqual(expect.any(Function));
+    expect(JSON.stringify({ listed, asked, seen })).not.toMatch(/paired-secret|token|OMB_COMMS|Bearer|sk-/i);
+    chief.close();
+    research.close();
+    await server.close();
   });
 });
 

@@ -30,12 +30,23 @@ export type JsonRpcSuccess = {
   result: unknown;
 };
 
-type ConnectorHandler = (request: JsonRpcRequest) => Promise<JsonRpcSuccess>;
+export type HermesBotScopeResolution =
+  | { state: "available"; botScopes: readonly string[] }
+  | { state: "unavailable"; code: "state_unavailable" };
+
+export type HermesVbotConnectorHandlerContext = { botScope: string };
+
+type ConnectorHandler = (
+  request: JsonRpcRequest,
+  context: HermesVbotConnectorHandlerContext,
+) => Promise<JsonRpcSuccess>;
 
 export type StartHermesVbotConnectorInput = {
   listen: HermesVbotListen;
   peerCredential: string;
   botScope: string;
+  allowedBotScopes?: readonly string[];
+  resolveBotScopes?: () => HermesBotScopeResolution;
   handler?: ConnectorHandler;
   log?: (line: string) => void;
 };
@@ -116,19 +127,36 @@ export async function startHermesVbotConnector(input: StartHermesVbotConnectorIn
   }
 
   const log = (line: string) => input.log?.(redact(line));
+  const resolveScopes = (): HermesBotScopeResolution => {
+    if (input.resolveBotScopes) return input.resolveBotScopes();
+    return {
+      state: "available",
+      botScopes: input.allowedBotScopes ?? [input.botScope],
+    };
+  };
   const server: Server = createServer((socket) => {
     let authed = false;
+    let connectionScope = input.botScope;
     readFrames(socket, (frame) => {
       if (!authed) {
         const hello = frame as { type?: string; peerCredential?: string; botScope?: string };
-        if (hello?.type !== "hello" || hello.peerCredential !== input.peerCredential || hello.botScope !== input.botScope) {
+        const resolved = resolveScopes();
+        const helloScope = typeof hello?.botScope === "string" ? hello.botScope : "";
+        if (
+          hello?.type !== "hello"
+          || hello.peerCredential !== input.peerCredential
+          || resolved.state !== "available"
+          || !helloScope
+          || !resolved.botScopes.includes(helloScope)
+        ) {
           log("rejected unauthenticated peer");
           socket.write(`${JSON.stringify({ type: "error", error: { code: "peer_unauthenticated", message: "peer credential required" } })}\n`);
           socket.destroy();
           return;
         }
         authed = true;
-        socket.write(`${JSON.stringify({ type: "hello-ok", botScope: input.botScope })}\n`);
+        connectionScope = helloScope;
+        socket.write(`${JSON.stringify({ type: "hello-ok", botScope: connectionScope })}\n`);
         return;
       }
       const request = frame as JsonRpcRequest;
@@ -142,7 +170,7 @@ export async function startHermesVbotConnector(input: StartHermesVbotConnectorIn
         socket.destroy();
         return;
       }
-      void (input.handler?.(request) ?? Promise.resolve({ jsonrpc: "2.0" as const, id: request.id, result: null }))
+      void (input.handler?.(request, { botScope: connectionScope }) ?? Promise.resolve({ jsonrpc: "2.0" as const, id: request.id, result: null }))
         .then((response) => {
           socket.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result: response.result })}\n`);
         })
