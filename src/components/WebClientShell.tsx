@@ -58,6 +58,7 @@ export function WebClientGate({
   const [deviceName, setDeviceName] = useState("Web browser");
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<{ message: string; kind: PairFailureKind } | null>(null);
+  const [qrError, setQrError] = useState<string | null>(null);
   const [pairRequestId, setPairRequestId] = useState<string | null>(null);
   const [qrLink, setQrLink] = useState<string | null>(null);
   const [qrExpired, setQrExpired] = useState(false);
@@ -106,6 +107,7 @@ export function WebClientGate({
       if (previous) void previous.dispose();
       setQrLink(null);
       setQrExpired(false);
+      setQrError(null);
       return;
     }
     const qrSession = new WebPairingQrSession();
@@ -120,6 +122,7 @@ export function WebClientGate({
           return;
         }
         setQrLink(qrSession.link);
+        setQrError(null);
         const tick = async () => {
           if (cancelled || qrSessionRef.current !== qrSession) return;
           const result = await qrSession.pollOnce();
@@ -138,8 +141,7 @@ export function WebClientGate({
       } catch (e) {
         if (cancelled) return;
         const message = e instanceof Error ? e.message : "Pairing could not finish.";
-        const kind = e instanceof HubPairError ? e.kind : "unknown";
-        setFailure({ message, kind });
+        setQrError(message);
       }
     })();
     return () => {
@@ -275,9 +277,9 @@ export function WebClientGate({
           <WebPairQrPane
             link={qrLink}
             expired={qrExpired}
-            error={failure?.message ?? null}
+            error={qrError}
             onRefresh={() => {
-              setFailure(null);
+              setQrError(null);
               setQrExpired(false);
               setQrLink(null);
               setQrGeneration((generation) => generation + 1);
