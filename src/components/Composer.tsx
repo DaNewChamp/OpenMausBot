@@ -401,7 +401,7 @@ export function Composer({
   };
 
   return (
-    <div className="px-5 pb-3 pt-1">
+    <div className="shrink-0 bg-app px-5 pb-3 pt-1">
       {speechError && (
         <div className="mx-auto mb-2 max-w-[900px] rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
           {speechError}
@@ -490,7 +490,7 @@ export function Composer({
           notice={attachmentNotice}
           onNotice={setAttachmentNotice}
         />
-        <div className="flex items-center gap-1.5 shell-composer-pill border border-hairline/30 bg-raised/50 px-2">
+        <div className="flex items-center gap-1.5 shell-composer-pill border border-hairline/30 bg-raised px-2">
           <input
             ref={fileInput}
             type="file"

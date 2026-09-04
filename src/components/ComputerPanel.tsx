@@ -36,6 +36,7 @@ import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
 import { ShellHealth } from "./ShellHealth";
 import { conversationTitle } from "@/lib/model-suffix";
 import { DESKTOP_DEMO_SCREEN_DATA_URL, isDesktopDemoMode } from "@/lib/desktop-demo";
+import { isWebClientMode } from "@/lib/web-client-mode";
 import {
   autoSelectsLocalComputer,
   instanceSupportsLocalComputer,
@@ -375,6 +376,28 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
       })
       .catch((e) => {
         if (!alive) return;
+        if (isWebClientMode() && vmSupported) {
+          return api(`/api/bots/${bot.id}/local-computer`)
+            .then((rawStatus) => {
+              if (!alive) return;
+              const status: LocalVmStatus = rawStatus;
+              setVmStatus(status);
+              const viewerUrl = String(status.viewer_url ?? "");
+              if (viewerUrl.startsWith("http")) setVmViewerUrl(viewerUrl);
+              if (status.ready) {
+                setError(null);
+                setPhase("vm");
+                return;
+              }
+              setError(status.problem ?? "The Local VM is not ready.");
+              setPhase("vm-unavailable");
+            })
+            .catch((vmErr) => {
+              if (!alive) return;
+              setError(vmErr instanceof Error ? vmErr.message : e.message);
+              setPhase("vm-unavailable");
+            });
+        }
         setError(e.message);
         setPhase("error");
       });

@@ -1166,7 +1166,7 @@ export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: ()
           </div>
         ) : (
         <div
-          className="mx-auto flex max-w-[900px] flex-col gap-3 pb-4"
+          className="mx-auto flex max-w-[900px] flex-col gap-3 pb-8"
           role="log"
           aria-live="polite"
           aria-label={`Room ${group.name}`}

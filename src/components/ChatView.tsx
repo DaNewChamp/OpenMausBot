@@ -1285,7 +1285,7 @@ export function ChatView({ bot }: { bot: Bot }) {
         }}
       >
         <div
-          className="mx-auto flex max-w-[900px] flex-col gap-3 pb-4"
+          className="mx-auto flex max-w-[900px] flex-col gap-3 pb-8"
           role="log"
           aria-live="polite"
           aria-label={`Conversation with ${conversationTitle(bot.name, bot.modelSelection)}`}
