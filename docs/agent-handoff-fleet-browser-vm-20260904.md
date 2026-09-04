@@ -123,3 +123,18 @@ No `pnpm` on PATH. bun exists at `/opt/homebrew/bin/bun` — do not add bun as a
 ## Brain
 
 Search `OpenMausBot fleet Local VM lightweight browser Chromium CDP takeover`. Latest entry 2026-09-04 1:00pm CDT under `Projects/OpenMausBot`.
+
+## Update 2026-09-04 1:35pm CDT (Claude Fable 5.1, after Grok)
+
+Vincent clicked Deploy. Settings → Local VM said "A Local VM already exists"; the Computer pane Deploy then created `openmausbot-computer-15ddee8124c6afc1` (browser image) on Windows and Take control failed with "JSON body must be an object".
+
+Root causes, both fixed and pushed to `personal feat/fleet-models-ui`, **not yet deployed** (auto-mode harness blocked remote rsync/tar; run the runbook above by hand or from an interactive session):
+
+- `3df1c7e5` — shared mode was not shared over the relay. `localVmRelayOpts` sent the bot id, and the bridge always used `perBotLocalVmTarget`, so every bot got its own container and the two Deploy buttons hit two containers. Harness now sends `"shared"`; bridge maps it to `openmausbot-computer` + `~/.openmausbot/vm-home` + label `local-vm-target=shared` (legacy label-less containers still count as managed). Tests in `server/bridge-local-vm-worker.test.ts`.
+- `92ba97d2` — `ComputerPanel` screenshot POST had no body; the sidecar requires exactly `{}` on Local VM action/screenshot routes. Plus the Grok Alt design pass (420px chat floor, right pane shrinks then hides, 52px headers, 32px icon buttons, Local VM card spacing).
+
+After deploy: Windows will have two orphans, `openmausbot-computer-15ddee8124c6afc1` (browser, 1g) and `openmausbot-computer-1bb5959b592e3a93` (Cua). Mini's `openmausbot-computer` is the old Cua shared container; the UI will offer "Delete and recreate". Ask Vincent before removing anything.
+
+Open UX question for Vincent: Deploy lives in Settings → Local VM and in the Computer pane. Recommendation is one place (Settings), Computer pane shows status + Take control + "Set up in Settings".
+
+AGY: Sonnet quota exhausted (~2h), Flash not logged in on the mini (`agy-status`). ZCode GLM 5.3 Flash verified the tests; Grok Alt did the design pass.
