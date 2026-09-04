@@ -21,6 +21,7 @@ import AVFoundation
 import Combine
 import Speech
 import CompanionCore
+import os
 
 @MainActor
 final class SpeechDictation: ObservableObject {
@@ -49,8 +50,9 @@ final class SpeechDictation: ObservableObject {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var tapInstalled = false
     private var stopping = false
-    /// Live mic level (RMS, 0...1) for voice mode's orb. Nil handler = the
-    /// composer, which wants nothing per-frame.
+    /// Live mic level (linear RMS) for voice mode's orb. Nil handler = the
+    /// composer, which wants nothing per-frame. The controller maps this
+    /// through LevelFollower onto 0...1.
     var onLevel: ((Float) -> Void)?
     /// Voice mode's endpointing: fired once per capture when the silence
     /// gate runs out. Composer mode never sets it — there is deliberately
@@ -61,6 +63,8 @@ final class SpeechDictation: ObservableObject {
     /// the user already cancelled cannot open the mic.
     private var generation = 0
     private var startTask: Task<Void, Never>?
+    private var levelLogCounter = 0
+    private static let log = Logger(subsystem: "com.posival.openmausmobile", category: "voice-mic")
 
     func toggle(capturing base: String) {
         if isListening || isStarting {
@@ -155,10 +159,14 @@ final class SpeechDictation: ObservableObject {
         self.recognizer = recognizer
 
         let session = AVAudioSession.sharedInstance()
-        // `.record` rather than `.playAndRecord`: this is composer
-        // dictation, not a call, and holding the playback route would
-        // duck whatever else is on the phone for no reason.
-        try session.setCategory(.record, mode: .measurement)
+        // Voice mode also plays TTS on the same session, so it needs
+        // `.playAndRecord`. Composer dictation stays `.record` so it does
+        // not duck whatever else is on the phone.
+        if silenceGate != nil {
+            try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker])
+        } else {
+            try session.setCategory(.record, mode: .measurement)
+        }
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
         let engine = AVAudioEngine()
@@ -183,7 +191,9 @@ final class SpeechDictation: ObservableObject {
 
         // The tap format is only valid after the session is active.
         // Installing against a 0-channel format is the usual "it works
-        // in the sample and fails here" failure.
+        // in the sample and fails here" failure. Metering (the tap) must
+        // be installed before engine.start() or the first buffers — and
+        // on some routes, every buffer — never arrive.
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0 else {
@@ -191,11 +201,15 @@ final class SpeechDictation: ObservableObject {
         }
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             request.append(buffer)
-            guard let self else { return }
             let level = Self.rms(of: buffer)
             Task { @MainActor in
+                guard let self else { return }
                 guard gen == self.generation, self.isListening, !self.stopping else { return }
                 self.onLevel?(level)
+                self.levelLogCounter += 1
+                if self.levelLogCounter % 15 == 1 {
+                    Self.log.debug("mic rms=\(level, format: .fixed(precision: 4), privacy: .public)")
+                }
                 guard var gate = self.silenceGate else { return }
                 // One finalize per capture: nil the gate before firing so a
                 // late frame cannot call onSilence twice.
@@ -208,10 +222,12 @@ final class SpeechDictation: ObservableObject {
             }
         }
         tapInstalled = true
+        stopping = false
+        levelLogCounter = 0
         engine.prepare()
         try engine.start()
-
-        stopping = false
+        // Arm immediately after a successful start so the first tap
+        // frames are not dropped by the isListening guard.
         isListening = true
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, recognitionError in
@@ -279,22 +295,54 @@ final class SpeechDictation: ObservableObject {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
-    /// Root mean square of the buffer, 0...1-ish. Voice mode's orb and its
-    /// silence gate both want levels, not words.
-    private static func rms(of buffer: AVAudioPCMBuffer) -> Float {
-        guard let channelData = buffer.floatChannelData else { return 0 }
+    /// Root mean square of the buffer, linear 0...1-ish. Voice mode's orb
+    /// and its silence gate both want levels, not words. Integer PCM is
+    /// scaled onto [-1, 1] — `floatChannelData` is nil on those routes,
+    /// and returning 0 there froze the orb while SFSpeech still heard.
+    static func rms(of buffer: AVAudioPCMBuffer) -> Float {
         let frames = Int(buffer.frameLength)
         let channels = Int(buffer.format.channelCount)
         guard frames > 0, channels > 0 else { return 0 }
-        var sum: Float = 0
-        for channel in 0..<channels {
-            let samples = channelData[channel]
-            for frame in 0..<frames {
-                let value = samples[frame]
-                sum += value * value
+
+        if let channelData = buffer.floatChannelData {
+            var sum: Float = 0
+            for channel in 0..<channels {
+                let samples = channelData[channel]
+                for frame in 0..<frames {
+                    let value = samples[frame]
+                    sum += value * value
+                }
             }
+            return sqrt(sum / Float(frames * channels))
         }
-        return sqrt(sum / Float(frames * channels))
+
+        if let channelData = buffer.int16ChannelData {
+            var sum: Float = 0
+            let scale: Float = 1 / 32768
+            for channel in 0..<channels {
+                let samples = channelData[channel]
+                for frame in 0..<frames {
+                    let value = Float(samples[frame]) * scale
+                    sum += value * value
+                }
+            }
+            return sqrt(sum / Float(frames * channels))
+        }
+
+        if let channelData = buffer.int32ChannelData {
+            var sum: Float = 0
+            let scale: Float = 1 / Float(Int32.max)
+            for channel in 0..<channels {
+                let samples = channelData[channel]
+                for frame in 0..<frames {
+                    let value = Float(samples[frame]) * scale
+                    sum += value * value
+                }
+            }
+            return sqrt(sum / Float(frames * channels))
+        }
+
+        return 0
     }
 
     private enum CaptureError: Error {

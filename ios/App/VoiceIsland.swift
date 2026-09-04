@@ -2,9 +2,9 @@
 //
 // Same attributes and widget the bots use — one more presence kind — so the
 // island gains a live voice state without a second activity shape. The
-// session is foreground-only: it exists while VoiceModesView is up, and it
-// always ends with it. The stop button in the island lands in this process
-// via a LiveActivityIntent, same door AnswerApprovalIntent opens.
+// island follows the app-scoped voice session (start / phase / end), not
+// the chat screen's cover. The stop button lands in this process via a
+// LiveActivityIntent, same door AnswerApprovalIntent opens.
 import ActivityKit
 import CompanionCore
 import Foundation

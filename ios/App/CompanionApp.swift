@@ -29,6 +29,7 @@ struct CompanionApp: App {
                 }
                 .onOpenURL { session.receivePairingURL($0) }
                 .onChange(of: scenePhase) { _, phase in
+                    session.handleVoiceScenePhase(phase)
                     switch phase {
                     case .active:
                         session.setAppActive(true)
@@ -113,6 +114,13 @@ struct RootView: View {
                 onApprove: { Task { await session.approveWebPairing() } },
                 onDeny: session.denyWebPairing
             )
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { session.voicePresented },
+            set: { if !$0 { session.closeVoice() } }
+        )) {
+            VoiceModesView(controller: session.voiceMode)
+                .environmentObject(session)
         }
     }
 

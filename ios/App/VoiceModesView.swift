@@ -13,20 +13,13 @@ import SwiftUI
 import CompanionCore
 
 struct VoiceModesView: View {
-    let chat: Chat
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.dismiss) private var dismiss
-    @AppStorage(PrefKey.voiceIsland) private var voiceIslandEnabled = true
-    @StateObject private var controller: VoiceModeController
+    @ObservedObject var controller: VoiceModeController
     @State private var typed = ""
     @FocusState private var composerFocused: Bool
 
-    init(chat: Chat) {
-        self.chat = chat
-        _controller = StateObject(wrappedValue: VoiceModeController(chat: chat))
-    }
+    private var chatName: String { controller.chat?.name ?? "bot" }
 
     var body: some View {
         ZStack {
@@ -34,6 +27,15 @@ struct VoiceModesView: View {
             VStack(spacing: 0) {
                 Spacer()
                 orb
+#if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-voice-level-probe") {
+                    Text(String(format: "level %.2f", controller.micLevel))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.55))
+                        .padding(.top, 12)
+                        .accessibilityIdentifier("voice-level-probe")
+                }
+#endif
                 statusLine
                     .padding(.top, 36)
                 if let islandNote = controller.islandNote {
@@ -48,29 +50,29 @@ struct VoiceModesView: View {
             }
             .padding(.horizontal, 24)
         }
+        // Session owns the controller. Appearing or disappearing this
+        // cover must not start or tear down the mic/TTS/island.
+#if DEBUG
         .onAppear {
-            controller.activate(session: session, islandEnabled: voiceIslandEnabled) {
-                dismiss()
+            if ProcessInfo.processInfo.arguments.contains("-voice-level-probe"),
+               controller.phase == .idle {
+                controller.orbTapped()
             }
         }
-        .onDisappear {
-            controller.shutdown()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            // A backgrounded app must not keep a mic capture armed.
-            if phase != .active { controller.close() }
-        }
+#endif
     }
 
     // MARK: - The orb
 
     private var orb: some View {
-        VoiceOrb(
-            phase: controller.phase,
-            level: controller.micLevel,
-            voiceLevel: controller.voiceLevel,
-            reduceMotion: reduceMotion
-        )
+        TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 1.0 / 30.0, paused: reduceMotion)) { timeline in
+            let _ = timeline.date
+            VoiceOrb(
+                phase: controller.phase,
+                level: controller.micLevel,
+                voiceLevel: controller.voiceLevel,
+                reduceMotion: reduceMotion
+            )
             .frame(width: 190, height: 190)
             .contentShape(Circle())
             .onTapGesture {
@@ -82,6 +84,7 @@ struct VoiceModesView: View {
             .accessibilityLabel(accessibilityText)
             .accessibilityAddTraits(.isButton)
             .accessibilityHint(controller.phase == .idle ? "Starts the microphone" : "Stops or interrupts")
+        }
     }
 
     /// The one line under the orb: what was heard, what is happening, or
@@ -167,7 +170,7 @@ struct VoiceModesView: View {
 
     private var composer: some View {
         HStack(spacing: 10) {
-            TextField("Message \(chat.name)…", text: $typed, axis: .vertical)
+            TextField("Message \(chatName)…", text: $typed, axis: .vertical)
                 .lineLimit(1...4)
                 .font(.body)
                 .foregroundStyle(Color.white)
@@ -236,12 +239,11 @@ struct VoiceOrb: View {
     @State private var breathing = false
     @State private var orbiting = false
 
-    /// The amplitude driving this phase, normalized to 0...1. Mic RMS in a
-    /// lively room tops out around 0.45; voice output arrives clamped.
+    /// The amplitude driving this phase, already 0...1 from LevelFollower.
     private var activeLevel: CGFloat {
         let raw: Float
         switch phase {
-        case .listening: raw = level / 0.45
+        case .listening: raw = level
         case .speaking: raw = voiceLevel
         case .idle, .thinking: raw = 0
         }
@@ -252,13 +254,13 @@ struct VoiceOrb: View {
         if reduceMotion { return 1 }
         switch phase {
         case .idle:
-            return breathing ? 1.0 : 1.02
+            return breathing ? 1.0 : 1.04
         case .listening:
-            return 1.0 + (breathing ? 0.01 : 0.0) + activeLevel * 0.16
+            return 1.0 + (breathing ? 0.02 : 0.0) + activeLevel * 0.38
         case .thinking:
             return 1.0
         case .speaking:
-            return 1.0 + activeLevel * 0.13
+            return 1.0 + activeLevel * 0.32
         }
     }
 
@@ -334,8 +336,10 @@ struct VoiceOrb: View {
         }
         .scaleEffect(coreScale)
         .opacity(coreOpacity)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: level)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: voiceLevel)
+        // TimelineView is the animation engine: it samples mic/voice level
+        // every frame. Binding scale to `.animation(value:)` here made the
+        // orb look frozen — SwiftUI coalesced the 50 Hz assignments into
+        // one interpolation that never visibly moved.
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.9), value: phase)
         .onAppear { runAnimations() }
         .onChange(of: phase) { _, _ in runAnimations() }

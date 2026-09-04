@@ -121,4 +121,37 @@ final class VoiceSessionPolicyTests: XCTestCase {
         XCTAssertEqual(VoiceSessionPolicy.islandLine(for: .speaking), "Speaking…")
         XCTAssertEqual(VoiceSessionPolicy.islandHeadline(name: "Scout", phase: .listening), "Scout is listening")
     }
+
+    // MARK: - Mic level math for the orb
+
+    func testRmsOfFloatSamplesMatchesTheRootMeanSquare() {
+        XCTAssertEqual(VoiceSessionPolicy.rms(of: []), 0)
+        XCTAssertEqual(VoiceSessionPolicy.rms(of: [0, 0, 0]), 0)
+        XCTAssertEqual(VoiceSessionPolicy.rms(of: [1, -1, 1, -1]), 1, accuracy: 0.0001)
+        let mixed = VoiceSessionPolicy.rms(of: [0.1, -0.2, 0.1, -0.2])
+        XCTAssertEqual(mixed, sqrt(0.025), accuracy: 0.0001)
+    }
+
+    func testRmsOfInt16DoesNotTreatIntegerPcmAsSilence() {
+        XCTAssertEqual(VoiceSessionPolicy.rms(ofInt16: []), 0)
+        // Full-scale Int16 must not collapse to 0 the way a nil float
+        // channel would — that was the frozen-orb failure on integer taps.
+        let full = VoiceSessionPolicy.rms(ofInt16: [Int16.max, Int16.min, Int16.max, Int16.min])
+        XCTAssertGreaterThan(full, 0.9)
+        let quiet = VoiceSessionPolicy.rms(ofInt16: [300, -300, 300, -300])
+        XCTAssertGreaterThan(quiet, 0.005)
+        XCTAssertLessThan(quiet, 0.02)
+    }
+
+    func testNormalizedMicLevelTurnsSpeechRmsIntoAVisibleOrb() {
+        XCTAssertEqual(VoiceSessionPolicy.normalizedMicLevel(rms: 0), 0, accuracy: 0.001)
+        XCTAssertEqual(VoiceSessionPolicy.normalizedMicLevel(rms: 0.001), 0, accuracy: 0.001)
+        let speech = VoiceSessionPolicy.normalizedMicLevel(rms: 0.05)
+        XCTAssertGreaterThan(speech, 0.5, "hand-held speech must swell the orb, not sit at a 2% scale tick")
+        XCTAssertLessThan(speech, 1)
+        let loud = VoiceSessionPolicy.normalizedMicLevel(rms: 0.4)
+        XCTAssertGreaterThanOrEqual(loud, 0.95)
+        let atThreshold = VoiceSessionPolicy.normalizedMicLevel(rms: VoiceSessionPolicy.voiceThreshold)
+        XCTAssertGreaterThan(atThreshold, 0.2)
+    }
 }

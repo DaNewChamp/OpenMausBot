@@ -20,7 +20,6 @@ struct ChatChromeView: View {
     @Binding var showingProfile: Bool
     @Binding var showingModelPicker: Bool
     @Binding var showingComputer: Bool
-    @Binding var showingVoice: Bool
     @Binding var groupProfileRoom: Room?
 
     @EnvironmentObject private var session: Session
@@ -88,7 +87,7 @@ struct ChatChromeView: View {
             if case .bot = current {
                 Button {
                     Haptics.selection()
-                    showingVoice = true
+                    session.presentVoice(chat: current)
                 } label: {
                     Image(systemName: "waveform")
                         .font(.body.weight(.medium))

@@ -18,7 +18,7 @@ import CompanionCore
 @MainActor
 final class VoiceModeController: ObservableObject {
     /// The live session, for the island's stop button — one voice session
-    /// can exist at a time because one full-screen cover can.
+    /// can exist at a time because the app owns a single controller.
     static weak var active: VoiceModeController?
 
     @Published private(set) var phase: VoiceSessionPhase = .idle
@@ -26,7 +26,7 @@ final class VoiceModeController: ObservableObject {
     @Published private(set) var heard = ""
     /// The settled reply, shown while it is spoken.
     @Published private(set) var replyText = ""
-    /// Live mic level for the orb, 0...~0.5 in a normal room.
+    /// Live mic level for the orb, 0...1 after LevelFollower.
     @Published private(set) var micLevel: Float = 0
     /// Live voice-output level for the orb while a reply is spoken,
     /// 0...1 — real playback metering, not a stand-in pulse.
@@ -36,6 +36,8 @@ final class VoiceModeController: ObservableObject {
     /// Why the island is not live, when it is not — surfaced on the voice
     /// screen instead of failing silently.
     @Published private(set) var islandNote: String?
+    /// The chat this session is talking to. Nil when idle and unused.
+    @Published private(set) var chat: Chat?
 
     private let dictation = SpeechDictation()
     private let speaker = MessageSpeaker()
@@ -43,12 +45,14 @@ final class VoiceModeController: ObservableObject {
     private var micFollower = LevelFollower()
     private var voiceFollower = LevelFollower(attack: 0.6, release: 0.28)
     private weak var session: Session?
-    private let chat: Chat
     private var island: VoiceIsland?
     private var onRequestClose: (() -> Void)?
     private var watchTask: Task<Void, Never>?
     private var approvalObserver: AnyCancellable?
     private var interruptionObserver: AnyCancellable?
+#if DEBUG
+    private var probeTask: Task<Void, Never>?
+#endif
 
     /// Settling a reply: the send that started the wait, whether the bot was
     /// seen busy since, and the last bot text line before the send so a
@@ -60,16 +64,15 @@ final class VoiceModeController: ObservableObject {
     /// do not close voice mode; only ones that arrive do.
     private var openedWithPendingApproval = false
     private var didShutdown = true
+    /// True after a real background/interruption so a launch `.active`
+    /// scene-phase pulse cannot idle a session that never left the screen.
+    private var suspendedFromBackground = false
 
-    init(chat: Chat) {
-        self.chat = chat
-    }
-
-    private var threadId: String { chat.threadId }
+    private var threadId: String { chat?.threadId ?? "" }
 
     /// The live chat record, as ChatView keeps it.
     private var current: Chat? {
-        guard let session else { return nil }
+        guard let session, let chat else { return nil }
         switch chat {
         case let .bot(bot): return session.state.bot(bot.id).map(Chat.bot) ?? chat
         case let .room(room):
@@ -78,13 +81,21 @@ final class VoiceModeController: ObservableObject {
     }
 
     private func bot(in state: CompanionState) -> Bot? {
-        guard case let .bot(bot) = chat else { return nil }
+        guard let chat, case let .bot(bot) = chat else { return nil }
         return state.bot(bot.id) ?? bot
     }
 
     // MARK: - Lifecycle
 
-    func activate(session: Session, islandEnabled: Bool, onRequestClose: @escaping () -> Void) {
+    func activate(chat: Chat, session: Session, islandEnabled: Bool, onRequestClose: @escaping () -> Void) {
+        if !didShutdown, self.chat?.stableID == chat.stableID, self.session === session {
+            self.onRequestClose = onRequestClose
+            return
+        }
+        if !didShutdown {
+            shutdown()
+        }
+        self.chat = chat
         self.session = session
         self.onRequestClose = onRequestClose
         speaker.dictation = dictation
@@ -92,8 +103,9 @@ final class VoiceModeController: ObservableObject {
             guard let self else { return }
             self.voiceLevel = self.voiceFollower.observe(level)
         }
-        openedWithPendingApproval = session.state.pendingApprovals.contains { $0.threadId == threadId }
+        openedWithPendingApproval = session.state.pendingApprovals.contains { $0.threadId == chat.threadId }
         didShutdown = false
+        suspendedFromBackground = false
         Self.active = self
 
         if islandEnabled {
@@ -102,12 +114,18 @@ final class VoiceModeController: ObservableObject {
                 name: liveBot?.name ?? chat.name,
                 color: liveBot?.color ?? "violet",
                 shape: liveBot?.mascotShape?.rawValue,
-                threadId: threadId
+                threadId: chat.threadId
             )
             islandNote = island.start()
             island.update(phase)
             self.island = island
         }
+
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-voice-level-probe") {
+            fire(.micReady)
+        }
+#endif
 
         approvalObserver = session.$state.sink { [weak self] state in
             self?.watchApprovals(in: state)
@@ -119,9 +137,48 @@ final class VoiceModeController: ObservableObject {
                 let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey]
                 let value = (raw as? NSNumber)?.uintValue ?? (raw as? UInt) ?? 0
                 if value == AVAudioSession.InterruptionType.began.rawValue {
-                    self?.close()
+                    // A call or Siri takes the route; the session stays up
+                    // so coming back does not rip the island down.
+                    self?.suspendCapture()
                 }
             }
+    }
+
+    /// Background / audio interruption: drop the mic and player, keep the
+    /// session and the island. iOS will have already stopped the capture
+    /// without a background-audio mode; we just refuse to crash or close.
+    func suspendCapture() {
+        guard !didShutdown else { return }
+        suspendedFromBackground = true
+        dictation.stop()
+        speaker.stop()
+        micFollower.reset()
+        voiceFollower.reset()
+        micLevel = 0
+        voiceLevel = 0
+#if DEBUG
+        probeTask?.cancel()
+        probeTask = nil
+#endif
+        switch phase {
+        case .listening, .speaking:
+            phase = .idle
+            island?.update(phase)
+        case .thinking, .idle:
+            break
+        }
+    }
+
+    /// Foreground resume after a real background/interruption. A launch
+    /// `.active` pulse must not idle a session that never left the screen.
+    func resumeAfterForeground() {
+        guard !didShutdown, suspendedFromBackground else { return }
+        suspendedFromBackground = false
+        if phase == .listening {
+            // A capture that survived in name only — the route is gone.
+            phase = .idle
+            island?.update(phase)
+        }
     }
 
     /// The X, a phone call, the island's stop button, the app backgrounding:
@@ -133,6 +190,7 @@ final class VoiceModeController: ObservableObject {
     func shutdown() {
         guard !didShutdown else { return }
         didShutdown = true
+        suspendedFromBackground = false
         if Self.active === self { Self.active = nil }
         watchTask?.cancel()
         watchTask = nil
@@ -146,10 +204,15 @@ final class VoiceModeController: ObservableObject {
         voiceFollower.reset()
         micLevel = 0
         voiceLevel = 0
+#if DEBUG
+        probeTask?.cancel()
+        probeTask = nil
+#endif
         island?.end()
         island = nil
         islandNote = nil
         phase = .idle
+        chat = nil
     }
 
     // MARK: - Input
@@ -162,7 +225,9 @@ final class VoiceModeController: ObservableObject {
         case .listening:
             finishListening()
         case .thinking:
-            Task { await session?.interrupt(chat: current ?? chat) }
+            if let target = current ?? chat {
+                Task { await session?.interrupt(chat: target) }
+            }
             fire(.bargeIn)
         case .speaking:
             speaker.stop()
@@ -231,12 +296,26 @@ final class VoiceModeController: ObservableObject {
         voiceFollower.reset()
         voiceLevel = 0
         island?.update(phase)
-        dictation.onLevel = { [weak self] level in
-            self?.micLevel = level
+        dictation.onLevel = { [weak self] rms in
+            guard let self else { return }
+#if DEBUG
+            // The probe owns the follower so a silent simulator mic cannot
+            // pin the orb at zero while we are proving it moves.
+            if ProcessInfo.processInfo.arguments.contains("-voice-level-probe") { return }
+#endif
+            self.micLevel = self.micFollower.observe(VoiceSessionPolicy.normalizedMicLevel(rms: rms))
         }
         dictation.onSilence = { [weak self] in
             self?.finishListening()
         }
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-voice-level-probe") {
+            // Skip SFSpeech so the permission sheet does not cover the orb
+            // while we prove the follower → TimelineView chain.
+            startLevelProbeIfRequested()
+            return
+        }
+#endif
         dictation.startVoiceSession()
     }
 
@@ -322,9 +401,33 @@ final class VoiceModeController: ObservableObject {
     }
 
     private var voiceId: String? {
-        guard let session, case let .bot(bot) = chat else { return nil }
+        guard let session, let chat, case let .bot(bot) = chat else { return nil }
         return session.state.bot(bot.id)?.voice ?? bot.voice
     }
+
+#if DEBUG
+    /// `-voice-level-probe` drives onLevel with a known oscillating RMS so
+    /// the simulator can prove the orb moves without a working mic. The
+    /// real tap still runs and logs; this only fills the follower.
+    private func startLevelProbeIfRequested() {
+        guard ProcessInfo.processInfo.arguments.contains("-voice-level-probe") else { return }
+        probeTask?.cancel()
+        probeTask = Task { [weak self] in
+            var t: Float = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 20_000_000)
+                guard let self, self.phase == .listening else { continue }
+                t += 0.18
+                let rms = 0.02 + 0.12 * (0.5 + 0.5 * sin(t))
+                let next = self.micFollower.observe(VoiceSessionPolicy.normalizedMicLevel(rms: rms))
+                self.micLevel = next
+                if Int(t * 10) % 8 == 0 {
+                    print("voice-level-probe rms=\(rms) micLevel=\(next)")
+                }
+            }
+        }
+    }
+#endif
 
     /// Stop a turn that is on its way without leaving voice mode: the typed
     /// line replaces whatever was happening.

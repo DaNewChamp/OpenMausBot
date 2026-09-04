@@ -139,6 +139,12 @@ final class Session: ObservableObject {
     /// `openmausbot://share` all fire during one foreground activation.
     private var shareInboxReadyForActivation = true
 
+    /// App-scoped live voice session. Owned here so navigating off a chat
+    /// (or the chat's cover disappearing) cannot rip down the mic, TTS, or
+    /// Dynamic Island. The root fullScreenCover reads `voicePresented`.
+    let voiceMode = VoiceModeController()
+    @Published private(set) var voicePresented = false
+
     private var client: CompanionClient?
     /// The device token, kept in memory so the client can be rebuilt when the
     /// dial moves to another stored host. The keychain remains the only place
@@ -345,6 +351,12 @@ final class Session: ObservableObject {
             recordHydration(resumed: false)
             status = StorePreviewHarness.status(arguments: ProcessInfo.processInfo.arguments)
             previouslyLive = status == .live
+            if ProcessInfo.processInfo.arguments.contains("-open-voice"),
+               let bot = state.bots.first {
+                Task { @MainActor in
+                    self.presentVoice(chat: .bot(bot))
+                }
+            }
             return
         }
 #endif
@@ -971,6 +983,40 @@ final class Session: ObservableObject {
             UserDefaults.standard.removeObject(forKey: Self.connectionsKey)
         } else {
             UserDefaults.standard.set(try? JSONEncoder().encode(registry), forKey: Self.connectionsKey)
+        }
+    }
+
+    // MARK: - Live voice
+
+    /// Starts (or re-presents) live voice for a bot chat. The waveform
+    /// button on any bot chat calls this; the root cover is what shows.
+    func presentVoice(chat: Chat) {
+        guard chat.isBot else { return }
+        let islandEnabled = UserDefaults.standard.object(forKey: PrefKey.voiceIsland) as? Bool ?? true
+        voiceMode.activate(
+            chat: chat,
+            session: self,
+            islandEnabled: islandEnabled
+        ) { [weak self] in
+            self?.voicePresented = false
+        }
+        voicePresented = true
+    }
+
+    /// X, island stop, swipe-down on the cover: tear the session down.
+    func closeVoice() {
+        voiceMode.close()
+        voicePresented = false
+    }
+
+    func handleVoiceScenePhase(_ phase: ScenePhase) {
+        switch phase {
+        case .background:
+            voiceMode.suspendCapture()
+        case .active:
+            voiceMode.resumeAfterForeground()
+        default:
+            break
         }
     }
 

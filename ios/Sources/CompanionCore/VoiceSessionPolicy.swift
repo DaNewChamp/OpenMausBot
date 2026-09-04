@@ -97,6 +97,41 @@ public enum VoiceSessionPolicy: Sendable {
     /// well under it; speech at hand-held distance sits well over it.
     public static let voiceThreshold: Float = 0.012
 
+    /// Linear RMS of a sample buffer. The app-target tap uses the same
+    /// formula in place; this copy is what the tests pin.
+    public static func rms(of samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        var sum: Float = 0
+        for sample in samples {
+            sum += sample * sample
+        }
+        return sqrt(sum / Float(samples.count))
+    }
+
+    /// Int16 PCM scaled onto [-1, 1] then RMS. Some input routes deliver
+    /// integer samples; treating those as missing float data made the orb
+    /// sit at zero while speech still transcribed.
+    public static func rms(ofInt16 samples: [Int16]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        var sum: Float = 0
+        let scale: Float = 1 / 32768
+        for sample in samples {
+            let value = Float(sample) * scale
+            sum += value * value
+        }
+        return sqrt(sum / Float(samples.count))
+    }
+
+    /// Maps linear RMS onto 0...1 for the orb. Hand-held speech sits roughly
+    /// -40 to -12 dBFS; below `floor` is silence, above `ceiling` is full.
+    public static func normalizedMicLevel(rms: Float) -> Float {
+        let floor: Float = -50
+        let ceiling: Float = -8
+        let safe = max(rms, 1e-8)
+        let db = 20 * log10(safe)
+        return min(max((db - floor) / (ceiling - floor), 0), 1)
+    }
+
     /// Island copy for the voice session — "Listening…" and friends, one
     /// place so the orb caption and the Dynamic Island cannot drift.
     public static func islandLine(for phase: VoiceSessionPhase) -> String {
