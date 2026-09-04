@@ -66,6 +66,16 @@ export type BridgeJob =
   | (BridgeJobBase & {
       kind: "hermes-signin";
       payload: { argv: ["setup"] };
+    })
+  | (BridgeJobBase & {
+      kind: "fleet-chat";
+      payload: {
+        baseUrl: string;
+        model: string;
+        messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+        threadId: string;
+        turnId: string;
+      };
     });
 
 export type { HermesEndpointDescriptor } from "./hermes-endpoints.ts";

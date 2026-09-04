@@ -8,6 +8,13 @@ import { credentialsPath, loadCredentials, saveCredentials } from "./config.ts";
 import { runShellJob, runSshJob } from "./exec.ts";
 import { runLocalVmJob } from "./local-vm.ts";
 import { runHermesBridgeJob, runHermesSignInJob, type HermesBridgeJob } from "./hermes.ts";
+import {
+  discoverLocalModelCatalog,
+  modelDiscoveryIntervalMs,
+  runFleetChatJob,
+  shareLocalModels,
+} from "./local-models.ts";
+import type { LocalModelsPayload } from "../../shared/bridge-fleet-contract.ts";
 import { defaultHermesBridgeRuntimeFactory } from "./hermes-runtime.ts";
 import { runHermesJobSerialized } from "./hermes-queue.ts";
 import {
@@ -50,6 +57,8 @@ function bridgeCapabilities(): string[] {
 
 const hermesRuntimeFactory = defaultHermesBridgeRuntimeFactory();
 let publishedHermesEndpoints: HermesEndpointDescriptor[] = [];
+let publishedLocalModels: LocalModelsPayload | undefined;
+let lastLocalModelProbeAt = 0;
 
 function cacheHermesEndpointsFromDiscover(result: BridgeJobResult, credentials: BridgeCredentials) {
   const identity = {
@@ -105,6 +114,7 @@ async function handleJob(job: BridgeJob, signal?: AbortSignal) {
     if (!bridgeHermesExecutionEnabled()) return hermesCapabilityDisabledResult();
     return runHermesBridgeJob(job, hermesRuntimeFactory, signal);
   }
+  if (job.kind === "fleet-chat") return runFleetChatJob(job, signal);
   return { exitCode: 1, stdout: "", stderr: `unsupported job kind: ${(job as BridgeJob).kind}`, truncated: false };
 }
 
@@ -144,11 +154,17 @@ async function runDaemon(credentials = loadCredentials()) {
   try {
   for (;;) {
     try {
+      const interval = modelDiscoveryIntervalMs();
+      if (shareLocalModels() && interval !== null && Date.now() - lastLocalModelProbeAt >= interval) {
+        lastLocalModelProbeAt = Date.now();
+        publishedLocalModels = (await discoverLocalModelCatalog()) ?? undefined;
+      }
+      if (!shareLocalModels() || interval === null) publishedLocalModels = undefined;
       const { jobs, cancelJobIds } = await heartbeat(
         credentials,
         hostname(),
         bridgeCapabilities(),
-        { hermesEndpoints: publishedHermesEndpoints },
+        { hermesEndpoints: publishedHermesEndpoints, localModels: publishedLocalModels },
       );
       for (const jobId of cancelJobIds) {
         inFlight.get(jobId)?.abort.abort();
@@ -173,7 +189,9 @@ async function runDaemon(credentials = loadCredentials()) {
               ? `ssh ${job.alias} ${job.command}`
               : job.kind.startsWith("hermes-")
                 ? `${job.kind}${"profile" in job.payload ? ` ${job.payload.profile}` : ""}`
-                : `${job.kind} ${"botId" in job.payload ? job.payload.botId : ""}`;
+                : job.kind === "fleet-chat"
+                  ? `fleet-chat ${job.payload.model}`
+                  : `${job.kind} ${"botId" in job.payload ? job.payload.botId : ""}`;
         console.log(`job ${job.id}: ${label}`);
         const run = () => handleJob(job, abort.signal)
           .then((result) => {
@@ -285,6 +303,9 @@ async function main() {
   OMB_BRIDGE_LOCAL_VM=1     advertise local-vm relay capability
   OMB_BRIDGE_SSH_FORWARD=1  advertise ssh-forward capability
   OMB_BRIDGE_HERMES=1       advertise typed Hermes bridge capability
+  BRIDGE_SHARE_MODELS=true  opt in to advertising local model catalogs
+  BRIDGE_MODEL_DISCOVERY    seconds between probes, or off
+  BRIDGE_MODEL_ENDPOINTS    extra OpenAI-compatible base URLs
 `);
 }
 

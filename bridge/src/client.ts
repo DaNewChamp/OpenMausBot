@@ -38,7 +38,7 @@ export async function heartbeat(
   credentials: BridgeCredentials,
   hostInfo?: string,
   capabilities?: string[],
-  metadata?: { hermesEndpoints?: unknown[] },
+  metadata?: { hermesEndpoints?: unknown[]; localModels?: unknown },
 ): Promise<{ jobs: BridgeJob[]; cancelJobIds: string[] }> {
   const res = await fetch(`${credentials.url}/api/bridge/heartbeat`, {
     method: "POST",
@@ -51,6 +51,7 @@ export async function heartbeat(
       hostInfo,
       capabilities,
       ...(metadata?.hermesEndpoints ? { hermesEndpoints: metadata.hermesEndpoints } : {}),
+      ...(metadata?.localModels ? { localModels: metadata.localModels } : {}),
     }),
   });
   const body = (await res.json()) as { jobs?: BridgeJob[]; cancelJobIds?: string[]; error?: string };
