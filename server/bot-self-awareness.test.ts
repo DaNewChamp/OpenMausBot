@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { botSelfAwarenessCatalog, botSelfAwarenessPersona } from "./bot-self-awareness.ts";
+import {
+  botSelfAwarenessCatalog,
+  botSelfAwarenessPersona,
+  roleNameAwareness,
+} from "./bot-self-awareness.ts";
 
 describe("bot self-awareness", () => {
   it("names V Bot in persona and chief role", () => {
@@ -45,5 +49,18 @@ describe("bot self-awareness", () => {
       reportsToTitle: "Chief of Staff",
     });
     expect(lead).toContain("use create_bot to add specialists");
+  });
+});
+
+
+describe("roleNameAwareness", () => {
+  it("derives authority from leadership names without a title field", () => {
+    const line = roleNameAwareness("Chief of Investments");
+    expect(line).toContain("CHIEF OF INVESTMENTS");
+    expect(line).toContain("Own that domain");
+  });
+
+  it("stays quiet for bots without a leadership name", () => {
+    expect(roleNameAwareness("Scout")).toBe("");
   });
 });

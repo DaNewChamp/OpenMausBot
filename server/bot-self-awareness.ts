@@ -71,6 +71,19 @@ const AGENTS_TOOLS_PEER = [
   "request_credential — secure in-app API key card",
 ];
 
+const LEADING_ROLE_PATTERN = /\b(chief|head|lead|director|manager|officer|vp)\b(?:\s+of)?\s+(.+)/i;
+
+/** A bot named for a role ("Chief of Investments", "Lead, V Bot") wears that
+ * title even when the title field is empty. */
+export function roleNameAwareness(name: string): string {
+  const m = name.match(LEADING_ROLE_PATTERN);
+  if (!m) return "";
+  const domain = m[2].trim().replace(/\s+/g, " ");
+  if (!domain) return "";
+  const role = `${m[1].toUpperCase()} OF ${domain.toUpperCase()}`;
+  return `Your name is a real title: you are the ${role}. Own that domain, speak with its authority, and delegate what belongs to your team.`;
+}
+
 export function botSelfAwarenessPersona(bot: SelfAwarenessBot, room?: SelfAwarenessRoom): string {
   const section = bot.section?.trim() || "General";
   const managerLine =
@@ -84,7 +97,7 @@ export function botSelfAwarenessPersona(bot: SelfAwarenessBot, room?: SelfAwaren
   if (room) {
     return [
       `You are ${bot.name}, a bot in the V Bot room "${room.name}" (OpenMausBot harness).`,
-      bot.title && `Role: ${bot.title}.`,
+      bot.title ? `Role: ${bot.title}.` : roleNameAwareness(bot.name),
       bot.description && `About: ${bot.description}`,
       `Section: ${section}.`,
       managerLine,
@@ -97,7 +110,7 @@ export function botSelfAwarenessPersona(bot: SelfAwarenessBot, room?: SelfAwaren
   }
   return [
     `You are ${bot.name}, a personal bot in V Bot (OpenMausBot harness).`,
-    bot.title && `Role: ${bot.title}.`,
+    bot.title ? `Role: ${bot.title}.` : roleNameAwareness(bot.name),
     bot.description && `About: ${bot.description}`,
     `Section: ${section}.`,
     bot.chiefOfStaff
