@@ -11,11 +11,9 @@
 // (same as delegations / approvals). The composer shows a pending chip
 // until drain appends the words.
 //
-// Unlike the delegation drain, an interrupted or failed turn does NOT
-// discard this queue: delegations are a bot's fan-out (dropping them on
-// Stop is a safety property), but these are the user's own words —
-// stop-then-steer (queue a correction, hit Stop, the correction runs) is
-// the feature.
+// Unlike a normal settle, Stop discards this queue: queued follow-ups are
+// the user's words, but they must not restart work the user just halted.
+// Steer is the explicit path for a mid-turn correction.
 
 import { newId } from "./contracts.ts";
 import type { BotRecord, Message } from "./store.ts";
@@ -105,6 +103,18 @@ export function drainSteeredMessages(
       appended.map((message) => message.id),
     );
   }
+}
+
+/** Drop every held send for one bot. Stop is authoritative: queued
+ * follow-ups must not restart work after an interrupt. */
+export function discardSteeredMessages(botId: string): number {
+  let dropped = 0;
+  for (const [threadId, entry] of queues) {
+    if (entry.botId !== botId) continue;
+    dropped += entry.items.length;
+    queues.delete(threadId);
+  }
+  return dropped;
 }
 
 /** Test helper: how many messages remain queued for a thread. */

@@ -157,7 +157,7 @@ import {
   liveApprovalReviewerStatus,
 } from "./approval-reviewer-bind.ts";
 import { _loadPending, discardDelegations, drainDelegations, pendingDelegationSnapshot, pendingThreads, queueDelegation, type QueueResult } from "./delegations.ts";
-import { drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
+import { discardSteeredMessages, drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { createHermesEngineRegistry, type HermesEngineRegistry } from "./engines/index.ts";
@@ -908,6 +908,90 @@ async function interruptBotTurn(
   );
 }
 
+/** Invalidates an in-flight startTurn IIFE when Stop or a hub-side steer
+ * takes over the bot. The dispatch that no longer matches must not send. */
+const taskTurnEpoch = new Map<string, number>();
+/** 1:1 Hermes turns whose Stop already won. Late gateway events keep this id. */
+const cancelledTaskTurnIds = new Set<string>();
+const activeTaskTurnIds = new Map<string, string>();
+const suppressedTaskThreads = new Set<string>();
+const MAX_CANCELLED_TASK_TURNS = 256;
+
+function bumpTaskEpoch(botId: string): number {
+  const epoch = (taskTurnEpoch.get(botId) ?? 0) + 1;
+  taskTurnEpoch.set(botId, epoch);
+  return epoch;
+}
+
+function currentTaskEpoch(botId: string): number {
+  return taskTurnEpoch.get(botId) ?? 0;
+}
+
+function rememberCancelledTaskTurn(turnId: string): void {
+  cancelledTaskTurnIds.add(turnId);
+  if (cancelledTaskTurnIds.size <= MAX_CANCELLED_TASK_TURNS) return;
+  const first = cancelledTaskTurnIds.values().next().value;
+  if (first) cancelledTaskTurnIds.delete(first);
+}
+
+function shouldDropCancelledTaskEvent(event: RuntimeEvent): boolean {
+  if (event.turnId && cancelledTaskTurnIds.has(event.turnId)) return true;
+  if (!suppressedTaskThreads.has(event.threadId)) return false;
+  const live = activeTaskTurnIds.get(event.threadId);
+  return !live || event.turnId !== live;
+}
+
+function settleTaskTurn(botId: string, threadId: string): void {
+  watchdog.settle(threadId);
+  turnUsage.delete(threadId);
+  const owner = botActivityOwners.get(botId);
+  if (owner?.kind === "task" && owner.threadId === threadId) botActivityOwners.delete(botId);
+  const bot = store.bot(botId);
+  if (!bot?.busy) return;
+  stopScreenPoller(bot.id);
+  if (activeVpsThreads.get(bot.id) === threadId) activeVpsThreads.delete(bot.id);
+  if (store.bot(bot.id)?.activity !== "dead") store.setActivity(bot.id, "idle");
+}
+
+/** Stop is hub-authoritative: interrupt the gateway, drop queued sends, and
+ * clear busy even when the provider never emits turn.completed. */
+async function stopBotWork(
+  botId: string,
+  threadId: string,
+  runOn: HermesInterruptRunOn = "maus",
+): Promise<unknown | null> {
+  discardSteeredMessages(botId);
+  bumpTaskEpoch(botId);
+  const liveTurnId = activeTaskTurnIds.get(threadId);
+  if (liveTurnId) rememberCancelledTaskTurn(liveTurnId);
+  activeTaskTurnIds.delete(threadId);
+  suppressedTaskThreads.add(threadId);
+  const interruptFailure = await interruptBotTurn(botId, threadId, runOn).then(() => null).catch((error: unknown) => error);
+  if (interruptFailure instanceof HermesEngineError) {
+    if (liveTurnId) {
+      cancelledTaskTurnIds.delete(liveTurnId);
+      activeTaskTurnIds.set(threadId, liveTurnId);
+    }
+    suppressedTaskThreads.delete(threadId);
+    return interruptFailure;
+  }
+  settleTaskTurn(botId, threadId);
+  return null;
+}
+
+async function steerBusyBotTurn(
+  bot: NonNullable<ReturnType<typeof store.bot>>,
+  text: string,
+  replyTo?: Message,
+): Promise<"steered" | "ended"> {
+  const interruptFailure = await stopBotWork(bot.id, bot.threadId);
+  if (interruptFailure instanceof HermesEngineError) throw interruptFailure;
+  const current = store.bot(bot.id);
+  if (!current || current.threadId !== bot.threadId) return "ended";
+  await startTurn(bot.id, text, { replyTo, steered: true });
+  return "steered";
+}
+
 function roomTurnActivityKey(threadId: string, turnId: string): string {
   return `${threadId}\u0000${turnId}`;
 }
@@ -1381,6 +1465,7 @@ bus.subscribe((event: RuntimeEvent) => {
   const routineRun = routines?.handleRuntimeEvent(event) ?? null;
   const bot = store.botByThread(event.threadId);
   const group = bot ? undefined : store.groupByThread(event.threadId);
+  if (bot && shouldDropCancelledTaskEvent(event)) return;
   const currentRoomSpeaker = groupSpeakers.get(event.threadId);
   const blockedRoomTurn = event.turnId
     ? roomTurnCancellation.isTurnBlocked(event.threadId, event.turnId)
@@ -2019,11 +2104,8 @@ bus.subscribe((event: RuntimeEvent) => {
 // subscriber runs the main fold has already dropped the speaker record —
 // so the drain matches on "this queue's bot is idle now" instead.
 // Registration order puts this after the main fold, so busy is already
-// false when it looks. Deliberately NOT gated on event.ok (unlike the
-// delegation drain above): queued delegations are a bot's fan-out and
-// dropping them on Stop is a safety property, but queued messages are the
-// user's own words — stop-then-steer is the point, so an interrupted turn
-// drains too.
+// false when it looks. Stop discards the queue before this fires, so an
+// interrupted turn does not restart work.
 bus.subscribe((event: RuntimeEvent) => {
   if (event.type !== "turn.completed") return;
   drainQueuedSends();
@@ -2179,6 +2261,8 @@ async function startTurn(
     cardContinuation?: boolean;
     /** Earlier text message this user turn is replying to. */
     replyTo?: Message;
+    /** Mid-turn correction: the user line is a steer, not a queued follow-up. */
+    steered?: boolean;
     onDispatchError?: (message: string) => void;
   },
 ) {
@@ -2289,7 +2373,13 @@ async function startTurn(
   if (!userMessage) {
     userMessage = opts?.cardContinuation
       ? { id: `card-${randomUUID()}`, at: Date.now(), role: "user", kind: "text", text }
-      : store.appendMessage(threadId, { role: "user", kind: "text", text, replyToId: opts?.replyTo?.id });
+      : store.appendMessage(threadId, {
+        role: "user",
+        kind: "text",
+        text,
+        replyToId: opts?.replyTo?.id,
+        steered: opts?.steered,
+      });
   }
 
   // transcript for API-backed drivers: settled text turns on the ACTIVE
@@ -2351,6 +2441,8 @@ async function startTurn(
   // busy flips immediately so the composer locks; the dispatch itself runs
   // in the background — box provisioning can take ~90s and must never
   // hang the HTTP request
+  const epoch = bumpTaskEpoch(bot.id);
+  suppressedTaskThreads.delete(threadId);
   store.setActivity(bot.id, "working");
   botActivityOwners.set(bot.id, { kind: "task", threadId });
   store.patchBot(bot.id, { unread: false });
@@ -2358,6 +2450,7 @@ async function startTurn(
 
   void (async () => {
     try {
+      if (currentTaskEpoch(bot.id) !== epoch) return;
       // A bound bot uses the internal Hermes Bot Chat adapter exclusively.
       // Keep this branch ahead of integrations/computer setup: Hermes Bot
       // Mode has no MCP, queue, steer, or attachment contract, and a bound
@@ -2381,6 +2474,9 @@ async function startTurn(
             opts?.onDispatchError?.(safe.message);
             return;
           }
+          if (currentTaskEpoch(bot.id) !== epoch) return;
+          activeTaskTurnIds.set(threadId, adapterTurnId);
+          suppressedTaskThreads.delete(threadId);
           watchdog.watch(threadId, bot.id);
           try {
             await dispatchHermesBridgeSend({
@@ -2395,10 +2491,12 @@ async function startTurn(
               publishEvent: (event) => publishHermesEvent(event, adapterInstanceId),
               instanceId: adapterInstanceId,
             });
+            if (currentTaskEpoch(bot.id) !== epoch) return;
             if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
             store.markTaskDispatched(bot.id, threadId, instanceId);
             return;
           } catch (error) {
+            if (currentTaskEpoch(bot.id) !== epoch) return;
             const safe = publishHermesFailure(
               threadId,
               adapterTurnId,
@@ -2426,6 +2524,12 @@ async function startTurn(
             terminal = true;
           }
         });
+        if (currentTaskEpoch(bot.id) !== epoch) {
+          unsubscribe();
+          return;
+        }
+        activeTaskTurnIds.set(threadId, adapterTurnId);
+        suppressedTaskThreads.delete(threadId);
         watchdog.watch(threadId, bot.id);
         try {
           await hermesEngine.send({
@@ -2437,12 +2541,14 @@ async function startTurn(
             fromBotId: bot.id,
             senderHandle: hermesBinding.profile === "default" ? "hermes" : hermesBinding.profile,
           });
+          if (currentTaskEpoch(bot.id) !== epoch) return;
           if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
           // Preserve the V Bot selection and task bookkeeping; Hermes session
           // ids are intentionally never stored as resume cursors.
           store.markTaskDispatched(bot.id, threadId, instanceId);
           return;
         } catch (error) {
+          if (currentTaskEpoch(bot.id) !== epoch) return;
           if (!terminal) {
             const safe = publishHermesFailure(threadId, adapterTurnId, adapterInstanceId, error);
             opts?.onDispatchError?.(safe.message);
@@ -2716,6 +2822,7 @@ async function startTurn(
       // snapshot() absorbs failures, so checkpointing may delay but never fail
       // a turn.
       if (checkpointCwd) await checkpoints.snapshot(bot.id, checkpointCwd, `turn ${threadId.slice(0, 8)}`);
+      if (currentTaskEpoch(bot.id) !== epoch) return;
       watchdog.watch(threadId, bot.id);
       await instance.adapter.sendTurn({
         threadId,
@@ -2761,6 +2868,7 @@ async function startTurn(
         integrations,
         cwd,
       });
+      if (currentTaskEpoch(bot.id) !== epoch) return;
       // dispatched: the rewind is spent, and the old cursors are dead
       if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
       // and this engine now owns the thread's most recent turn
@@ -2773,6 +2881,7 @@ async function startTurn(
         startScreenPoller(bot.id, previewCapture, { screenIsTheWork: instance.driverKind === "boxAgent" });
       }
     } catch (e) {
+      if (currentTaskEpoch(bot.id) !== epoch) return;
       releaseLocalVmThread(threadId);
       if (activeVpsThreads.get(bot.id) === threadId) activeVpsThreads.delete(bot.id);
       watchdog.settle(threadId);
@@ -2814,7 +2923,8 @@ routines = new RoutineManager({
   startTurn: (botId, threadId, prompt, runOn, triggerSource, onDispatchError) =>
     startTurn(botId, prompt, { threadId, runOn, automationSource: triggerSource, onDispatchError }),
   interruptTurn: async (botId, threadId, runOn) => {
-    await interruptBotTurn(botId, threadId, runOn);
+    const failure = await stopBotWork(botId, threadId, runOn);
+    if (failure instanceof HermesEngineError) throw failure;
   },
   onRunFailed: (run) => {
     const bot = store.bot(run.botId);
@@ -4249,12 +4359,13 @@ function hermesFailure(error: unknown): HermesEngineError {
 }
 
 function isHermesBoundBot(botId: string): boolean {
+  const bot = store.bot(botId);
+  if (bot?.runtimeBinding?.kind === "hermes") return true;
   const bindings = loadHermesBindings();
   if (bindings.state === "unavailable") return true;
   if (bindings.value.has(botId)) return true;
   const bridgeBindings = loadHermesBridgeBindings();
   if (bridgeBindings.state === "available") return bridgeBindings.value.has(botId);
-  const bot = store.bot(botId);
   return Boolean(bot && isBridgeHermesBotCandidate(bot, hermesBotInstanceId(cfg)));
 }
 
@@ -4290,16 +4401,11 @@ function projectHermesSubagentLive(
   if (frame) broadcast(frame);
 }
 
-function projectBotComposer(botId: string): { queueing: false; steer: false; stop: true } | undefined {
-  const bindings = loadHermesBindings();
-  if (bindings.state === "available" && bindings.value.has(botId)) {
-    return { queueing: false, steer: false, stop: true };
-  }
-  const bridgeBindings = loadHermesBridgeBindings();
-  if (bridgeBindings.state === "available" && bridgeBindings.value.has(botId)) {
-    return { queueing: false, steer: false, stop: true };
-  }
-  return undefined;
+function projectBotComposer(botId: string): { queueing: true; steer: true; stop: true } | undefined {
+  if (!isHermesBoundBot(botId)) return undefined;
+  // Hub-side steer is interrupt-then-run. Queue remains available for an
+  // explicit long-press; Stop drops anything still waiting.
+  return { queueing: true, steer: true, stop: true };
 }
 
 function hermesSetupCode(code: HermesEngineError["code"]): boolean {
@@ -6467,7 +6573,7 @@ const server = createServer(async (req, res) => {
       dropPendingRoomResumes(threadId, interruptedRun);
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
       const interruptFailure = busy
-        ? await interruptBotTurn(busy.id, threadId).then(() => null).catch((error: unknown) => error)
+        ? await stopBotWork(busy.id, threadId)
         : null;
       closeOpenApprovals(threadId);
       if (interruptFailure instanceof HermesEngineError) {
@@ -7085,7 +7191,10 @@ const server = createServer(async (req, res) => {
       // its sidecar is unavailable; steer must never cross into a generic
       // provider in either state.
       const hermesBound = isHermesBoundBot(bot.id);
-      const canSteer = !hermesBound && Boolean(instance?.adapter.capabilities.queueing && instance.adapter.steer);
+      const adapterSteer = Boolean(instance?.adapter.capabilities.queueing && instance.adapter.steer);
+      // Hermes has no in-turn write; the hub steers by interrupting then
+      // running the new text. That path is available for bound bots.
+      const canSteer = hermesBound || adapterSteer;
       const action = decideDelivery({ mode, busy: Boolean(bot.busy), canSteer });
       if (action === "unsupported") {
         return json(res, 409, { error: "this bot's current engine cannot steer an active turn — choose Queue or wait for it to finish" });
@@ -7094,7 +7203,19 @@ const server = createServer(async (req, res) => {
       // the legacy fallback: if the write loses a race with turn settlement,
       // the existing server-side queue records the message for the next turn.
       if (action === "steer") {
-        const steered = await instance!.adapter
+        if (hermesBound || !instance?.adapter.steer) {
+          try {
+            const steered = await steerBusyBotTurn(bot, text, replyTo);
+            if (steered === "ended") {
+              return json(res, 409, { error: "the active turn ended before this steer could be recorded" });
+            }
+            return json(res, 202, { ...deliveryReceipt("steered"), steered: true });
+          } catch (error) {
+            if (error instanceof HermesEngineError) return json(res, 409, hermesSetupJson(error));
+            throw error;
+          }
+        }
+        const steered = await instance.adapter
           .steer!(bot.threadId, promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"))
           .catch(() => false);
         if (steered) {
@@ -7273,6 +7394,7 @@ const server = createServer(async (req, res) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       const routineRun = routines!.activeRunForBot(bot.id);
       if (routineRun) {
+        discardSteeredMessages(bot.id);
         await routines!.cancelRun(routineRun.id);
         return json(res, 200, { ok: true });
       }
@@ -7288,7 +7410,7 @@ const server = createServer(async (req, res) => {
         dropPendingRoomResumes(busyGroup.threadId, interruptedRun);
         closeOpenApprovals(busyGroup.threadId);
       }
-      const interruptFailure = await interruptBotTurn(bot.id, interruptThread).then(() => null).catch((error: unknown) => error);
+      const interruptFailure = await stopBotWork(bot.id, interruptThread);
       if (interruptFailure instanceof HermesEngineError) {
         closeOpenApprovals(bot.threadId);
         return json(res, 409, hermesSetupJson(interruptFailure));

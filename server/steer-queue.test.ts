@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { drainSteeredMessages, queueSteeredMessage, _queuedCount, type SteerStore } from "./steer-queue.ts";
+import { discardSteeredMessages, drainSteeredMessages, queueSteeredMessage, _queuedCount, type SteerStore } from "./steer-queue.ts";
 import type { BotRecord, Message } from "./store.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -146,6 +146,19 @@ describe("steer-queue module", () => {
     drainSteeredMessages(fakeStore([]), run);
     expect(run).not.toHaveBeenCalled();
     expect(_queuedCount("thread-d")).toBe(0);
+  });
+
+  it("discardSteeredMessages drops one bot and leaves others", () => {
+    const first = fakeBot("bot-e", "thread-e", true);
+    const second = fakeBot("bot-f", "thread-f", true);
+    queueSteeredMessage(first, "hold e");
+    queueSteeredMessage(second, "hold f");
+    expect(discardSteeredMessages("bot-e")).toBe(1);
+    expect(_queuedCount("thread-e")).toBe(0);
+    expect(_queuedCount("thread-f")).toBe(1);
+    const run = vi.fn();
+    drainSteeredMessages(fakeStore([fakeBot("bot-f", "thread-f", false)]), run);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
 });
@@ -342,7 +355,7 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
   );
 
   it(
-    "drains the queue after an interrupt — stop-then-steer",
+    "drops the queue on interrupt — stop does not restart work",
     async () => {
       const bot = await newBot("steerStop", "Stoppable");
 
@@ -363,26 +376,15 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
       }, "the hung prompt");
       expect((await api("POST", `/api/bots/${bot.id}/interrupt`)).status).toBe(200);
 
-      // the interrupt settles the hung turn (ACP cancel grace), and the
-      // drain consumes the queue: its message loses the queued flag while
-      // the steered turn waits on the still-missing gate
-      await until(async () => {
-        const snapshot = await botById(bot.id);
-        const message = snapshot.messages.find((m: any) => m.text === "after stop please");
-        return Boolean(message) && !message.queued;
-      }, "the post-interrupt drain");
-
       writeFileSync(stopGate, "open");
       let snapshot: any;
       await until(async () => {
         snapshot = await botById(bot.id);
-        return !snapshot.busy && echoes(snapshot).length >= 1;
-      }, "the steered turn");
+        return snapshot.busy === false;
+      }, "the interrupted turn");
 
-      // the interrupted turn produced no reply; the steered one answers
-      const replies = echoes(snapshot);
-      expect(replies).toHaveLength(1);
-      expect(replies[0].text).toContain("after stop please");
+      expect(snapshot.messages.some((m: any) => m.text === "after stop please")).toBe(false);
+      expect(echoes(snapshot)).toHaveLength(0);
     },
     60_000,
   );

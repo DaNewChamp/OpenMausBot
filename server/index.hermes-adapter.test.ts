@@ -57,7 +57,11 @@ process.stdin.on("data", (chunk) => {
     } else if (request.method === "prompt.submit") {
       prompts += 1;
       out({ jsonrpc: "2.0", id: request.id, result: { accepted: true } });
-      if (prompts === 1) setTimeout(() => out({ jsonrpc: "2.0", method: "event", params: { type: "message.complete", session_id: "runtime-only-session", payload: { text: "fixture Hermes reply", status: "complete", usage: { input: 4, output: 2 } } } }), 40);
+      const text = String(request.params && request.params.text || "");
+      const lastLine = text.trim().split("\\n").pop() || "";
+      if (!lastLine.includes("stay running")) {
+        setTimeout(() => out({ jsonrpc: "2.0", method: "event", params: { type: "message.complete", session_id: "runtime-only-session", payload: { text: "fixture Hermes reply", status: "complete", usage: { input: 4, output: 2 } } } }), 40);
+      }
     } else if (request.method === "session.interrupt") {
       out({ jsonrpc: "2.0", id: request.id, result: { status: "interrupted" } });
       out({ jsonrpc: "2.0", method: "event", params: { type: "message.complete", session_id: "runtime-only-session", payload: { text: "interrupted", status: "interrupted" } } });
@@ -267,7 +271,7 @@ describe("Hermes Bot Chat hub integration", () => {
 
     const listed = await api("GET", "/api/bots");
     const listedBot = listed.body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
-    expect(listedBot?.composer).toEqual({ queueing: false, steer: false, stop: true });
+    expect(listedBot?.composer).toEqual({ queueing: true, steer: true, stop: true });
     expect(JSON.stringify(listedBot)).not.toMatch(/canonicalTitle|profile|session-root|runtime-gen/i);
 
     const sent = await api("POST", `/api/bots/${bot.id}/messages`, { text: "hello Hermes" });
@@ -533,5 +537,97 @@ describe("Hermes Bot Chat hub integration", () => {
     const stopped = await api("POST", `/api/groups/${room.body.group.id}/interrupt`);
     expect(stopped.status).toBe(200);
     expect(stopped.body).toEqual({ ok: true });
+  }, 30_000);
+
+  it("stop drops queued Hermes sends, interrupts the gateway, and clears busy", async () => {
+    writeFileSync(join(dataDir, "config.json"), JSON.stringify({
+      vbot: { hermes: { enabled: true } },
+      instances: { hermes: { driver: "hermesAgent", config: { cli: fakeHermes } } },
+    }));
+    expect((await api("PATCH", "/api/config", { vbot: { hermes: { enabled: true } } })).status).toBe(200);
+    const created = await api("POST", "/api/bots");
+    const bot = created.body.bot;
+    writeFileSync(join(dataDir, "hermes-bindings.json"), JSON.stringify({
+      version: 1,
+      bindings: {
+        [bot.id]: {
+          adapter: "hermesBot",
+          profile: "default",
+          canonicalTitle: "Bot Chat",
+          bindingVersion: 1,
+        },
+      },
+    }), { mode: 0o600 });
+
+    const submitCount = () => existsSync(hermesLog)
+      ? readFileSync(hermesLog, "utf8").trim().split("\n").filter(Boolean)
+        .map((line) => JSON.parse(line) as { method?: string })
+        .filter((request) => request.method === "prompt.submit").length
+      : 0;
+    const submitsAtStart = submitCount();
+    const hung = await api("POST", `/api/bots/${bot.id}/messages`, { text: "stay running" });
+    expect(hung.status).toBe(202);
+    await waitFor(async () => (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id)?.busy === true, "the hung Hermes turn");
+    await waitFor(async () => submitCount() > submitsAtStart, "the hung Hermes prompt");
+
+    const queued = await api("POST", `/api/bots/${bot.id}/messages`, { text: "after stop please", delivery: "queue" });
+    expect(queued.status).toBe(202);
+    expect(queued.body.queued).toBe(true);
+
+    const submitsBefore = submitCount();
+
+    expect((await api("POST", `/api/bots/${bot.id}/interrupt`)).status).toBe(200);
+    await waitFor(async () => (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id)?.busy === false, "the interrupted Hermes bot");
+
+    const snapshot = (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
+    expect(snapshot.busy).toBe(false);
+    expect(snapshot.messages.some((message: { text?: string }) => message.text === "after stop please")).toBe(false);
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const after = existsSync(hermesLog)
+      ? readFileSync(hermesLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as { method?: string })
+      : [];
+    expect(after.some((request) => request.method === "session.interrupt")).toBe(true);
+    expect(after.filter((request) => request.method === "prompt.submit").length).toBe(submitsBefore);
+  }, 30_000);
+
+  it("steers a busy Hermes-runtime bot by interrupting then running the new text", async () => {
+    writeFileSync(join(dataDir, "config.json"), JSON.stringify({
+      vbot: { hermes: { enabled: true } },
+      instances: { hermes: { driver: "hermesAgent", config: { cli: fakeHermes } } },
+    }));
+    expect((await api("PATCH", "/api/config", { vbot: { hermes: { enabled: true } } })).status).toBe(200);
+    const created = await api("POST", "/api/bots");
+    const bot = created.body.bot;
+    writeFileSync(join(dataDir, "hermes-bindings.json"), JSON.stringify({
+      version: 1,
+      bindings: {
+        [bot.id]: {
+          adapter: "hermesBot",
+          profile: "default",
+          canonicalTitle: "Bot Chat",
+          bindingVersion: 1,
+        },
+      },
+    }), { mode: 0o600 });
+
+    expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "stay running" })).status).toBe(202);
+    await waitFor(async () => (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id)?.busy === true, "the Hermes turn to steer");
+
+    const steered = await api("POST", `/api/bots/${bot.id}/messages`, { text: "go this way instead", delivery: "steer" });
+    expect(steered.status).toBe(202);
+    expect(steered.body).toMatchObject({ ok: true, disposition: "steered", steered: true });
+
+    await waitFor(async () => {
+      const snapshot = (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
+      return snapshot?.messages.some((message: { role: string; text?: string; steered?: boolean }) =>
+        message.role === "user" && message.text === "go this way instead" && message.steered === true);
+    }, "the steered Hermes user line");
+
+    await waitFor(async () => {
+      const snapshot = (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
+      return snapshot?.messages.some((message: { role: string; text?: string }) =>
+        message.role === "bot" && message.text === "fixture Hermes reply");
+    }, "the steered Hermes reply");
   }, 30_000);
 });

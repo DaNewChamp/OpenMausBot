@@ -121,7 +121,7 @@ posixOnly("mid-turn steering e2e", () => {
     40_000,
   );
 
-  it("an engine without a live session preserves the message in the server-side queue", async () => {
+  it("an engine without a live session queues mid-turn sends and drops them on stop", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "acp", model: "fake-model" } });
     expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "first" })).status).toBe(202);
@@ -131,11 +131,7 @@ posixOnly("mid-turn steering e2e", () => {
     expect(queued.body.queued).toBe(true);
     expect((await getBot(created.id)).messages.some((m: any) => m.text === "second")).toBe(false);
     await api("POST", `/api/bots/${created.id}/interrupt`);
-    await waitFor(
-      async () => (await getBot(created.id)).messages.some((m: any) => m.text === "second"),
-      "the queued message to begin its turn",
-    );
-    await api("POST", `/api/bots/${created.id}/interrupt`);
-    await waitFor(async () => (await getBot(created.id)).busy === false, "the queued turn to settle");
+    await waitFor(async () => (await getBot(created.id)).busy === false, "the interrupted turn to settle");
+    expect((await getBot(created.id)).messages.some((m: any) => m.text === "second")).toBe(false);
   }, 30_000);
 });
