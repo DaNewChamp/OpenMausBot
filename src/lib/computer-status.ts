@@ -59,8 +59,8 @@ export function computerStatusSummary(input: {
       return {
         title: "Linux VM ready",
         detail: input.shared === false
-          ? "A private container for this bot is running on the assigned machine."
-          : "A shared Linux VM is running on the assigned machine. Bots take turns driving it.",
+          ? "A private container for this bot is running on the selected fleet machine."
+          : "Every bot shares this Linux VM on the selected fleet machine. Bots take turns driving it.",
         tone: "positive",
       };
     case "local":
@@ -82,7 +82,7 @@ export function computerStatusSummary(input: {
     case "vps-incompatible":
       return { title: "VPS computer needs replacement", detail: "This workspace belongs to an older V Bot image.", tone: "warning" };
     case "vm-unavailable":
-      return { title: "Local VM unavailable", detail: "Create or repair this bot's private workspace in Local VM settings.", tone: "warning" };
+      return { title: "Linux VM unavailable", detail: "Pick a fleet machine and Deploy to create the shared Linux VM.", tone: "warning" };
     case "local-unavailable":
       return { title: "This computer unavailable", detail: "Enable the required desktop permissions, then try again.", tone: "warning" };
     case "error":

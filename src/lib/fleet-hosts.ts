@@ -41,3 +41,28 @@ export function preferredHostId(
   if (pinned && options.some((host) => host.id === pinned)) return pinned;
   return options.find((host) => host.online)?.id ?? options[0]?.id;
 }
+
+/** Keep an explicit fleet pick even if that machine cannot host a Linux VM yet. */
+export function selectedFleetHostId(
+  hosts: readonly FleetHost[],
+  pinned?: string | null,
+): string | undefined {
+  if (pinned && hosts.some((host) => host.id === pinned)) return pinned;
+  return preferredHostId(hosts, "local-vm") ?? hosts.find((host) => host.online)?.id ?? hosts[0]?.id;
+}
+
+export function fleetHostLabel(host: FleetHost): string {
+  const tags: string[] = [];
+  if (!host.online) tags.push("offline");
+  else if (!host.capabilities.includes("local-vm")) tags.push("no Linux VM");
+  return tags.length ? `${host.name} (${tags.join(", ")})` : host.name;
+}
+
+export function fleetVmDeployBlockReason(host: FleetHost | undefined): string | null {
+  if (!host) return "Pair a desktop or bridge, then pick it here.";
+  if (!host.online) return `${host.name} is offline.`;
+  if (!host.capabilities.includes("local-vm")) {
+    return `${host.name} is connected, but it isn't hosting a Linux VM. Start Docker on that machine to Deploy.`;
+  }
+  return null;
+}

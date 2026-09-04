@@ -112,6 +112,7 @@ import {
   hermesBotInstanceId,
   instanceConfigs,
   loadConfig,
+  localVmHostId,
   localVmMaxInstances,
   localVmMode,
   parseConfigPatch,
@@ -569,9 +570,10 @@ const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
 });
 
 function localVmRelayOpts(bot: { id: string; computerHostId?: string }) {
+  const hostId = localVmHostId(cfg) ?? bot.computerHostId;
   return {
     botId: bot.id,
-    ...(bot.computerHostId ? { bridgeId: bot.computerHostId } : {}),
+    ...(hostId ? { bridgeId: hostId } : {}),
   };
 }
 
@@ -4395,6 +4397,7 @@ function configStatus() {
     localVm: {
       mode: localVmMode(cfg),
       maxInstances: localVmMaxInstances(cfg),
+      hostId: localVmHostId(cfg),
     },
     features: { skillRecorder: skillRecorderEnabled(cfg) },
     permissions: { defaultMode: defaultPermissionMode(cfg) },
@@ -7579,6 +7582,24 @@ const server = createServer(async (req, res) => {
     // what the user's machine can host: which runtime is installed, whether
     // its daemon is up, and whether the desktop image and container exist
     if (method === "GET" && path === "/api/local-computer") {
+      if (await shouldRelayLocalVm(bridges)) {
+        try {
+          const { data } = await runLocalVmOnBridge(bridges, {
+            ...localVmRelayOpts({ id: "shared" }),
+            op: "status",
+          });
+          const status = data as Awaited<ReturnType<typeof containerComputerStatus>>;
+          return json(res, 200, {
+            ...status,
+            commands: setupCommands(status.runtime, process.platform, SHARED_LOCAL_VM_TARGET),
+            idle_timeout_ms: LOCAL_VM_IDLE_MS,
+            mode: localVmMode(cfg),
+            max_instances: localVmMaxInstances(cfg),
+          });
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
       return json(res, 200, await localVmPayload(SHARED_LOCAL_VM_TARGET));
     }
     m = path.match(/^\/api\/local-computer\/(pull|run|start|stop|remove)$/);
@@ -8284,6 +8305,26 @@ const server = createServer(async (req, res) => {
     }
     if (method === "GET" && path === "/api/config") {
       return json(res, 200, configStatus());
+    }
+    // Paired-safe fleet VM location. The broad /api/config writer stays closed
+    // to phones and the web app; this is the one field they may set.
+    if (method === "PATCH" && path === "/api/local-vm/location") {
+      const body = await readBody(req);
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return json(res, 400, { error: "location requires a JSON object" });
+      }
+      const values = body as Record<string, unknown>;
+      const keys = Object.keys(values);
+      if (keys.length !== 1 || keys[0] !== "hostId") {
+        return json(res, 400, { error: "location accepts only hostId" });
+      }
+      const parsed = parseComputerHostId(values.hostId);
+      if (!parsed.ok) return json(res, 400, { error: parsed.error });
+      saveConfig({ localVm: { hostId: parsed.computerHostId ?? "" } } as Partial<AppConfig>);
+      Object.assign(cfg, loadConfig());
+      const status = configStatus();
+      broadcast({ kind: "config", ...status });
+      return json(res, 200, { localVm: status.localVm });
     }
     // Phone-writable config slices. Deliberately narrow: the broad
     // /api/config writer stays computer-only.

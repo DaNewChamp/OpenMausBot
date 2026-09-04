@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import { Card, CommandLine } from "./SettingsPrimitives";
 import { cn } from "@/lib/cn";
+import { api, useStore } from "@/state/store";
+import { FleetVmLocationPicker, useFleetVmLocation } from "./ComputerHostPicker";
 
 type Action = "pull" | "run" | "start" | "stop" | "remove" | "recreate";
 
@@ -101,6 +103,9 @@ function ActionButton({
 }
 
 export function LocalComputerSection() {
+  const { state } = useStore();
+  const fleetVm = useFleetVmLocation();
+  const botId = state.bots[0]?.id;
   const [status, setStatus] = useState<Status | null>(null);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<Action | null>(null);
@@ -108,24 +113,21 @@ export function LocalComputerSection() {
   const [policyPending, setPolicyPending] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const refresh = useCallback(async (signal?: AbortSignal) => {
-    const response = await fetch("/api/local-computer", { signal });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error ?? `Status request failed (${response.status})`);
+  const refresh = useCallback(async () => {
+    const path = botId ? `/api/bots/${botId}/local-computer` : "/api/local-computer";
+    const body = await api(path);
     setStatus(body as Status);
     setError(null);
-  }, []);
+  }, [botId]);
 
   useEffect(() => {
     let active = true;
     let timer: number | undefined;
-    let controller: AbortController | undefined;
     const poll = async () => {
-      controller = new AbortController();
       try {
-        await refresh(controller.signal);
+        await refresh();
       } catch (e) {
-        if (active && !(e instanceof DOMException && e.name === "AbortError")) {
+        if (active) {
           setStatus(null);
           setError(e instanceof Error ? e.message : String(e));
         }
@@ -139,19 +141,17 @@ export function LocalComputerSection() {
     void poll();
     return () => {
       active = false;
-      controller?.abort();
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [refresh, refreshKey]);
 
   const post = async (action: Exclude<Action, "recreate">) => {
-    const response = await fetch(`/api/local-computer/${action}`, {
+    const perBot = botId && (action === "run" || action === "stop");
+    const path = perBot ? `/api/bots/${botId}/local-computer/${action}` : `/api/local-computer/${action}`;
+    const body = await api(path, {
       method: "POST",
-      headers: { "content-type": "application/json" },
       body: "{}",
     });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error ?? `${action} failed`);
     setStatus(body as Status);
   };
 
@@ -187,13 +187,10 @@ export function LocalComputerSection() {
     setPolicyPending(true);
     setError(null);
     try {
-      const response = await fetch("/api/config", {
+      await api("/api/config", {
         method: "PATCH",
-        headers: { "content-type": "application/json" },
         body: JSON.stringify({ localVm: { mode, maxInstances } }),
       });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error ?? "Could not save the Local VM isolation policy");
       setStatus((current) => current ? { ...current, mode, max_instances: maxInstances } : current);
       await refresh();
     } catch (e) {
@@ -216,7 +213,6 @@ export function LocalComputerSection() {
         status?.persistence === "unsafe"),
   );
   const unavailable = !loading && !status;
-  const host = status?.platform === "darwin" ? "Mac" : "computer";
   const perBot = status?.mode === "per-bot";
   const perBotRuntimeUnsupported = perBot && status?.runtime === "container";
   const headerReady = perBot ? Boolean(status?.daemonUp && status?.image && !perBotRuntimeUnsupported) : ready;
@@ -224,10 +220,61 @@ export function LocalComputerSection() {
   return (
     <>
       <Card
+        title="VM location"
+        subtitle="Every bot uses this Linux VM. Pick a machine from your connected fleet, then Deploy."
+      >
+        <FleetVmLocationPicker
+          hosts={fleetVm.hosts}
+          value={fleetVm.hostId}
+          disabled={policyPending || pending !== null}
+          onChange={(hostId) => {
+            void fleetVm.save(hostId).then(() => setRefreshKey((key) => key + 1)).catch((e) => {
+              setError(e instanceof Error ? e.message : String(e));
+            });
+          }}
+        />
+        <div className="mt-2 text-[12px] leading-relaxed text-ink-secondary">
+          {fleetVm.blockReason
+            ?? (perBot
+              ? "Each bot gets its own container on that machine."
+              : "Bots take turns driving one shared desktop on that machine.")}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            onClick={() => {
+              if (fleetVm.blockReason) {
+                setError(fleetVm.blockReason);
+                return;
+              }
+              if (!botId) {
+                setError("Create a bot first, then Deploy.");
+                return;
+              }
+              void (async () => {
+                try {
+                  if (fleetVm.selectedId && fleetVm.selectedId !== fleetVm.hostId) {
+                    await fleetVm.save(fleetVm.selectedId);
+                  }
+                  await act("run");
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : String(e));
+                }
+              })();
+            }}
+            disabled={pending !== null || Boolean(fleetVm.blockReason)}
+            className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-white hover:brightness-110 disabled:opacity-50"
+          >
+            {pending === "run" && <Loader2 size={13} className="animate-spin" />}
+            Deploy
+          </button>
+        </div>
+      </Card>
+
+      <Card
         title="Local VM"
         subtitle={perBot
-          ? `Private Cua Linux desktops on this ${host}, with one container and durable workspace per bot. Distinct bots can work concurrently and idle desktops stop after 8 hours.`
-          : `A shared Cua Linux sandbox on this ${host} for bots to browse and work in: isolated, backed by one durable workspace, and automatically recycled after 8 hours without activity.`}
+          ? `Private Cua Linux desktops on the selected fleet machine, with one container and durable workspace per bot. Distinct bots can work concurrently and idle desktops stop after 8 hours.`
+          : `A shared Cua Linux sandbox on the selected fleet machine for bots to browse and work in: isolated, backed by one durable workspace, and automatically recycled after 8 hours without activity.`}
       >
         <div className="flex flex-wrap items-center gap-2">
           <span

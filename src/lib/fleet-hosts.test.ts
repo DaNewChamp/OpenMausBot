@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { hostsWithCapability, parseFleetHosts, preferredHostId } from "./fleet-hosts";
+import {
+  fleetHostLabel,
+  fleetVmDeployBlockReason,
+  hostsWithCapability,
+  parseFleetHosts,
+  preferredHostId,
+  selectedFleetHostId,
+} from "./fleet-hosts";
 
 const mini = {
   id: "bridge-mini",
@@ -29,5 +36,16 @@ describe("fleet hosts", () => {
     expect(preferredHostId(hosts, "local-vm")).toBe("bridge-mini");
     expect(preferredHostId(hosts, "shell", "bridge-win")).toBe("bridge-win");
     expect(preferredHostId(hosts, "local-vm", "missing")).toBe("bridge-mini");
+  });
+
+  it("keeps an explicit fleet pick and explains why Deploy is blocked", () => {
+    const hosts = parseFleetHosts({ bridges: [windows, mini] });
+    expect(selectedFleetHostId(hosts, "bridge-win")).toBe("bridge-win");
+    expect(selectedFleetHostId(hosts)).toBe("bridge-mini");
+    expect(fleetHostLabel(mini)).toBe("mini");
+    expect(fleetHostLabel(windows)).toBe("windows (offline)");
+    expect(fleetVmDeployBlockReason(windows)).toContain("offline");
+    expect(fleetVmDeployBlockReason({ ...windows, online: true })).toContain("isn't hosting a Linux VM");
+    expect(fleetVmDeployBlockReason(mini)).toBeNull();
   });
 });

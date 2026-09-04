@@ -23,7 +23,6 @@ import { api, useStore, type Bot } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
 import { cn } from "@/lib/cn";
 import { usePageVisible } from "@/lib/page-visible";
-import { CloudBackendPicker } from "./CloudBackendPicker";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { RoutineEditor } from "./RoutinesPage";
 import { AndroidDevicePanel, useAndroidUsbDevices } from "./AndroidDevicePanel";
@@ -32,21 +31,13 @@ import { builtInBrowserEnabled } from "@/lib/feature-flags";
 import { LocalScreenPreview } from "./LocalScreenPreview";
 import { LinuxLocalControl } from "./LinuxLocalControl";
 import { MacLocalControl } from "./MacLocalControl";
-import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
 import { ShellHealth } from "./ShellHealth";
 import { conversationTitle } from "@/lib/model-suffix";
 import { DESKTOP_DEMO_SCREEN_DATA_URL, isDesktopDemoMode } from "@/lib/desktop-demo";
-import { isWebClientMode } from "@/lib/web-client-mode";
-import {
-  autoSelectsLocalComputer,
-  instanceSupportsLocalComputer,
-  localComputerDisabledReason,
-  localComputerSelectable,
-} from "@/lib/local-computer";
-import { vpsComputerNeedsReplacement, type VpsComputerStatus } from "@/lib/vps-computer";
+import { instanceSupportsLocalComputer, localComputerDisabledReason } from "@/lib/local-computer";
+import { type VpsComputerStatus } from "@/lib/vps-computer";
 import { computerStatusSummary } from "@/lib/computer-status";
-import { preferredHostId } from "@/lib/fleet-hosts";
-import { ComputerHostPicker, useFleetHosts } from "./ComputerHostPicker";
+import { FleetVmLocationPicker, useFleetVmLocation } from "./ComputerHostPicker";
 
 type Phase =
   | "checking"
@@ -90,12 +81,9 @@ function nextRunLabel(at: number | null) {
 
 export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrowser?: (botId: string) => void }) {
   const { state, dispatch } = useStore();
-  const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
-  const localAvailable = capabilities.localComputer.available;
+  const { capabilities } = useDesktopCapabilities();
   const isLinux = capabilities.host.platform === "linux";
   const providerSupportsLocal = instanceSupportsLocalComputer(state.instances, bot);
-  const localSelectable = localComputerSelectable({ capabilities, providerSupportsLocal });
-  const [localAutoWarning, setLocalAutoWarning] = useState(false);
   const localDisabledReason = localComputerDisabledReason({ capabilities, providerSupportsLocal });
   const [phase, setPhase] = useState<Phase>("checking");
   const [boxState, setBoxState] = useState<string | null>(null);
@@ -125,7 +113,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
   const selectedInstance = state.instances.find(
     (instance) => instance.instanceId === bot.modelSelection.instanceId,
   );
-  const hosts = useFleetHosts();
+  const fleetVm = useFleetVmLocation();
   const reconstructedEngine = selectedInstance?.driverKind === "grokReconstructed";
   const reconstructedComputerNotice =
     "Grok Reconstructed supports chat, roster, and transcript history only. Computer control, Local VM, attachments, queueing, and connected tools stay off for this engine.";
@@ -170,12 +158,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
       selectedInstance.capabilities?.computerMcp &&
       selectedInstance.driverKind !== "boxAgent",
   );
-  const computerToolSupported = selectedInstance?.capabilities?.computerMcp === true;
-  const vpsSupported = Boolean(computerToolSupported && selectedInstance?.driverKind !== "boxAgent");
   const cloudBackend = bot.cloudBackend ?? "box";
-  const cloudSupported = cloudBackend === "vps"
-    ? vpsSupported
-    : computerToolSupported || selectedInstance?.driverKind === "boxAgent";
   const botRoutines = state.routines
     .filter((routine) => routine.botId === bot.id)
     .sort((a, b) => Number(b.enabled) - Number(a.enabled) || (a.nextRunAt ?? Infinity) - (b.nextRunAt ?? Infinity));
@@ -204,10 +187,6 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
       setVmFrame(DESKTOP_DEMO_SCREEN_DATA_URL);
       return;
     }
-    if (bot.computer === "off") {
-      setPhase("off");
-      return;
-    }
     if (reconstructedEngine) {
       // Reconstructed has no MCP/computer integration. Do not even inspect
       // Box/VPS/Local VM state for Auto: doing so could provision a desktop
@@ -215,190 +194,56 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
       setPhase("error");
       return;
     }
-    if (bot.computer === "local") {
-      if (!providerSupportsLocal) {
-        setError(reconstructedEngine ? null : "This model engine cannot control this computer. Choose Claude or an ACP engine.");
-      }
-      setPhase(capabilitiesReady && localAvailable && providerSupportsLocal ? "local" : "local-unavailable");
-      return;
+    if (!vmSupported) {
+      setError("This model engine cannot drive the Linux VM. Choose Claude or an ACP engine to control it.");
     }
-    if (bot.computer === "vm" || (isWebClientMode() && !bot.computer)) {
-      if (!vmSupported && bot.computer === "vm") {
-        setError(reconstructedEngine ? null : "This model engine cannot drive the Linux VM. Choose Claude or an ACP engine to control it.");
-      }
-      let retryTimer: number | undefined;
-      api(`/api/bots/${bot.id}/local-computer`)
-        .then((rawStatus) => {
-          if (!alive) return;
-          const status: LocalVmStatus = rawStatus;
-          setVmStatus(status);
-          // parse at the boundary: our own status endpoint sends a string or nothing
-          const viewerUrl = String(status.viewer_url ?? "");
-          if (viewerUrl.startsWith("http")) setVmViewerUrl(viewerUrl);
-          if (status.ready) {
-            vmReadinessAttempts.current = 0;
-            setPhase("vm");
-          } else if (
-            status.container === "running" &&
-            status.imageMatches &&
-            status.managed &&
-            status.network === "loopback" &&
-            status.security === "hardened" &&
-            status.persistence === "durable" &&
-            !status.desktopReady &&
-            vmReadinessAttempts.current < 15
-          ) {
-            vmReadinessAttempts.current += 1;
-            setError(null);
-            setPhase("checking");
-            retryTimer = window.setTimeout(() => setRetry((n) => n + 1), 2000);
-          }
-          else {
-            const canCreateHere =
-              status.mode === "per-bot" &&
-              status.container === "missing" &&
-              status.image &&
-              status.create_supported;
-            setError(canCreateHere ? null : `${status.problem ?? "The Local VM is not ready"}. Open App Settings → Local VM.`);
-            setPhase("vm-unavailable");
-          }
-        })
-        .catch((e) => {
-          if (!alive) return;
-          setError(e.message);
-          setPhase("vm-unavailable");
-        });
-      return () => {
-        alive = false;
-        if (retryTimer !== undefined) window.clearTimeout(retryTimer);
-      };
-    }
-    if (bot.computer === "cloud" && !cloudSupported) {
-      setError(reconstructedEngine ? null : "This model engine cannot use cloud computer tools. Choose Claude, an ACP engine, or the Computer engine.");
-      setPhase("error");
-      return;
-    }
-    if (bot.computer !== "cloud" && !capabilitiesReady) return;
-    if (cloudBackend === "vps") {
-      const autoLocal =
-        !isLinux && bot.computer !== "cloud" && capabilitiesReady && localSelectable;
-      if (!vpsSupported) {
-        if (autoLocal) setPhase("local");
-        else {
-          setError("This model engine cannot use a self-hosted VPS. Choose Claude or an ACP engine, or switch the cloud backend to Box.");
-          setPhase("error");
-        }
-        return;
-      }
-      api(`/api/bots/${bot.id}/computer`)
-        .then((rawStatus) => {
-          if (!alive) return;
-          const status: VpsComputerStatus = rawStatus;
-          setVpsStatus(status);
-          if (!status.configured) {
-            if (autoLocal) setPhase("local");
-            else {
-              setError("Add the VPS SSH config alias in App Settings → Connections.");
-              setPhase("vps-unconfigured");
-            }
-            return;
-          }
-          if (status.ready) {
-            setBoxState(status.container ?? null);
-            setPhase("ready");
-            return;
-          }
-          // App updates can bump IMAGE_LAYER_VERSION while this bot still has
-          // a managed container from the previous release. Provision refuses
-          // to overwrite it by design, so surface the explicit replacement
-          // path instead of automatically issuing a request that can only 409.
-          if (vpsComputerNeedsReplacement(status)) {
-            setError(status.problem);
-            setPhase("vps-incompatible");
-            return;
-          }
-          if (bot.computer === "cloud") {
-            setPhase("starting");
-            return api(`/api/bots/${bot.id}/computer/provision`, { method: "POST" }).then((result) => {
-              if (!alive) return;
-              setBoxState(result.container ?? null);
-              if (result.ready) setPhase("ready");
-              else {
-                setError(result.problem ?? "The VPS Cua desktop is not ready yet");
-                setPhase("error");
-              }
-            });
-          }
-          if (autoLocal) {
-            setPhase("local");
-            return;
-          }
-          setBoxState(status.container ?? null);
-          setError(
-            bot.autoStartVps
-              ? `${status.problem ?? "No ready VPS container"}. Auto will prepare or wake it when this bot next works.`
-              : `${status.problem ?? "No ready VPS container"}. Enable Start VPS automatically below, or choose Cloud to provision it.`,
-          );
-          setPhase(status.container === "stopped" ? "vps-stopped" : "vps-unconfigured");
-        })
-        .catch((e) => {
-          if (!alive) return;
-          setError(e.message);
-          setPhase("error");
-        });
-      return () => {
-        alive = false;
-      };
-    }
-    // cloud, or auto (cloud box wins when one exists, else local in-app)
-    api(`/api/bots/${bot.id}/computer`)
-      .then((status) => {
+    let retryTimer: number | undefined;
+    api(`/api/bots/${bot.id}/local-computer`)
+      .then((rawStatus) => {
         if (!alive) return;
-        const autoLocal = autoSelectsLocalComputer({
-          platform: capabilities.host.platform,
-          computer: bot.computer,
-          capabilitiesReady,
-          localSelectable,
-        });
-        if (!status.configured) {
-          setPhase(autoLocal ? "local" : "unconfigured");
-          return;
+        const status: LocalVmStatus = rawStatus;
+        setVmStatus(status);
+        const viewerUrl = String(status.viewer_url ?? "");
+        if (viewerUrl.startsWith("http")) setVmViewerUrl(viewerUrl);
+        if (status.ready) {
+          vmReadinessAttempts.current = 0;
+          setPhase("vm");
+        } else if (
+          status.container === "running" &&
+          status.imageMatches &&
+          status.managed &&
+          status.network === "loopback" &&
+          status.security === "hardened" &&
+          status.persistence === "durable" &&
+          !status.desktopReady &&
+          vmReadinessAttempts.current < 15
+        ) {
+          vmReadinessAttempts.current += 1;
+          setError(null);
+          setPhase("checking");
+          retryTimer = window.setTimeout(() => setRetry((n) => n + 1), 2000);
+        } else {
+          const canDeploy = !fleetVm.blockReason && (status.container === "missing" || status.create_supported || Boolean(status.image));
+          setError(canDeploy ? fleetVm.blockReason : `${status.problem ?? "The Linux VM is not ready"}. Pick a fleet machine and Deploy.`);
+          setPhase("vm-unavailable");
         }
-        if (!status.box && autoLocal) {
-          setPhase("local");
-          return;
-        }
-        setPhase("starting");
-        return api(`/api/bots/${bot.id}/computer/provision`, { method: "POST" }).then((r) => {
-          if (!alive) return;
-          setBoxState(r.state ?? null);
-          setPhase("ready");
-        });
       })
       .catch((e) => {
         if (!alive) return;
         setError(e.message);
-        setPhase("error");
+        setPhase("vm-unavailable");
       });
     return () => {
       alive = false;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
   }, [
     bot.id,
-    bot.computer,
-    bot.computerHostId,
-    bot.autoStartVps,
-    cloudBackend,
     retry,
-    capabilitiesReady,
-    localSelectable,
-    isLinux,
-    providerSupportsLocal,
     reconstructedEngine,
     vmSupported,
-    cloudSupported,
-    vpsSupported,
-    state.config?.vps?.sshAlias,
+    fleetVm.blockReason,
+    fleetVm.hostId,
   ]);
 
   // cloud preview: SSE frames win while the bot works; otherwise poll.
@@ -636,6 +481,9 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
     setVmStatus(null);
     vmReadinessAttempts.current = 0;
     try {
+      if (fleetVm.selectedId && fleetVm.selectedId !== fleetVm.hostId) {
+        await fleetVm.save(fleetVm.selectedId);
+      }
       if (action !== "vm-create") {
         await api(`/api/bots/${bot.id}/local-computer/remove`, {
           method: "POST",
@@ -868,23 +716,23 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
                 </button>
               )}
               {phase === "vm-unavailable" && !reconstructedEngine && (
-                vmStatus?.mode === "per-bot" && vmStatus.image && vmStatus.create_supported ? (
-                  <button
-                    onClick={() => void runVmAction(vmStatus.container === "missing" ? "vm-create" : "vm-recreate")}
-                    disabled={pending !== null}
-                    className="mt-1 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-50"
-                  >
-                    {(pending === "vm-create" || pending === "vm-recreate") && (
-                      <Loader2 size={13} className="mr-1.5 inline animate-spin" />
-                    )}
-                    {vmStatus.container === "missing" ? `Create ${bot.name}'s VM` : `Replace ${bot.name}'s VM`}
-                  </button>
-                ) : (
+                fleetVm.blockReason ? (
                   <button
                     onClick={openVmSettings}
                     className="mt-1 rounded-lg bg-control px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover"
                   >
                     Open Local VM setup
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => void runVmAction("vm-create")}
+                    disabled={pending !== null}
+                    className="mt-1 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-50"
+                  >
+                    {pending === "vm-create" && (
+                      <Loader2 size={13} className="mr-1.5 inline animate-spin" />
+                    )}
+                    Deploy
                   </button>
                 )
               )}
@@ -985,97 +833,22 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
         </div>
 
         <div className="mt-2">
-          <div className="mb-1 text-[11.5px] font-medium text-ink-secondary">Runs on</div>
-          <div className="flex overflow-hidden rounded-lg border border-hairline/40">
-            {(
-              [
-                ["cloud", "Cloud"],
-                ["vm", "Linux VM"],
-                ["local", "This host"],
-                ["off", "Off"],
-              ] as const
-            ).map(([mode, label], i) => {
-              const disabled =
-                (mode === "cloud" && !cloudSupported) ||
-                (mode === "vm" && reconstructedEngine) ||
-                (mode === "local" && !localSelectable && !isWebClientMode());
-              const unavailableTitle =
-                mode === "vm" && reconstructedEngine
-                  ? "Grok Reconstructed does not provide Local VM control"
-                  : mode === "cloud" && !cloudSupported
-                    ? reconstructedEngine ? "Grok Reconstructed does not provide computer control" : "This model engine cannot use cloud computer tools"
-                    : mode === "local" && !localSelectable
-                      ? localDisabledReason ?? "Local computer control isn't ready"
-                      : undefined;
-              return (
-                <button
-                  key={mode}
-                  disabled={disabled}
-                  title={unavailableTitle}
-                  onClick={() => {
-                    if (mode === bot.computer && mode !== "vm" && mode !== "local") return;
-                    const hostId = mode === "vm"
-                      ? preferredHostId(hosts, "local-vm", bot.computerHostId)
-                      : mode === "local"
-                        ? preferredHostId(hosts, "shell", bot.computerHostId)
-                        : undefined;
-                    if (mode === "local" && bot.autoApprove) setLocalAutoWarning(true);
-                    else {
-                      dispatch({
-                        type: "updateBot",
-                        botId: bot.id,
-                        patch: {
-                          computer: mode,
-                          ...(hostId && (mode === "vm" || mode === "local") ? { computerHostId: hostId } : {}),
-                        },
-                      });
-                    }
-                  }}
-                  className={cn(
-                    "flex-1 py-1 text-[11.5px]",
-                    i > 0 && "border-l border-hairline/40",
-                    disabled && "cursor-not-allowed opacity-40",
-                    bot.computer === mode
-                      ? "bg-control text-ink"
-                      : "text-ink-secondary hover:bg-control/60 hover:text-ink",
-                  )}
-                >
-                  {label}
-                </button>
-              );
-            })}
+          <FleetVmLocationPicker
+            hosts={fleetVm.hosts}
+            value={fleetVm.hostId}
+            disabled={reconstructedEngine}
+            onChange={(hostId) => {
+              void fleetVm.save(hostId).then(() => setRetry((n) => n + 1)).catch((e) => {
+                setError(e instanceof Error ? e.message : String(e));
+              });
+            }}
+          />
+          <div className="mt-1.5 text-[11.5px] leading-relaxed text-ink-secondary">
+            {fleetVm.blockReason
+              ?? (vmStatus?.mode === "per-bot"
+                ? "This bot gets its own Linux container on that machine."
+                : "Every bot uses this Linux VM. Only one can drive the desktop at a time.")}
           </div>
-          {(bot.computer === "vm" || (isWebClientMode() && !bot.computer)) && (
-            <>
-              <ComputerHostPicker
-                hosts={hosts}
-                capability="local-vm"
-                value={bot.computerHostId}
-                onChange={(hostId) => dispatch({
-                  type: "updateBot",
-                  botId: bot.id,
-                  patch: { computer: "vm", computerHostId: hostId },
-                })}
-              />
-              <div className="mt-1.5 text-[11.5px] leading-relaxed text-ink-secondary">
-                {vmStatus?.mode === "per-bot"
-                  ? "This bot gets its own Linux container on that machine."
-                  : "Bots assigned here share one Linux VM. Only one can drive the desktop at a time."}
-              </div>
-            </>
-          )}
-          {bot.computer === "local" && (
-            <ComputerHostPicker
-              hosts={hosts}
-              capability="shell"
-              value={bot.computerHostId}
-              onChange={(hostId) => dispatch({
-                type: "updateBot",
-                botId: bot.id,
-                patch: { computer: "local", computerHostId: hostId },
-              })}
-            />
-          )}
         </div>
 
         {error && (
@@ -1231,47 +1004,6 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
         {!reconstructedEngine && <LocalScreenPreview />}
         {!reconstructedEngine && <LinuxLocalControl />}
         {!reconstructedEngine && <MacLocalControl />}
-
-          {(!bot.computer || bot.computer === "cloud") && !isDesktopDemoMode() && !reconstructedEngine && (
-            <>
-              <CloudBackendPicker
-                value={cloudBackend}
-                vpsSupported={vpsSupported}
-                onChange={(backend) => dispatch({ type: "updateBot", botId: bot.id, patch: { cloudBackend: backend } })}
-              />
-              {!bot.computer && cloudBackend === "vps" && (
-                <div className="mt-3 flex items-center justify-between gap-4 rounded-lg bg-inset px-3 py-2.5">
-                  <div className="min-w-0">
-                    <div className="text-[13px] text-ink">Start VPS automatically</div>
-                    <div className="mt-0.5 text-[11.5px] text-ink-secondary">
-                      Off by default. When enabled, Auto may create or wake this bot's managed container.
-                    </div>
-                  </div>
-                  <button
-                    role="switch"
-                    aria-checked={Boolean(bot.autoStartVps)}
-                    aria-label="Start VPS automatically"
-                    onClick={() => dispatch({
-                      type: "updateBot",
-                      botId: bot.id,
-                      patch: { autoStartVps: !bot.autoStartVps },
-                    })}
-                    className={cn(
-                      "relative h-6 w-11 shrink-0 rounded-full transition-colors",
-                      bot.autoStartVps ? "bg-accent" : "bg-control",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "absolute top-[3px] size-[18px] rounded-full bg-white transition-all",
-                        bot.autoStartVps ? "left-[22px]" : "left-[4px]",
-                      )}
-                    />
-                  </button>
-                </div>
-              )}
-            </>
-          )}
       </div>
       )}
       {creatingRoutine && (
@@ -1283,22 +1015,6 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
         />
       )}
     </aside>
-    <LocalComputerAutoWarning
-      open={localAutoWarning}
-      onCancel={() => setLocalAutoWarning(false)}
-      onConfirm={() => {
-        dispatch({
-          type: "updateBot",
-          botId: bot.id,
-          patch: {
-            computer: "local",
-            acknowledgeLocalAuto: true,
-            computerHostId: preferredHostId(hosts, "shell", bot.computerHostId),
-          },
-        });
-        setLocalAutoWarning(false);
-      }}
-    />
     </>
   );
 }

@@ -840,6 +840,7 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // Phone-writable config slices; the broad /api/config writer stays closed.
   { method: "PATCH", path: /^\/api\/config\/house-style$/ },
   { method: "PATCH", path: /^\/api\/config\/zai-key$/ },
+  { method: "PATCH", path: /^\/api\/local-vm\/location$/ },
 
   // Scrubbed bridge roster + revoke. Job audit/cancel stay off this list.
   { method: "GET", path: /^\/api\/bridges$/ },

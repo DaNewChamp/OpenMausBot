@@ -10,6 +10,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
 import { DATA_DIR } from "./data-dir.ts";
 import { parseJson, schemaIssue, type JsonObject, type JsonValue } from "./schema.ts";
+import { parseComputerHostId } from "../shared/computer-host.ts";
 
 export { DATA_DIR } from "./data-dir.ts";
 
@@ -66,6 +67,8 @@ const localVmConfigSchema = z.object({
     .min(MIN_LOCAL_VM_MAX_INSTANCES)
     .max(MAX_LOCAL_VM_MAX_INSTANCES)
     .optional(),
+  /** Fleet machine that hosts the shared (or per-bot) Linux VM. */
+  hostId: z.string().regex(/^[\w-]{0,80}$/).optional(),
 });
 const featureConfigSchema = z.object({
   /** Experimental desktop workflow recorder. Hidden unless explicitly enabled. */
@@ -165,8 +168,9 @@ export interface AppConfig {
   profile?: { name?: string; email?: string };
   rooms?: { turnTimeoutMinutes: number };
   /** Shared preserves the historical singleton. Per-bot gives every bot a
-   * separate container, durable workspace, viewer and lease. */
-  localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
+   * separate container, durable workspace, viewer and lease. hostId pins the
+   * VM to one paired fleet machine for every bot. */
+  localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number; hostId?: string };
   /** Opt-in product experiments. Every flag defaults to disabled. */
   features?: { skillRecorder?: boolean };
   /** App-wide permission behavior. Missing means ask every time. */
@@ -230,6 +234,13 @@ export function localVmMode(cfg: AppConfig): "shared" | "per-bot" {
 
 export function localVmMaxInstances(cfg: AppConfig): number {
   return cfg.localVm?.maxInstances ?? DEFAULT_LOCAL_VM_MAX_INSTANCES;
+}
+
+/** Paired machine that should host the Linux VM for every bot. */
+export function localVmHostId(cfg: AppConfig): string | null {
+  const parsed = parseComputerHostId(cfg.localVm?.hostId ?? null);
+  if (!parsed.ok) return null;
+  return parsed.computerHostId ?? null;
 }
 
 export function skillRecorderEnabled(cfg: AppConfig): boolean {

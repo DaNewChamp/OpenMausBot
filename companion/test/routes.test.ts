@@ -169,6 +169,7 @@ describe("what the app may do", () => {
     ["POST", "/api/routine-runs/run_1/seen"],
     ["PATCH", "/api/config/house-style"],
     ["PATCH", "/api/config/zai-key"],
+    ["PATCH", "/api/local-vm/location"],
     ["GET", "/api/connectors/catalog"],
     ["GET", "/api/connectors/connected"],
     ["GET", "/api/connectors"],

@@ -2320,7 +2320,7 @@ describe("harness HTTP API", () => {
     const first = (await api("POST", "/api/bots")).body.bot;
     const second = (await api("POST", "/api/bots")).body.bot;
     const before = await api("GET", "/api/config");
-    expect(before.body.localVm).toEqual({ mode: "shared", maxInstances: 2 });
+    expect(before.body.localVm).toEqual({ mode: "shared", maxInstances: 2, hostId: null });
 
     const shared = await api("GET", `/api/bots/${first.id}/local-computer`);
     expect(shared.status).toBe(200);
@@ -2330,7 +2330,7 @@ describe("harness HTTP API", () => {
       localVm: { mode: "per-bot", maxInstances: 3 },
     });
     expect(saved.status).toBe(200);
-    expect(saved.body.localVm).toEqual({ mode: "per-bot", maxInstances: 3 });
+    expect(saved.body.localVm).toEqual({ mode: "per-bot", maxInstances: 3, hostId: null });
 
     const [firstStatus, secondStatus] = await Promise.all([
       api("GET", `/api/bots/${first.id}/local-computer`),
@@ -2349,6 +2349,24 @@ describe("harness HTTP API", () => {
     const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
     expect(disk.localVm).toEqual({ mode: "per-bot", maxInstances: 3 });
     await api("PATCH", "/api/config", { localVm: { mode: "shared", maxInstances: 2 } });
+  });
+
+  it("persists one fleet VM location for every bot", async () => {
+    const saved = await api("PATCH", "/api/local-vm/location", { hostId: "bridge-mini" });
+    expect(saved.status).toBe(200);
+    expect(saved.body.localVm).toMatchObject({ hostId: "bridge-mini", mode: "shared" });
+
+    const config = await api("GET", "/api/config");
+    expect(config.body.localVm.hostId).toBe("bridge-mini");
+
+    const cleared = await api("PATCH", "/api/local-vm/location", { hostId: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.localVm.hostId).toBeNull();
+
+    const extra = await api("PATCH", "/api/local-vm/location", { hostId: "bridge-mini", mode: "shared" });
+    expect(extra.status).toBe(400);
+    const bad = await api("PATCH", "/api/local-vm/location", { hostId: "../etc" });
+    expect(bad.status).toBe(400);
   });
 
   it("keeps an active turn alive when only the room timeout changes", async () => {

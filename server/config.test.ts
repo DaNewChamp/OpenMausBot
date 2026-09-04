@@ -12,6 +12,7 @@ import {
   instanceConfigs,
   isValidSshAlias,
   loadConfig,
+  localVmHostId,
   localVmMaxInstances,
   localVmMode,
   parseConfigPatch,
@@ -82,6 +83,13 @@ describe("configuration boundaries", () => {
     });
     expect(localVmMode({ localVm: { mode: "per-bot" } })).toBe("per-bot");
     expect(localVmMaxInstances({ localVm: { maxInstances: 3 } })).toBe(3);
+    expect(localVmHostId({})).toBeNull();
+    expect(parseConfigPatch({ localVm: { hostId: "bridge-mini" } })).toEqual({
+      localVm: { hostId: "bridge-mini" },
+    });
+    expect(localVmHostId({ localVm: { hostId: "bridge-mini" } })).toBe("bridge-mini");
+    expect(localVmHostId({ localVm: { hostId: "" } })).toBeNull();
+    expect(() => parseConfigPatch({ localVm: { hostId: "../etc" } })).toThrow("localVm.hostId");
   });
 
   it("keeps experimental features off by default and accepts an explicit opt-in", () => {

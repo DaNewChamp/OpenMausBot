@@ -27,7 +27,6 @@ import {
   pickComputerDestinationPatch,
   type BotUpdatePatch,
 } from "./bot-patch-queue";
-import { hostsWithCapability, parseFleetHosts, preferredHostId } from "@/lib/fleet-hosts";
 import { skillRecorderEnabled } from "@/lib/feature-flags";
 import { desktopDemoFixture, isDesktopDemoMode } from "@/lib/desktop-demo";
 import { loadRightRailOpen } from "@/lib/shell-layout";
@@ -314,7 +313,7 @@ export interface ConfigStatus {
   box: { configured: boolean };
   vps: { configured: boolean; sshAlias: string };
   rooms: { turnTimeoutMinutes: number };
-  localVm: { mode: "shared" | "per-bot"; maxInstances: number };
+  localVm: { mode: "shared" | "per-bot"; maxInstances: number; hostId?: string | null };
   opencodeGo?: { configured: boolean };
   zai?: { configured: boolean };
   /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
@@ -1599,25 +1598,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "newBot":
-          void (async () => {
-            let payload: Record<string, unknown> = {};
-            if (isWebClientMode()) {
-              try {
-                const hosts = parseFleetHosts(await api("/api/bridges"));
-                const vmHost = preferredHostId(hosts, "local-vm");
-                if (vmHost && hostsWithCapability(hosts, "local-vm").filter((host) => host.online).length === 1) {
-                  payload = { computer: "vm", computerHostId: vmHost };
-                }
-              } catch {
-                /* create without a pin if the roster is unreachable */
-              }
-            }
-            const { bot } = await api("/api/bots", {
-              method: "POST",
-              body: JSON.stringify(payload),
-            });
-            rawDispatch({ type: "botAdded", bot });
-          })().catch(showError);
+          api("/api/bots", { method: "POST", body: "{}" })
+            .then(({ bot }) => rawDispatch({ type: "botAdded", bot }))
+            .catch(showError);
           break;
         case "duplicateBot": {
           const source = stateRef.current.bots.find((b) => b.id === action.botId);
