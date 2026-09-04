@@ -571,8 +571,10 @@ const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
 
 function localVmRelayOpts(bot: { id: string; computerHostId?: string }) {
   const hostId = localVmHostId(cfg) ?? bot.computerHostId;
+  // In shared mode every bot drives one VM, so the bridge must get one
+  // identity, not the bot id — otherwise each bot silently gets its own container.
   return {
-    botId: bot.id,
+    botId: localVmMode(cfg) === "per-bot" ? bot.id : SHARED_LOCAL_VM_TARGET.key,
     ...(hostId ? { bridgeId: hostId } : {}),
   };
 }

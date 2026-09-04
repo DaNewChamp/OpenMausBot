@@ -49,6 +49,21 @@ export interface LocalVmTarget {
   label: string;
 }
 
+/** The harness sends this in place of a bot id when Local VM mode is shared. */
+export const SHARED_LOCAL_VM_KEY = "shared";
+
+export const SHARED_LOCAL_VM_TARGET: LocalVmTarget = {
+  key: SHARED_LOCAL_VM_KEY,
+  containerName: LOCAL_VM_CONTAINER,
+  workspaceDir: join(LOCAL_VM_DATA_DIR, "vm-home"),
+  label: SHARED_LOCAL_VM_KEY,
+};
+
+/** Resolve the harness identity to a container: "shared" is the one fleet VM, anything else is a bot. */
+export function localVmTargetFor(botId: string): LocalVmTarget {
+  return botId === SHARED_LOCAL_VM_KEY ? SHARED_LOCAL_VM_TARGET : perBotLocalVmTarget(botId);
+}
+
 /** Keep bridge identities byte-for-byte compatible with the harness. */
 export function perBotLocalVmTarget(botId: string): LocalVmTarget {
   const digest = createHash("sha256").update(botId).digest("hex");
@@ -95,7 +110,9 @@ function containerLabelsMatch(labels: Record<string, string> | undefined, target
   return (
     imageLabelsMatch(labels) &&
     labels?.[WORKSPACE_LABEL] === "1" &&
-    labels?.[TARGET_LABEL] === target.label
+    (target.key === SHARED_LOCAL_VM_KEY
+      ? labels?.[TARGET_LABEL] === undefined || labels?.[TARGET_LABEL] === target.label
+      : labels?.[TARGET_LABEL] === target.label)
   );
 }
 
@@ -364,7 +381,7 @@ async function cuaReady(
 }
 
 async function localVmStatus(botId: string, run: CommandRunner): Promise<LocalVmStatus> {
-  const target = perBotLocalVmTarget(botId);
+  const target = localVmTargetFor(botId);
   const status = emptyStatus(target);
   const runtime = await detectRuntime(run);
   status.runtime = runtime;
@@ -506,7 +523,7 @@ async function localVmAction(
   action: "run" | "stop" | "remove" | "recreate",
   run: CommandRunner,
 ): Promise<LocalVmStatus> {
-  const target = perBotLocalVmTarget(botId);
+  const target = localVmTargetFor(botId);
   const before = await localVmStatus(botId, run);
   const runtime = before.runtime;
   if (!runtime) throw new Error(before.problem ?? "No container runtime is installed");
@@ -532,7 +549,7 @@ async function localVmAction(
 async function localVmScreenshot(botId: string, run: CommandRunner): Promise<{ image: string }> {
   const status = await localVmStatus(botId, run);
   if (!status.ready || !status.runtime) throw new Error(status.problem ?? "The Local VM is not ready");
-  const target = perBotLocalVmTarget(botId);
+  const target = localVmTargetFor(botId);
   const screenshot = "/tmp/openmausbot-preview.jpg";
   await run(
     status.runtime,
@@ -565,7 +582,7 @@ export async function runLocalVmJob(job: LocalVmBridgeJob, run: CommandRunner = 
       if (!input) throw new Error("input required");
       const status = await localVmStatus(botId, run);
       if (!status.ready || !status.runtime) throw new Error(status.problem ?? "The Local VM is not ready");
-      const target = perBotLocalVmTarget(botId);
+      const target = localVmTargetFor(botId);
       const action =
         input.action === "click"
           ? "mouse"

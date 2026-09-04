@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { perBotLocalVmTarget, runLocalVmJob, type CommandRunner } from "../bridge/src/local-vm.ts";
+import {
+  localVmTargetFor,
+  perBotLocalVmTarget,
+  runLocalVmJob,
+  SHARED_LOCAL_VM_TARGET,
+  type CommandRunner,
+  type LocalVmTarget,
+} from "../bridge/src/local-vm.ts";
 import type { LocalVmBridgeJob } from "../bridge/src/types.ts";
 
 const image = "localhost/openmausbot/browser-vm:v1";
@@ -12,14 +19,25 @@ const jpeg = Buffer.concat([
   Buffer.from([0xff, 0xd9]),
 ]);
 
-function job(action: "run" | "recreate"): LocalVmBridgeJob {
+function job(action: "run" | "recreate", botId = "bot-test"): LocalVmBridgeJob {
   return {
     id: `job-${action}`,
     bridgeId: "bridge",
     timeoutMs: 120_000,
     createdAt: Date.now(),
     kind: "local-vm-action",
-    payload: { botId: "bot-test", action },
+    payload: { botId, action },
+  };
+}
+
+function statusJob(botId = "shared"): LocalVmBridgeJob {
+  return {
+    id: "job-status",
+    bridgeId: "bridge",
+    timeoutMs: 120_000,
+    createdAt: Date.now(),
+    kind: "local-vm-status",
+    payload: { botId },
   };
 }
 
@@ -36,17 +54,20 @@ function preparedImage() {
   }]);
 }
 
-function runningContainer(target: ReturnType<typeof perBotLocalVmTarget>) {
+function runningContainer(target: LocalVmTarget, options?: { omitTargetLabel?: boolean }) {
+  const labels: Record<string, string> = {
+    "com.openmausbot.local-vm": "1",
+    "com.openmausbot.computer-kind": "browser",
+    "com.openmausbot.image-layer": "1",
+    "com.openmausbot.workspace": "1",
+  };
+  if (!options?.omitTargetLabel) {
+    labels["com.openmausbot.local-vm-target"] = target.label;
+  }
   return JSON.stringify([{
     Config: {
       Image: image,
-      Labels: {
-        "com.openmausbot.local-vm": "1",
-        "com.openmausbot.computer-kind": "browser",
-        "com.openmausbot.image-layer": "1",
-        "com.openmausbot.workspace": "1",
-        "com.openmausbot.local-vm-target": target.label,
-      },
+      Labels: labels,
     },
     HostConfig: {
       Memory: 1 * 1024 * 1024 * 1024,
@@ -71,8 +92,11 @@ function runningContainer(target: ReturnType<typeof perBotLocalVmTarget>) {
   }]);
 }
 
-function fakeRuntime(initiallyCreated: boolean) {
-  const target = perBotLocalVmTarget("bot-test");
+function fakeRuntime(
+  initiallyCreated: boolean,
+  target: LocalVmTarget = perBotLocalVmTarget("bot-test"),
+  options?: { omitTargetLabel?: boolean },
+) {
   let created = initiallyCreated;
   const calls: string[] = [];
   const run: CommandRunner = async (command, args) => {
@@ -82,7 +106,7 @@ function fakeRuntime(initiallyCreated: boolean) {
     if (command === "docker" && args[0] === "image") return { stdout: preparedImage() };
     if (command === "docker" && args[0] === "inspect" && args[1] === target.containerName) {
       if (!created) throw new Error("No such container");
-      return { stdout: runningContainer(target) };
+      return { stdout: runningContainer(target, options) };
     }
     if (command === "docker" && args[0] === "run") {
       created = true;
@@ -141,5 +165,38 @@ describe("bridge Local VM lifecycle", () => {
     const runIndex = fake.calls.findIndex((call) => call.startsWith("docker run "));
     expect(removeIndex).toBeGreaterThan(-1);
     expect(runIndex).toBeGreaterThan(removeIndex);
+  });
+
+  it("creates a missing shared VM with openmausbot-computer name, target label, and /vm-home mount", async () => {
+    const target = localVmTargetFor("shared");
+    const fake = fakeRuntime(false, target);
+    const result = await runLocalVmJob(job("run", "shared"), fake.run);
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ container: "running", ready: true, desktopReady: true });
+    const runCall = fake.calls.find((call) => call.startsWith("docker run ")) ?? "";
+    expect(runCall).toContain("--name openmausbot-computer");
+    expect(runCall).toContain("--label com.openmausbot.local-vm-target=shared");
+    expect(runCall).toContain(`--mount type=bind,source=${SHARED_LOCAL_VM_TARGET.workspaceDir}`);
+    expect(SHARED_LOCAL_VM_TARGET.workspaceDir.endsWith("/vm-home")).toBe(true);
+    expect(runCall).not.toContain("/vm-homes");
+  });
+
+  it("treats a running container with no target label as managed in shared status", async () => {
+    const fake = fakeRuntime(true, SHARED_LOCAL_VM_TARGET, { omitTargetLabel: true });
+    const result = await runLocalVmJob(statusJob("shared"), fake.run);
+
+    expect(result.exitCode).toBe(0);
+    const status = JSON.parse(result.stdout);
+    expect(status.container).toBe("running");
+    expect(status.managed).toBe(true);
+    expect(status.ready).toBe(true);
+
+    const perBotFake = fakeRuntime(true, perBotLocalVmTarget("bot-test"), { omitTargetLabel: true });
+    const perBotResult = await runLocalVmJob(statusJob("bot-test"), perBotFake.run);
+    expect(perBotResult.exitCode).toBe(0);
+    const perBotStatus = JSON.parse(perBotResult.stdout);
+    expect(perBotStatus.managed).toBe(false);
+    expect(perBotStatus.ready).toBe(false);
   });
 });
