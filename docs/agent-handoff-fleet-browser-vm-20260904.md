@@ -161,3 +161,12 @@ Finished the remaining Local VM closeout on `feat/fleet-models-ui`. Pushed `pers
 Continued from `e9030320` in isolated branch `fix/fleet-shared-takeover-0904`. Resource-scoped human takeover, reassignment SSE refresh, and the readiness-to-execution takeover race are repaired and independently tested. Final gate: **3,478 Vitest tests passed / 19 skipped**, all four TypeScript checks, Vite build, and **34 Electron Node tests** passed. No deployment, merge, push, TestFlight, or container cleanup occurred.
 
 Important newly confirmed limitation: native `/api/internal/local-vm/invoke` still executes on the hub instead of relaying to the selected fleet bridge. Manual controls working on Windows do not establish native-bot execution parity. See [the shared takeover closeout](agent-handoff-shared-takeover-20260904.md) for exact workspace, verification evidence, and the next native-relay boundary.
+
+## Update 2026-09-04 4:31pm CDT (Grok 4.6, hub closeout)
+
+Fast-forwarded `fix/fleet-shared-takeover-0904` onto `feat/fleet-models-ui` (`e9030320` → `099664b0`). Pushed `personal` only. Did not merge to main, TestFlight, bun, `scripts/deploy-cloud-vps.mjs`, `deploy-bridge.mjs`, Oracle firewall, or stop/remove any Docker container.
+
+1. **Verify.** `tsc -p tsconfig.server.json --noEmit` exit 0; `tsc -p tsconfig.companion.build.json --noEmit` exit 0; focused vitest 4 files / 36 pass; `server/index.test.ts -t "takeover"` 1 pass / 108 skipped.
+2. **Hub redeploy (runbook, web and bridges unchanged).** Snapshots `server-pre-takeover-20260904212950` + `companion-pre-takeover-20260904212950`. rsync `dist-server` + `dist-companion`. Restart harness+sidecar. Health try 5: `{"app":"openmausbot","pid":3770827,"static":false}` (was 3713697).
+3. **Windows E2E (hostId `6b9c61f5-3517-4a59-9abe-25f3af311fef`, bot Chief Keef `94a201dd-537d-40be-8da3-e723532c982b`).** GET status HTTP 200 `ready:true` `desktopReady:true` `container_name:openmausbot-computer` `mode:shared`. POST screenshot HTTP 200 `data:image/jpeg;base64` len 7755. POST take HTTP 200 `held:true`. POST click HTTP 200 `{"text":"ok","isError":false}`. POST release HTTP 200 `held:false`.
+4. **Shared-hold second bot.** No second `computer=vm` bot exists (15 bots; only Chief Keef is `vm`). Cross-bot hold fan-out was not live-proved.
