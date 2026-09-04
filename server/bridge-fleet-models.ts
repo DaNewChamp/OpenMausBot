@@ -9,6 +9,7 @@ import { DATA_DIR } from "./data-dir.ts";
 import { HermesEngineError } from "./engines/contracts.ts";
 import {
   DEFAULT_FLEET_DISCOVERY_INTERVAL_MS,
+  FLEET_MODEL_PREFIX,
   fleetModelId,
   machineSlug,
   parseFleetChatResult,
@@ -179,6 +180,43 @@ export function listAdvertisedFleetModels(opts: { now?: number } = {}): FleetMod
     }
   }
   return rows;
+}
+
+/** One picker instance per advertised machine so Create bot / model
+ * selection lists fleet GPUs next to Cloud and Local engines. */
+export function advertisedFleetInstances(opts: { now?: number } = {}) {
+  const groups = new Map<string, {
+    instanceId: string;
+    driverKind: "fleet";
+    displayName: string;
+    snapshot: { state: "available"; version: string | null };
+    models: { default: string; options: Array<{ id: string; label: string }> };
+    capabilities: { computerMcp: false; agentsMcp: false; localComputerMcp: false };
+  }>();
+  for (const row of listAdvertisedFleetModels(opts)) {
+    const parsed = parseFleetModelId(row.id);
+    if (!parsed) continue;
+    const instanceId = `${FLEET_MODEL_PREFIX}${parsed.machineSlug}`;
+    const option = { id: row.id, label: row.label || parsed.modelId };
+    const existing = groups.get(instanceId);
+    if (existing) {
+      if (!existing.models.options.some((model) => model.id === option.id)) {
+        existing.models.options.push(option);
+      }
+      continue;
+    }
+    groups.set(instanceId, {
+      instanceId,
+      driverKind: "fleet",
+      displayName: row.machine || parsed.machineSlug,
+      snapshot: { state: "available", version: row.server },
+      models: { default: option.id, options: [option] },
+      capabilities: { computerMcp: false, agentsMcp: false, localComputerMcp: false },
+    });
+  }
+  return [...groups.values()].sort((a, b) =>
+    a.displayName.localeCompare(b.displayName) || a.instanceId.localeCompare(b.instanceId)
+  );
 }
 
 export function lookupFleetModel(id: string, opts: { now?: number } = {}): FleetModelLookup | null {

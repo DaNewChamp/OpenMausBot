@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { useStore, type Bot, type InstanceInfo, type ModelSelection } from "@/state/store";
 import { filterCustomModels, partitionCustomModels, suggestedModels } from "@/lib/custom-models";
-import { isCustomOnly, splitEngineRail } from "@/lib/engine-rail";
+import { isCustomOnly, isFleetInstance, splitEngineRail } from "@/lib/engine-rail";
 import { ProviderMark } from "./ProviderIcons";
 import { EngineSetup, needsCli, needsSignIn } from "./EngineSetup";
 import { EngineGroupLabel } from "./EngineGroupLabel";
@@ -157,14 +157,20 @@ export function ModelPicker({
     const selectedIsCustom = instance?.models.options.some(
       (option) => option.id === selection.model && option.custom,
     );
-    setPane(selectedIsCustom || isCustomOnly(instance) || official.length === 0 ? "custom" : "main");
+    setPane(
+      isFleetInstance(instance)
+        ? "main"
+        : selectedIsCustom || isCustomOnly(instance) || official.length === 0
+          ? "custom"
+          : "main",
+    );
     resetList();
   };
 
   const selectRail = (instance: InstanceInfo) => {
     setRailId(instance.instanceId);
     const official = instance.models.options.filter((option) => !option.custom);
-    setPane(isCustomOnly(instance) || official.length === 0 ? "custom" : "main");
+    setPane(isFleetInstance(instance) || !(isCustomOnly(instance) || official.length === 0) ? "main" : "custom");
     resetList();
   };
 
@@ -182,6 +188,12 @@ export function ModelPicker({
     });
     setOpen(false);
   };
+
+  const selectionLabel = active
+    ? isFleetInstance(active)
+      ? `${active.displayName} · ${modelLabel(active, selection.model)}`
+      : modelLabel(active, selection.model)
+    : selection.model;
 
   const official = railInstance?.models.options.filter((option) => !option.custom) ?? [];
   const custom = railInstance?.models.options.filter((option) => option.custom) ?? [];
@@ -231,11 +243,11 @@ export function ModelPicker({
         // resolved engine keeps its label — the mark is what would hide it)
         !contained && active && COMPACT_SQUARE,
       )}
-      title={active ? `${active.displayName} · ${modelLabel(active, selection.model)}` : selection.model}
+      title={active ? `${active.displayName} · ${modelLabel(active, selection.model)}` : selectionLabel}
     >
       {active && <ProviderMark driverKind={active.driverKind} size={14} />}
       <span className={cn("max-w-[160px] truncate", !contained && active && "@max-4xl/chathead:hidden")}>
-        {modelLabel(active, selection.model)}
+        {selectionLabel}
       </span>
       <ChevronDown
         size={14}
@@ -273,7 +285,7 @@ export function ModelPicker({
         >
           <div className="flex w-14 shrink-0 flex-col gap-1 overflow-y-auto border-r border-hairline/40 bg-panel p-2">
             {(() => {
-              const { subscription, custom: local } = splitEngineRail(pickerInstances);
+              const { subscription, custom: local, fleet } = splitEngineRail(pickerInstances);
               const railButton = (instance: InstanceInfo) => {
                 const selected = instance.instanceId === railInstance?.instanceId;
                 const attention = needsCli(instance) || needsSignIn(instance);
@@ -307,6 +319,10 @@ export function ModelPicker({
                     <EngineGroupLabel className="px-0 pb-0.5 pt-2 text-center text-[9px]">Local</EngineGroupLabel>
                   )}
                   {local.map(railButton)}
+                  {fleet.length > 0 && (
+                    <EngineGroupLabel className="px-0 pb-0.5 pt-2 text-center text-[9px]">Fleet</EngineGroupLabel>
+                  )}
+                  {fleet.map(railButton)}
                 </>
               );
             })()}
@@ -328,9 +344,11 @@ export function ModelPicker({
                     </span>
                   </div>
                   <div className="mt-0.5 text-[11.5px] text-ink-secondary">
-                    {pane === "custom"
-                      ? "Run this agent with a model already on your machine."
-                      : "Choose a model for this bot."}
+                    {isFleetInstance(railInstance)
+                      ? "Models this machine is advertising through its V Bot bridge."
+                      : pane === "custom"
+                        ? "Run this agent with a model already on your machine."
+                        : "Choose a model for this bot."}
                   </div>
                 </div>
 
@@ -445,7 +463,7 @@ export function ModelPicker({
                   </>
                 )}
 
-                {pane === "main" && (
+                {pane === "main" && !isFleetInstance(railInstance) && (
                   <button
                     type="button"
                     aria-label={

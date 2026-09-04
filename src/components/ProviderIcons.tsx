@@ -149,6 +149,7 @@ export function ProviderMark({ driverKind, size, className }: IconProps & { driv
     case "hermesAgent":
       return <HermesMark size={size} className={className} />;
     case "boxAgent":
+    case "fleet":
       return <ComputerMark size={size} className={className} />;
     case "piAgent":
       return <PiMark size={size} className={className} />;

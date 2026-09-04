@@ -194,6 +194,9 @@ export function classifyProvider(input: {
   const instanceId = compact(input.instanceId);
   const driverKind = compact(input.driverKind);
   const modelId = compact(input.modelId);
+  if (instanceId.startsWith("fleet/") || driverKind === "fleet" || modelId.startsWith("fleet/")) {
+    return instanceId.startsWith("fleet/") ? instanceId : "fleet";
+  }
   if (isGrokAuthDriver(driverKind, instanceId)) return "grok-auth";
   if (isOpenRouterDriver(driverKind, instanceId)) return "openrouter";
   if (modelId.includes("/") && !isOpenCodeDriver(driverKind, instanceId) && !isCursorDriver(driverKind, instanceId)) {

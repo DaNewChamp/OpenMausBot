@@ -8,6 +8,7 @@ import { BridgeRegistry } from "./bridge-registry.ts";
 import { handleBridgeRoutes } from "./bridge-routes.ts";
 import { encodeFleetChatResult, parseFleetModelId } from "../shared/bridge-fleet-contract.ts";
 import {
+  advertisedFleetInstances,
   dispatchFleetModelTurn,
   ingestLocalModelCatalog,
   lastKnownLocalModelsFor,
@@ -113,6 +114,22 @@ describe("hub ingest and GET /api/fleet-models", () => {
         label: "Qwen 2.5",
         server: "ollama",
         models: [{ id: "qwen2.5:7b", name: "Qwen 2.5" }],
+      },
+    ]);
+    expect(advertisedFleetInstances({ now: 1_000 })).toEqual([
+      {
+        instanceId: "fleet/mac-mini",
+        driverKind: "fleet",
+        displayName: "Mac mini",
+        snapshot: { state: "available", version: "ollama" },
+        models: {
+          default: "fleet/mac-mini/llama3.2",
+          options: [
+            { id: "fleet/mac-mini/llama3.2", label: "Llama 3.2" },
+            { id: "fleet/mac-mini/qwen2.5:7b", label: "Qwen 2.5" },
+          ],
+        },
+        capabilities: { computerMcp: false, agentsMcp: false, localComputerMcp: false },
       },
     ]);
   });

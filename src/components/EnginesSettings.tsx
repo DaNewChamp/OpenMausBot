@@ -10,7 +10,7 @@ import { Check, ChevronDown, Loader2, TriangleAlert } from "lucide-react";
 import { api, useStore, type InstanceInfo } from "@/state/store";
 import { EngineGroupLabel } from "./EngineGroupLabel";
 import { ProviderMark } from "./ProviderIcons";
-import { splitEngineRail } from "@/lib/engine-rail";
+import { isFleetInstance, splitEngineRail } from "@/lib/engine-rail";
 import { cn } from "@/lib/cn";
 import type { VBotEngineStatus } from "@/lib/vbot-engine";
 
@@ -373,7 +373,7 @@ export function EnginesSettings() {
         <div className="text-[13px] text-ink-secondary">No CLI engines detected yet.</div>
       )}
       {(() => {
-        const { subscription, custom } = splitEngineRail(rows);
+        const { subscription, custom } = splitEngineRail(rows.filter((row) => !isFleetInstance(row)));
         return (
           <>
             {subscription.length > 0 && <EngineGroupLabel>Cloud</EngineGroupLabel>}

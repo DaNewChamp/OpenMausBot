@@ -95,6 +95,23 @@ describe("classifyProvider", () => {
     expect(classifyProvider({ instanceId: "grok", driverKind: "grokAgent", modelId: "grok-4.6" })).toBe("grok-auth");
     expect(classifyProvider({ instanceId: "cursor", driverKind: "cursorAgent", modelId: "grok-4.6" })).toBe("cursor");
   });
+
+  it("keeps fleet machine ids out of OpenRouter even when the model id contains slashes", () => {
+    expect(
+      classifyProvider({
+        instanceId: "fleet/mac-mini",
+        driverKind: "fleet",
+        modelId: "fleet/mac-mini/llama3.2",
+      }),
+    ).toBe("fleet/mac-mini");
+    expect(
+      classifyProvider({
+        instanceId: "fleet/mac-mini",
+        driverKind: "fleet",
+        modelId: "fleet/mac-mini/lmstudio-community/Meta-Llama-3.1",
+      }),
+    ).toBe("fleet/mac-mini");
+  });
 });
 
 describe("normalizeModelLabel", () => {
@@ -106,6 +123,26 @@ describe("normalizeModelLabel", () => {
 });
 
 describe("sanitizeMobileProviderCatalog", () => {
+  it("groups fleet machines under their own provider, not OpenRouter", () => {
+    const catalog = sanitizeMobileProviderCatalog([
+      sample({
+        instanceId: "fleet/mac-mini",
+        driverKind: "fleet",
+        displayName: "Mac mini",
+        models: [
+          { id: "fleet/mac-mini/llama3.2", label: "Llama 3.2" },
+          { id: "fleet/mac-mini/lmstudio-community/Meta-Llama-3.1", label: "Llama 3.1" },
+        ],
+      }),
+    ]);
+    expect(catalog.providers.map((provider) => provider.id)).toEqual(["fleet/mac-mini"]);
+    expect(catalog.providers[0]?.label).toBe("Mac mini");
+    expect(catalog.providers[0]?.models.map((model) => model.id)).toEqual([
+      "fleet/mac-mini/llama3.2",
+      "fleet/mac-mini/lmstudio-community/Meta-Llama-3.1",
+    ]);
+  });
+
   it("orders named providers exactly and places remaining after them", () => {
     const catalog = sanitizeMobileProviderCatalog([
       sample({

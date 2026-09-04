@@ -28,6 +28,7 @@ import { appendDecision, readDecisions } from "./decision-log.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
 import { handleBridgeRoutes, isCompanionRequest } from "./bridge-routes.ts";
 import {
+  advertisedFleetInstances,
   dispatchFleetModelTurn,
   listAdvertisedFleetModels,
   lookupFleetModel,
@@ -4376,7 +4377,7 @@ function configStatus() {
  * mobile/provider projection. Disabled mode omits the additive field so old
  * `/api/instances` snapshots remain byte-for-byte compatible. */
 async function describeProviderInstances() {
-  const instances = await registry.describe();
+  const instances = [...await registry.describe(), ...advertisedFleetInstances()];
   if (!hermesRegistry.isEnabled) return instances;
   const hermes = await hermesRegistry.describe();
   return instances.map((instance) => {
