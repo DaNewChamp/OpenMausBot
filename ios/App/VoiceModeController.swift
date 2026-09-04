@@ -7,6 +7,13 @@
 // are never negotiated together, which MessageSpeaker already enforces by
 // pausing dictation before it plays.
 //
+// Long replies do not wait to be spoken whole: on the on-device engine the
+// watcher feeds the still-streaming text through VoiceReplyChunker and each
+// completed sentence is queued for speech as it lands (stream-and-speak).
+// The turn stays `speaking` until the text stream has closed AND the
+// utterance queue has drained. Hub and custom engines need the complete
+// text, so they keep the settle-then-speak shape.
+//
 // Approvals outrank the conversation: the moment a pending card appears on
 // this thread the whole session tears down and the screen goes back to the
 // transcript, where the card already renders.
@@ -38,6 +45,9 @@ final class VoiceModeController: ObservableObject {
     @Published private(set) var islandNote: String?
     /// The chat this session is talking to. Nil when idle and unused.
     @Published private(set) var chat: Chat?
+    /// When this session was opened — the time-in-call caption on the
+    /// voice screen. Nil when the session is not live.
+    @Published private(set) var callStartedAt: Date?
 
     private let dictation = SpeechDictation()
     private let speaker = MessageSpeaker()
@@ -67,6 +77,21 @@ final class VoiceModeController: ObservableObject {
     /// True after a real background/interruption so a launch `.active`
     /// scene-phase pulse cannot idle a session that never left the screen.
     private var suspendedFromBackground = false
+
+    /// Stream-and-speak state for the current reply. `streamSpeakWanted`
+    /// is decided once per send — on-device engine, unmuted, the only
+    /// engine that can speak text it has not seen all of.
+    private var streamSpeakWanted = false
+    private var replyChunker: VoiceReplyChunker?
+    /// How much of the streamed reply the chunker has already seen.
+    private var fedStreamCount = 0
+    /// The text side is over: settled, tail flushed, pump closed. Only the
+    /// queue drain remains.
+    private var streamSettled = false
+    /// Sentences flow to the speech task through here; closing it is what
+    /// lets the queue drain and the turn end.
+    private var chunkPump: AsyncStream<String>.Continuation?
+    private var streamTask: Task<Void, Never>?
 
     private var threadId: String { chat?.threadId ?? "" }
 
@@ -106,6 +131,7 @@ final class VoiceModeController: ObservableObject {
         openedWithPendingApproval = session.state.pendingApprovals.contains { $0.threadId == chat.threadId }
         didShutdown = false
         suspendedFromBackground = false
+        callStartedAt = Date()
         Self.active = self
 
         if islandEnabled {
@@ -152,6 +178,7 @@ final class VoiceModeController: ObservableObject {
         suspendedFromBackground = true
         dictation.stop()
         speaker.stop()
+        endStreamTurn()
         micFollower.reset()
         voiceFollower.reset()
         micLevel = 0
@@ -194,6 +221,7 @@ final class VoiceModeController: ObservableObject {
         if Self.active === self { Self.active = nil }
         watchTask?.cancel()
         watchTask = nil
+        endStreamTurn()
         approvalObserver?.cancel()
         approvalObserver = nil
         interruptionObserver?.cancel()
@@ -213,6 +241,7 @@ final class VoiceModeController: ObservableObject {
         islandNote = nil
         phase = .idle
         chat = nil
+        callStartedAt = nil
     }
 
     // MARK: - Input
@@ -279,6 +308,8 @@ final class VoiceModeController: ObservableObject {
             beginSend(heard)
         case .speakReply:
             beginSpeaking()
+        case .speakStreamReply:
+            beginStreamSpeaking()
         case .stopAll:
             shutdown()
             onRequestClose?()
@@ -288,6 +319,7 @@ final class VoiceModeController: ObservableObject {
     private func beginListening() {
         watchTask?.cancel()
         watchTask = nil
+        endStreamTurn()
         phase = .listening
         heard = ""
         replyText = ""
@@ -331,6 +363,10 @@ final class VoiceModeController: ObservableObject {
         voiceLevel = 0
         sentAt = Date()
         sawBusy = false
+        streamSpeakWanted = !isMuted && VoiceOutputSettings.load().engine == .onDevice
+        replyChunker = streamSpeakWanted ? VoiceReplyChunker() : nil
+        fedStreamCount = 0
+        streamSettled = false
         preSendBotLineId = session.state
             .visibleTranscript(forThread: threadId)
             .last(where: { $0.role == .bot && $0.kind == .text })?.id
@@ -354,8 +390,11 @@ final class VoiceModeController: ObservableObject {
         watchTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                if self.phase != .thinking { return }
+                // A stream-and-speak turn keeps the loop alive through the
+                // speaking phase — it is still feeding sentences in.
+                if self.phase != .thinking, self.chunkPump == nil { return }
                 if let session = self.session {
+                    self.ingestStream(session.state)
                     self.evaluateSettled(session.state)
                 }
                 try? await Task.sleep(nanoseconds: 300_000_000)
@@ -363,10 +402,59 @@ final class VoiceModeController: ObservableObject {
         }
     }
 
+    /// Stream-and-speak: feed the growing reply text through the sentence
+    /// chunker and queue every completed sentence for speech. The first
+    /// sentence starts the speaking turn at any length, so the bot is
+    /// heard before the reply has finished arriving. The transcript line
+    /// mirrors the stream as it grows.
+    private func ingestStream(_ state: CompanionState) {
+        guard streamSpeakWanted, !streamSettled else { return }
+        let streamed = state.streaming[threadId] ?? ""
+        guard streamed.count > fedStreamCount else { return }
+        replyText = streamed
+        let start = streamed.index(streamed.startIndex, offsetBy: fedStreamCount)
+        let addition = String(streamed[start...])
+        fedStreamCount = streamed.count
+        for chunk in replyChunker?.feed(addition) ?? [] {
+            enqueueStreamChunk(chunk)
+        }
+    }
+
+    private func enqueueStreamChunk(_ chunk: String) {
+        let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if chunkPump == nil {
+            fire(.streamStarted)
+            guard phase == .speaking else { return }
+        }
+        chunkPump?.yield(trimmed)
+    }
+
+    /// Stream-and-speak: the first sentence is ready. The rest queue
+    /// through the pump as they complete, and the turn ends when the text
+    /// stream has closed and the utterance queue has drained.
+    private func beginStreamSpeaking() {
+        guard let session else { return }
+        phase = .speaking
+        island?.update(phase)
+        let (stream, continuation) = AsyncStream.makeStream(of: String.self)
+        chunkPump = continuation
+        streamTask = Task { [weak self] in
+            guard let self else { return }
+            let drained = await self.speaker.speakStream(chunks: stream, session: session)
+            // A stopped stream already moved the loop along; only a
+            // drained one ends the turn from here.
+            guard self.phase == .speaking, drained else { return }
+            self.fire(.replySpoken)
+        }
+    }
+
     /// The reply has settled when the bot left busy after having been busy,
     /// or a new bot text line exists while not busy, or the wait ran out.
+    /// A stream-and-speak turn is watched through the speaking phase too —
+    /// the stream ends here even though speaking began sentences ago.
     private func evaluateSettled(_ state: CompanionState) {
-        guard phase == .thinking, let sentAt else { return }
+        guard let sentAt, phase == .thinking || (streamSpeakWanted && !streamSettled) else { return }
         let busy = bot(in: state)?.busy == true
         if busy { sawBusy = true }
         let lastBotLine = state.visibleTranscript(forThread: threadId)
@@ -382,8 +470,44 @@ final class VoiceModeController: ObservableObject {
             } else {
                 replyText = ""
             }
-            fire(.replySettled(hasReply: !replyText.isEmpty, shouldSpeak: !isMuted))
+            if streamSpeakWanted {
+                settleStream()
+            } else {
+                fire(.replySettled(hasReply: !replyText.isEmpty, shouldSpeak: !isMuted))
+            }
         }
+    }
+
+    /// The text side of a stream-and-speak turn is over: flush whatever
+    /// partial sentence is left — nothing spoken stays dangling — close
+    /// the pump, and let the drain completion end the turn. A reply that
+    /// never produced a sentence falls back to the settled-reply event.
+    private func settleStream() {
+        streamSettled = true
+        if let tail = replyChunker?.flush() {
+            enqueueStreamChunk(tail)
+        }
+        chunkPump?.finish()
+        chunkPump = nil
+        if phase == .thinking {
+            // No sentence ever started speaking; the loop moves on now.
+            fire(.replySettled(hasReply: false, shouldSpeak: !isMuted))
+        }
+    }
+
+    /// Tear down the stream-and-speak machinery for the current reply.
+    /// Every exit path — barge-in, close, background, approval card, the
+    /// turn simply finishing — comes through here, so no pump, task, or
+    /// stale chunk outlives the turn.
+    private func endStreamTurn() {
+        chunkPump?.finish()
+        chunkPump = nil
+        streamTask?.cancel()
+        streamTask = nil
+        replyChunker = nil
+        fedStreamCount = 0
+        streamSettled = false
+        streamSpeakWanted = false
     }
 
     private func beginSpeaking() {
@@ -436,6 +560,7 @@ final class VoiceModeController: ObservableObject {
         speaker.stop()
         watchTask?.cancel()
         watchTask = nil
+        endStreamTurn()
         sentAt = nil
     }
 

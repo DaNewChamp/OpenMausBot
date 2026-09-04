@@ -10,6 +10,14 @@
 // existing rule that the mic and a playback route are never negotiated
 // together.
 //
+// Speaking is a stream even when the text arrives all at once: startStream
+// opens a generation, enqueue queues sentences onto the synthesizer (which
+// speaks queued utterances in order, natively), finishStream closes the
+// text side, and waitUntilDrained resolves when the last utterance finishes.
+// The VoiceUtteranceQueue carries the generation token, the pending count,
+// and the drain rule; a stop invalidates the generation so a sentence
+// enqueued around a barge-in is dropped instead of spoken.
+//
 // The synthesizer reports per word-range, not per sample, so the orb's
 // amplitude comes from AmplitudeEnvelope: each willSpeakRange bumps toward
 // a peak and a small timer lets it decay between words, which reads as
@@ -38,9 +46,16 @@ final class LocalTtsEngine: NSObject {
     var onAmplitude: ((Float) -> Void)?
 
     private let synthesizer = AVSpeechSynthesizer()
-    /// Resumed exactly once per clip, by the delegate callback or by a
-    /// stop — the same shape as MessageSpeaker's clip continuation.
-    private var clipContinuation: CheckedContinuation<Bool, Never>?
+    /// The current stream's generation token, pending-utterance count and
+    /// drain state.
+    private var stream = VoiceUtteranceQueue()
+    /// Utterances handed to the synthesizer and not yet finished or
+    /// cancelled — by identity, so a callback from a stopped stream's
+    /// utterance cannot be mistaken for the current stream's.
+    private var inFlight: Set<AVSpeechUtterance> = []
+    /// Resumed exactly once per drain wait, by the drain check or by a
+    /// stop — the same shape MessageSpeaker's clip continuation has.
+    private var drainContinuation: CheckedContinuation<Bool, Never>?
     private var envelope = AmplitudeEnvelope()
     private var pulseTimer: Timer?
     private var interruptionObserver: AnyCancellable?
@@ -65,36 +80,96 @@ final class LocalTtsEngine: NSObject {
     /// Speaks the whole text and returns when it finishes. Throws when the
     /// clip was stopped (a barge-in, a close, an interruption) or could not
     /// play; the caller's generation check decides whether anyone still
-    /// cares, exactly as the player path does.
+    /// cares, exactly as the player path does. One sentence in, one stream.
     func speak(text: String) async throws {
+        let generation = try startStream()
+        enqueue(text, generation: generation)
+        finishStream(generation: generation)
+        let finished = await waitUntilDrained(generation: generation)
+        guard finished else { throw EngineError.unplayable }
+    }
+
+    /// Stream-and-speak, step 1: negotiate the playback route — the caller
+    /// has already paused dictation — and open a fresh generation. Throws
+    /// when the route cannot be taken.
+    func startStream() throws -> Int {
         let audioSession = AVAudioSession.sharedInstance()
         try audioSession.setCategory(.playback, mode: .spokenAudio)
         try audioSession.setActive(true)
 
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier)
-
+        stream.stop()
         envelope = AmplitudeEnvelope()
         startPulse()
-        let finished: Bool = await withCheckedContinuation { continuation in
-            self.clipContinuation = continuation
-            self.synthesizer.speak(utterance)
+        return stream.generation
+    }
+
+    /// Whether this generation is still the one that may speak.
+    func streamIsActive(_ generation: Int) -> Bool {
+        stream.isActive(generation)
+    }
+
+    /// Stream-and-speak, step 2: queue one sentence. Stale generations are
+    /// dropped — the chunk was enqueued around a barge-in.
+    func enqueue(_ text: String, generation: Int) {
+        guard streamIsActive(generation),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier)
+        stream.enqueue()
+        inFlight.insert(utterance)
+        synthesizer.speak(utterance)
+    }
+
+    /// Stream-and-speak, step 3: the text is all here. The turn can end the
+    /// moment the queue drains.
+    func finishStream(generation: Int) {
+        guard streamIsActive(generation) else { return }
+        stream.finishStream()
+        resumeDrainIfReady()
+    }
+
+    /// Stream-and-speak, step 4: resolved when the last utterance finishes
+    /// (true) or the stream was stopped (false — a barge-in, a close, an
+    /// interruption).
+    func waitUntilDrained(generation: Int) async -> Bool {
+        guard streamIsActive(generation) else { return false }
+        if stream.isDrained {
+            endTurn()
+            return true
         }
-        stopPulse()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        guard finished else { throw EngineError.unplayable }
+        let finished: Bool = await withCheckedContinuation { continuation in
+            self.drainContinuation = continuation
+        }
+        endTurn()
+        return finished
     }
 
     func stop() {
         synthesizer.stopSpeaking(at: .immediate)
-        resumeClip(finished: false)
+        stream.stop()
+        inFlight.removeAll()
+        if let continuation = drainContinuation {
+            drainContinuation = nil
+            continuation.resume(returning: false)
+        }
         stopPulse()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
-    private func resumeClip(finished: Bool) {
-        guard let continuation = clipContinuation else { return }
-        clipContinuation = nil
-        continuation.resume(returning: finished)
+    /// The drain check: the last utterance is off the queue and the text
+    /// side is closed, so anything waiting on the drain can go home.
+    private func resumeDrainIfReady() {
+        guard stream.isDrained, let continuation = drainContinuation else { return }
+        drainContinuation = nil
+        continuation.resume(returning: true)
+    }
+
+    /// Playback over either way the turn ends: the envelope goes quiet and
+    /// the route is given back.
+    private func endTurn() {
+        stopPulse()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     private func startPulse() {
@@ -131,11 +206,20 @@ extension LocalTtsEngine: AVSpeechSynthesizerDelegate {
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.resumeClip(finished: true) }
+        Task { @MainActor in self.retire(utterance) }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.resumeClip(finished: false) }
+        Task { @MainActor in self.retire(utterance) }
+    }
+
+    /// One utterance is off the queue, finished or cancelled — unless it
+    /// belonged to a stream that was already stopped, in which case stop()
+    /// settled that stream's state and this is a stale echo.
+    private func retire(_ utterance: AVSpeechUtterance) {
+        guard inFlight.remove(utterance) != nil else { return }
+        stream.utteranceFinished()
+        resumeDrainIfReady()
     }
 }
 

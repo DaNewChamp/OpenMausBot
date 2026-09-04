@@ -111,6 +111,32 @@ final class MessageSpeaker: NSObject, ObservableObject {
         finish(generation: gen)
     }
 
+    /// Stream-and-speak, on-device only: the sentences of a reply that is
+    /// still streaming arrive through `chunks` and are queued for speech
+    /// as they come, so the bot starts talking before the text is all
+    /// here. Returns when the queue has drained (true) or the stream was
+    /// stopped (false — a barge-in, a close, an interruption, an engine
+    /// that could not start); the caller's phase check decides what the
+    /// loop does next, exactly as `speakForVoiceMode` does.
+    func speakStream(chunks: AsyncStream<String>, session: Session) async -> Bool {
+        // Pause the mic before the playback route is negotiated, not after.
+        dictation?.stop()
+        let generation: Int
+        do {
+            generation = try localEngine.startStream()
+        } catch {
+            session.actionError = "On-device speech could not play."
+            return false
+        }
+        for await chunk in chunks {
+            guard localEngine.streamIsActive(generation) else { return false }
+            localEngine.enqueue(chunk, generation: generation)
+        }
+        guard localEngine.streamIsActive(generation) else { return false }
+        localEngine.finishStream(generation: generation)
+        return await localEngine.waitUntilDrained(generation: generation)
+    }
+
     private func run(
         text: String,
         voiceId: String?,
