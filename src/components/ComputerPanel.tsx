@@ -937,7 +937,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
               onClick={openNativeEnginePicker}
               className="mt-2 rounded-lg bg-control px-3 py-1.5 text-[12px] font-medium text-ink hover:bg-raised-hover"
             >
-              Choose V Bot / OpenMaus engine
+              Choose Vi Bot engine
             </button>
           </div>
         )}

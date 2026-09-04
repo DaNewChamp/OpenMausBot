@@ -26,7 +26,7 @@ enum ProviderMarks {
         case "pi", "piagent": return "pi"
         case "box", "boxagent", "computer": return "Computer"
         case "openrouter": return "OpenRouter"
-        case "openmaus": return "OpenMaus"
+        case "openmaus": return "Vi Bot"
         case "minimax": return "MiniMax"
         default:
             if let fallback, !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

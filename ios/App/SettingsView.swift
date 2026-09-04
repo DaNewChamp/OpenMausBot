@@ -1646,12 +1646,12 @@ struct EngineSelectionView: View {
 
     private func engineFooter(_ sync: VBotEngineSync) -> String {
         if sync.fallback, let reason = sync.fallbackReason {
-            return "Using OpenMaus because Grok Reconstructed is unavailable: \(reason)"
+            return "Using Vi Bot because Grok Reconstructed is unavailable: \(reason)"
         }
         if sync.servingEngine == .grokReconstructed {
             return "V Bot is showing agents synced from Grok Bot 0.18 Reconstructed on this Mac."
         }
-        return "OpenMaus remains the default engine when Grok Reconstructed is unavailable."
+        return "Vi Bot remains the default engine when Grok Reconstructed is unavailable."
     }
 
     private func engineStatus(_ sync: VBotEngineSync) -> some View {

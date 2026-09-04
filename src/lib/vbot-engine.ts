@@ -298,7 +298,7 @@ function parseStatus(value: unknown): VBotEngineStatus | null {
     id,
     displayName: boundedLabel(
       item.displayName,
-      id === "openmaus" ? "OpenMaus" : "Grok Reconstructed",
+      id === "openmaus" ? "Vi Bot" : "Grok Reconstructed",
     ),
     state,
     ...(code ? { code } : {}),
@@ -399,7 +399,7 @@ function syntheticBot(
     title: previous?.title ?? "",
     description:
       previous?.description ??
-      `Synced from ${sync.activeSource === "grokReconstructed" ? "Grok Reconstructed" : "OpenMaus"}`,
+      `Synced from ${sync.activeSource === "grokReconstructed" ? "Grok Reconstructed" : "Vi Bot"}`,
     notifications: previous?.notifications ?? true,
     color: previous?.color ?? colorFor(row.id),
     unread: previous?.unread ?? false,

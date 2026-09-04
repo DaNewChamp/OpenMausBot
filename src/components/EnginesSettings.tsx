@@ -339,7 +339,7 @@ function VBotEngineChoice() {
                     {selected && <span className="text-[10.5px] font-normal text-accent">Selected</span>}
                   </span>
                   <span className="mt-0.5 block text-[11.5px] leading-relaxed text-ink-secondary">
-                    {unavailable ? engine.reason ?? "Unavailable on this computer." : engine.id === "grokReconstructed" ? "Use the local reconstructed desktop gateway." : "Use the OpenMaus control plane (default)."}
+                    {unavailable ? engine.reason ?? "Unavailable on this computer." : engine.id === "grokReconstructed" ? "Use the local reconstructed desktop gateway." : "Use the Vi Bot control plane (default)."}
                   </span>
                 </span>
               </button>
@@ -351,7 +351,7 @@ function VBotEngineChoice() {
       )}
       {state.engineSync?.fallback && state.engineSync.fallbackReason && (
         <div className="rounded-lg bg-warning/10 px-2.5 py-2 text-[11.5px] leading-relaxed text-warning">
-          Grok Reconstructed is selected but unavailable; actions stay blocked instead of silently using OpenMaus. {state.engineSync.fallbackReason}
+          Grok Reconstructed is selected but unavailable; actions stay blocked instead of silently using Vi Bot. {state.engineSync.fallbackReason}
         </div>
       )}
       {error && <div role="alert" className="text-[12px] text-danger">{error}</div>}

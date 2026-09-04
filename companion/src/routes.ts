@@ -943,7 +943,7 @@ export function denyReason({ path, method, authenticated }: RouteRequest): Denia
   if (isBridgeDaemonRoute(method, path)) return null;
 
   if (!authenticated) {
-    return { status: 401, error: "pair this device from Phone settings in OpenMausBot on your computer" };
+    return { status: 401, error: "pair this device from Phone settings in Vi Bot on your computer" };
   }
 
   if (ALLOWED.some((route) => route.method === method && route.path.test(path))) return null;

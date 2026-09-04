@@ -19,7 +19,7 @@ function sync(overrides: Partial<VBotEngineSync> = {}): VBotEngineSync {
     fallbackCode: null,
     fallbackReason: null,
     engines: [
-      { id: "openmaus", displayName: "OpenMaus", state: "available" },
+      { id: "openmaus", displayName: "Vi Bot", state: "available" },
       {
         id: "grokReconstructed",
         displayName: "Grok Reconstructed",

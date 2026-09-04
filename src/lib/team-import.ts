@@ -21,7 +21,7 @@ export function teamImportPreview(manifest: unknown): PendingTeamImport {
   }
   const root = manifest as Record<string, unknown>;
   if (root.format === "openmaus.package") return packagePreview(root, manifest);
-  if (root.format !== "openmaus.team") throw new Error("This is not a BotMRR playbook or legacy OpenMaus team.");
+  if (root.format !== "openmaus.team") throw new Error("This is not a BotMRR playbook or legacy Vi Bot team.");
   if (root.version !== 1 && root.version !== 2) throw new Error(`Team file version ${String(root.version)} is not supported.`);
   if (!root.team || typeof root.team !== "object" || Array.isArray(root.team)) {
     throw new Error("This team file is missing its team definition.");
