@@ -103,7 +103,12 @@ function hermesCapabilityDisabledResult() {
 async function handleJob(job: BridgeJob, signal?: AbortSignal) {
   if (job.kind === "shell") return runShellJob(job, signal);
   if (job.kind === "ssh-exec") return runSshJob(job, signal);
-  if (job.kind === "local-vm-status" || job.kind === "local-vm-action" || job.kind === "local-vm-screenshot") {
+  if (
+    job.kind === "local-vm-status"
+    || job.kind === "local-vm-action"
+    || job.kind === "local-vm-screenshot"
+    || job.kind === "local-vm-input"
+  ) {
     return runLocalVmJob(job);
   }
   if (job.kind === "hermes-signin") {

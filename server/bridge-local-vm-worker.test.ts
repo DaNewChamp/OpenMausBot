@@ -199,4 +199,21 @@ describe("bridge Local VM lifecycle", () => {
     expect(perBotStatus.managed).toBe(false);
     expect(perBotStatus.ready).toBe(false);
   });
+
+  it("dispatches a click through CDP on the shared VM", async () => {
+    const target = localVmTargetFor("shared");
+    const fake = fakeRuntime(true, target);
+    const result = await runLocalVmJob({
+      id: "job-input",
+      bridgeId: "bridge",
+      timeoutMs: 90_000,
+      createdAt: Date.now(),
+      kind: "local-vm-input",
+      payload: { botId: "shared", input: { action: "click", x: 100, y: 100, button: "left" } },
+    }, fake.run);
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ text: "ok", isError: false });
+    expect(fake.calls.some((call) => call.includes("openmausbot-cdp.mjs"))).toBe(true);
+  });
 });
