@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { validHermesBridgeProfile } from "../shared/bridge-hermes-contract.ts";
+import {
+  parseFleetChatJobPayload,
+  type FleetChatJobPayload,
+} from "../shared/bridge-fleet-contract.ts";
 
 export type BridgeCapability = "shell" | "local-vm" | "ssh-forward" | "hermes";
 
@@ -109,6 +113,11 @@ export interface HermesSignInBridgeJob extends BridgeJobBase {
   payload: HermesBridgeSignInPayload;
 }
 
+export interface FleetChatBridgeJob extends BridgeJobBase {
+  kind: "fleet-chat";
+  payload: FleetChatJobPayload;
+}
+
 export type BridgeJob =
   | ShellBridgeJob
   | LocalVmBridgeJob
@@ -117,7 +126,8 @@ export type BridgeJob =
   | HermesEnsureCanonicalBridgeJob
   | HermesSendBridgeJob
   | HermesInterruptBridgeJob
-  | HermesSignInBridgeJob;
+  | HermesSignInBridgeJob
+  | FleetChatBridgeJob;
 
 export interface BridgeJobResult {
   jobId: string;
@@ -265,6 +275,9 @@ export function jobFingerprint(job: BridgeJob): string {
     return `hermes-interrupt\0${job.payload.profile}\0${job.payload.turnId ?? ""}`;
   }
   if (job.kind === "hermes-signin") return "hermes-signin";
+  if (job.kind === "fleet-chat") {
+    return `fleet-chat\0${job.payload.baseUrl}\0${job.payload.model}\0${job.payload.threadId}\0${job.payload.turnId}`;
+  }
   return `${job.kind}\0${job.payload.botId}\0${job.payload.action ?? ""}`;
 }
 
@@ -735,6 +748,31 @@ export class BridgeRegistry {
     if (opts.idempotencyKey) {
       const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
       if (existing) return existing.job as HermesSignInBridgeJob;
+    }
+    this.enqueueRecord(bridgeId, job, opts);
+    return job;
+  }
+
+  enqueueFleetChat(
+    bridgeId: string,
+    payload: FleetChatJobPayload,
+    timeoutMs = 180_000,
+    opts: EnqueueBridgeJobOpts = {},
+  ): FleetChatBridgeJob {
+    if (!bridgeRecord(bridgeId)) throw new Error("unknown bridge");
+    const parsed = parseFleetChatJobPayload(payload);
+    if (!parsed) throw new Error("invalid fleet chat payload");
+    const job: FleetChatBridgeJob = {
+      id: randomUUID(),
+      bridgeId,
+      kind: "fleet-chat",
+      payload: parsed,
+      timeoutMs,
+      createdAt: Date.now(),
+    };
+    if (opts.idempotencyKey) {
+      const existing = this.existingIdempotent(bridgeId, opts.idempotencyKey, jobFingerprint(job), Date.now());
+      if (existing) return existing.job as FleetChatBridgeJob;
     }
     this.enqueueRecord(bridgeId, job, opts);
     return job;

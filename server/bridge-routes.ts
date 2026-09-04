@@ -4,6 +4,7 @@ import type { BridgeCapability, BridgeRegistry } from "./bridge-registry.ts";
 import { IdempotencyConflictError } from "./bridge-registry.ts";
 import { runShellOnBridge } from "./bridge-exec.ts";
 import { ingestHermesEndpointDescriptors } from "./bridge-hermes.ts";
+import { ingestLocalModelCatalog } from "./bridge-fleet-models.ts";
 
 type JsonFn = (res: ServerResponse, status: number, body: unknown) => void;
 
@@ -148,6 +149,9 @@ export async function handleBridgeRoutes(
     });
     if (body.hermesEndpoints !== undefined) {
       ingestHermesEndpointDescriptors(bridgeId, body.hermesEndpoints);
+    }
+    if (body.localModels !== undefined) {
+      ingestLocalModelCatalog(bridgeId, body.localModels, { name: bridge.name });
     }
     return json(res, 200, { jobs: bridges.pollJobs(bridgeId), cancelJobIds: bridges.cancelRequests(bridgeId) }), true;
   }
