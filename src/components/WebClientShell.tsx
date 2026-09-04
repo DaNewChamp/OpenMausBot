@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2, Menu, QrCode, RotateCcw, ShieldCheck, Users, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { ChatView } from "@/components/ChatView";
+import { ComputerPanel } from "@/components/ComputerPanel";
 import { GroupView } from "@/components/GroupView";
 import { BotAvatar } from "@/components/Avatar";
 import { PluginsPanel, preloadConnectedApps } from "@/components/PluginsPanel";
@@ -14,6 +15,11 @@ import { TeamMapPage } from "@/components/TeamMapPage";
 import { StoreProvider, useStore, type Bot, type Group } from "@/state/store";
 import { isDesktopDemoMode } from "@/lib/desktop-demo";
 import { webClientLayout } from "@/lib/web-client-layout";
+import {
+  saveRightRailOpen,
+  SHELL_COLLAPSE_LEFT_BELOW,
+  SHELL_COLLAPSE_RIGHT_BELOW,
+} from "@/lib/shell-layout";
 import { stateForBot } from "@/lib/mascot";
 import {
   canCallHubApi,
@@ -491,14 +497,21 @@ function RoomInfoPanel({ group, onClose }: { group: Group; onClose: () => void }
 }
 
 export function WebClientShell() {
-  const { state } = useStore();
+  const { state, dispatch } = useStore();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [roomInfoOpen, setRoomInfoOpen] = useState(false);
   const group = state.groups.find((entry) => entry.id === state.selectedId);
   const bot = group ? undefined : (state.bots.find((entry) => entry.id === state.selectedId) ?? state.bots[0]);
   const [viewportWidth, setViewportWidth] = useState(() => globalThis.innerWidth || 1280);
-  const mobile = viewportWidth < 768;
-  const layout = webClientLayout();
+  const overlay = viewportWidth < SHELL_COLLAPSE_LEFT_BELOW;
+  const chrome = webClientLayout();
+  const showRightRail =
+    chrome.rightPane === "computer" &&
+    state.computerOpen &&
+    Boolean(bot) &&
+    !state.settingsOpen &&
+    state.activeView === "chat" &&
+    viewportWidth >= SHELL_COLLAPSE_RIGHT_BELOW;
 
   useEffect(() => {
     if (canCallHubApi()) void preloadConnectedApps();
@@ -511,23 +524,65 @@ export function WebClientShell() {
   }, []);
 
   useEffect(() => {
-    if (!mobile) setDrawerOpen(false);
-  }, [mobile]);
+    if (!overlay) setDrawerOpen(false);
+  }, [overlay]);
 
   useEffect(() => {
     setRoomInfoOpen(false);
   }, [state.selectedId]);
 
+  useEffect(() => {
+    saveRightRailOpen(state.computerOpen);
+  }, [state.computerOpen]);
+
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [state.selectedId, state.activeView, state.pluginsOpen, state.settingsOpen]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.metaKey || event.ctrlKey) return;
+      if (state.pluginsOpen) {
+        event.preventDefault();
+        dispatch({ type: "togglePlugins", open: false });
+        return;
+      }
+      if (state.appSettingsOpen) {
+        event.preventDefault();
+        dispatch({ type: "toggleAppSettings", open: false });
+        return;
+      }
+      if (state.settingsOpen) {
+        event.preventDefault();
+        dispatch({ type: "toggleSettings", open: false });
+        return;
+      }
+      if (showRightRail) {
+        event.preventDefault();
+        dispatch({ type: "toggleComputer", open: false });
+        return;
+      }
+      if (drawerOpen) {
+        event.preventDefault();
+        setDrawerOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dispatch, drawerOpen, showRightRail, state.appSettingsOpen, state.pluginsOpen, state.settingsOpen]);
+
   return (
     <div
       data-web-client-shell
-      data-web-left-rail={layout.leftRail}
-      data-web-main={layout.main}
-      data-web-right-pane={layout.rightPane}
-      data-web-traffic-lights={String(layout.trafficLights)}
+      data-web-left-rail={chrome.leftRail}
+      data-web-main={chrome.main}
+      data-web-right-pane={chrome.rightPane}
+      data-web-traffic-lights={String(chrome.trafficLights)}
+      data-web-overlay={String(overlay)}
+      data-web-computer={String(showRightRail)}
       className="relative flex h-screen min-h-0 overflow-hidden bg-app text-ink"
     >
-      {mobile && drawerOpen && (
+      {overlay && drawerOpen && (
         <button
           type="button"
           aria-label="Close bot list"
@@ -537,23 +592,23 @@ export function WebClientShell() {
       )}
       <Sidebar
         web
-        open={mobile ? drawerOpen : true}
-        overlay={mobile}
+        open={overlay ? drawerOpen : true}
+        overlay={overlay}
         onClose={() => setDrawerOpen(false)}
       />
 
-      <div data-web-main-column className="relative flex min-w-0 flex-1 flex-col bg-app">
-        {mobile && (
+      <div data-web-main-column className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-app">
+        {overlay && (
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
             aria-label="Open bot list"
-            className="shell-control absolute left-2 top-2 z-20 rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
+            className="shell-control absolute left-2 top-2 z-20 cursor-pointer rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
           >
             <Menu size={18} />
           </button>
         )}
-        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1">
           {state.activeView === "team-map" ? <TeamMapPage /> : state.activeView === "routines" ? <RoutinesPage /> : state.activeView === "skill-recorder" ? <SkillRecorderPage /> : group ? <GroupView key={group.id} group={group} onOpenInfo={() => setRoomInfoOpen(true)} /> : bot ? <ChatView bot={bot} /> : (
             <div className="flex h-full min-w-0 flex-1 items-center justify-center text-[14px] text-ink-secondary">
               No bots yet
@@ -562,6 +617,7 @@ export function WebClientShell() {
         </div>
       </div>
 
+      {showRightRail && bot && <ComputerPanel bot={bot} />}
       {state.settingsOpen && bot && <SettingsPanel bot={bot} />}
       {roomInfoOpen && group && <RoomInfoPanel group={group} onClose={() => setRoomInfoOpen(false)} />}
       {state.appSettingsOpen && <SettingsModal />}

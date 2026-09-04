@@ -111,7 +111,7 @@ export function RenameTitle({
 
   return (
     <span
-      className={cn("cursor-text", className)}
+      className={cn("cursor-pointer select-none", className)}
       title="Double-click to rename"
       tabIndex={0}
       role="button"

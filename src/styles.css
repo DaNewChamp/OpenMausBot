@@ -297,21 +297,32 @@ body {
   overflow: hidden;
 }
 
-/* Keep focus visible after components clear the browser outline. These
-   unlayered rules outrank Tailwind utilities without needing !important. */
-:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
+/* Pointer clicks must not paint a floating 2px box around rounded
+   controls — Chromium treats mouse-down as :focus-visible on buttons and
+   role=button rows, which sat offset from the hit target. Keyboard Tab
+   still gets an inset ring that follows the control. */
+:focus {
+  outline: none;
 }
-
-/* Text fields already sit in a bordered card (the composer pill especially).
-   Chromium treats a pointer click as :focus-visible on inputs, so the
-   global ring above becomes a sharp blue rectangle inside the rounded
-   chrome. Fields keep their own focus:border-*; buttons still use the
-   :focus-visible ring. */
+:focus-visible {
+  outline: none;
+}
+:is(button, [role="button"], a, summary):focus-visible {
+  box-shadow: inset 0 0 0 2px var(--color-focus);
+}
 :is(input, textarea, select):focus,
 :is(input, textarea, select):focus-visible {
   outline: none;
+  box-shadow: none;
+}
+
+/* Roster names and chrome controls are click targets, not text fields. */
+[data-web-client-shell] :is(button, [role="button"], a, summary) {
+  cursor: pointer;
+}
+[data-web-client-shell] :is(button, [role="button"])[disabled],
+[data-web-client-shell] :is(button, [role="button"])[aria-disabled="true"] {
+  cursor: not-allowed;
 }
 
 ::selection {

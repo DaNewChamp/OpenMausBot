@@ -117,16 +117,18 @@ function RoomToolChip({
 /** 16px maus + name, shown once per sender cluster. */
 function ClusterLabel({ bot, name, color }: { bot?: Bot; name: string; color: string }) {
   return (
-    <div className="mt-1 flex items-center gap-1.5 pl-0.5">
-      <MausAvatar
-        color={(bot?.color ?? color) as Bot["color"]}
-        state={normalizeState(bot?.mascotExpression) ?? "happy"}
-        size={16}
-        motion="none"
-        motionKey={0}
-        animated={false}
-      />
-      <span className="text-[11px] font-medium text-ink-secondary">{name}</span>
+    <div className="mt-1 flex min-w-0 items-center gap-1.5 pl-0.5">
+      <span className="shrink-0">
+        <MausAvatar
+          color={(bot?.color ?? color) as Bot["color"]}
+          state={normalizeState(bot?.mascotExpression) ?? "happy"}
+          size={16}
+          motion="none"
+          motionKey={0}
+          animated={false}
+        />
+      </span>
+      <span className="truncate text-[11px] font-medium text-ink-secondary">{name}</span>
     </div>
   );
 }
@@ -987,7 +989,7 @@ export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: ()
   const noDrag = isWin ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
   return (
-    <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+    <main className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col bg-app">
       <GroupCallOverlay group={group} members={members} />
       {membersOpen && !group.dm && (
         <ManageMembersPanel group={group} onClose={closeMembers} triggerRef={membersTriggerRef} />
@@ -995,7 +997,7 @@ export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: ()
       {/* Header: static member mauses; a ring + dot marks the working bot. */}
       <div
         className={cn(
-          "flex items-center justify-between px-5 py-3",
+          "flex shrink-0 items-center justify-between gap-3 px-5 py-3",
           // Room for the drawer button, which overlays this corner below md.
           "pl-11 md:pl-5",
           isWin && "pr-[148px]",
@@ -1007,14 +1009,14 @@ export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: ()
             type="button"
             onClick={onOpenInfo}
             aria-label={`Open info for ${headerTitle}`}
-            className="truncate rounded-lg px-1.5 py-1 text-left text-[15px] font-semibold text-ink hover:bg-raised/50"
+            className="min-w-0 flex-1 cursor-pointer truncate rounded-lg px-1.5 py-1 text-left text-[15px] font-semibold text-ink hover:bg-raised/50"
           >
             {headerTitle}
           </button>
         ) : (
-          <span className="truncate text-[15px] font-semibold text-ink">{headerTitle}</span>
+          <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-ink">{headerTitle}</span>
         )}
-        <div className="flex items-center gap-1.5" style={noDrag}>
+        <div className="flex max-w-[52%] shrink-0 items-center gap-1.5 overflow-hidden" style={noDrag}>
           <button
             type="button"
             onClick={() => setFindOpen((open) => !open)}
@@ -1042,9 +1044,9 @@ export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: ()
               onClick={() => setMembersOpen(true)}
               title="Manage members"
               aria-label={`Manage members: ${members.length} ${members.length === 1 ? "bot" : "bots"} in this channel`}
-              className="flex items-center gap-1.5 rounded-full py-0.5 pl-1 pr-1.5 hover:bg-raised/60"
+              className="flex max-w-full items-center gap-1 overflow-hidden rounded-full py-0.5 pl-1 pr-1.5 hover:bg-raised/60"
             >
-              {memberMauses}
+              <span className="flex min-w-0 items-center gap-1 overflow-hidden">{memberMauses}</span>
               <span className="flex size-[18px] items-center justify-center rounded-full border border-dashed border-hairline/70 text-ink-secondary">
                 <Plus size={11} />
               </span>
@@ -1133,7 +1135,7 @@ export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: ()
       {/* Transcript */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-5 [overflow-anchor:none]"
+        className="min-h-0 flex-1 overflow-y-auto px-5 [overflow-anchor:none]"
         onWheel={(e) => {
           if (e.deltaY < 0) setBottomFollow(false);
           else if (atEnd()) setBottomFollow(true);

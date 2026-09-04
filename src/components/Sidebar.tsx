@@ -184,10 +184,11 @@ function StackedMauses({ members, density }: { members: Bot[]; density: SidebarD
   const iconOnly = density === "icons";
   const slotSize = iconOnly ? "size-12" : density === "compact" ? "size-10" : "size-14";
   const singleSize = iconOnly ? 44 : density === "compact" ? 40 : 56;
+  const face = iconOnly ? 28 : density === "compact" ? 22 : 26;
   if (members.length <= 1) {
     const b = members[0];
     return (
-      <div className={cn("flex shrink-0 items-center justify-center", slotSize)}>
+      <div className={cn("flex shrink-0 items-center justify-center overflow-hidden", slotSize)}>
         {b ? <BotAvatar bot={b} state="happy" size={singleSize} animated={false} /> : <Users size={24} className="text-ink-secondary" />}
       </div>
     );
@@ -195,13 +196,15 @@ function StackedMauses({ members, density }: { members: Bot[]; density: SidebarD
   const shown = members.slice(0, 3);
   const extra = members.length - shown.length;
   return (
-    <div className={cn("flex shrink-0 items-center justify-center", slotSize)}>
-      <div className="flex items-center -space-x-3">
+    <div className={cn("flex shrink-0 items-center justify-center overflow-hidden", slotSize)}>
+      <div className="flex items-center -space-x-2">
         {shown.map((b) => (
-          <BotAvatar key={b.id} bot={b} state="happy" size={30} animated={false} />
+          <span key={b.id} className="relative rounded-full ring-2 ring-panel">
+            <BotAvatar bot={b} state="happy" size={face} animated={false} />
+          </span>
         ))}
         {extra > 0 && (
-          <span className="z-10 flex size-[22px] items-center justify-center rounded-full border border-hairline/40 bg-raised text-[10px] font-medium text-ink-secondary">
+          <span className="z-10 flex size-[18px] items-center justify-center rounded-full border border-hairline/40 bg-raised text-[10px] font-medium text-ink-secondary">
             +{extra}
           </span>
         )}
@@ -242,7 +245,7 @@ function GroupListItem({
         onMenu({ groupId: group.id, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
       }}
       className={cn(
-        "relative flex w-full items-center rounded-lg text-left",
+        "relative flex w-full cursor-pointer select-none items-center rounded-lg text-left",
         density === "icons" ? "justify-center px-1 py-1.5" : "gap-2.5 px-2 py-1.5",
         selected ? "bg-raised" : "hover:bg-raised/50",
       )}
@@ -766,7 +769,7 @@ function PinnedChiefCard({
         aria-label={conversationTitle(bot.name, bot.modelSelection)}
         aria-current={selected ? "true" : undefined}
         className={cn(
-          "flex w-[var(--shell-pin-width)] max-w-full flex-col items-center gap-1.5 rounded-xl border px-2 py-2.5 text-center",
+          "flex w-[var(--shell-pin-width)] max-w-full cursor-pointer select-none flex-col items-center gap-1.5 rounded-xl border px-2 py-2.5 text-center",
           selected ? "border-hairline/40 bg-raised/40" : "border-hairline/20 bg-card/40 hover:bg-raised/25",
         )}
       >
@@ -815,7 +818,7 @@ function BotListItem({
   const last = visible.at(-1);
   const suffix = modelSuffix(bot.modelSelection);
   const rowClass = cn(
-    "flex w-full items-center rounded-lg text-left",
+    "flex w-full cursor-pointer select-none items-center rounded-lg text-left",
     iconOnly
       ? "justify-center px-1 py-1.5"
       : "gap-2.5 px-2 py-1.5 pr-10",
@@ -1334,9 +1337,7 @@ export function Sidebar({
         "shell-rail flex h-full shrink-0 flex-col border-r border-hairline/30 bg-panel transition-[width] duration-200",
         density === "icons"
           ? "w-[var(--shell-left-icons)]"
-          : web
-            ? "w-[248px]"
-            : "w-[var(--shell-left-width)]",
+          : "w-[var(--shell-left-width)]",
         // Overlay only: the rail leaves the flow. Do not emit a translate when
         // in-flow — Tailwind v4's native `translate` makes this a containing
         // block for fixed menus (+ and NewRoomPanel).
@@ -1363,13 +1364,23 @@ export function Sidebar({
           <div />
         )}
         <div className="relative flex items-center" style={windowNoDragStyle}>
+          <button
+            type="button"
+            data-sidebar-collapse
+            onClick={toggleCollapsed}
+            aria-label={density === "icons" ? "Expand sidebar" : "Collapse sidebar"}
+            title={density === "icons" ? "Expand sidebar" : "Collapse sidebar"}
+            className="shell-control flex cursor-pointer items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+          >
+            {density === "icons" ? <PanelLeftOpen size={18} strokeWidth={2} /> : <PanelLeftClose size={18} strokeWidth={2} />}
+          </button>
           {web && (
             <button
               onClick={() => dispatch({ type: "showTeamMap" })}
               data-web-team-map-entry
               aria-label="Team map"
               title="Team map"
-              className="shell-control flex items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+              className="shell-control flex cursor-pointer items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
             >
               <Network size={20} strokeWidth={2} />
             </button>

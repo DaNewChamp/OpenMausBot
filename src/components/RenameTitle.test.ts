@@ -26,4 +26,13 @@ describe("RenameTitle", () => {
 
     expect(markup).toContain("Open Maus&#x27;s profile");
   });
+
+  it("uses a pointer cursor on the idle title so roster names do not look like text fields", () => {
+    const markup = renderToStaticMarkup(createElement(RenameTitle, {
+      value: "Hermes",
+      onCommit: vi.fn(),
+    }));
+    expect(markup).toContain("cursor-pointer");
+    expect(markup).not.toContain("cursor-text");
+  });
 });

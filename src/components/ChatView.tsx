@@ -1175,13 +1175,13 @@ export function ChatView({ bot }: { bot: Bot }) {
   const noDrag = isWin ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
   return (
-    <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+    <main className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col bg-app">
       {/* Call mode covers the thread while the bot is on the line */}
       <CallOverlay bot={bot} />
       {/* Header */}
       <div
         className={cn(
-          "@container/chathead flex items-center justify-between border-b border-hairline/20 px-4 py-2.5",
+          "@container/chathead flex shrink-0 items-center justify-between border-b border-hairline/20 px-4 py-2.5",
           "pl-11 md:pl-5",
           isWin && "pr-[148px]",
         )}
@@ -1190,7 +1190,7 @@ export function ChatView({ bot }: { bot: Bot }) {
         <button
           type="button"
           onClick={() => dispatch({ type: "toggleSettings", open: true })}
-          className="flex min-w-0 items-center gap-2.5 rounded-lg px-1 py-0.5 text-left hover:bg-raised/50"
+          className="flex min-w-0 cursor-pointer items-center gap-2.5 rounded-lg px-1 py-0.5 text-left hover:bg-raised/50"
           style={noDrag}
           title="Open agent profile"
           aria-label={`Open ${bot.name}'s profile`}
@@ -1208,13 +1208,26 @@ export function ChatView({ bot }: { bot: Bot }) {
             {bot.busy ? <Loader2 size={14} className="ml-1.5 inline animate-spin text-ink-secondary" /> : null}
           </div>
         </button>
-        <ChatHeaderMenu
-          bot={bot}
-          messages={messages}
-          onToggleFind={() => setFindOpen((open) => !open)}
-          onToggleTimeline={() => setTimelineOpen((open) => !open)}
-          timelineOpen={timelineOpen}
-        />
+        <div className="flex shrink-0 items-center gap-0.5" style={noDrag}>
+          <button
+            type="button"
+            data-chat-computer-toggle
+            onClick={() => dispatch({ type: "toggleComputer" })}
+            aria-label={state.computerOpen ? "Hide bot computer" : "Show bot computer"}
+            aria-pressed={state.computerOpen}
+            title="Bot's computer"
+            className="shell-control cursor-pointer rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+          >
+            <Monitor size={18} className={state.computerOpen ? "text-accent" : undefined} />
+          </button>
+          <ChatHeaderMenu
+            bot={bot}
+            messages={messages}
+            onToggleFind={() => setFindOpen((open) => !open)}
+            onToggleTimeline={() => setTimelineOpen((open) => !open)}
+            timelineOpen={timelineOpen}
+          />
+        </div>
       </div>
 
       {findOpen && <ChatFindBar threadId={bot.threadId} onClose={() => setFindOpen(false)} />}
@@ -1246,7 +1259,7 @@ export function ChatView({ bot }: { bot: Bot }) {
       {/* Messages */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-5 [overflow-anchor:none] bg-app"
+        className="min-h-0 flex-1 overflow-y-auto bg-app px-5 [overflow-anchor:none]"
         onWheel={(e) => {
           if (e.deltaY < 0) setBottomFollow(false);
           else if (atEnd()) setBottomFollow(true);

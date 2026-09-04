@@ -1,12 +1,12 @@
-/** Compact browser-only chrome contract. Keep this separate from the
- * Electron shell layout: the hosted client is a two-column conversation UI,
- * not a responsive three-column desktop window. */
+/** Hosted V Bot chrome matches the desktop Grok window: bot roster,
+ * conversation, and the bot's computer. No traffic lights — the browser
+ * already owns those. */
 export const WEB_CLIENT_NAV_ITEMS = ["Bots", "Rooms", "Find", "Account"] as const;
 
 export type WebClientLayout = {
   leftRail: "bots";
   main: "conversation";
-  rightPane: "on-demand";
+  rightPane: "computer";
   trafficLights: false;
 };
 
@@ -14,7 +14,7 @@ export function webClientLayout(): WebClientLayout {
   return {
     leftRail: "bots",
     main: "conversation",
-    rightPane: "on-demand",
+    rightPane: "computer",
     trafficLights: false,
   };
 }
