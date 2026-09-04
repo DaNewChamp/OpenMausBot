@@ -60,6 +60,7 @@ final class VoiceModeController: ObservableObject {
     private var watchTask: Task<Void, Never>?
     private var approvalObserver: AnyCancellable?
     private var interruptionObserver: AnyCancellable?
+    private var dictationErrorObserver: AnyCancellable?
 #if DEBUG
     private var probeTask: Task<Void, Never>?
 #endif
@@ -156,6 +157,16 @@ final class VoiceModeController: ObservableObject {
         approvalObserver = session.$state.sink { [weak self] state in
             self?.watchApprovals(in: state)
         }
+        // startVoiceSession is fire-and-forget: a denied permission or a
+        // dead recognizer only surfaces as the dictation's published error.
+        // Left unheard, the island would sit on "Listening…" with no
+        // capture. Stale errors from an earlier turn are inert — the guard
+        // keeps them from idling a session that never failed.
+        dictationErrorObserver = dictation.$error.sink { [weak self] error in
+            guard let self, let error, self.phase == .listening else { return }
+            self.session?.actionError = error
+            self.fire(.micStopped(hasTranscript: false))
+        }
         interruptionObserver = NotificationCenter.default
             .publisher(for: AVAudioSession.interruptionNotification)
             .receive(on: DispatchQueue.main)
@@ -166,6 +177,11 @@ final class VoiceModeController: ObservableObject {
                     // A call or Siri takes the route; the session stays up
                     // so coming back does not rip the island down.
                     self?.suspendCapture()
+                } else if value == AVAudioSession.InterruptionType.ended.rawValue {
+                    // The interruption's own resume: without it the flag a
+                    // began set would refuse the mic forever on a scene that
+                    // never left the screen.
+                    self?.resumeAfterForeground()
                 }
             }
     }
@@ -176,6 +192,11 @@ final class VoiceModeController: ObservableObject {
     func suspendCapture() {
         guard !didShutdown else { return }
         suspendedFromBackground = true
+        // The settle watcher polls the session, whose SSE lingers in the
+        // background: left alive, a settle fires the loop onward and the
+        // next step tries to open the mic while backgrounded.
+        watchTask?.cancel()
+        watchTask = nil
         dictation.stop()
         speaker.stop()
         endStreamTurn()
@@ -201,10 +222,20 @@ final class VoiceModeController: ObservableObject {
     func resumeAfterForeground() {
         guard !didShutdown, suspendedFromBackground else { return }
         suspendedFromBackground = false
-        if phase == .listening {
-            // A capture that survived in name only — the route is gone.
+        // Whatever the route is now, the turn is not what it was: stop both
+        // halves before the phase follows them, so idle never sits above an
+        // open mic or a live player.
+        dictation.stop()
+        speaker.stop()
+        switch phase {
+        case .listening, .thinking:
+            // A capture that survived in name only — the route is gone —
+            // and a thinking turn whose watcher was cancelled at
+            // suspension. Neither can finish; sit down at the orb.
             phase = .idle
             island?.update(phase)
+        case .speaking, .idle:
+            break
         }
     }
 
@@ -226,6 +257,8 @@ final class VoiceModeController: ObservableObject {
         approvalObserver = nil
         interruptionObserver?.cancel()
         interruptionObserver = nil
+        dictationErrorObserver?.cancel()
+        dictationErrorObserver = nil
         dictation.stop()
         speaker.stop()
         micFollower.reset()
@@ -317,6 +350,9 @@ final class VoiceModeController: ObservableObject {
     }
 
     private func beginListening() {
+        // Suspended from the background, nothing may open the mic — not
+        // even a settle that somehow fires before the watcher is cancelled.
+        guard !suspendedFromBackground else { return }
         watchTask?.cancel()
         watchTask = nil
         endStreamTurn()
@@ -434,7 +470,7 @@ final class VoiceModeController: ObservableObject {
     /// through the pump as they complete, and the turn ends when the text
     /// stream has closed and the utterance queue has drained.
     private func beginStreamSpeaking() {
-        guard let session else { return }
+        guard let session, !suspendedFromBackground else { return }
         phase = .speaking
         island?.update(phase)
         let (stream, continuation) = AsyncStream.makeStream(of: String.self)
@@ -443,9 +479,18 @@ final class VoiceModeController: ObservableObject {
             guard let self else { return }
             let drained = await self.speaker.speakStream(chunks: stream, session: session)
             // A stopped stream already moved the loop along; only a
-            // drained one ends the turn from here.
-            guard self.phase == .speaking, drained else { return }
-            self.fire(.replySpoken)
+            // still-speaking turn ends from here.
+            guard self.phase == .speaking else { return }
+            if drained {
+                self.fire(.replySpoken)
+            } else {
+                // The engine could not start or died mid-stream with nobody
+                // stopping the turn: nothing else would end it, so fail it
+                // like a send — the error is already on screen — and let
+                // the island clear instead of hanging on "Speaking…".
+                self.endStreamTurn()
+                self.fire(.sendFailed)
+            }
         }
     }
 

@@ -26,7 +26,8 @@ public enum VoiceSessionEvent: Equatable, Sendable {
     /// Capture ended — by tap or by silence. `hasTranscript` says whether
     /// anything was heard.
     case micStopped(hasTranscript: Bool)
-    /// The send round-trip failed. The transport error is already on screen.
+    /// The send round-trip failed, or a stream-and-speak engine could not
+    /// start or died mid-turn. The error is already on screen.
     case sendFailed
     /// The reply finished streaming. `shouldSpeak` is false when muted;
     /// `hasReply` is false when the run settled with nothing speakable.
@@ -82,7 +83,9 @@ public enum VoiceSessionPolicy: Sendable {
             guard phase == .listening else { return .stay }
             return hasTranscript ? .sendTranscript : .idle
         case .sendFailed:
-            guard phase == .thinking else { return .stay }
+            // A failed send sits in .thinking; a stream-and-speak engine
+            // that died mid-turn sits in .speaking. Both are dead turns.
+            guard phase == .thinking || phase == .speaking else { return .stay }
             return .idle
         case .replySettled(let hasReply, let shouldSpeak):
             guard phase == .thinking else { return .stay }

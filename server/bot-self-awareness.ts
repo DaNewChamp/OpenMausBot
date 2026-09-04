@@ -73,44 +73,59 @@ const AGENTS_TOOLS_PEER = [
 
 const LEADING_ROLE_PATTERN = /\b(chief|head|lead|director|manager|officer|vp)\b(?:\s+of)?\s+(.+)/i;
 
+/** One line of bounded plain text for a persona interpolation: names and
+ * titles are user-set, so nothing they carry — newlines, control
+ * characters, unbounded length — may reach a system prompt. */
+function singleLine(value: string, max: number): string {
+  const line = value.replace(/\p{C}+/gu, " ").replace(/\s+/g, " ").trim();
+  return line.length > max ? line.slice(0, max).trim() : line;
+}
+
 /** A bot named for a role ("Chief of Investments", "Lead, V Bot") wears that
  * title even when the title field is empty. */
 export function roleNameAwareness(name: string): string {
   const m = name.match(LEADING_ROLE_PATTERN);
   if (!m) return "";
-  const domain = m[2].trim().replace(/\s+/g, " ");
+  const domain = singleLine(m[2].replace(/[^\p{L}\p{N} &\-.]/gu, ""), 80);
   if (!domain) return "";
   const role = `${m[1].toUpperCase()} OF ${domain.toUpperCase()}`;
   return `Your name is a real title: you are the ${role}. Own that domain, speak with its authority, and delegate what belongs to your team.`;
 }
 
 export function botSelfAwarenessPersona(bot: SelfAwarenessBot, room?: SelfAwarenessRoom): string {
-  const section = bot.section?.trim() || "General";
+  const name = singleLine(bot.name, 120);
+  const title = bot.title ? singleLine(bot.title, 200) : "";
+  const section = singleLine(bot.section ?? "", 60) || "General";
+  const reportsToName = bot.reportsToName ? singleLine(bot.reportsToName, 120) : "";
+  const reportsToTitle = bot.reportsToTitle ? singleLine(bot.reportsToTitle, 200) : "";
   const managerLine =
-    bot.reportsToBotId && bot.reportsToName
-      ? `You report to ${bot.reportsToName}${bot.reportsToTitle ? ` (${bot.reportsToTitle})` : ""}.`
+    bot.reportsToBotId && reportsToName
+      ? `You report to ${reportsToName}${reportsToTitle ? ` (${reportsToTitle})` : ""}.`
       : "";
   const teamLeadLine =
     isTeamLead({ title: bot.title ?? "", reportsToBotId: bot.reportsToBotId, chiefOfStaff: bot.chiefOfStaff }) && !bot.chiefOfStaff
       ? "You lead a sub-team — use create_bot to add specialists who report to you."
       : "";
   if (room) {
+    const roomName = singleLine(room.name, 120);
+    const memberNames = room.memberNames.map((member) => singleLine(member, 200)).filter(Boolean);
+    const userName = singleLine(room.userName, 120);
     return [
-      `You are ${bot.name}, a bot in the V Bot room "${room.name}" (OpenMausBot harness).`,
-      bot.title ? `Role: ${bot.title}.` : roleNameAwareness(bot.name),
+      `You are ${name}, a bot in the V Bot room "${roomName}" (OpenMausBot harness).`,
+      bot.title ? `Role: ${title}.` : roleNameAwareness(bot.name),
       bot.description && `About: ${bot.description}`,
       `Section: ${section}.`,
       managerLine,
       teamLeadLine,
-      `Room members: ${room.memberNames.join(", ")}, and ${room.userName} (the human).`,
+      `Room members: ${memberNames.join(", ")}, and ${userName} (the human).`,
       "V Bot is Vincent's multi-bot platform: iPhone, desktop viewer, and cloud harness. You are one agent in a fleet — not a generic chatbot.",
     ]
       .filter(Boolean)
       .join(" ");
   }
   return [
-    `You are ${bot.name}, a personal bot in V Bot (OpenMausBot harness).`,
-    bot.title ? `Role: ${bot.title}.` : roleNameAwareness(bot.name),
+    `You are ${name}, a personal bot in V Bot (OpenMausBot harness).`,
+    bot.title ? `Role: ${title}.` : roleNameAwareness(bot.name),
     bot.description && `About: ${bot.description}`,
     `Section: ${section}.`,
     bot.chiefOfStaff

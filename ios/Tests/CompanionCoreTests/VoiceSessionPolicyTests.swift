@@ -72,6 +72,15 @@ final class VoiceSessionPolicyTests: XCTestCase {
         XCTAssertEqual(decide(.thinking, .sendFailed), .idle)
     }
 
+    func testAnEngineThatDiedMidStreamFailsTheSpeakingTurnToo() {
+        // A stream-and-speak engine that could not start (or died with
+        // nobody stopping the turn) leaves the loop in .speaking with
+        // nothing to fire replySpoken — the failed-turn event must clear it
+        // the same way it clears a failed send, or the island hangs on
+        // "Speaking…" forever.
+        XCTAssertEqual(decide(.speaking, .sendFailed), .idle)
+    }
+
     // MARK: - Close works from every phase
 
     func testClosedTearsDownFromEveryPhase() {
