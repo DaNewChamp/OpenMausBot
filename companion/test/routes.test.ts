@@ -92,6 +92,7 @@ describe("what the app may do", () => {
     ["PUT", "/api/approval-reviewer"],
     ["GET", "/api/events"],
     ["GET", "/api/instances"],
+    ["GET", "/api/fleet-models"],
     ["GET", "/api/hermes/setup"],
     ["GET", "/api/hermes/setup/status"],
     ["POST", "/api/hermes/setup"],

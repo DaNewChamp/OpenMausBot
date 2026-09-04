@@ -27,6 +27,12 @@ import * as checkpoints from "./checkpoints.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
 import { handleBridgeRoutes, isCompanionRequest } from "./bridge-routes.ts";
+import {
+  dispatchFleetModelTurn,
+  listAdvertisedFleetModels,
+  lookupFleetModel,
+} from "./bridge-fleet-models.ts";
+import { parseFleetModelId } from "../shared/bridge-fleet-contract.ts";
 import { resolveBridge, runShellOnBridge, runSshOnBridge } from "./bridge-exec.ts";
 import { runLocalVmOnBridge, shouldRelayLocalVm } from "./bridge-local-vm.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
@@ -2311,6 +2317,7 @@ async function startTurn(
     : null;
   const hermesDispatch = hermesDispatchResolution.route !== "none";
   const hermesEngine = hermesBinding ? hermesRegistry.forBinding(hermesBinding) : null;
+  const fleetTarget = opts?.runOn === "cloud" ? null : parseFleetModelId(bot.modelSelection.model);
   // a task takes its name from the first thing you asked it to do
   if (text.trim() && !opts?.cardContinuation) store.titleTaskFromFirstMessage(bot.id, text, threadId);
 
@@ -2324,7 +2331,7 @@ async function startTurn(
   if ((hermesBinding || hermesBindingError) && !instance) {
     instance = registry.get(hermesBotInstanceId(cfg));
   }
-  if (!instance && !hermesDispatch) {
+  if (!instance && !hermesDispatch && !fleetTarget) {
     throw Object.assign(
       new Error(
         opts?.runOn === "cloud"
@@ -2339,7 +2346,7 @@ async function startTurn(
   // a cloud routine borrows the instance default model, so it borrows no
   // per-bot effort either
   let effort = opts?.runOn === "cloud" ? undefined : bot.modelSelection.effort;
-  if (opts?.runOn !== "cloud" && !hermesDispatch && bot.fastMode) {
+  if (opts?.runOn !== "cloud" && !hermesDispatch && !fleetTarget && bot.fastMode) {
     const fast = resolveFastDispatch({
       stored: bot.modelSelection,
       instances: registry.instances().map((candidate) => ({
@@ -2361,7 +2368,7 @@ async function startTurn(
   }
   // A selection can be persisted while its engine is offline. Re-check when
   // the engine returns so an old or unsupported value never reaches a CLI.
-  if (!hermesDispatch && effort && instance && !instance.adapter.capabilities.effortLevels?.includes(effort)) {
+  if (!hermesDispatch && !fleetTarget && effort && instance && !instance.adapter.capabilities.effortLevels?.includes(effort)) {
     throw Object.assign(
       new Error(`effort "${effort}" is not offered by this bot's engine — choose another level in settings`),
       { status: 409 },
@@ -2451,6 +2458,43 @@ async function startTurn(
   void (async () => {
     try {
       if (currentTaskEpoch(bot.id) !== epoch) return;
+      if (fleetTarget) {
+        const adapterTurnId = randomUUID();
+        const adapterInstanceId = instance?.instanceId ?? "fleet";
+        if (currentTaskEpoch(bot.id) !== epoch) return;
+        activeTaskTurnIds.set(threadId, adapterTurnId);
+        suppressedTaskThreads.delete(threadId);
+        watchdog.watch(threadId, bot.id);
+        try {
+          await dispatchFleetModelTurn({
+            registry: bridges,
+            model: bot.modelSelection.model,
+            messages: [
+              ...(persona ? [{ role: "system" as const, content: persona }] : []),
+              ...transcript.map((entry) => ({ role: entry.role, content: entry.text })),
+              { role: "user", content: turnText },
+            ],
+            threadId,
+            turnId: adapterTurnId,
+            publishEvent: (event) => publishHermesEvent(event, adapterInstanceId),
+            instanceId: adapterInstanceId,
+          });
+          if (currentTaskEpoch(bot.id) !== epoch) return;
+          if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
+          store.markTaskDispatched(bot.id, threadId, instanceId);
+          return;
+        } catch (error) {
+          if (currentTaskEpoch(bot.id) !== epoch) return;
+          const safe = publishHermesFailure(
+            threadId,
+            adapterTurnId,
+            adapterInstanceId,
+            bridgeBindingUnavailableError(error),
+          );
+          opts?.onDispatchError?.(safe.message);
+          return;
+        }
+      }
       // A bound bot uses the internal Hermes Bot Chat adapter exclusively.
       // Keep this branch ahead of integrations/computer setup: Hermes Bot
       // Mode has no MCP, queue, steer, or attachment contract, and a bound
@@ -6659,6 +6703,25 @@ const server = createServer(async (req, res) => {
       if (!parsed.ok) return json(res, 400, { error: parsed.error });
       const existing = store.bot(m[1]);
       if (!existing) return json(res, 404, { error: "no such bot" });
+      if (parseFleetModelId(parsed.patch.model)) {
+        if (!lookupFleetModel(parsed.patch.model)) {
+          return json(res, 400, { error: `model "${parsed.patch.model}" is not advertised by the fleet` });
+        }
+        if (existing.busy) {
+          return json(res, 409, { error: "the bot is already working — interrupt it first" });
+        }
+        const catalogs = await registry.describe();
+        const instanceId = catalogs.some((row) => row.instanceId === parsed.patch.instanceId)
+          ? parsed.patch.instanceId
+          : existing.modelSelection.instanceId;
+        const bot = store.patchBot(existing.id, {
+          modelSelection: { instanceId, model: parsed.patch.model },
+        });
+        if (!bot) return json(res, 404, { error: "no such bot" });
+        const visible = wireBot(bot);
+        broadcast({ kind: "bot", bot: visible });
+        return json(res, 200, { bot: visible });
+      }
       const current = existing.modelSelection;
       if (current.instanceId === parsed.patch.instanceId && current.model === parsed.patch.model && parsed.patch.effort === undefined) {
         const visible = wireBot(existing);
@@ -7810,6 +7873,10 @@ const server = createServer(async (req, res) => {
         return json(res, 400, { error: "limit must be a positive whole number" });
       }
       return json(res, 200, { decisions: readDecisions(DATA_DIR, parsedLimit ?? 200) });
+    }
+
+    if (method === "GET" && path === "/api/fleet-models") {
+      return json(res, 200, { models: listAdvertisedFleetModels() });
     }
 
     // ── provider instances (model picker) ──

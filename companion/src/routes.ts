@@ -707,6 +707,7 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   APPROVAL_REVIEWER_ROUTE,
   { method: "GET", path: /^\/api\/events$/ },
   { method: "GET", path: /^\/api\/instances$/ },
+  { method: "GET", path: /^\/api\/fleet-models$/ },
   HERMES_SETUP_STATUS_ROUTE,
   HERMES_SETUP_CONNECT_ROUTE,
   HERMES_SETUP_SIGNIN_ROUTE,
