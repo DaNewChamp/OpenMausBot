@@ -409,7 +409,7 @@ struct SettingsView: View {
     private var busySection: some View {
         VBotSurfaceGroup(
             title: "While agent is working",
-            footer: "Steer sends your next message into the active turn. Queue holds it until the current work finishes. Touch and hold Send for either choice at any time."
+            footer: "Tap Send to steer into the current turn. Touch and hold Send to choose Steer or Queue. This default still applies on other surfaces, such as running a skill while the bot is working."
         ) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Default action")

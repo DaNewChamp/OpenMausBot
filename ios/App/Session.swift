@@ -1921,12 +1921,18 @@ final class Session: ObservableObject {
                         message: "Grok Reconstructed cannot stop a group from this app."
                     )
                 }
-                return
+            } else {
+                switch chat {
+                case let .bot(bot): try await $0.interrupt(botId: bot.id)
+                case let .room(room): try await $0.interrupt(roomId: room.id)
+                }
             }
-            switch chat {
-            case let .bot(bot): try await $0.interrupt(botId: bot.id)
-            case let .room(room): try await $0.interrupt(roomId: room.id)
-            }
+            queueReceiptStore.reconcile(
+                threadId: chat.threadId,
+                transcript: [],
+                authoritativeRefresh: true
+            )
+            publishQueueReceipts()
         }
     }
 

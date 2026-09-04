@@ -32,6 +32,8 @@ struct ChatComposerView: View {
     @Environment(\.conversationTypography) private var chatTypography
     @AppStorage("busySendDefault") private var busySendDefault = BusySendDefault.steer.rawValue
     @State private var libraryCommands: [CommandSkillItem] = []
+    @State private var showBusySendChooser = false
+    @State private var sendLongPressed = false
 
     private static let maxAttachmentCount = AttachmentComposerCopy.maxCount
 
@@ -258,6 +260,22 @@ struct ChatComposerView: View {
         .padding(.top, 6)
         .padding(.bottom, 8)
         .background(VBotSurface.background.ignoresSafeArea(.container, edges: .bottom))
+        .overlay {
+            if showBusySendChooser {
+                ZStack(alignment: .bottomTrailing) {
+                    Color.black.opacity(reduceMotion ? 0.22 : 0.12)
+                        .ignoresSafeArea()
+                        .onTapGesture { dismissBusySendChooser() }
+                        .accessibilityLabel("Dismiss send options")
+                        .accessibilityAddTraits(.isButton)
+                    busySendChooser
+                        .padding(.trailing, 4)
+                        .padding(.bottom, ConversationLayoutPolicy.composerBarHeight + 10)
+                        .transition(reduceMotion ? .opacity : .scale(scale: 0.96, anchor: .bottomTrailing).combined(with: .opacity))
+                }
+            }
+        }
+        .animation(reduceMotion ? .easeOut(duration: 0.16) : .spring(response: 0.32, dampingFraction: 0.86), value: showBusySendChooser)
         .task(id: current.stableID) {
             await loadLibrarySkills()
         }
@@ -510,10 +528,14 @@ struct ChatComposerView: View {
         )
     }
 
-    private func composerSendButton(mode: MessageDeliveryMode) -> some View {
+    private func composerSendButton(mode _: MessageDeliveryMode) -> some View {
         Button {
+            if sendLongPressed {
+                sendLongPressed = false
+                return
+            }
             if acceptTopMentionIfNeeded() { return }
-            onSubmit(nil, mode)
+            onSubmit(nil, current.busy ? .steer : .auto)
         } label: {
             Image(systemName: "arrow.up")
                 .font(.system(size: 15, weight: .bold))
@@ -524,27 +546,111 @@ struct ChatComposerView: View {
         }
         .buttonStyle(ComposerActionButtonStyle(reduceMotion: reduceMotion))
         .disabled(composerRequestGate.isInFlight)
-        .contextMenu {
-            if composerCapabilities.steer {
-                Button {
-                    onSubmit(nil, .steer)
-                } label: {
-                    Label("Steer now", systemImage: "arrow.turn.up.right")
-                }
-            }
-            if composerCapabilities.queueing {
-                Button {
-                    onSubmit(nil, .queue)
-                } label: {
-                    Label("Queue after current work", systemImage: "clock.arrow.circlepath")
-                }
+        .onLongPressGesture(minimumDuration: 0.35) {
+            sendLongPressed = true
+            guard current.busy, !composerRequestGate.isInFlight else { return }
+            Haptics.impact(.medium)
+            updateState(.spring(response: 0.32, dampingFraction: 0.86)) {
+                showBusySendChooser = true
             }
         }
-        .accessibilityLabel(mode == .steer ? "Send and steer" : mode == .queue ? "Send and queue" : "Send")
+        .accessibilityLabel(current.busy ? "Send and steer" : "Send")
         .accessibilityHint(
             highlightedMentionName.map(GroupRouting.mentionReturnHint)
-                ?? "Touch and hold for explicit steer or queue choices"
+                ?? (current.busy
+                    ? "Sends into the current turn. Touch and hold to choose Steer or Queue"
+                    : "Touch and hold for steer or queue while the bot is working")
         )
+        .accessibilityAction(named: "Queue after current work") {
+            guard current.busy else { return }
+            onSubmit(nil, .queue)
+        }
+    }
+
+    private var busySendChooser: some View {
+        VStack(spacing: 0) {
+            busySendChooserRow(
+                title: "Steer",
+                subtitle: "Send into the current turn",
+                systemImage: "arrow.turn.up.right",
+                action: { submitBusyChoice(.steer) }
+            )
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(height: 1)
+            busySendChooserRow(
+                title: "Queue",
+                subtitle: "Send after current work",
+                systemImage: "clock.arrow.circlepath",
+                action: { submitBusyChoice(.queue) }
+            )
+        }
+        .frame(width: 248)
+        .background {
+            chooserMaterial
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Send options")
+    }
+
+    private func busySendChooserRow(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.primary)
+                    .frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Color.primary)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(Color.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 52)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityHint(subtitle)
+    }
+
+    private func submitBusyChoice(_ mode: MessageDeliveryMode) {
+        dismissBusySendChooser()
+        if acceptTopMentionIfNeeded() { return }
+        onSubmit(nil, mode)
+    }
+
+    private func dismissBusySendChooser() {
+        updateState(.easeOut(duration: 0.16)) {
+            showBusySendChooser = false
+        }
+        sendLongPressed = false
+    }
+
+    @ViewBuilder
+    private var chooserMaterial: some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        if reduceMotion {
+            shape.fill(VBotSurface.controlSurface)
+        } else if #available(iOS 26.0, *) {
+            shape.fill(.clear).glassEffect(.regular, in: shape)
+        } else {
+            shape.fill(.ultraThinMaterial)
+        }
     }
 }
 

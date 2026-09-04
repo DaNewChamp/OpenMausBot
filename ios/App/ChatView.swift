@@ -664,7 +664,7 @@ struct ChatView: View {
         // the accepted-request boundary rather than after the await.
         Haptics.keyboardTap()
         let target = current
-        let mode = explicitMode ?? (target.busy ? selectedBusySendDefault.deliveryMode : .auto)
+        let mode = explicitMode ?? (target.busy ? .steer : .auto)
         showCommandHUD = false
         Task { @MainActor in
             let textWithReply = promptText(text, replyingTo: replyAtSubmission, in: target)
@@ -708,8 +708,8 @@ struct ChatView: View {
                 await session.interrupt(chat: target)
                 composerRequestGate.end()
             }
-        case .send(let mode):
-            submit(mode: mode)
+        case .send:
+            submit(mode: current.busy ? .steer : .auto)
         case .none:
             break
         }
