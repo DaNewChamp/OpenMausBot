@@ -170,3 +170,10 @@ Fast-forwarded `fix/fleet-shared-takeover-0904` onto `feat/fleet-models-ui` (`e9
 2. **Hub redeploy (runbook, web and bridges unchanged).** Snapshots `server-pre-takeover-20260904212950` + `companion-pre-takeover-20260904212950`. rsync `dist-server` + `dist-companion`. Restart harness+sidecar. Health try 5: `{"app":"openmausbot","pid":3770827,"static":false}` (was 3713697).
 3. **Windows E2E (hostId `6b9c61f5-3517-4a59-9abe-25f3af311fef`, bot Chief Keef `94a201dd-537d-40be-8da3-e723532c982b`).** GET status HTTP 200 `ready:true` `desktopReady:true` `container_name:openmausbot-computer` `mode:shared`. POST screenshot HTTP 200 `data:image/jpeg;base64` len 7755. POST take HTTP 200 `held:true`. POST click HTTP 200 `{"text":"ok","isError":false}`. POST release HTTP 200 `held:false`.
 4. **Shared-hold second bot.** No second `computer=vm` bot exists (15 bots; only Chief Keef is `vm`). Cross-bot hold fan-out was not live-proved.
+
+
+## Update 2026-09-04 6:57pm CDT: native relay deployed
+
+Code `88f4090a` on `feat/fleet-models-ui` is pushed to both personal OpenMausBot and private VBot. Native tools now relay to the selected bridge with actual bot/thread ownership, per-command authenticated preflight, cancellation, no pinned-host fallback, and correct JPEG MIME. Full gate: **3,511 passed / 19 skipped**, four typechecks, all builds and built bridge imports, and **34 Electron tests**. Hub, companion, Mini bridge, and Windows bridge deployed with backups; services healthy and both bridges online. No main merge, TestFlight, VM cleanup, or assignment change.
+
+**Native model-to-Windows E2E is still unproved:** a disposable Cursor screenshot turn timed out before creating any native bridge job. It was interrupted/deleted, leaving the original 15 bots. Do not report complete native parity from fixtures or manual controls. Exact evidence, runtime hashes, backups, review disposition, and next investigation are in [the native relay handoff](agent-handoff-native-vm-relay-20260904.md).
