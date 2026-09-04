@@ -9,7 +9,7 @@ import {
   BASE_IMAGE,
   CUA_DRIVER_VERSION,
   CUA_SOCKET,
-  IMAGE as CUA_IMAGE,
+  CUA_IMAGE,
   cuaExecArgs,
   dockerSecurityIsHardened,
   imageLabelsMatch,

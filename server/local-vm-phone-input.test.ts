@@ -30,14 +30,14 @@ describe("Local VM phone input validation", () => {
 });
 
 describe("Local VM phone input execution", () => {
-  it("routes click and scroll through Cua", async () => {
+  it("routes click and scroll through Chromium DevTools", async () => {
     const runner = vi.fn<CommandRunner>().mockResolvedValue({ stdout: "ok" });
     const click = await executeLocalVmPhoneInput(
       { action: "click", x: 4, y: 8, button: "right" },
       { runtime, containerName, runner },
     );
     expect(click.isError).toBe(false);
-    expect(runner.mock.calls[0]?.[1]?.join(" ")).toContain("click");
+    expect(runner.mock.calls[0]?.[1]?.join(" ")).toContain("mouse");
 
     runner.mockClear();
     const scroll = await executeLocalVmPhoneInput(

@@ -1,9 +1,9 @@
-import type { BridgeJobResult, BridgeRegistry, LocalVmBridgeJobKind } from "./bridge-registry.ts";
+import type { BridgeJobResult, BridgeRegistry, LocalVmBridgeJobKind, LocalVmJobPayload } from "./bridge-registry.ts";
 import { waitForBridgeJobResult } from "./bridge-job-wait.ts";
 import { resolveBridge } from "./bridge-exec.ts";
 import { containerRuntimeStatus } from "./container-computer.ts";
 
-export type LocalVmBridgeOp = "status" | "action" | "screenshot";
+export type LocalVmBridgeOp = "status" | "action" | "screenshot" | "input";
 
 export async function shouldRelayLocalVm(registry: BridgeRegistry): Promise<boolean> {
   if (process.env.OMB_LOCAL_VM_RELAY === "1") return true;
@@ -31,6 +31,7 @@ export async function runLocalVmOnBridge(
     botId: string;
     op: LocalVmBridgeOp;
     action?: "run" | "stop" | "remove" | "recreate";
+    input?: LocalVmJobPayload["input"];
     timeoutMs?: number;
   },
 ): Promise<{ data: unknown; bridgeName: string }> {
@@ -49,12 +50,20 @@ export async function runLocalVmOnBridge(
       ? "local-vm-status"
       : opts.op === "screenshot"
         ? "local-vm-screenshot"
-        : "local-vm-action";
-  const timeoutMs = opts.timeoutMs ?? (opts.op === "screenshot" ? 90_000 : 120_000);
+        : opts.op === "input"
+          ? "local-vm-input"
+          : "local-vm-action";
+  const timeoutMs =
+    opts.timeoutMs ??
+    (opts.op === "screenshot" || opts.op === "input"
+      ? 90_000
+      : opts.op === "action"
+        ? 10 * 60_000
+        : 120_000);
   const job = registry.enqueueLocalVmJob(
     bridge.id,
     kind,
-    { botId: opts.botId, action: opts.action },
+    { botId: opts.botId, action: opts.action, input: opts.input },
     timeoutMs,
   );
   const result = await waitForBridgeJobResult(registry, job.id, timeoutMs, bridge.name);

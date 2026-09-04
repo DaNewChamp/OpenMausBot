@@ -1,12 +1,11 @@
-// Cua-backed Local VM lifecycle and health checks.
+// Fleet Local VM lifecycle: headless Chromium + CLI.
 //
-// OpenMausBot owns only the sandbox boundary: image preparation, container
-// lifecycle, resource limits, loopback viewer, and target-scoped lease in the
-// harness. Desktop automation itself is Cua Driver. Agents connect directly to
-// `cua-driver mcp` inside the container; this module never reimplements clicks,
-// typing, screenshots, accessibility, or window discovery.
+// OpenMausBot owns the sandbox boundary: image preparation, container
+// lifecycle, resource limits, loopback debugger, and target-scoped lease.
+// Browser automation is Chromium DevTools via the in-container CDP helper.
+// The BYO-VPS path still uses the Cua XFCE image in vps-computer.ts.
 import { execFile } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -15,6 +14,24 @@ import { promisify } from "node:util";
 import { augmentedPath } from "./env-path.ts";
 import { DATA_DIR } from "./data-dir.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
+import {
+  BROWSER_CDP_PORT,
+  BROWSER_VM_CPUS,
+  BROWSER_VM_IMAGE,
+  BROWSER_VM_KIND,
+  BROWSER_VM_KIND_LABEL,
+  BROWSER_VM_LAYER_LABEL,
+  BROWSER_VM_LAYER_VERSION,
+  BROWSER_VM_MEMORY,
+  BROWSER_VM_MEMORY_BYTES,
+  BROWSER_VM_NANO_CPUS,
+  BROWSER_VM_PIDS_LIMIT,
+  BROWSER_VM_SHM,
+  BROWSER_VM_SHM_BYTES,
+  browserCdpExecArgs,
+  browserVmDockerfile,
+  browserVmImageLabelsMatch,
+} from "./browser-vm-image.ts";
 
 const run = promisify(execFile);
 const SCREENSHOT_STATUS_TTL_MS = 10_000;
@@ -38,7 +55,10 @@ export const BASE_IMAGE = `${BASE_IMAGE_REPOSITORY}@${BASE_IMAGE_DIGEST}`;
 export const IMAGE_REPOSITORY = "localhost/openmausbot/cua-local-vm";
 export const IMAGE_LAYER_VERSION = "5";
 export const IMAGE_LAYER_LABEL = "com.openmausbot.image-layer";
-export const IMAGE = `${IMAGE_REPOSITORY}:driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}`;
+/** Cua XFCE desktop used by the BYO-VPS computer, not the fleet Local VM. */
+export const CUA_IMAGE = `${IMAGE_REPOSITORY}:driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}`;
+/** Fleet Local VM: headless Chromium + CLI. */
+export const IMAGE = BROWSER_VM_IMAGE;
 export const CONTAINER = "openmausbot-computer";
 export const MANAGED_LABEL = "com.openmausbot.local-vm";
 export const DRIVER_LABEL = "com.openmausbot.cua-driver";
@@ -55,12 +75,16 @@ const RUNTIMES = ["docker", "podman", "container"] as const;
 export type Runtime = (typeof RUNTIMES)[number];
 export type LifecycleAction = "pull" | "run" | "start" | "stop" | "remove";
 
-const INTERNAL_VIEWER_PORT = 6901;
-const HOST_VIEWER_PORT = 6080;
-const MEMORY_BYTES = 4 * 1024 * 1024 * 1024;
-const NANO_CPUS = 2_000_000_000;
-const PIDS_LIMIT = 512;
-const SHM_BYTES = 512 * 1024 * 1024;
+const INTERNAL_VIEWER_PORT = BROWSER_CDP_PORT;
+const HOST_VIEWER_PORT = 9222;
+const MEMORY_BYTES = BROWSER_VM_MEMORY_BYTES;
+const NANO_CPUS = BROWSER_VM_NANO_CPUS;
+const PIDS_LIMIT = BROWSER_VM_PIDS_LIMIT;
+const SHM_BYTES = BROWSER_VM_SHM_BYTES;
+const CUA_MEMORY_BYTES = 4 * 1024 * 1024 * 1024;
+const CUA_NANO_CPUS = 2_000_000_000;
+const CUA_PIDS_LIMIT = 512;
+const CUA_SHM_BYTES = 512 * 1024 * 1024;
 
 export interface LocalVmTarget {
   /** Stable, non-secret identity used for leases and caches. */
@@ -332,33 +356,33 @@ function emptyStatus(platform: NodeJS.Platform, target: LocalVmTarget): Containe
     problem: "Install a supported container runtime first",
     image_ref: IMAGE,
     image_id: null,
-    base_image_ref: BASE_IMAGE,
-    driver_version: CUA_DRIVER_VERSION,
+    base_image_ref: "debian:bookworm-slim",
+    driver_version: `browser-${BROWSER_VM_LAYER_VERSION}`,
     container_name: target.containerName,
     target_key: target.key,
     workspace_path: target.workspaceDir,
     workspace_guest_path: VM_WORKSPACE_GUEST,
     viewer_port: target.viewerPort,
-    viewer_url: target.viewerPort ? `http://127.0.0.1:${target.viewerPort}/vnc.html` : "",
+    viewer_url: "",
   };
 }
 
 function statusProblem(status: ContainerComputerStatus): string | null {
   if (!status.runtime) return "Install a supported container runtime first";
   if (!status.daemonUp) return `Start ${status.runtime} first`;
-  if (!status.image) return `Prepare the Cua desktop image with Driver ${CUA_DRIVER_VERSION}`;
+  if (!status.image) return "Prepare the browser VM image (Deploy builds it on first use)";
   if (status.container === "missing" && !status.create_supported) {
     return "Per-bot Local VMs require Docker or Podman because Apple container requires a fixed host port";
   }
   if (status.container === "missing") return "Create the Local VM";
-  if (!status.imageMatches) return "The existing Local VM uses an older desktop or Cua Driver; recreate it";
+  if (!status.imageMatches) return "The existing Local VM uses an older browser image; recreate it";
   if (!status.managed) return "The existing container was not created by OpenMausBot; recreate it";
-  if (status.network === "unsafe") return "The existing Local VM exposes its viewer publicly; recreate it";
+  if (status.network === "unsafe") return "The existing Local VM exposes its debugger publicly; recreate it";
   if (status.security === "unsafe") return "The existing Local VM is missing safety limits; recreate it";
   if (status.persistence === "unsafe") return "The existing Local VM is missing its durable workspace; recreate it";
-  if (status.container === "stopped") return "This desktop image cannot safely resume; recreate the Local VM";
-  if (status.desktop_error) return `The Local VM desktop failed to start: ${status.desktop_error}`;
-  if (!status.desktopReady) return "The Local VM started, but Cua Driver is not ready yet";
+  if (status.container === "stopped") return "This browser VM cannot safely resume; recreate the Local VM";
+  if (status.desktop_error) return `The browser VM failed to start: ${status.desktop_error}`;
+  if (!status.desktopReady) return "The browser VM started, but Chromium is not ready yet";
   return null;
 }
 
@@ -378,7 +402,7 @@ function containerLabelsMatch(
   target: LocalVmTarget,
 ): boolean {
   return (
-    imageLabelsMatch(labels) &&
+    browserVmImageLabelsMatch(labels) &&
     labels?.[WORKSPACE_LABEL] === "1" &&
     (target.key === SHARED_LOCAL_VM_TARGET.key
       ? labels?.[TARGET_LABEL] === undefined || labels?.[TARGET_LABEL] === target.label
@@ -407,21 +431,6 @@ function inspectedImage(stdout: string): {
       image?.Config?.Labels ?? image?.config?.Labels ?? image?.config?.labels ?? image?.configuration?.labels,
     id: normalizeImageId(image?.Id ?? image?.id ?? image?.configuration?.descriptor?.digest),
   };
-}
-
-function viewerPassword(env: string[] | Record<string, string> | undefined): string | null {
-  if (Array.isArray(env)) {
-    return env.find((entry) => entry.startsWith("VNC_PW="))?.slice("VNC_PW=".length) || null;
-  }
-  return env?.VNC_PW || null;
-}
-
-function viewerUrl(password: string | null, port: number | null): string {
-  if (!port) return "";
-  const base = `http://127.0.0.1:${port}/vnc.html`;
-  if (!password) return base;
-  const fragment = new URLSearchParams({ autoconnect: "true", resize: "scale", password });
-  return `${base}#${fragment.toString()}`;
 }
 
 /** The one authoritative `exec … cua-driver` argv. Shared with the BYO-VPS
@@ -469,7 +478,7 @@ export async function containerComputerStatus(
   try {
     const { stdout } = await runner(status.runtime, ["image", "inspect", IMAGE]);
     const image = inspectedImage(stdout);
-    status.image = imageLabelsMatch(image.labels);
+    status.image = browserVmImageLabelsMatch(image.labels);
     status.image_id = image.id;
   } catch {
     // The prepared OpenMausBot derivative has not been built yet.
@@ -510,8 +519,8 @@ export async function containerComputerStatus(
         : "unsafe";
       const resources = detail?.configuration?.resources;
       status.security =
-        (resources?.memoryInBytes ?? 0) >= MEMORY_BYTES && resources?.cpus === 2 ? "hardened" : "unsafe";
-      status.viewer_url = viewerUrl(viewerPassword(detail?.configuration?.environment), status.viewer_port);
+        (resources?.memoryInBytes ?? 0) >= MEMORY_BYTES && resources?.cpus === 1 ? "hardened" : "unsafe";
+      status.viewer_url = "";
     } else {
       const inspected = JSON.parse(stdout) as Array<{
         Config?: { Image?: string; Labels?: Record<string, string>; Env?: string[] };
@@ -538,7 +547,7 @@ export async function containerComputerStatus(
       status.viewer_port = dockerViewerPort(detail?.NetworkSettings?.Ports, target.viewerPort);
       status.imageMatches =
         detail?.Config?.Image === IMAGE &&
-        imageLabelsMatch(detail?.Config?.Labels) &&
+        browserVmImageLabelsMatch(detail?.Config?.Labels) &&
         status.image_id !== null &&
         normalizeImageId(detail?.Image) === status.image_id;
       status.managed = containerLabelsMatch(detail?.Config?.Labels, target);
@@ -550,10 +559,20 @@ export async function containerComputerStatus(
       ) ? "durable" : "unsafe";
       status.security = (
         status.runtime === "podman"
-          ? podmanSecurityIsHardened(detail?.HostConfig, detail?.EffectiveCaps, detail?.BoundingCaps)
-          : dockerSecurityIsHardened(detail?.HostConfig)
+          ? podmanSecurityIsHardened(detail?.HostConfig, detail?.EffectiveCaps, detail?.BoundingCaps, {
+              memoryBytes: MEMORY_BYTES,
+              nanoCpus: NANO_CPUS,
+              pidsLimit: PIDS_LIMIT,
+              shmBytes: SHM_BYTES,
+            })
+          : dockerSecurityIsHardened(detail?.HostConfig, {
+              memoryBytes: MEMORY_BYTES,
+              nanoCpus: NANO_CPUS,
+              pidsLimit: PIDS_LIMIT,
+              shmBytes: SHM_BYTES,
+            })
       ) ? "hardened" : "unsafe";
-      status.viewer_url = viewerUrl(viewerPassword(detail?.Config?.Env), status.viewer_port);
+      status.viewer_url = "";
     }
   } catch {
     // No container with this name.
@@ -568,63 +587,30 @@ export async function containerComputerStatus(
     status.persistence === "durable";
   if (canProbe) {
     try {
-      const expected = `cua-driver ${CUA_DRIVER_VERSION}`;
-      const version = await runner(status.runtime, cuaExecArgs(["--version"], { container: target.containerName }), 8000);
-      if (version.stdout.trim() !== expected) throw new Error(`expected ${expected}`);
-      await runner(status.runtime, cuaExecArgs(["status", "--socket", CUA_SOCKET], { container: target.containerName }), 8000);
-      const health = await runner(
+      const version = await runner(
         status.runtime,
-        cuaExecArgs(["call", "health_report", "{}", "--socket", CUA_SOCKET], { container: target.containerName }),
-        15_000,
+        ["exec", "-u", "cua", target.containerName, "curl", "-sf", "--max-time", "2", "http://127.0.0.1:9222/json/version"],
+        8_000,
       );
-      const report = JSON.parse(health.stdout) as { schema_version?: string; overall?: string; checks?: unknown[] };
-      if (
-        report.schema_version !== "1" ||
-        !Array.isArray(report.checks) ||
-        (report.overall !== "ok" && report.overall !== "degraded")
-      ) {
-        throw new Error(`Cua health report is ${report.overall ?? "invalid"}`);
+      if (!/"Browser"\s*:/.test(version.stdout) && !/"webSocketDebuggerUrl"\s*:/.test(version.stdout)) {
+        throw new Error("Chromium DevTools is not answering");
       }
-      const readinessShot = "/tmp/openmausbot-readiness.png";
       await runner(
         status.runtime,
-        cuaExecArgs([
-          "call",
-          "get_desktop_state",
-          "{}",
-          "--socket",
-          CUA_SOCKET,
-          "--screenshot-out-file",
-          readinessShot,
-        ], { container: target.containerName }),
+        browserCdpExecArgs("screenshot", {}, { container: target.containerName }),
         20_000,
       );
       const captured = await runner(
         status.runtime,
-        ["exec", target.containerName, "base64", "-w0", readinessShot],
+        ["exec", target.containerName, "base64", "-w0", "/tmp/openmausbot-preview.jpg"],
         20_000,
       );
       if (!wholeScreenshot(Buffer.from(captured.stdout.trim(), "base64")).ok) {
-        throw new Error("Cua Driver returned an incomplete readiness screenshot");
+        throw new Error("Chromium returned an incomplete readiness screenshot");
       }
       status.desktopReady = true;
     } catch (error) {
-      // An empty log means XFCE and the supervisor-owned Cua daemon are
-      // probably still starting. A real startup failure should be actionable
-      // in the panel instead of looking like an endless readiness wait.
       status.desktop_error = error instanceof Error ? error.message.slice(0, 320) : null;
-      try {
-        const errorLog = await runner(
-          status.runtime,
-          ["exec", target.containerName, "tail", "-n", "4", "/var/log/supervisor/cua-driver.error.log"],
-          4000,
-        );
-        status.desktop_error =
-          errorLog.stdout.replace(/\s+/g, " ").trim().slice(0, 320) ||
-          status.desktop_error;
-      } catch {
-        // The log may not exist during the first seconds of container boot.
-      }
     }
   }
 
@@ -763,9 +749,19 @@ export interface DockerHardeningConfig {
  * on stop, so a restarted container is a broken one. */
 export function dockerSecurityIsHardened(
   config: DockerHardeningConfig | undefined,
-  options: { restartPolicy?: "no" | "unless-stopped" } = {},
+  options: {
+    restartPolicy?: "no" | "unless-stopped";
+    memoryBytes?: number;
+    nanoCpus?: number;
+    pidsLimit?: number;
+    shmBytes?: number;
+  } = {},
 ): boolean {
   if (!config) return false;
+  const memoryBytes = options.memoryBytes ?? CUA_MEMORY_BYTES;
+  const nanoCpus = options.nanoCpus ?? CUA_NANO_CPUS;
+  const pidsLimit = options.pidsLimit ?? CUA_PIDS_LIMIT;
+  const shmBytes = options.shmBytes ?? CUA_SHM_BYTES;
   const capDrop = (config.CapDrop ?? []).map((cap) => cap.toLowerCase());
   const capAdd = (config.CapAdd ?? [])
     .map((cap) => cap.toLowerCase().replace(/^cap_/, ""))
@@ -777,17 +773,17 @@ export function dockerSecurityIsHardened(
       ? restartPolicy === "unless-stopped"
       : restartPolicy === undefined || restartPolicy === "" || restartPolicy === "no";
   return (
-    config.Memory === MEMORY_BYTES &&
-    (config.MemorySwap ?? 0) === MEMORY_BYTES &&
-    (config.NanoCpus ?? 0) === NANO_CPUS &&
-    config.PidsLimit === PIDS_LIMIT &&
+    config.Memory === memoryBytes &&
+    (config.MemorySwap ?? 0) === memoryBytes &&
+    (config.NanoCpus ?? 0) === nanoCpus &&
+    config.PidsLimit === pidsLimit &&
     capDrop.includes("all") &&
     capAdd.join(",") === "setgid,setuid" &&
     config.Privileged === false &&
     !config.PidMode &&
     config.IpcMode === "private" &&
     !config.UTSMode &&
-    config.ShmSize === SHM_BYTES &&
+    config.ShmSize === shmBytes &&
     (!config.Devices || config.Devices.length === 0) &&
     (!config.DeviceRequests || config.DeviceRequests.length === 0) &&
     !unsafeSecurityOption &&
@@ -807,6 +803,13 @@ export function podmanSecurityIsHardened(
   config: DockerHardeningConfig | undefined,
   effectiveCaps: string[] | undefined,
   boundingCaps: string[] | undefined,
+  options: {
+    restartPolicy?: "no" | "unless-stopped";
+    memoryBytes?: number;
+    nanoCpus?: number;
+    pidsLimit?: number;
+    shmBytes?: number;
+  } = {},
 ): boolean {
   if (!config) return false;
   const normalizeCaps = (caps: string[] | undefined) => (caps ?? [])
@@ -822,7 +825,7 @@ export function podmanSecurityIsHardened(
     PidMode: config.PidMode === "private" ? "" : config.PidMode,
     UTSMode: config.UTSMode === "private" ? "" : config.UTSMode,
     CgroupnsMode: config.CgroupnsMode || "private",
-  });
+  }, options);
 }
 
 function commandErrorText(error: unknown): string {
@@ -843,7 +846,6 @@ export function viewerPortAllocatedError(error: unknown): boolean {
 
 export function containerRunArgs(
   runtime: Runtime,
-  password = "CHANGE_ME",
   target: LocalVmTarget = SHARED_LOCAL_VM_TARGET,
 ): string[] {
   if (runtime === "container" && target.key !== SHARED_LOCAL_VM_TARGET.key) {
@@ -854,11 +856,9 @@ export function containerRunArgs(
     "--label",
     `${MANAGED_LABEL}=1`,
     "--label",
-    `${DRIVER_LABEL}=${CUA_DRIVER_VERSION}`,
+    `${BROWSER_VM_KIND_LABEL}=${BROWSER_VM_KIND}`,
     "--label",
-    `${BASE_IMAGE_LABEL}=${BASE_IMAGE_DIGEST}`,
-    "--label",
-    `${IMAGE_LAYER_LABEL}=${IMAGE_LAYER_VERSION}`,
+    `${BROWSER_VM_LAYER_LABEL}=${BROWSER_VM_LAYER_VERSION}`,
     "--label",
     `${WORKSPACE_LABEL}=1`,
     "--label",
@@ -868,9 +868,9 @@ export function containerRunArgs(
     // Apple container already places each Linux container in a lightweight VM.
     common.push(
       "--memory",
-      "4g",
+      BROWSER_VM_MEMORY,
       "--cpus",
-      "2",
+      BROWSER_VM_CPUS,
       "--cap-drop",
       "ALL",
       "--cap-add",
@@ -878,18 +878,18 @@ export function containerRunArgs(
       "--cap-add",
       "SETGID",
       "--shm-size",
-      "512m",
+      BROWSER_VM_SHM,
     );
   } else {
     common.push(
       "--hostname",
       target.containerName,
       "--memory",
-      "4g",
+      BROWSER_VM_MEMORY,
       "--memory-swap",
-      "4g",
+      BROWSER_VM_MEMORY,
       "--cpus",
-      "2",
+      BROWSER_VM_CPUS,
       "--pids-limit",
       String(PIDS_LIMIT),
       // Pinned explicitly rather than trusting daemon defaults: the shared
@@ -907,7 +907,7 @@ export function containerRunArgs(
       "--cap-add",
       "SETGID",
       "--shm-size",
-      "512m",
+      BROWSER_VM_SHM,
     );
   }
   common.push(
@@ -915,8 +915,6 @@ export function containerRunArgs(
     runtime === "podman"
       ? `type=bind,source=${target.workspaceDir},target=${VM_WORKSPACE_GUEST},relabel=private,U=true`
       : `type=bind,source=${target.workspaceDir},target=${VM_WORKSPACE_GUEST}`,
-    "-e",
-    `VNC_PW=${password}`,
     "-p",
     target.viewerPort
       ? `127.0.0.1:${target.viewerPort}:${INTERNAL_VIEWER_PORT}`
@@ -932,10 +930,9 @@ async function ensureVmWorkspace(platform: NodeJS.Platform, target: LocalVmTarge
 }
 
 async function prepareManagedImage(runtime: Runtime, runner: CommandRunner): Promise<void> {
-  await runner(runtime, ["pull", BASE_IMAGE], 10 * 60_000);
-  const context = await mkdtemp(join(tmpdir(), "openmausbot-cua-image-"));
+  const context = await mkdtemp(join(tmpdir(), "openmausbot-browser-vm-"));
   try {
-    await writeFile(join(context, "Dockerfile"), managedImageDockerfile(), { mode: 0o600 });
+    await writeFile(join(context, "Dockerfile"), browserVmDockerfile(), { mode: 0o600 });
     await runner(runtime, ["build", "-t", IMAGE, context], 10 * 60_000);
   } finally {
     await rm(context, { recursive: true, force: true });
@@ -958,7 +955,7 @@ export async function containerComputerAction(
     throw Object.assign(new Error("A Local VM already exists; remove it before creating a replacement"), { status: 409 });
   }
   if (action === "run" && !before.image) {
-    throw Object.assign(new Error("Prepare the Cua desktop image before creating the Local VM"), { status: 409 });
+    await prepareManagedImage(runtime, runner);
   }
   if (action === "run" && !before.create_supported) {
     throw Object.assign(new Error(before.problem ?? "This runtime cannot create a per-bot Local VM"), { status: 409 });
@@ -979,7 +976,7 @@ export async function containerComputerAction(
     if (action === "run") await ensureVmWorkspace(platform, target);
     const args =
       action === "run"
-        ? containerRunArgs(runtime, randomBytes(6).toString("base64url"), target)
+        ? containerRunArgs(runtime, target)
         : action === "remove"
           ? ["rm", runtime === "container" ? "--force" : "-f", target.containerName]
           : [action, target.containerName];
@@ -994,7 +991,7 @@ export async function containerComputerAction(
       ).catch(() => undefined);
       await runner(
         runtime,
-        containerRunArgs(runtime, randomBytes(6).toString("base64url"), { ...target, viewerPort: null }),
+        containerRunArgs(runtime, { ...target, viewerPort: null }),
         2 * 60_000,
       );
     }
@@ -1055,18 +1052,10 @@ export async function containerComputerScreenshot(
   }
   if (cacheable) screenshotStatusCache.set(target.key, { status, expiresAt: now + SCREENSHOT_STATUS_TTL_MS });
   try {
-    const screenshot = "/tmp/openmausbot-preview.png";
+    const screenshot = "/tmp/openmausbot-preview.jpg";
     await runner(
       status.runtime,
-      cuaExecArgs([
-        "call",
-        "get_desktop_state",
-        "{}",
-        "--socket",
-        CUA_SOCKET,
-        "--screenshot-out-file",
-        screenshot,
-      ], { container: target.containerName }),
+      browserCdpExecArgs("screenshot", {}, { container: target.containerName }),
       30_000,
     );
     const { stdout } = await runner(
@@ -1077,7 +1066,7 @@ export async function containerComputerScreenshot(
     const data = stdout.trim();
     const checked = wholeScreenshot(Buffer.from(data, "base64"));
     if (!checked.ok) {
-      throw Object.assign(new Error("Cua Driver returned an incomplete screenshot"), { status: 502 });
+      throw Object.assign(new Error("Chromium returned an incomplete screenshot"), { status: 502 });
     }
     return `data:${checked.mime};base64,${data}`;
   } catch (error) {
@@ -1152,24 +1141,22 @@ export function setupCommands(
       start: null,
       stop: null,
       remove: null,
-      view: target.viewerPort ? `http://127.0.0.1:${target.viewerPort}/vnc.html` : "",
+      view: "",
     };
   }
   const command = (args: string[]) => [runtime, ...args].join(" ");
   return {
     install,
     runtimeStart,
-    // This is the inspectable base download. The normal Prepare button also
-    // builds the checksum-pinned 0.20.0 derivative automatically.
-    pull: command(["pull", BASE_IMAGE]),
+    pull: command(["build", "-t", IMAGE, "-"]),
     run:
       runtime === "container" && target.key !== SHARED_LOCAL_VM_TARGET.key
         ? null
-        : command(containerRunArgs(runtime, "CHANGE_ME", target)),
+        : command(containerRunArgs(runtime, target)),
     start: null,
     stop: command(["stop", target.containerName]),
     remove: command(["rm", runtime === "container" ? "--force" : "-f", target.containerName]),
-    view: target.viewerPort ? `http://127.0.0.1:${target.viewerPort}/vnc.html` : "",
+    view: "",
   };
 }
 

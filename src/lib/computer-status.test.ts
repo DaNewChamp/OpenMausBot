@@ -10,11 +10,11 @@ describe("computer status summary", () => {
     });
     expect(computerStatusSummary({ phase: "vm" })).toMatchObject({
       title: "Linux VM ready",
-      detail: expect.stringContaining("take turns"),
+      detail: expect.stringContaining("Take control"),
     });
     expect(computerStatusSummary({ phase: "vm", shared: false })).toMatchObject({
       title: "Linux VM ready",
-      detail: expect.stringContaining("private container"),
+      detail: expect.stringContaining("private browser"),
     });
   });
 

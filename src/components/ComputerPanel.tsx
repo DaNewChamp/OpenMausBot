@@ -89,9 +89,8 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
   const [boxState, setBoxState] = useState<string | null>(null);
   const [polledFrame, setPolledFrame] = useState<{ png: string; mime: string } | null>(null);
   const [vmFrame, setVmFrame] = useState<string | null>(null);
-  // The Local VM's interactive noVNC viewer (passworded, autoconnect). The
-  // preview below is a periodic screenshot that swallows clicks — this URL is
-  // the only way a person can actually drive the VM.
+  // Headless browser VM: the preview is a Chromium screenshot. Take control,
+  // then click and type here. noVNC is for the BYO-VPS Cua desktop only.
   const [vmViewerUrl, setVmViewerUrl] = useState<string | null>(null);
   const [vmStatus, setVmStatus] = useState<LocalVmStatus | null>(null);
   const [vpsStatus, setVpsStatus] = useState<VpsComputerStatus | null>(null);
@@ -345,14 +344,11 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
       : phase === "ready" || phase === "starting"
         ? cloudFrame && `data:${cloudFrame.mime};base64,${cloudFrame.png}`
         : null;
-  const previewOpensDesktop = Boolean(
-    frameSrc &&
-      ((phase === "vm" && vmViewerUrl) || phase === "ready"),
-  );
-
+  const previewOpensDesktop = Boolean(frameSrc && phase === "ready");
   // who-is-driving: SSE keeps this fresh; the mount fetch covers a panel
   // opened after the last frame (e.g. an app reload mid-hold)
   const control = state.computerControl[bot.id] ?? { held: false, helpReason: null };
+  const drivingBrowser = phase === "vm" && control.held && Boolean(frameSrc);
   useEffect(() => {
     let alive = true;
     api(`/api/bots/${bot.id}/computer/control`)
@@ -390,6 +386,54 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
     requestControl(action)
       .catch((e) => setError(e.message))
       .finally(() => setControlPending(false));
+  };
+
+  const sendBrowserInput = async (body: Record<string, unknown>) => {
+    await api(`/api/bots/${bot.id}/local-computer/input`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  };
+
+  const onBrowserPreviewClick = async (event: React.MouseEvent<HTMLImageElement>) => {
+    if (!drivingBrowser) return;
+    const img = event.currentTarget;
+    const rect = img.getBoundingClientRect();
+    if (!img.naturalWidth || !rect.width || !rect.height) return;
+    const x = Math.round(((event.clientX - rect.left) / rect.width) * img.naturalWidth);
+    const y = Math.round(((event.clientY - rect.top) / rect.height) * img.naturalHeight);
+    try {
+      await sendBrowserInput({
+        action: "click",
+        x,
+        y,
+        button: event.button === 2 ? "right" : "left",
+        double: event.detail === 2,
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const onBrowserPreviewKey = async (event: React.KeyboardEvent<HTMLImageElement>) => {
+    if (!drivingBrowser) return;
+    if (event.key === "Tab") return;
+    event.preventDefault();
+    try {
+      if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        await sendBrowserInput({ action: "type", text: event.key });
+        return;
+      }
+      const parts = [
+        event.ctrlKey || event.metaKey ? "ctrl" : "",
+        event.altKey ? "alt" : "",
+        event.shiftKey && event.key.length > 1 ? "shift" : "",
+        event.key === "Enter" ? "Return" : event.key,
+      ].filter(Boolean);
+      await sendBrowserInput({ action: "key", keys: parts.join("+") });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    }
   };
 
   const openDesktop = async () => {
@@ -682,8 +726,12 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
             <img
               src={frameSrc}
               alt={`${bot.name}'s screen`}
-              className="h-full w-full object-contain"
-              title={phase === "vm" ? "Watch-only preview" : undefined}
+              className={cn("h-full w-full object-contain", drivingBrowser && "cursor-crosshair")}
+              title={drivingBrowser ? "You have the wheel — click and type here" : phase === "vm" ? "Watch-only preview" : undefined}
+              tabIndex={drivingBrowser ? 0 : undefined}
+              onClick={drivingBrowser ? (event) => void onBrowserPreviewClick(event) : undefined}
+              onContextMenu={drivingBrowser ? (event) => { event.preventDefault(); void onBrowserPreviewClick(event); } : undefined}
+              onKeyDown={drivingBrowser ? (event) => void onBrowserPreviewKey(event) : undefined}
             />
           ) : (
             <div className="flex flex-col items-center gap-2 px-6 text-center text-ink-secondary">
@@ -847,7 +895,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
             {fleetVm.blockReason
               ?? (vmStatus?.mode === "per-bot"
                 ? "This bot gets its own Linux container on that machine."
-                : "Every bot uses this Linux VM. Only one can drive the desktop at a time.")}
+                : "Every bot uses this Linux browser + shell. Only one can drive it at a time.")}
           </div>
         </div>
 
@@ -890,7 +938,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
             <div className="mt-2 flex gap-2">
               <button
                 onClick={() =>
-                  phase === "vm" || phase === "ready" ? void openDesktop() : controlAction("take")
+                  phase === "ready" ? void openDesktop() : controlAction("take")
                 }
                 disabled={controlPending || pending === "join"}
                 className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-accent py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
@@ -913,7 +961,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
             <div className="text-[13px] leading-relaxed text-ink">
               You have the wheel. The bot takes no clicks or keystrokes until you hand it back.
               {phase === "ready" && " Use Open desktop to drive."}
-              {phase === "vm" && " Use Open desktop to drive. The preview here is watch-only."}
+              {phase === "vm" && " Click the preview to drive the browser. Type while it is focused."}
             </div>
             <button
               onClick={() => {
@@ -928,25 +976,14 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
             </button>
           </div>
         )}
-        {phase === "vm" && vmViewerUrl && control.held && (
-          <button
-            onClick={() => void openDesktop()}
-            disabled={pending === "join"}
-            className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
-            title="Open the Local VM's live desktop inside V Bot"
-          >
-            {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Monitor size={14} />}
-            Open live desktop
-          </button>
-        )}
         {phase === "vm" && !isDesktopDemoMode() && !control.held && !control.helpReason && (
           <button
-            onClick={() => void openDesktop()}
-            disabled={controlPending || pending === "join" || !vmViewerUrl}
+            onClick={() => controlAction("take")}
+            disabled={controlPending || pending === "join"}
             className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
-            title="Pause the bot's hands and open the Local VM's live desktop"
+            title="Pause the bot's hands and drive this browser yourself"
           >
-            {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Hand size={14} />}
+            {controlPending ? <Loader2 size={14} className="animate-spin" /> : <Hand size={14} />}
             Take control
           </button>
         )}

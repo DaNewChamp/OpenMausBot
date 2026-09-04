@@ -20,7 +20,8 @@
     "server/engines/contracts.ts",
     "server/engines/discovery.ts",
     "server/engines/bindings.ts",
-    "server/engines/hermes.ts"
+    "server/engines/hermes.ts",
+    "server/browser-vm-image.ts"
   ],
   "exclude": [
     "bridge/src/**/*.test.ts",

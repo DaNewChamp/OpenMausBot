@@ -221,7 +221,7 @@ export function LocalComputerSection() {
     <>
       <Card
         title="VM location"
-        subtitle="Every bot uses this Linux VM. Pick a machine from your connected fleet, then Deploy."
+        subtitle="Every bot uses this Linux browser + shell. Pick a machine from your connected fleet, then Deploy."
       >
         <FleetVmLocationPicker
           hosts={fleetVm.hosts}
@@ -273,8 +273,8 @@ export function LocalComputerSection() {
       <Card
         title="Local VM"
         subtitle={perBot
-          ? `Private Cua Linux desktops on the selected fleet machine, with one container and durable workspace per bot. Distinct bots can work concurrently and idle desktops stop after 8 hours.`
-          : `A shared Cua Linux sandbox on the selected fleet machine for bots to browse and work in: isolated, backed by one durable workspace, and automatically recycled after 8 hours without activity.`}
+          ? `Private headless Chromium + shell containers on the selected fleet machine, with one container and durable workspace per bot. Distinct bots can work concurrently and idle VMs stop after 8 hours.`
+          : `A shared headless Chromium + shell sandbox on the selected fleet machine: isolated, backed by one durable workspace, and automatically recycled after 8 hours without activity.`}
       >
         <div className="flex flex-wrap items-center gap-2">
           <span
@@ -306,9 +306,9 @@ export function LocalComputerSection() {
           >
             <RefreshCw size={12} /> Re-check
           </button>
-          {ready && !perBot && (
+          {ready && !perBot && status?.viewer_url?.startsWith("http") && (
             <a
-              href={status?.viewer_url ?? c?.view}
+              href={status.viewer_url}
               target="_blank"
               rel="noreferrer"
               className="flex items-center gap-1.5 rounded-lg border border-hairline/40 px-2.5 py-1 text-[12.5px] text-ink hover:bg-control"
@@ -322,7 +322,7 @@ export function LocalComputerSection() {
 
       <Card
         title="Isolation"
-        subtitle="Shared keeps the original single-desktop behavior. Per bot gives each bot its own container, workspace, viewer port, lease, and idle timer."
+        subtitle="Shared keeps one browser VM for every bot. Per bot gives each bot its own container, workspace, debugger port, lease, and idle timer."
       >
         <div className="flex overflow-hidden rounded-lg border border-hairline/40">
           {(["shared", "per-bot"] as const).map((mode, index) => (
@@ -344,7 +344,7 @@ export function LocalComputerSection() {
         <div className="mt-3 flex items-center justify-between gap-3">
           <div>
             <div className="text-[13px] text-ink">Maximum per-bot desktops</div>
-            <div className="text-[11.5px] text-ink-secondary">Limits storage and host resource use; each running desktop may use up to 4 GB and 2 CPUs.</div>
+            <div className="text-[11.5px] text-ink-secondary">Limits storage and host resource use; each running browser VM may use up to 1 GB and 1 CPU.</div>
           </div>
           <select
             aria-label="Maximum per-bot desktops"
@@ -359,7 +359,7 @@ export function LocalComputerSection() {
         {policyPending && <div className="mt-2 flex items-center gap-1.5 text-[12px] text-ink-secondary"><Loader2 size={12} className="animate-spin" /> Saving…</div>}
       </Card>
 
-      <Card title="Setup" subtitle="Once a container runtime is open, Vi Bot prepares Cua and the VM for you.">
+      <Card title="Setup" subtitle="Once a container runtime is open, Vi Bot prepares the browser VM for you.">
         <div className="flex flex-col gap-4">
           <Step n={1} title="Install a container runtime" done={Boolean(status?.runtime)}>
             <div className="text-[13px] leading-relaxed text-ink-secondary">
@@ -386,9 +386,9 @@ export function LocalComputerSection() {
             )}
           </Step>
 
-          <Step n={3} title="Prepare the Cua desktop (one-time download and build)" done={Boolean(status?.image)}>
+          <Step n={3} title="Prepare the browser VM (one-time download and build)" done={Boolean(status?.image)}>
             {status?.daemonUp && (
-              <ActionButton action="pull" pending={pending} onClick={() => void act("pull")}>Prepare Cua desktop</ActionButton>
+              <ActionButton action="pull" pending={pending} onClick={() => void act("pull")}>Prepare browser VM</ActionButton>
             )}
             {c?.pull && <details className="text-[12px] text-ink-secondary"><summary className="cursor-pointer">Show base-image download</summary><div className="mt-2"><CommandLine command={c.pull} /></div></details>}
           </Step>
@@ -417,13 +417,13 @@ export function LocalComputerSection() {
                     <RotateCcw size={13} /> Delete and recreate
                   </ActionButton>
                 ) : (
-                  <div className="text-[13px] text-ink-secondary">Prepare the pinned Cua desktop above before replacing this VM.</div>
+                  <div className="text-[13px] text-ink-secondary">Prepare the browser VM image above before replacing this VM.</div>
                 )}
               </>
             ) : status?.container === "stopped" ? (
               <ActionButton action="start" pending={pending} onClick={() => void act("start")}>Start Local VM</ActionButton>
             ) : status?.container === "running" ? (
-              <div className="flex items-center gap-2 text-[13px] text-ink-secondary"><Loader2 size={13} className="animate-spin" /> Waiting for the desktop…</div>
+              <div className="flex items-center gap-2 text-[13px] text-ink-secondary"><Loader2 size={13} className="animate-spin" /> Waiting for Chromium…</div>
             ) : status?.image ? (
               <ActionButton action="run" pending={pending} onClick={() => void act("run")}>Create Local VM</ActionButton>
             ) : null}
@@ -444,8 +444,8 @@ export function LocalComputerSection() {
       <Card
         title="Safety and storage"
         subtitle={perBot
-          ? `Cua Driver operates only each VM's desktop. Every bot gets a private host folder mounted at ${status?.workspace_guest_path ?? "/home/cua/workspace"}; its files and browser profile survive VM replacement. Viewers bind only to loopback, and exact bot-derived targets prevent one bot from attaching to another bot's container. Each VM keeps the existing 4 GB, 2 CPU, 512-process and dropped-capability limits. VMs can still reach the internet.`
-          : `Cua Driver operates only the VM's desktop. Exactly one private host folder is mounted at ${status?.workspace_guest_path ?? "/home/cua/workspace"}; files and browser sign-ins there survive VM replacement, while everything elsewhere in the VM remains disposable. The password-protected viewer is available only on this machine. Docker and Podman runs are limited to 4 GB memory, 2 CPUs and 512 processes; all Linux capabilities are dropped except the two the desktop supervisor needs to switch to its unprivileged user. The VM can still reach the internet, and bots share it one at a time.`}
+          ? `Each bot gets a private host folder mounted at ${status?.workspace_guest_path ?? "/home/cua/workspace"}; git checkouts and the Chromium profile survive VM replacement. The debugger binds only to loopback, and exact bot-derived targets prevent one bot from attaching to another bot's container. Each VM is limited to 1 GB, 1 CPU, 256 processes, and dropped capabilities. VMs can still reach the internet.`
+          : `Exactly one private host folder is mounted at ${status?.workspace_guest_path ?? "/home/cua/workspace"}; files and browser sign-ins there survive VM replacement, while everything elsewhere in the VM remains disposable. Drive the browser from the Computer pane. Docker and Podman runs are limited to 1 GB memory, 1 CPU and 256 processes; all Linux capabilities are dropped except the two needed to switch to the unprivileged user. The VM can still reach the internet, and bots share it one at a time.`}
       >
         {existing && (
           <div className="flex flex-wrap gap-2">

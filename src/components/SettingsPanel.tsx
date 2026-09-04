@@ -631,7 +631,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             />
             <div className="mt-1.5 text-[11.5px] leading-relaxed text-ink-secondary">
               {fleetVm.blockReason
-                ?? "Bots take turns driving this desktop. Deploy it from the Computer pane or App Settings → Local VM."}
+                ?? "Bots take turns driving this browser + shell. Deploy it from the Computer pane or App Settings → Local VM."}
             </div>
             <button
               type="button"

@@ -1,10 +1,10 @@
 // Paired-phone input for a bot's Local VM desktop.
 //
 // Narrower than the agent invoke surface: click, scroll, type, and key only.
-// Every action runs through Cua inside the container; nothing reaches the
-// host Mac shell or an arbitrary exec channel.
+// Every action runs through Chromium DevTools inside the container; nothing
+// reaches the host Mac shell or an arbitrary exec channel.
+import { browserCdpExecArgs } from "./browser-vm-image.ts";
 import type { CommandRunner, Runtime } from "./container-computer.ts";
-import { CUA_SOCKET, cuaExecArgs } from "./container-computer.ts";
 import { sanitizeLocalVmInvokeText } from "./local-vm-invoke.ts";
 
 export type LocalVmPhoneInputAction = "click" | "scroll" | "type" | "key";
@@ -26,20 +26,16 @@ export interface LocalVmPhoneInputResult {
   isError: boolean;
 }
 
-function cuaJson(payload: object): string {
-  return JSON.stringify(payload);
-}
-
-async function cuaCall(
+async function cdpCall(
   runner: CommandRunner,
   runtime: Runtime,
   container: string,
-  tool: string,
+  action: string,
   payload: object,
 ): Promise<string> {
   const { stdout } = await runner(
     runtime,
-    cuaExecArgs(["call", tool, cuaJson(payload), "--socket", CUA_SOCKET], { container }),
+    browserCdpExecArgs(action, payload, { container }),
     30_000,
   );
   return stdout.trim();
@@ -133,13 +129,13 @@ export async function executeLocalVmPhoneInput(
 ): Promise<LocalVmPhoneInputResult> {
   try {
     if (input.action === "click") {
-      const out = await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "click", {
+      const out = await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "mouse", {
         x: input.x,
         y: input.y,
         button: input.button ?? "left",
         double: input.double === true,
       });
-      return { text: sanitizeLocalVmInvokeText(out || "Clicked on this bot's Local VM desktop."), isError: false };
+      return { text: sanitizeLocalVmInvokeText(out || "Clicked in this bot's browser."), isError: false };
     }
     if (input.action === "scroll") {
       const payload: Record<string, unknown> = {
@@ -148,15 +144,15 @@ export async function executeLocalVmPhoneInput(
       };
       if (input.x !== undefined) payload.x = input.x;
       if (input.y !== undefined) payload.y = input.y;
-      const out = await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "scroll", payload);
-      return { text: sanitizeLocalVmInvokeText(out || "Scrolled on this bot's Local VM desktop."), isError: false };
+      const out = await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "scroll", payload);
+      return { text: sanitizeLocalVmInvokeText(out || "Scrolled in this bot's browser."), isError: false };
     }
     if (input.action === "type") {
-      const out = await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "type_text", { text: input.text });
-      return { text: sanitizeLocalVmInvokeText(out || "Typed on this bot's Local VM desktop."), isError: false };
+      const out = await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "type", { text: input.text });
+      return { text: sanitizeLocalVmInvokeText(out || "Typed in this bot's browser."), isError: false };
     }
-    const out = await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "press_key", { keys: input.keys });
-    return { text: sanitizeLocalVmInvokeText(out || "Pressed a key on this bot's Local VM desktop."), isError: false };
+    const out = await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "key", { keys: input.keys });
+    return { text: sanitizeLocalVmInvokeText(out || "Pressed a key in this bot's browser."), isError: false };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { text: sanitizeLocalVmInvokeText(message), isError: true };

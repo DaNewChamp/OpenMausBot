@@ -8,9 +8,8 @@
 
 import { redactSecretsInText } from "./redact.ts";
 import { normalizeBrowserUrl, safeBrowserUrl } from "./computer-observation.ts";
+import { browserCdpExecArgs } from "./browser-vm-image.ts";
 import {
-  CUA_SOCKET,
-  cuaExecArgs,
   type CommandRunner,
   type Runtime,
 } from "./container-computer.ts";
@@ -50,7 +49,7 @@ export type LocalVmEnsureResult =
   | { state: "blocked"; retryable: false; message: string };
 
 export const LOCAL_VM_STARTING_MESSAGE =
-  "The Local VM desktop is still starting. Retry the exact same computer action shortly. Do not control the user's Mac.";
+  "The Local VM is still starting. Retry the exact same computer action shortly. Do not control the user's machine.";
 
 const HOST_ENGINE_ERROR =
   "this model engine cannot use the Local VM — choose Claude or an ACP engine, or select another computer destination";
@@ -59,18 +58,18 @@ export const LOCAL_VM_INVOKE_TOOLS = [
   {
     name: "screenshot",
     description:
-      "See this bot's own Local VM desktop. This is not the user's Mac. Capture the screen before clicking or typing.",
+      "See this bot's own browser. This is not the user's Mac. Capture the page before clicking or typing.",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "get_desktop_state",
     description:
-      "Inspect windows, apps, and accessibility targets on this bot's Local VM desktop. Prefer this over raw coordinates. This is not the user's Mac.",
+      "Inspect the page's accessibility targets in this bot's browser. Prefer this over raw coordinates. This is not the user's Mac.",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "click",
-    description: "Click on this bot's Local VM desktop. Use coordinates from the last screenshot or desktop state.",
+    description: "Click in this bot's browser. Use coordinates from the last screenshot or page snapshot.",
     inputSchema: {
       type: "object",
       properties: {
@@ -84,7 +83,7 @@ export const LOCAL_VM_INVOKE_TOOLS = [
   },
   {
     name: "type_text",
-    description: "Type text at the current focus on this bot's Local VM desktop. Never type the user's passwords.",
+    description: "Type text at the current focus in this bot's browser. Never type the user's passwords.",
     inputSchema: {
       type: "object",
       properties: { text: { type: "string" } },
@@ -93,7 +92,7 @@ export const LOCAL_VM_INVOKE_TOOLS = [
   },
   {
     name: "press_key",
-    description: "Press a key or chord on this bot's Local VM desktop, e.g. Return, Tab, ctrl+l.",
+    description: "Press a key or chord in this bot's browser, e.g. Return, Tab, ctrl+l.",
     inputSchema: {
       type: "object",
       properties: { keys: { type: "string" } },
@@ -103,7 +102,7 @@ export const LOCAL_VM_INVOKE_TOOLS = [
   {
     name: "launch_app",
     description:
-      "Open an application inside this bot's Local VM, such as a browser. This cannot launch apps on the user's Mac.",
+      "Open an application inside this bot's Linux container. The browser is already running; use open_url for sites. This cannot launch apps on the user's Mac.",
     inputSchema: {
       type: "object",
       properties: { app: { type: "string" } },
@@ -113,7 +112,7 @@ export const LOCAL_VM_INVOKE_TOOLS = [
   {
     name: "open_url",
     description:
-      "Open an http(s) URL in this bot's Local VM browser. Use this when the user asks you to browse or open a site on your computer. This is not the user's Mac.",
+      "Open an http(s) URL in this bot's browser. Use this when the user asks you to browse or open a site on your computer. This is not the user's Mac.",
     inputSchema: {
       type: "object",
       properties: { url: { type: "string" } },
@@ -123,7 +122,7 @@ export const LOCAL_VM_INVOKE_TOOLS = [
   {
     name: "computer_exec",
     description:
-      "Run a shell command on this bot's Local VM (Linux desktop container). Returns stdout/stderr/exit code. This is not the user's Mac.",
+      "Run a shell command on this bot's Linux container (git, node, scripts). Returns stdout/stderr/exit code. This is not the user's Mac. Durable files live in /home/cua/workspace.",
     inputSchema: {
       type: "object",
       properties: { command: { type: "string" } },
@@ -143,15 +142,15 @@ export function botOwnsLocalVm(computer: BotComputer): boolean {
 export function localVmSelfInvokePrompt(mode: LocalVmMode): string {
   const ownership =
     mode === "per-bot"
-      ? "You have your own isolated Linux computer: a Cua sandbox desktop in a container reserved for this bot, hosted on the user's Mac."
-      : "You have a shared, isolated Linux computer: a Cua sandbox desktop in a container on the user's Mac.";
+      ? "You have your own isolated Linux computer: a headless Chromium browser plus a shell in a container reserved for this bot."
+      : "You have a shared, isolated Linux computer: a headless Chromium browser plus a shell in a container.";
   return (
     ` ${ownership}` +
-    " This is YOUR computer, not the user's Mac. Never inspect, click, type, or otherwise control the user's macOS desktop, and never fall back to it." +
-    " Only /home/cua/workspace is durable; save downloads, repositories, working files, and browser profiles there because everything else inside the VM is disposable. No other host folder is mounted." +
-    " When a request needs this computer — browsing, opening a site, clicking, typing, or other desktop work — use the computer and browser tools immediately. Do not ask whether you should use them, and do not wait for a tool picker." +
-    " If a tool reports that the Local VM desktop is still starting or booting, it is a retryable starting state: wait briefly and retry the exact same computer action on this VM. Do not give up or fall back to the user's Mac." +
-    " Inspect the desktop state before acting, prefer accessibility targets over raw coordinates, and work carefully."
+    " This is YOUR computer, not the user's Mac or Windows desktop. Never inspect, click, type, or otherwise control the user's host OS, and never fall back to it." +
+    " Only /home/cua/workspace is durable; clone repositories, save files, and keep git remotes there because everything else inside the VM is disposable. No other host folder is mounted." +
+    " When a request needs this computer — browsing, opening a site, clicking, typing, or running CLI commands — use the computer and browser tools immediately. Do not ask whether you should use them, and do not wait for a tool picker." +
+    " If a tool reports that the Local VM is still starting or booting, it is a retryable starting state: wait briefly and retry the exact same computer action on this VM. Do not give up or fall back to the user's machine." +
+    " Inspect page state before acting, prefer accessibility targets over raw coordinates, and work carefully. Use computer_exec for git, builds, and other shell work."
   );
 }
 
@@ -316,21 +315,16 @@ export interface LocalVmInvokeExecution {
   image?: string;
 }
 
-function cuaJson(payload: object): string {
-  return JSON.stringify(payload);
-}
-
-async function cuaCall(
+async function cdpCall(
   runner: CommandRunner,
   runtime: Runtime,
   container: string,
-  tool: string,
-  payload: object,
-  extra: string[] = [],
+  action: string,
+  payload: object = {},
 ): Promise<string> {
   const { stdout } = await runner(
     runtime,
-    cuaExecArgs(["call", tool, cuaJson(payload), "--socket", CUA_SOCKET, ...extra], { container }),
+    browserCdpExecArgs(action, payload, { container }),
     30_000,
   );
   return stdout.trim();
@@ -357,23 +351,19 @@ export async function executeLocalVmInvokeTool(
   const args = parseInvokeArgs(rawArgs);
   try {
     if (name === "screenshot") {
-      const screenshot = "/tmp/openmausbot-invoke.png";
-      await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "get_desktop_state", {}, [
-        "--screenshot-out-file",
-        screenshot,
-      ]);
+      await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "screenshot");
       const { stdout } = await ctx.runner(
         ctx.runtime,
-        ["exec", ctx.containerName, "base64", "-w0", screenshot],
+        ["exec", ctx.containerName, "base64", "-w0", "/tmp/openmausbot-preview.jpg"],
         30_000,
       );
       const data = stdout.trim();
       if (!data) return { text: "The Local VM screenshot was empty. Retry shortly.", isError: true };
-      return { text: "Captured this bot's Local VM desktop.", isError: false, image: data };
+      return { text: "Captured this bot's browser.", isError: false, image: data };
     }
     if (name === "get_desktop_state") {
-      const out = await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "get_desktop_state", args);
-      return { text: sanitizeLocalVmInvokeText(out || "Inspected this bot's Local VM desktop state."), isError: false };
+      const out = await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "snapshot");
+      return { text: sanitizeLocalVmInvokeText(out || "Inspected this bot's browser page."), isError: false };
     }
     if (name === "open_url") {
       const url = field(args, "url");
@@ -382,11 +372,8 @@ export async function executeLocalVmInvokeTool(
       if (!normalized || !publicUrl) {
         return { text: "open_url needs an http(s) URL.", isError: true };
       }
-      await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "launch_app", {
-        app: "google-chrome",
-        arguments: [normalized],
-      });
-      return { text: `Opened ${publicUrl} in this bot's Local VM browser.`, isError: false };
+      await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "navigate", { url: normalized });
+      return { text: `Opened ${publicUrl} in this bot's browser.`, isError: false };
     }
     if (name === "click") {
       const x = Number(field(args, "x"));
@@ -394,33 +381,35 @@ export async function executeLocalVmInvokeTool(
       if (!Number.isFinite(x) || !Number.isFinite(y)) {
         return { text: "click needs numeric x and y.", isError: true };
       }
-      const out = await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "click", {
+      const out = await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "mouse", {
         x: Math.round(x),
         y: Math.round(y),
         button: field(args, "button") === "right" ? "right" : "left",
         double: field(args, "double") === true,
       });
-      return { text: sanitizeLocalVmInvokeText(out || "Clicked on this bot's Local VM desktop."), isError: false };
+      return { text: sanitizeLocalVmInvokeText(out || "Clicked in this bot's browser."), isError: false };
     }
     if (name === "type_text") {
       const text = field(args, "text");
       if (typeof text !== "string" || !text) return { text: "type_text needs text.", isError: true };
-      const out = await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "type_text", { text });
-      return { text: sanitizeLocalVmInvokeText(out || "Typed on this bot's Local VM desktop."), isError: false };
+      const out = await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "type", { text });
+      return { text: sanitizeLocalVmInvokeText(out || "Typed in this bot's browser."), isError: false };
     }
     if (name === "press_key") {
       const keysRaw = field(args, "keys");
       const keys = typeof keysRaw === "string" ? keysRaw.trim() : "";
       if (!keys) return { text: "press_key needs keys.", isError: true };
-      const out = await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "press_key", { keys });
-      return { text: sanitizeLocalVmInvokeText(out || "Pressed a key on this bot's Local VM desktop."), isError: false };
+      const out = await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "key", { keys });
+      return { text: sanitizeLocalVmInvokeText(out || "Pressed a key in this bot's browser."), isError: false };
     }
     if (name === "launch_app") {
       const appRaw = field(args, "app");
       const app = typeof appRaw === "string" ? appRaw.trim() : "";
       if (!app) return { text: "launch_app needs an app name.", isError: true };
-      const out = await cuaCall(ctx.runner, ctx.runtime, ctx.containerName, "launch_app", { app });
-      return { text: sanitizeLocalVmInvokeText(out || `Launched ${app} on this bot's Local VM.`), isError: false };
+      if (/chrom|browser|firefox/i.test(app)) {
+        return { text: "The browser is already running. Use open_url to load a site.", isError: false };
+      }
+      return { text: `This computer is a browser plus shell. There is no GUI app named ${app}. Use computer_exec for CLI tools.`, isError: true };
     }
     if (name === "computer_exec") {
       const commandRaw = field(args, "command");
@@ -430,7 +419,7 @@ export async function executeLocalVmInvokeTool(
       try {
         const { stdout } = await ctx.runner(
           ctx.runtime,
-          ["exec", ctx.containerName, "bash", "-lc", trimmed],
+          ["exec", "-u", "cua", "-w", "/home/cua/workspace", "-e", "HOME=/home/cua", ctx.containerName, "bash", "-lc", trimmed],
           120_000,
         );
         return { text: sanitizeLocalVmInvokeText(stdout || "Command finished on this bot's Local VM."), isError: false };

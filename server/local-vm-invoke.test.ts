@@ -62,6 +62,7 @@ describe("Local VM self-invoke capability gate", () => {
     expect(contract.exposeTools).toBe(true);
     expect(contract.mount).toBe("vm");
     expect(contract.allowHostFallback).toBe(false);
+    expect(contract.prompt).toContain("headless Chromium");
     expect(contract.prompt).toContain("YOUR computer, not the user's Mac");
     expect(contract.prompt).toContain("use the computer and browser tools immediately");
     expect(contract.prompt).toContain("Do not ask whether you should use them");
@@ -369,7 +370,7 @@ describe("Local VM execute coverage and contract drift prevention", () => {
     const result = await executeLocalVmInvokeTool("screenshot", {}, ctx(happyRunner));
     expect(result.isError).toBe(false);
     expect(result.image).toBe("iVBORw0KGgoAAAANSUhEUg==");
-    expect(result.text).toContain("Captured this bot's Local VM desktop");
+    expect(result.text).toContain("Captured this bot's browser");
 
     const emptyRunner = vi.fn(async (_runtime: any, args: string[]) => {
       if (args.includes("base64")) return { stdout: "" };
@@ -399,8 +400,9 @@ describe("Local VM execute coverage and contract drift prevention", () => {
     expect(good.isError).toBe(false);
     expect(runner).toHaveBeenCalledTimes(1);
     const execArgs = (runner.mock.calls as any)[0][1] as string[];
-    const payloadIndex = execArgs.indexOf("click") + 1;
-    const payload = JSON.parse(execArgs[payloadIndex]);
+    expect(execArgs).toContain("mouse");
+    const encoded = execArgs.at(-1) as string;
+    const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
     expect(payload).toEqual({
       x: 100,
       y: 201,
@@ -420,8 +422,8 @@ describe("Local VM execute coverage and contract drift prevention", () => {
     expect(good.isError).toBe(false);
     expect(runner).toHaveBeenCalledTimes(1);
     const execArgs = (runner.mock.calls as any)[0][1] as string[];
-    const payloadIndex = execArgs.indexOf("type_text") + 1;
-    const payload = JSON.parse(execArgs[payloadIndex]);
+    expect(execArgs).toContain("type");
+    const payload = JSON.parse(Buffer.from(execArgs.at(-1) as string, "base64url").toString("utf8"));
     expect(payload).toEqual({ text: "hello world" });
   });
 
@@ -436,8 +438,8 @@ describe("Local VM execute coverage and contract drift prevention", () => {
     expect(good.isError).toBe(false);
     expect(runner).toHaveBeenCalledTimes(1);
     const execArgs = (runner.mock.calls as any)[0][1] as string[];
-    const payloadIndex = execArgs.indexOf("press_key") + 1;
-    const payload = JSON.parse(execArgs[payloadIndex]);
+    expect(execArgs).toContain("key");
+    const payload = JSON.parse(Buffer.from(execArgs.at(-1) as string, "base64url").toString("utf8"));
     expect(payload).toEqual({ keys: "Return" });
   });
 
@@ -448,13 +450,15 @@ describe("Local VM execute coverage and contract drift prevention", () => {
     expect(bad.text).toContain("needs an app name");
     expect(runner).not.toHaveBeenCalled();
 
-    const good = await executeLocalVmInvokeTool("launch_app", { app: "gedit" }, ctx(runner));
-    expect(good.isError).toBe(false);
-    expect(runner).toHaveBeenCalledTimes(1);
-    const execArgs = (runner.mock.calls as any)[0][1] as string[];
-    const payloadIndex = execArgs.indexOf("launch_app") + 1;
-    const payload = JSON.parse(execArgs[payloadIndex]);
-    expect(payload).toEqual({ app: "gedit" });
+    const missing = await executeLocalVmInvokeTool("launch_app", { app: "gedit" }, ctx(runner));
+    expect(missing.isError).toBe(true);
+    expect(missing.text).toContain("browser plus shell");
+    expect(runner).not.toHaveBeenCalled();
+
+    const browser = await executeLocalVmInvokeTool("launch_app", { app: "google-chrome" }, ctx(runner));
+    expect(browser.isError).toBe(false);
+    expect(browser.text).toContain("already running");
+    expect(runner).not.toHaveBeenCalled();
   });
 
   it("executes open_url only for valid http(s) URLs and rejects arbitrary protocols", async () => {
@@ -472,12 +476,9 @@ describe("Local VM execute coverage and contract drift prevention", () => {
     expect(good.text).toContain("example.com");
     expect(runner).toHaveBeenCalledTimes(1);
     const execArgs = (runner.mock.calls as any)[0][1] as string[];
-    const payloadIndex = execArgs.indexOf("launch_app") + 1;
-    const payload = JSON.parse(execArgs[payloadIndex]);
-    expect(payload).toEqual({
-      app: "google-chrome",
-      arguments: ["https://example.com/test"],
-    });
+    expect(execArgs).toContain("navigate");
+    const payload = JSON.parse(Buffer.from(execArgs.at(-1) as string, "base64url").toString("utf8"));
+    expect(payload).toEqual({ url: "https://example.com/test" });
   });
 
   it("catches and sanitizes command runner exceptions", async () => {

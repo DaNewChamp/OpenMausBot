@@ -25,7 +25,7 @@ export interface BridgeRecord {
 
 export type BridgeJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
-export type LocalVmBridgeJobKind = "local-vm-status" | "local-vm-action" | "local-vm-screenshot";
+export type LocalVmBridgeJobKind = "local-vm-status" | "local-vm-action" | "local-vm-screenshot" | "local-vm-input";
 
 export type HermesBridgeJobKind =
   | "hermes-discover"
@@ -60,6 +60,17 @@ export interface HermesBridgeSignInPayload {
 export interface LocalVmJobPayload {
   botId: string;
   action?: "run" | "stop" | "remove" | "recreate";
+  input?: {
+    action: "click" | "scroll" | "type" | "key";
+    x?: number;
+    y?: number;
+    button?: "left" | "right";
+    double?: boolean;
+    direction?: "up" | "down";
+    clicks?: number;
+    text?: string;
+    keys?: string;
+  };
 }
 
 interface BridgeJobBase {

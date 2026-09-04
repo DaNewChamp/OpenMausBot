@@ -7854,25 +7854,36 @@ const server = createServer(async (req, res) => {
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer\/input$/);
     if (m && method === "POST") {
-      if (req.headers["x-openmausbot-companion"] !== "1") {
-        return json(res, 403, { error: "Local VM input is available only through the paired companion" });
-      }
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const target = localVmTargetForBot(bot.id);
+      const held = computerControl.snapshot(bot.id).held;
       const vmOwner = localVmLeaseFor(target).current(localVmOwnerBusy);
-      if (vmOwner) {
-        return json(res, 409, { error: "this bot is using its Local VM — wait for the turn to finish before sending input" });
-      }
-      const status = await containerComputerStatus(undefined, undefined, target);
-      if (!status.ready || !status.runtime) {
-        return json(res, 409, { error: status.problem ?? "The Local VM desktop is not ready." });
+      if (vmOwner && !held) {
+        return json(res, 409, { error: "this bot is using its Local VM — take control first, or wait for the turn to finish" });
       }
       const parsed = validateLocalVmPhoneInput(await readBody(req));
       if ("error" in parsed) return json(res, 400, { error: parsed.error });
+      if (await shouldRelayLocalVm(bridges)) {
+        try {
+          const { data } = await runLocalVmOnBridge(bridges, {
+            ...localVmRelayOpts(bot),
+            op: "input",
+            input: parsed.input,
+          });
+          localVmIdleFor(target).touch();
+          return json(res, 200, data);
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      const status = await containerComputerStatus(undefined, undefined, target);
+      if (!status.ready || !status.runtime) {
+        return json(res, 409, { error: status.problem ?? "The Local VM is not ready." });
+      }
       localVmIdleFor(target).touch();
       const result = await executeLocalVmPhoneInput(parsed.input, {
         runtime: status.runtime,

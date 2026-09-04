@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   BASE_IMAGE,
-  BASE_IMAGE_DIGEST,
   BASE_IMAGE_LABEL,
   CONTAINER,
   CUA_DRIVER_VERSION,
@@ -47,20 +46,14 @@ function runner(responses: Record<string, string | Error>) {
   return { calls, run };
 }
 
-const driverExec =
-  `docker exec -u cua -e HOME=/home/cua -e DISPLAY=:1 -e CUA_DRIVER_INSTALL_CHANNEL=python_package ` +
-  `-e CUA_DRIVER_RS_TELEMETRY_ENABLED=0 ${CONTAINER} ${CUA_EXECUTABLE}`;
-const versionProbe = `${driverExec} --version`;
-const statusProbe = `${driverExec} status --socket ${CUA_SOCKET}`;
-const healthProbe = `${driverExec} call health_report {} --socket ${CUA_SOCKET}`;
+const versionProbe = `docker exec -u cua ${CONTAINER} curl -sf --max-time 2 http://127.0.0.1:9222/json/version`;
 const readinessProbe =
-  `${driverExec} call get_desktop_state {} --socket ${CUA_SOCKET} ` +
-  "--screenshot-out-file /tmp/openmausbot-readiness.png";
-const readinessRead = `docker exec ${CONTAINER} base64 -w0 /tmp/openmausbot-readiness.png`;
-const validPng = Buffer.concat([
-  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  `docker exec -u cua -e HOME=/home/cua ${CONTAINER} node /opt/ogb/openmausbot-cdp.mjs screenshot e30`;
+const readinessRead = `docker exec ${CONTAINER} base64 -w0 /tmp/openmausbot-preview.jpg`;
+const validJpeg = Buffer.concat([
+  Buffer.from([0xff, 0xd8]),
   Buffer.alloc(600),
-  Buffer.from("IEND", "ascii"),
+  Buffer.from([0xff, 0xd9]),
 ]);
 
 function preparedImageInspect() {
@@ -70,9 +63,8 @@ function preparedImageInspect() {
       Config: {
         Labels: {
           [MANAGED_LABEL]: "1",
-          [DRIVER_LABEL]: CUA_DRIVER_VERSION,
-          [BASE_IMAGE_LABEL]: BASE_IMAGE_DIGEST,
-          [IMAGE_LAYER_LABEL]: IMAGE_LAYER_VERSION,
+          "com.openmausbot.computer-kind": "browser",
+          "com.openmausbot.image-layer": "1",
         },
       },
     },
@@ -86,9 +78,8 @@ function readyInspect(overrides: Record<string, unknown> = {}) {
         Image: IMAGE,
         Labels: {
           [MANAGED_LABEL]: "1",
-          [DRIVER_LABEL]: CUA_DRIVER_VERSION,
-          [BASE_IMAGE_LABEL]: BASE_IMAGE_DIGEST,
-          [IMAGE_LAYER_LABEL]: IMAGE_LAYER_VERSION,
+          "com.openmausbot.computer-kind": "browser",
+          "com.openmausbot.image-layer": "1",
           [WORKSPACE_LABEL]: "1",
         },
         Env: ["VNC_PW=secret123"],
@@ -98,18 +89,18 @@ function readyInspect(overrides: Record<string, unknown> = {}) {
       // the full hardened HostConfig the stricter shared check now demands:
       // unprivileged, private IPC/cgroup namespaces, pinned shm, no devices
       HostConfig: {
-        Memory: 4 * 1024 * 1024 * 1024,
-        MemorySwap: 4 * 1024 * 1024 * 1024,
-        NanoCpus: 2_000_000_000,
-        PidsLimit: 512,
+        Memory: 1 * 1024 * 1024 * 1024,
+        MemorySwap: 1 * 1024 * 1024 * 1024,
+        NanoCpus: 1_000_000_000,
+        PidsLimit: 256,
         CapDrop: ["ALL"],
         CapAdd: ["CAP_SETUID", "CAP_SETGID"],
         Privileged: false,
         IpcMode: "private",
         CgroupnsMode: "private",
-        ShmSize: 512 * 1024 * 1024,
+        ShmSize: 256 * 1024 * 1024,
         RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
-        PortBindings: { "6901/tcp": [{ HostIp: "127.0.0.1" }] },
+        PortBindings: { "9222/tcp": [{ HostIp: "127.0.0.1" }] },
       },
       Mounts: [
         {
@@ -129,9 +120,9 @@ function perBotReadyInspect(botId: string, viewerPort: number, targetLabel?: str
   const detail = JSON.parse(readyInspect())[0];
   detail.Config.Labels[TARGET_LABEL] = targetLabel ?? target.label;
   detail.Mounts[0].Source = target.workspaceDir;
-  detail.HostConfig.PortBindings["6901/tcp"][0].HostPort = String(viewerPort);
+  detail.HostConfig.PortBindings["9222/tcp"][0].HostPort = String(viewerPort);
   detail.NetworkSettings = {
-    Ports: { "6901/tcp": [{ HostIp: "127.0.0.1", HostPort: String(viewerPort) }] },
+    Ports: { "9222/tcp": [{ HostIp: "127.0.0.1", HostPort: String(viewerPort) }] },
   };
   return JSON.stringify([detail]);
 }
@@ -172,24 +163,15 @@ describe("containerComputerStatus", () => {
     };
     detail.EffectiveCaps = ["CAP_SETGID", "CAP_SETUID"];
     detail.BoundingCaps = ["CAP_SETGID", "CAP_SETUID"];
-    const targetDriverExec =
-      `podman exec -u cua -e HOME=/home/cua -e DISPLAY=:1 -e CUA_DRIVER_INSTALL_CHANNEL=python_package ` +
-      `-e CUA_DRIVER_RS_TELEMETRY_ENABLED=0 ${target.containerName} ${CUA_EXECUTABLE}`;
     const fake = runner({
       "where.exe podman": "C:\\Program Files\\RedHat\\Podman\\podman.exe\n",
       "where.exe docker": new Error("missing"),
       "podman info --format json": '{"host":{"arch":"amd64"}}\n',
       [`podman image inspect ${IMAGE}`]: preparedImageInspect(),
       [`podman inspect ${target.containerName}`]: JSON.stringify([detail]),
-      [`${targetDriverExec} --version`]: `cua-driver ${CUA_DRIVER_VERSION}\n`,
-      [`${targetDriverExec} status --socket ${CUA_SOCKET}`]: "running\n",
-      [`${targetDriverExec} call health_report {} --socket ${CUA_SOCKET}`]: JSON.stringify({
-        schema_version: "1",
-        overall: "ok",
-        checks: [],
-      }),
-      [`${targetDriverExec} call get_desktop_state {} --socket ${CUA_SOCKET} --screenshot-out-file /tmp/openmausbot-readiness.png`]: "{}\n",
-      [`podman exec ${target.containerName} base64 -w0 /tmp/openmausbot-readiness.png`]: validPng.toString("base64"),
+      [`podman exec -u cua ${target.containerName} curl -sf --max-time 2 http://127.0.0.1:9222/json/version`]: '{"Browser":"Chrome"}\n',
+      [`podman exec -u cua -e HOME=/home/cua ${target.containerName} node /opt/ogb/openmausbot-cdp.mjs screenshot e30`]: '{"ok":true}\n',
+      [`podman exec ${target.containerName} base64 -w0 /tmp/openmausbot-preview.jpg`]: validJpeg.toString("base64"),
     });
 
     const status = await containerComputerStatus(fake.run, "win32", target);
@@ -239,24 +221,15 @@ describe("containerComputerStatus", () => {
 
   it("keeps per-bot identities, workspaces, and ephemeral viewer ports separate", async () => {
     const target = perBotLocalVmTarget("bot-a");
-    const targetDriverExec =
-      `docker exec -u cua -e HOME=/home/cua -e DISPLAY=:1 -e CUA_DRIVER_INSTALL_CHANNEL=python_package ` +
-      `-e CUA_DRIVER_RS_TELEMETRY_ENABLED=0 ${target.containerName} ${CUA_EXECUTABLE}`;
     const fake = runner({
       "/usr/bin/which docker": "docker\n",
       "/usr/bin/which podman": new Error("missing"),
       "docker info --format {{.ServerVersion}}": "29\n",
       [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
       [`docker inspect ${target.containerName}`]: perBotReadyInspect("bot-a", 49152),
-      [`${targetDriverExec} --version`]: `cua-driver ${CUA_DRIVER_VERSION}\n`,
-      [`${targetDriverExec} status --socket ${CUA_SOCKET}`]: "running\n",
-      [`${targetDriverExec} call health_report {} --socket ${CUA_SOCKET}`]: JSON.stringify({
-        schema_version: "1",
-        overall: "ok",
-        checks: [],
-      }),
-      [`${targetDriverExec} call get_desktop_state {} --socket ${CUA_SOCKET} --screenshot-out-file /tmp/openmausbot-readiness.png`]: "{}\n",
-      [`docker exec ${target.containerName} base64 -w0 /tmp/openmausbot-readiness.png`]: validPng.toString("base64"),
+      [`docker exec -u cua ${target.containerName} curl -sf --max-time 2 http://127.0.0.1:9222/json/version`]: '{"Browser":"Chrome"}\n',
+      [`docker exec -u cua -e HOME=/home/cua ${target.containerName} node /opt/ogb/openmausbot-cdp.mjs screenshot e30`]: '{"ok":true}\n',
+      [`docker exec ${target.containerName} base64 -w0 /tmp/openmausbot-preview.jpg`]: validJpeg.toString("base64"),
     });
 
     const status = await containerComputerStatus(fake.run, "linux", target);
@@ -270,7 +243,7 @@ describe("containerComputerStatus", () => {
       persistence: "durable",
       ready: true,
     });
-    expect(status.viewer_url).toContain("http://127.0.0.1:49152/vnc.html");
+    expect(status.viewer_url).toBe("");
   });
 
   it("refuses a per-bot container carrying another target's label", async () => {
@@ -301,7 +274,7 @@ describe("containerComputerStatus", () => {
       [`podman inspect ${CONTAINER}`]: JSON.stringify([
         {
           State: { Running: false },
-          HostConfig: { PortBindings: { "6901/tcp": [{ HostIp: "127.0.0.1" }] } },
+          HostConfig: { PortBindings: { "9222/tcp": [{ HostIp: "127.0.0.1" }] } },
         },
       ]),
     });
@@ -327,13 +300,12 @@ describe("containerComputerStatus", () => {
         {
           configuration: {
             image: { reference: IMAGE, descriptor: { digest: "sha256:managed-image-id" } },
-            resources: { cpus: 2, memoryInBytes: 4 * 1024 * 1024 * 1024 },
-            publishedPorts: [{ hostAddress: "127.0.0.1", containerPort: 6901 }],
+            resources: { cpus: 1, memoryInBytes: 1 * 1024 * 1024 * 1024 },
+            publishedPorts: [{ hostAddress: "127.0.0.1", containerPort: 9222 }],
             labels: {
               [MANAGED_LABEL]: "1",
-              [DRIVER_LABEL]: CUA_DRIVER_VERSION,
-              [BASE_IMAGE_LABEL]: BASE_IMAGE_DIGEST,
-              [IMAGE_LAYER_LABEL]: IMAGE_LAYER_VERSION,
+              "com.openmausbot.computer-kind": "browser",
+              "com.openmausbot.image-layer": "1",
               [WORKSPACE_LABEL]: "1",
             },
             mounts: [{ source: VM_WORKSPACE_DIR, destination: VM_WORKSPACE_GUEST, options: [] }],
@@ -365,7 +337,7 @@ describe("containerComputerStatus", () => {
           PidsLimit: 512,
           CapDrop: ["ALL"],
           CapAdd: ["CAP_SETUID", "CAP_SETGID"],
-          PortBindings: { "6901/tcp": [{ HostIp: "0.0.0.0" }] },
+          PortBindings: { "9222/tcp": [{ HostIp: "0.0.0.0" }] },
         },
       }),
     });
@@ -443,11 +415,9 @@ describe("containerComputerStatus", () => {
       "docker info --format {{.ServerVersion}}": "29\n",
       [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
       [`docker inspect ${CONTAINER}`]: readyInspect(),
-      [versionProbe]: `cua-driver ${CUA_DRIVER_VERSION}\n`,
-      [statusProbe]: "running\n",
-      [healthProbe]: JSON.stringify({ schema_version: "1", overall: "ok", checks: [] }),
-      [readinessProbe]: "{}\n",
-      [readinessRead]: validPng.toString("base64"),
+      [versionProbe]: '{"Browser":"Chrome"}\n',
+      [readinessProbe]: '{"ok":true}\n',
+      [readinessRead]: validJpeg.toString("base64"),
     });
 
     const status = await containerComputerStatus(fake.run, "linux");
@@ -462,49 +432,42 @@ describe("containerComputerStatus", () => {
       desktop_error: null,
       ready: true,
       problem: null,
-      driver_version: "0.20.0",
+      driver_version: "browser-1",
     });
-    expect(status.viewer_url).toContain("#autoconnect=true&resize=scale&password=secret123");
+    expect(status.viewer_url).toBe("");
   });
 
   it("reports the bounded desktop startup error instead of waiting forever", async () => {
-    const errorProbe =
-      `docker exec ${CONTAINER} tail -n 4 /var/log/supervisor/cua-driver.error.log`;
     const fake = runner({
       "/usr/bin/which docker": "docker\n",
       "/usr/bin/which podman": new Error("missing"),
       "docker info --format {{.ServerVersion}}": "29\n",
       [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
       [`docker inspect ${CONTAINER}`]: readyInspect(),
-      [versionProbe]: new Error("driver unavailable"),
-      [errorProbe]: "X display :1 did not become ready within 45 seconds\n",
+      [versionProbe]: new Error("Chromium DevTools is not answering"),
     });
 
     const status = await containerComputerStatus(fake.run, "linux");
 
     expect(status.desktopReady).toBe(false);
-    expect(status.desktop_error).toContain("did not become ready");
-    expect(status.problem).toContain("desktop failed to start");
+    expect(status.desktop_error).toContain("not answering");
+    expect(status.problem).toContain("browser VM failed to start");
   });
 
-  it("does not report ready when the driver's health contract fails", async () => {
-    const errorProbe = `docker exec ${CONTAINER} tail -n 4 /var/log/supervisor/cua-driver.error.log`;
+  it("does not report ready when Chromium DevTools is empty", async () => {
     const fake = runner({
       "/usr/bin/which docker": "docker\n",
       "/usr/bin/which podman": new Error("missing"),
       "docker info --format {{.ServerVersion}}": "29\n",
       [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
       [`docker inspect ${CONTAINER}`]: readyInspect(),
-      [versionProbe]: `cua-driver ${CUA_DRIVER_VERSION}\n`,
-      [statusProbe]: "running\n",
-      [healthProbe]: JSON.stringify({ schema_version: "1", overall: "failed", checks: [] }),
-      [errorProbe]: "",
+      [versionProbe]: "{}\n",
     });
 
     const status = await containerComputerStatus(fake.run, "linux");
 
     expect(status.desktopReady).toBe(false);
-    expect(status.desktop_error).toContain("health report is failed");
+    expect(status.desktop_error).toContain("not answering");
     expect(fake.calls).not.toContain(readinessProbe);
   });
 
@@ -526,7 +489,7 @@ describe("containerComputerStatus", () => {
 
     expect(status.imageMatches).toBe(false);
     expect(status.ready).toBe(false);
-    expect(status.problem).toContain("older desktop or Cua Driver");
+    expect(status.problem).toContain("older browser image");
     expect(fake.calls).not.toContain(versionProbe);
   });
 
@@ -544,7 +507,7 @@ describe("containerComputerStatus", () => {
     expect(status.image_id).toBe("managed-image-id");
     expect(status.imageMatches).toBe(false);
     expect(status.ready).toBe(false);
-    expect(status.problem).toContain("older desktop or Cua Driver");
+    expect(status.problem).toContain("older browser image");
   });
 
   it("does not treat an unlabelled image under the local tag as prepared", async () => {
@@ -559,7 +522,7 @@ describe("containerComputerStatus", () => {
     const status = await containerComputerStatus(fake.run, "linux");
 
     expect(status.image).toBe(false);
-    expect(status.problem).toContain("Prepare the Cua desktop image");
+    expect(status.problem).toContain("Prepare the browser VM image");
   });
 });
 
@@ -622,30 +585,23 @@ describe("Cua integration", () => {
     expect(fetch).toBeGreaterThan(gate);
   });
 
-  it("captures the preview through Cua Driver rather than xdotool or VNC", async () => {
-    const screenshotCall =
-      `${driverExec} call get_desktop_state {} --socket ${CUA_SOCKET} ` +
-      "--screenshot-out-file /tmp/openmausbot-preview.png";
-    const png = validPng;
+  it("captures the preview through Chromium DevTools rather than xdotool or VNC", async () => {
+    const jpeg = validJpeg;
     const fake = runner({
       "/usr/bin/which docker": "docker\n",
       "/usr/bin/which podman": new Error("missing"),
       "docker info --format {{.ServerVersion}}": "29\n",
       [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
       [`docker inspect ${CONTAINER}`]: readyInspect(),
-      [versionProbe]: `cua-driver ${CUA_DRIVER_VERSION}\n`,
-      [statusProbe]: "running\n",
-      [healthProbe]: JSON.stringify({ schema_version: "1", overall: "degraded", checks: [] }),
-      [readinessProbe]: "{}\n",
-      [readinessRead]: png.toString("base64"),
-      [screenshotCall]: "{}\n",
-      [`docker exec ${CONTAINER} base64 -w0 /tmp/openmausbot-preview.png`]: png.toString("base64"),
+      [versionProbe]: '{"Browser":"Chrome"}\n',
+      [readinessProbe]: '{"ok":true}\n',
+      [readinessRead]: jpeg.toString("base64"),
     });
 
     const image = await containerComputerScreenshot(fake.run, "linux");
 
-    expect(image).toBe(`data:image/png;base64,${png.toString("base64")}`);
-    expect(fake.calls).toContain(screenshotCall);
+    expect(image).toBe(`data:image/jpeg;base64,${jpeg.toString("base64")}`);
+    expect(fake.calls).toContain(readinessProbe);
     expect(fake.calls.some((call) => /xdotool|scrot|vnc/i.test(call))).toBe(false);
   });
 });
@@ -668,7 +624,7 @@ describe("containerComputerAction", () => {
     expect(fake.calls.some((call) => call.startsWith("container run "))).toBe(false);
   });
 
-  it("does not create a VM before its managed image is prepared", async () => {
+  it("builds the browser image on first run when it is missing", async () => {
     const fake = runner({
       "/usr/bin/which docker": "docker\n",
       "/usr/bin/which podman": new Error("missing"),
@@ -677,9 +633,8 @@ describe("containerComputerAction", () => {
       [`docker inspect ${CONTAINER}`]: new Error("missing container"),
     });
 
-    await expect(containerComputerAction("run", fake.run, "linux")).rejects.toThrow(
-      "Prepare the Cua desktop image",
-    );
+    await expect(containerComputerAction("run", fake.run, "linux")).rejects.toThrow();
+    expect(fake.calls.some((call) => call.startsWith("docker build "))).toBe(true);
     expect(fake.calls.some((call) => call.startsWith("docker run "))).toBe(false);
   });
 
@@ -696,7 +651,7 @@ describe("containerComputerAction", () => {
     expect(fake.calls).not.toContain(`docker start ${CONTAINER}`);
   });
 
-  it("retries shared Local VM create on an ephemeral viewer port when 6080 is taken", async () => {
+  it("retries shared Local VM create on an ephemeral debugger port when 9222 is taken", async () => {
     const calls: string[] = [];
     let created = false;
     const run: CommandRunner = async (command, args) => {
@@ -710,35 +665,31 @@ describe("containerComputerAction", () => {
         if (!created) throw new Error("missing container");
         const detail = JSON.parse(readyInspect())[0];
         detail.NetworkSettings = {
-          Ports: { "6901/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }] },
+          Ports: { "9222/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }] },
         };
         return { stdout: JSON.stringify([detail]) };
       }
-      if (key.startsWith("docker run ") && key.includes("127.0.0.1:6080:6901")) {
-        throw Object.assign(new Error("Bind for 127.0.0.1:6080 failed: port is already allocated"), {
-          stderr: "Bind for 127.0.0.1:6080 failed: port is already allocated",
+      if (key.startsWith("docker run ") && key.includes("127.0.0.1:9222:9222")) {
+        throw Object.assign(new Error("Bind for 127.0.0.1:9222 failed: port is already allocated"), {
+          stderr: "Bind for 127.0.0.1:9222 failed: port is already allocated",
         });
       }
       if (key === `docker rm -f ${CONTAINER}`) return { stdout: "" };
-      if (key.startsWith("docker run ") && key.includes("127.0.0.1::6901")) {
+      if (key.startsWith("docker run ") && key.includes("127.0.0.1::9222")) {
         created = true;
         return { stdout: "" };
       }
-      if (key.includes("--version")) return { stdout: `cua-driver ${CUA_DRIVER_VERSION}\n` };
-      if (key.includes("status --socket")) return { stdout: "running\n" };
-      if (key.includes("health_report")) {
-        return { stdout: JSON.stringify({ schema_version: "1", overall: "ok", checks: [] }) };
-      }
-      if (key.includes("get_desktop_state")) return { stdout: "{}\n" };
-      if (key.includes("base64")) return { stdout: validPng.toString("base64") };
+      if (key.includes("json/version")) return { stdout: '{"Browser":"Chrome"}\n' };
+      if (key.includes("openmausbot-cdp.mjs")) return { stdout: '{"ok":true}\n' };
+      if (key.includes("base64")) return { stdout: validJpeg.toString("base64") };
       throw new Error(`unexpected command: ${key}`);
     };
 
     const status = await containerComputerAction("run", run, "linux");
 
-    expect(calls.some((call) => call.includes("127.0.0.1:6080:6901"))).toBe(true);
+    expect(calls.some((call) => call.includes("127.0.0.1:9222:9222"))).toBe(true);
     expect(calls).toContain(`docker rm -f ${CONTAINER}`);
-    expect(calls.some((call) => call.includes("127.0.0.1::6901"))).toBe(true);
+    expect(calls.some((call) => call.includes("127.0.0.1::9222"))).toBe(true);
     expect(status.container).toBe("running");
   });
 
@@ -769,14 +720,14 @@ describe("setupCommands", () => {
 
   it("asks Docker for an ephemeral loopback viewer port for each per-bot VM", () => {
     const target = perBotLocalVmTarget("bot-a");
-    const args = containerRunArgs("docker", "secret", target);
+    const args = containerRunArgs("docker", target);
     const command = ["docker", ...args].join(" ");
 
     expect(command).toContain(`--name ${target.containerName}`);
     expect(command).toContain(`--label ${TARGET_LABEL}=${target.label}`);
     expect(command).toContain(`source=${target.workspaceDir},target=${VM_WORKSPACE_GUEST}`);
-    expect(command).toContain("-p 127.0.0.1::6901");
-    expect(command).not.toContain("127.0.0.1:6080:6901");
+    expect(command).toContain("-p 127.0.0.1::9222");
+    expect(command).not.toContain("127.0.0.1:9222:9222");
   });
 
   it("does not invent Docker commands when no runtime was detected", () => {
@@ -788,12 +739,12 @@ describe("setupCommands", () => {
     expect(commands.install).not.toContain("Docker");
   });
 
-  it("publishes only the password-protected viewer and only on loopback", () => {
+  it("publishes the DevTools port only on loopback", () => {
     const command = setupCommands("podman", "linux").run!;
-    expect(command).toContain("-p 127.0.0.1:6080:6901");
-    expect(command).not.toContain(" -p 6080:6901");
+    expect(command).toContain("-p 127.0.0.1:9222:9222");
+    expect(command).not.toContain(" -p 9222:9222");
     expect(command).not.toContain("5900");
-    expect(command).toContain("VNC_PW=CHANGE_ME");
+    expect(command).not.toContain("VNC_PW=");
   });
 
   it("does not suggest docker start for an image that must be recreated", () => {
@@ -802,12 +753,12 @@ describe("setupCommands", () => {
 
   it("limits resources and retains only the sandbox supervisor's identity-switch caps", () => {
     const command = setupCommands("docker", "linux").run!;
-    expect(command).toContain("--memory 4g --memory-swap 4g");
-    expect(command).toContain("--cpus 2 --pids-limit 512");
+    expect(command).toContain("--memory 1g --memory-swap 1g");
+    expect(command).toContain("--cpus 1 --pids-limit 256");
     expect(command).toContain("--ipc private --cgroupns private");
     expect(command).toContain("--cap-drop ALL --cap-add SETUID --cap-add SETGID");
     expect(command).toContain(`--label ${MANAGED_LABEL}=1`);
-    expect(command).toContain(`--label ${DRIVER_LABEL}=${CUA_DRIVER_VERSION}`);
+    expect(command).toContain("--label com.openmausbot.computer-kind=browser");
     expect(command).toContain(`--label ${WORKSPACE_LABEL}=1`);
     expect(command).toContain(`--hostname ${CONTAINER}`);
     expect(command).toContain(
@@ -822,13 +773,13 @@ describe("setupCommands", () => {
     );
   });
 
-  it("shows the pinned base pull while creating the managed derivative through the API", () => {
-    expect(setupCommands("docker", "linux").pull).toBe(`docker pull ${BASE_IMAGE}`);
+  it("shows the browser image build while creating the managed derivative through the API", () => {
+    expect(setupCommands("docker", "linux").pull).toBe(`docker build -t ${IMAGE} -`);
     expect(setupCommands("docker", "linux").run).toContain(IMAGE);
   });
 
   it("uses an explicit local image name so Podman never resolves the managed build on Docker Hub", () => {
-    expect(IMAGE).toMatch(/^localhost\/openmausbot\/cua-local-vm:/);
+    expect(IMAGE).toMatch(/^localhost\/openmausbot\/browser-vm:/);
     expect(setupCommands("podman", "darwin").run).toContain(IMAGE);
     expect(setupCommands("podman", "darwin").run).not.toContain("docker.io/openmausbot");
   });
@@ -837,7 +788,7 @@ describe("setupCommands", () => {
     const commands = setupCommands("container", "darwin");
     expect(commands.runtimeStart).toBe("container system start");
     expect(commands.remove).toBe(`container rm --force ${CONTAINER}`);
-    expect(commands.run).toContain("--memory 4g --cpus 2 --cap-drop ALL");
+    expect(commands.run).toContain("--memory 1g --cpus 1 --cap-drop ALL");
     expect(commands.run).not.toContain("--memory-swap");
   });
 

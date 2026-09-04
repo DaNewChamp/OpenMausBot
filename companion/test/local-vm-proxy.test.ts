@@ -136,6 +136,8 @@ describe("Local VM companion boundary", () => {
     expect((await device("POST", "/api/bots/bot-1/local-computer/screenshot", {})).status).toBe(200);
     expect(seen).toHaveLength(3);
     expect(seen[2]).toMatchObject({ path: "/api/bots/bot-1/local-computer/screenshot", marker: "1" });
+    expect((await device("POST", "/api/bots/bot-1/local-computer/input", { action: "click", x: 1, y: 1, button: "left" })).status).toBe(200);
+    expect(seen).toHaveLength(4);
     expect((await device("POST", "/api/bots/bot-1/local-computer/remove", {})).status).toBe(403);
     localVmAccess = false;
   });

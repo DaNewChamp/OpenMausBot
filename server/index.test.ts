@@ -13,8 +13,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import {
+  browserCdpPayloadsFromDockerLog,
   installFakeLocalVmDockerRuntime,
-  launchAppPayloadsFromDockerLog,
 } from "./testing/fake-local-vm-docker.ts";
 import { openSse } from "./testing/sse.ts";
 import { IMAGE_MAX_BYTES } from "./attachments.ts";
@@ -3364,7 +3364,7 @@ posixOnly("Local VM owned invoke route with fake runtime", () => {
     if (vmHome) await removeTempDir(vmHome);
   });
 
-  it("authenticated owned POST reaches ready and executes open_url through Cua launch_app", async () => {
+  it("authenticated owned POST reaches ready and executes open_url through Chromium DevTools", async () => {
     writeFileSync(vmDockerLog, "");
     rmSync(vmFakeClaudeDump, { force: true });
     const sent = await routeApi("POST", `/api/bots/${routeBotId}/messages`, { text: "open a page" });
@@ -3392,8 +3392,8 @@ posixOnly("Local VM owned invoke route with fake runtime", () => {
     expect(body.result?.isError).toBe(false);
     expect(body.result?.text).toContain("example.com");
 
-    const payloads = launchAppPayloadsFromDockerLog(readFileSync(vmDockerLog, "utf8"));
-    expect(payloads).toEqual([{ app: "google-chrome", arguments: [url] }]);
+    const payloads = browserCdpPayloadsFromDockerLog(readFileSync(vmDockerLog, "utf8"));
+    expect(payloads).toContainEqual({ action: "navigate", payload: { url } });
 
     await routeApi("POST", `/api/bots/${routeBotId}/interrupt`);
   });

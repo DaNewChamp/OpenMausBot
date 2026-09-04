@@ -59,8 +59,8 @@ export function computerStatusSummary(input: {
       return {
         title: "Linux VM ready",
         detail: input.shared === false
-          ? "A private container for this bot is running on the selected fleet machine."
-          : "Every bot shares this Linux VM on the selected fleet machine. Bots take turns driving it.",
+          ? "A private browser + shell container for this bot is running on the selected fleet machine. Take control to drive the browser."
+          : "Every bot shares this browser + shell on the selected fleet machine. Take control to drive the browser; bots take turns.",
         tone: "positive",
       };
     case "local":
