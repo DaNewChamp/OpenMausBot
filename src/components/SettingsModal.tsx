@@ -366,14 +366,14 @@ export function SettingsModal() {
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-center justify-between px-5 py-3">
+          <div className="shell-header justify-between gap-2 px-5">
             <span className="text-[15px] font-semibold text-ink">
               {SECTIONS.find((s) => s.id === section)?.label}
             </span>
             <button
               onClick={() => dispatch({ type: "toggleAppSettings", open: false })}
               aria-label="Close settings"
-              className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
+              className="shell-icon-btn text-ink-secondary hover:bg-control hover:text-ink"
             >
               <X size={18} />
             </button>

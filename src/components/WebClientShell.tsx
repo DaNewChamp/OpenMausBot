@@ -15,11 +15,8 @@ import { TeamMapPage } from "@/components/TeamMapPage";
 import { StoreProvider, useStore, type Bot, type Group } from "@/state/store";
 import { isDesktopDemoMode } from "@/lib/desktop-demo";
 import { webClientLayout } from "@/lib/web-client-layout";
-import {
-  saveRightRailOpen,
-  SHELL_COLLAPSE_LEFT_BELOW,
-  SHELL_COLLAPSE_RIGHT_BELOW,
-} from "@/lib/shell-layout";
+import { saveRightRailOpen, shellColumnVisibility } from "@/lib/shell-layout";
+import { loadSidebarDensity } from "@/lib/sidebar-preferences";
 import { stateForBot } from "@/lib/mascot";
 import {
   canCallHubApi,
@@ -437,15 +434,15 @@ function RoomInfoPanel({ group, onClose }: { group: Group; onClose: () => void }
       aria-label={`${group.name} room info`}
       className="animate-panel-in flex h-full w-[min(320px,100vw)] shrink-0 flex-col border-l border-hairline/40 bg-panel"
     >
-      <header className="flex items-center justify-between border-b border-hairline/20 px-4 py-3">
+      <header className="shell-header justify-between gap-2 px-3">
         <span className="text-[15px] font-semibold text-ink">Room info</span>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close room info"
-          className="flex size-8 items-center justify-center rounded-lg text-ink-secondary hover:bg-control hover:text-ink"
+          className="shell-icon-btn text-ink-secondary hover:bg-control hover:text-ink"
         >
-          <X size={17} />
+          <X size={18} />
         </button>
       </header>
       <div className="flex-1 overflow-y-auto px-4 py-4">
@@ -503,15 +500,19 @@ export function WebClientShell() {
   const group = state.groups.find((entry) => entry.id === state.selectedId);
   const bot = group ? undefined : (state.bots.find((entry) => entry.id === state.selectedId) ?? state.bots[0]);
   const [viewportWidth, setViewportWidth] = useState(() => globalThis.innerWidth || 1280);
-  const overlay = viewportWidth < SHELL_COLLAPSE_LEFT_BELOW;
+  const [leftDensity] = useState(() => loadSidebarDensity());
+  const layout = shellColumnVisibility(viewportWidth, {
+    leftDensity,
+    rightUserCollapsed: !state.computerOpen,
+  });
+  const overlay = layout.left === "overlay";
   const chrome = webClientLayout();
   const showRightRail =
     chrome.rightPane === "computer" &&
-    state.computerOpen &&
+    layout.right === "open" &&
     Boolean(bot) &&
     !state.settingsOpen &&
-    state.activeView === "chat" &&
-    viewportWidth >= SHELL_COLLAPSE_RIGHT_BELOW;
+    state.activeView === "chat";
 
   useEffect(() => {
     if (canCallHubApi()) void preloadConnectedApps();
@@ -580,6 +581,8 @@ export function WebClientShell() {
       data-web-traffic-lights={String(chrome.trafficLights)}
       data-web-overlay={String(overlay)}
       data-web-computer={String(showRightRail)}
+      data-shell-left={layout.left}
+      data-shell-right={layout.right}
       className="relative flex h-screen min-h-0 overflow-hidden bg-app text-ink"
     >
       {overlay && drawerOpen && (
@@ -603,7 +606,7 @@ export function WebClientShell() {
             type="button"
             onClick={() => setDrawerOpen(true)}
             aria-label="Open bot list"
-            className="shell-control absolute left-2 top-2 z-20 cursor-pointer rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
+            className="shell-icon-btn absolute left-2 top-2.5 z-20 cursor-pointer text-ink-secondary hover:bg-raised hover:text-ink"
           >
             <Menu size={18} />
           </button>

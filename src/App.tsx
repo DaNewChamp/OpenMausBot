@@ -219,7 +219,7 @@ function Shell() {
           aria-label="Open bot list"
           aria-expanded={drawerOpen}
           onClick={() => setDrawerOpen(true)}
-          className="shell-control absolute left-3 top-3 z-30 rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+          className="shell-icon-btn absolute left-3 top-2.5 z-30 text-ink-secondary hover:bg-raised hover:text-ink"
         >
           <Menu size={18} />
         </button>

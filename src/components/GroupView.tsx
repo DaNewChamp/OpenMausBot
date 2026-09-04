@@ -244,7 +244,7 @@ const Transcript = memo(function Transcript({
                 <PinToggle group={group} message={m} />
                 <div
                   className={cn(
-                    "max-w-[70%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed",
+                    "shell-bubble-fit rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed",
                     user ? "whitespace-pre-wrap bg-bubble-user text-ink" : "bg-card text-ink",
                   )}
                   title={new Date(m.at).toLocaleString()}
@@ -304,7 +304,7 @@ function StreamingBubble({ text }: { text: string }) {
   const deferred = useDeferredValue(text);
   return (
     <div className="flex w-full justify-start">
-      <div className="max-w-[70%] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
+      <div className="shell-bubble-fit rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
         <ChatMarkdown text={deferred} streaming />
         <span className="animate-caret ml-0.5 inline-block h-[14px] w-[2px] bg-ink align-middle" />
       </div>
@@ -989,7 +989,7 @@ export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: ()
   const noDrag = isWin ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
   return (
-    <main className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col bg-app">
+    <main className="shell-main relative flex h-full min-h-0 min-w-0 flex-1 flex-col bg-app">
       <GroupCallOverlay group={group} members={members} />
       {membersOpen && !group.dm && (
         <ManageMembersPanel group={group} onClose={closeMembers} triggerRef={membersTriggerRef} />
@@ -997,9 +997,9 @@ export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: ()
       {/* Header: static member mauses; a ring + dot marks the working bot. */}
       <div
         className={cn(
-          "flex shrink-0 items-center justify-between gap-3 px-5 py-3",
+          "shell-header justify-between gap-3 px-3",
           // Room for the drawer button, which overlays this corner below md.
-          "pl-11 md:pl-5",
+          "pl-11 md:pl-3",
           isWin && "pr-[148px]",
         )}
         style={drag}
@@ -1023,7 +1023,7 @@ export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: ()
             aria-label="Find in conversation"
             aria-pressed={findOpen}
             className={cn(
-              "rounded-md p-1.5 hover:bg-raised",
+              "shell-icon-btn hover:bg-raised",
               findOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
             )}
             title="Find in conversation (⌘F)"
@@ -1166,7 +1166,7 @@ export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: ()
           </div>
         ) : (
         <div
-          className="mx-auto flex max-w-[900px] flex-col gap-3 pb-8"
+          className="shell-transcript mx-auto flex w-full max-w-[900px] flex-col gap-3 pb-8"
           role="log"
           aria-live="polite"
           aria-label={`Room ${group.name}`}

@@ -7,14 +7,18 @@ import {
   neighborConversationId,
   parseRightRailOpen,
   saveRightRailOpen,
+  SHELL_BUBBLE_WIDE_PX,
+  SHELL_CENTER_MIN_PX,
   SHELL_COLLAPSE_LEFT_BELOW,
   SHELL_COLLAPSE_RIGHT_BELOW,
   SHELL_LEFT_ICONS_PX,
   SHELL_LEFT_WIDTH_PX,
+  SHELL_RIGHT_MIN_PX,
   SHELL_RIGHT_WIDTH_PX,
   SHELL_SCREENSHOT_HEIGHT,
   SHELL_SCREENSHOT_WIDTH,
   shellBubbleMaxPx,
+  shellBubbleMaxRatioForColumn,
   shellCenterWidthPx,
   shellColumnVisibility,
   unreadAfterSelected,
@@ -51,6 +55,22 @@ describe("shell column collapse policy", () => {
     });
     expect(narrow.right).toBe("hidden");
     expect(narrow.left).toBe("overlay");
+  });
+
+  it("keeps the right rail at 1000px and makes it yield instead of crushing chat", () => {
+    const vis = shellColumnVisibility(1000, {
+      leftDensity: "compact",
+      rightUserCollapsed: false,
+    });
+    expect(vis.right).toBe("open");
+    expect(vis.left).toBe("open");
+    expect(1000 - SHELL_LEFT_WIDTH_PX - SHELL_RIGHT_MIN_PX).toBeGreaterThanOrEqual(SHELL_CENTER_MIN_PX);
+  });
+
+  it("fills bubbles on a narrow column and caps them once the column is wide", () => {
+    expect(shellBubbleMaxRatioForColumn(300)).toBe(1);
+    expect(shellBubbleMaxRatioForColumn(SHELL_BUBBLE_WIDE_PX - 1)).toBe(1);
+    expect(shellBubbleMaxRatioForColumn(SHELL_BUBBLE_WIDE_PX)).toBe(0.76);
   });
 
   it("honors a user-collapsed right rail even on a wide window", () => {

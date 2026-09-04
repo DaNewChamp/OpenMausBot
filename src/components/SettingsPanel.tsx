@@ -362,12 +362,12 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
     <>
     <aside className="animate-panel-in relative z-20 flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3">
+      <div className="shell-header justify-between gap-2 px-3">
         <button
           onClick={() => dispatch({ type: "toggleSettings", open: false })}
           aria-label="Collapse agent profile"
           title="Collapse agent profile"
-          className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
+          className="shell-icon-btn text-ink-secondary hover:bg-control hover:text-ink"
         >
           <ChevronLeft size={18} />
         </button>
@@ -376,7 +376,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
           onClick={() => dispatch({ type: "toggleSettings", open: false })}
           aria-label="Close agent profile"
           title="Close agent profile"
-          className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
+          className="shell-icon-btn text-ink-secondary hover:bg-control hover:text-ink"
         >
           <X size={18} />
         </button>
@@ -619,27 +619,29 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
 
           <div className="rounded-xl bg-card p-4">
             <div className="text-[15px] font-medium text-ink">Computer</div>
-            <div className="mt-0.5 text-[13px] text-ink-secondary">
+            <div className="mt-1 text-[13px] leading-relaxed text-ink-secondary">
               Every bot uses one Linux VM on a machine from your fleet.
             </div>
-            <FleetVmLocationPicker
-              hosts={fleetVm.hosts}
-              value={fleetVm.hostId}
-              onChange={(hostId) => {
-                void fleetVm.save(hostId).catch(() => {});
-              }}
-            />
-            <div className="mt-1.5 text-[11.5px] leading-relaxed text-ink-secondary">
-              {fleetVm.blockReason
-                ?? "Bots take turns driving this browser + shell. Deploy it from the Computer pane or App Settings → Local VM."}
+            <div className="mt-4 flex flex-col gap-3">
+              <FleetVmLocationPicker
+                hosts={fleetVm.hosts}
+                value={fleetVm.hostId}
+                onChange={(hostId) => {
+                  void fleetVm.save(hostId).catch(() => {});
+                }}
+              />
+              <div className="text-[12px] leading-relaxed text-ink-secondary">
+                {fleetVm.blockReason
+                  ?? "Bots take turns driving this browser + shell. Deploy it from the Computer pane or App Settings → Local VM."}
+              </div>
+              <button
+                type="button"
+                onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "computer" })}
+                className="self-start rounded-lg bg-control px-3 py-1.5 text-[12.5px] text-ink hover:bg-raised-hover"
+              >
+                Open Local VM setup
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "computer" })}
-              className="mt-3 rounded-lg bg-control px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover"
-            >
-              Open Local VM setup
-            </button>
           </div>
 
           <BotUsageCard bot={bot} />

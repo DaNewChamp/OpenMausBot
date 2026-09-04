@@ -1,19 +1,29 @@
 import type { SidebarDensity } from "./sidebar-preferences";
 
-/** Viewport width where the right rail leaves the flow first. 1024 still
- * shows all three columns so the phase-1 screenshot matches the shell. */
-export const SHELL_COLLAPSE_RIGHT_BELOW = 900;
-
 /** Viewport width where the left rail becomes an overlay drawer. */
 export const SHELL_COLLAPSE_LEFT_BELOW = 720;
 
 export const SHELL_LEFT_WIDTH_PX = 280;
 export const SHELL_LEFT_ICONS_PX = 72;
 export const SHELL_RIGHT_WIDTH_PX = 320;
+/** Floor the right rail can shrink to before it leaves the flow. */
+export const SHELL_RIGHT_MIN_PX = 240;
+/** Readable floor for the conversation column. Panes yield before this. */
+export const SHELL_CENTER_MIN_PX = 420;
 export const SHELL_CONTROL_PX = 44;
+export const SHELL_HEADER_HEIGHT_PX = 52;
+export const SHELL_HEADER_CONTROL_PX = 32;
 export const SHELL_SCREENSHOT_WIDTH = 1024;
 export const SHELL_SCREENSHOT_HEIGHT = 648;
 export const SHELL_BUBBLE_MAX_RATIO = 0.76;
+/** Transcript width at which bubbles cap at 76% instead of filling the column. */
+export const SHELL_BUBBLE_WIDE_PX = 576;
+
+/** Compact-left viewport where even a shrunk right rail cannot keep the
+ * chat column at SHELL_CENTER_MIN_PX (280 + 420 + 240). 1024 still shows
+ * three columns (center 424) so the phase-1 screenshot matches the shell. */
+export const SHELL_COLLAPSE_RIGHT_BELOW =
+  SHELL_LEFT_WIDTH_PX + SHELL_CENTER_MIN_PX + SHELL_RIGHT_MIN_PX;
 
 /** Center column width at the reference three-column canvas. */
 export const shellCenterWidthPx = (
@@ -29,6 +39,11 @@ export const shellBubbleMaxPx = (
   right = SHELL_RIGHT_WIDTH_PX,
   ratio = SHELL_BUBBLE_MAX_RATIO,
 ) => Math.round(shellCenterWidthPx(width, left, right) * ratio);
+
+/** Fill the column until it is wide enough for a 76% cap to stay readable. */
+export function shellBubbleMaxRatioForColumn(columnPx: number): number {
+  return columnPx >= SHELL_BUBBLE_WIDE_PX ? SHELL_BUBBLE_MAX_RATIO : 1;
+}
 
 export const RIGHT_RAIL_KEY = "vbot.rightRail";
 
@@ -84,8 +99,12 @@ export function shellColumnVisibility(
       : opts.leftDensity === "icons"
         ? "icons"
         : "open";
+  const leftOccupied = left === "overlay" ? 0 : leftRailWidthPx(left, opts.leftDensity);
+  const roomForRight = width - leftOccupied - SHELL_CENTER_MIN_PX;
   const right: "open" | "hidden" =
-    opts.rightUserCollapsed || width < SHELL_COLLAPSE_RIGHT_BELOW ? "hidden" : "open";
+    opts.rightUserCollapsed || left === "overlay" || roomForRight < SHELL_RIGHT_MIN_PX
+      ? "hidden"
+      : "open";
   return { left, right, collapseOrder };
 }
 

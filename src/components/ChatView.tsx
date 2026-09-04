@@ -175,7 +175,7 @@ function ThinkingStrip({ text, active }: { text: string; active: boolean }) {
   }, [text, open]);
   return (
     <div className="flex w-full justify-start">
-      <div className="max-w-[70%] min-w-[200px]">
+      <div className="shell-bubble-fit">
         <button
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
@@ -224,7 +224,7 @@ function ErrorRow({
 }) {
   return (
     <div className="flex justify-start">
-      <div className="max-w-[70%] rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-2.5 text-[13.5px] text-danger">
+      <div className="shell-bubble-fit rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-2.5 text-[13.5px] text-danger">
         <div className="flex items-start gap-2">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" />
           <span className="min-w-0 break-words">{message}</span>
@@ -257,7 +257,7 @@ class MessageBoundary extends Component<{ children: ReactNode; fallbackText: str
   render() {
     if (this.state.failed) {
       return (
-        <div className="shell-bubble max-w-[70%] bg-card px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-ink">
+        <div className="shell-bubble shell-bubble-fit bg-card px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-ink">
           {this.props.fallbackText}
         </div>
       );
@@ -289,7 +289,7 @@ function BubbleEditor({
     if (draft.trim()) onSubmit(draft.trim());
   };
   return (
-    <div className="shell-bubble w-full max-w-[70%] border border-hairline/40 bg-bubble-user px-4 py-3">
+    <div className="shell-bubble shell-bubble-fit w-full border border-hairline/40 bg-bubble-user px-4 py-3">
       <textarea
         ref={ref}
         value={draft}
@@ -416,11 +416,7 @@ function Bubble({
         >
           {bot.pinnedMessageId === message.id ? <PinOff size={14} /> : <Pin size={14} />}
         </button>
-        <div
-          className={cn(
-            user ? "max-w-[70%] shrink-0" : "max-w-[var(--shell-bubble-max)] shrink-0",
-          )}
-        >
+        <div className="shell-bubble-fit">
         <div
           className={cn(
             "shell-bubble text-[15px] leading-relaxed",
@@ -428,7 +424,7 @@ function Bubble({
               ? "overflow-hidden border border-accent/25 bg-card text-ink shadow-[0_10px_30px_rgba(0,0,0,0.18)]"
               : user
                 ? "bg-bubble-user px-4 py-2.5 whitespace-pre-wrap text-ink"
-                : "shell-bubble-assistant bg-card px-4 py-2.5 text-ink",
+                : "bg-card px-4 py-2.5 text-ink",
           )}
           title={new Date(message.at).toLocaleString()}
         >
@@ -445,7 +441,7 @@ function Bubble({
             </div>
           )}
           {user && webhookView ? (
-            <div className="min-w-[300px] max-w-[520px]">
+            <div className="min-w-0 w-full max-w-full">
               <div className="flex items-center gap-2 border-b border-accent/15 bg-accent/[0.055] px-4 py-2.5 text-[11.5px] font-medium text-accent">
                 <Webhook size={13} />
                 <span>Webhook task</span>
@@ -626,7 +622,7 @@ function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
       <img
         src={`data:${mime ?? "image/png"};base64,${png}`}
         alt="Bot's screen"
-        className="max-w-[70%] shell-bubble border border-hairline/40"
+        className="shell-bubble-fit shell-bubble border border-hairline/40"
       />
     </div>
   );
@@ -638,7 +634,7 @@ function StreamingBubble({ text }: { text: string }) {
   const deferred = useDeferredValue(text);
   return (
     <div className="flex w-full justify-start">
-      <div className="shell-bubble shell-bubble-assistant bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
+      <div className="shell-bubble shell-bubble-fit bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
         <MessageBoundary fallbackText={deferred}>
           <ChatMarkdown text={deferred} streaming />
         </MessageBoundary>
@@ -887,7 +883,7 @@ function ChatHeaderMenu({
         aria-label="Conversation actions"
         aria-expanded={open}
         aria-haspopup="menu"
-        className="shell-control rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+        className="shell-icon-btn text-ink-secondary hover:bg-raised hover:text-ink"
         title="Conversation actions"
       >
         <MoreHorizontal size={18} />
@@ -1175,14 +1171,14 @@ export function ChatView({ bot }: { bot: Bot }) {
   const noDrag = isWin ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
   return (
-    <main className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col bg-app">
+    <main className="shell-main relative flex h-full min-h-0 min-w-0 flex-1 flex-col bg-app">
       {/* Call mode covers the thread while the bot is on the line */}
       <CallOverlay bot={bot} />
       {/* Header */}
       <div
         className={cn(
-          "@container/chathead flex shrink-0 items-center justify-between border-b border-hairline/20 px-4 py-2.5",
-          "pl-11 md:pl-5",
+          "shell-header @container/chathead justify-between gap-2 px-3",
+          "pl-11 md:pl-3",
           isWin && "pr-[148px]",
         )}
         style={drag}
@@ -1216,7 +1212,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             aria-label={state.computerOpen ? "Hide bot computer" : "Show bot computer"}
             aria-pressed={state.computerOpen}
             title="Bot's computer"
-            className="shell-control cursor-pointer rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+            className="shell-icon-btn cursor-pointer text-ink-secondary hover:bg-raised hover:text-ink"
           >
             <Monitor size={18} className={state.computerOpen ? "text-accent" : undefined} />
           </button>
@@ -1285,7 +1281,7 @@ export function ChatView({ bot }: { bot: Bot }) {
         }}
       >
         <div
-          className="mx-auto flex max-w-[900px] flex-col gap-3 pb-8"
+          className="shell-transcript mx-auto flex w-full max-w-[900px] flex-col gap-3 pb-8"
           role="log"
           aria-live="polite"
           aria-label={`Conversation with ${conversationTitle(bot.name, bot.modelSelection)}`}

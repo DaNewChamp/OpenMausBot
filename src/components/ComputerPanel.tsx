@@ -287,7 +287,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
       if (vmInFlight.current) return;
       vmInFlight.current = true;
       try {
-        const { image } = await api(`/api/bots/${bot.id}/local-computer/screenshot`, { method: "POST" });
+        const { image } = await api(`/api/bots/${bot.id}/local-computer/screenshot`, { method: "POST", body: "{}" });
         if (alive && typeof image === "string") setVmFrame(image);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
@@ -609,18 +609,19 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
 
   return (
     <>
-    <aside className="shell-right animate-panel-in flex h-full w-[var(--shell-right-width)] shrink-0 flex-col border-l border-hairline/30 bg-panel">
+    <aside className="shell-right animate-panel-in flex h-full flex-col border-l border-hairline/30 bg-panel">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2">
+      <div className="shell-header justify-between gap-2 px-3">
         <button
+          type="button"
           onClick={() => dispatch({ type: "toggleSettings", open: true })}
-          className="shell-control rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
+          className="shell-icon-btn text-ink-secondary hover:bg-control hover:text-ink"
           title="Bot settings"
         >
           <Settings size={18} />
         </button>
         {androidConnected || browserEnabled ? (
-          <div className="flex overflow-hidden rounded-lg border border-hairline/40">
+          <div className="flex min-w-0 overflow-hidden rounded-lg border border-hairline/40">
             <button
               onClick={() => setPanelView("computer")}
               aria-pressed={panelView === "computer"}
@@ -660,8 +661,9 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
           <span className="text-[15px] font-semibold text-ink">Computer</span>
         )}
         <button
+          type="button"
           onClick={() => dispatch({ type: "toggleComputer", open: false })}
-          className="shell-control rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
+          className="shell-icon-btn text-ink-secondary hover:bg-control hover:text-ink"
           aria-label="Collapse right rail"
           title="Collapse right rail"
         >
@@ -670,7 +672,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
       </div>
 
       {panelView === "android" && androidConnected ? (
-        <div className="flex-1 overflow-y-auto px-4 pt-2">
+        <div className="flex-1 overflow-y-auto px-4 pt-3">
           <AndroidDevicePanel status={androidStatus} />
         </div>
       ) : panelView === "browser" && browserEnabled ? (
@@ -687,7 +689,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
           />
         </div>
       ) : (
-      <div className="flex-1 overflow-y-auto px-4 pb-4">
+      <div className="flex-1 overflow-y-auto px-4 pb-4 pt-3">
           <div
             data-computer-status={phase}
             className={cn(
@@ -841,7 +843,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
             <button
               type="button"
               onClick={() => setCreatingRoutine(true)}
-              className="shell-control flex items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
+              className="shell-icon-btn text-ink-secondary hover:bg-control hover:text-ink"
               aria-label={`Add a routine for ${bot.name}`}
               title="Add routine"
             >
@@ -880,7 +882,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
           )}
         </div>
 
-        <div className="mt-2">
+        <div className="mt-3 flex flex-col gap-2">
           <FleetVmLocationPicker
             hosts={fleetVm.hosts}
             value={fleetVm.hostId}
@@ -891,7 +893,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
               });
             }}
           />
-          <div className="mt-1.5 text-[11.5px] leading-relaxed text-ink-secondary">
+          <div className="text-[12px] leading-relaxed text-ink-secondary">
             {fleetVm.blockReason
               ?? (vmStatus?.mode === "per-bot"
                 ? "This bot gets its own Linux container on that machine."
@@ -900,7 +902,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
         </div>
 
         {error && (
-          <div className="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">
+          <div className="mt-3 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2.5 text-[12.5px] leading-relaxed text-danger">
             {error}
           </div>
         )}

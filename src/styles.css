@@ -74,7 +74,11 @@
   --shell-left-width: 280px;
   --shell-left-icons: 72px;
   --shell-right-width: 320px;
+  --shell-right-min: 240px;
+  --shell-center-min: 420px;
   --shell-control: 44px;
+  --shell-header-height: 52px;
+  --shell-header-control: 32px;
   --shell-row: 44px;
   --shell-pin-width: 156px;
   --shell-pin-avatar: 56px;
@@ -396,6 +400,28 @@ body {
   min-height: var(--shell-control);
 }
 
+.shell-header {
+  display: flex;
+  align-items: center;
+  height: var(--shell-header-height);
+  min-height: var(--shell-header-height);
+  border-bottom: 1px solid color-mix(in oklab, var(--color-hairline) 20%, transparent);
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.shell-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--shell-header-control);
+  height: var(--shell-header-control);
+  padding: 0;
+  flex-shrink: 0;
+  border-radius: 6px;
+  line-height: 0;
+}
+
 .shell-search {
   min-height: var(--shell-control);
   border-radius: var(--shell-search-radius);
@@ -410,8 +436,35 @@ body {
   border-radius: var(--shell-composer-radius);
 }
 
-.shell-bubble-assistant {
-  max-width: var(--shell-bubble-max);
+.shell-transcript {
+  container-type: inline-size;
+  container-name: transcript;
+}
+
+.shell-bubble-fit {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+@container transcript (min-width: 36rem) {
+  .shell-bubble-fit {
+    max-width: var(--shell-bubble-max);
+  }
+}
+
+.shell-right {
+  width: var(--shell-right-width);
+  min-width: var(--shell-right-min);
+  max-width: var(--shell-right-width);
+  flex-shrink: 1;
+}
+
+@media (min-width: 720px) {
+  [data-web-main-column],
+  .shell-main {
+    min-width: var(--shell-center-min);
+  }
 }
 
 .shell-unread {

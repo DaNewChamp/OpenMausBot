@@ -67,8 +67,8 @@ function Step({ n, title, done, children }: { n: number; title: string; done: bo
         {done ? <Check size={12} /> : n}
       </div>
       <div className="min-w-0 flex-1">
-        <div className={cn("text-[14px]", done ? "text-ink-secondary line-through" : "text-ink")}>{title}</div>
-        {!done && children && <div className="mt-2 flex flex-col items-start gap-2">{children}</div>}
+        <div className={cn("text-[14px] leading-snug", done ? "text-ink-secondary line-through" : "text-ink")}>{title}</div>
+        {!done && children && <div className="mt-2.5 flex flex-col items-start gap-2.5">{children}</div>}
       </div>
     </div>
   );
@@ -216,6 +216,21 @@ export function LocalComputerSection() {
   const perBot = status?.mode === "per-bot";
   const perBotRuntimeUnsupported = perBot && status?.runtime === "container";
   const headerReady = perBot ? Boolean(status?.daemonUp && status?.image && !perBotRuntimeUnsupported) : ready;
+  const statusLabel = loading
+    ? "Checking…"
+    : unavailable
+      ? "Status unavailable"
+      : perBot && headerReady
+        ? "Ready for per-bot desktops"
+        : perBotRuntimeUnsupported
+          ? "Needs Docker or Podman"
+          : ready
+            ? "Ready"
+            : "Not ready";
+  const problemText =
+    !loading && !unavailable && !headerReady && status?.problem && status.problem !== statusLabel
+      ? status.problem
+      : null;
 
   return (
     <>
@@ -223,50 +238,52 @@ export function LocalComputerSection() {
         title="VM location"
         subtitle="Every bot uses this Linux browser + shell. Pick a machine from your connected fleet, then Deploy."
       >
-        <FleetVmLocationPicker
-          hosts={fleetVm.hosts}
-          value={fleetVm.hostId}
-          disabled={policyPending || pending !== null}
-          onChange={(hostId) => {
-            void fleetVm.save(hostId).then(() => setRefreshKey((key) => key + 1)).catch((e) => {
-              setError(e instanceof Error ? e.message : String(e));
-            });
-          }}
-        />
-        <div className="mt-2 text-[12px] leading-relaxed text-ink-secondary">
-          {fleetVm.blockReason
-            ?? (perBot
-              ? "Each bot gets its own container on that machine."
-              : "Bots take turns driving one shared desktop on that machine.")}
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            onClick={() => {
-              if (fleetVm.blockReason) {
-                setError(fleetVm.blockReason);
-                return;
-              }
-              if (!botId) {
-                setError("Create a bot first, then Deploy.");
-                return;
-              }
-              void (async () => {
-                try {
-                  if (fleetVm.selectedId && fleetVm.selectedId !== fleetVm.hostId) {
-                    await fleetVm.save(fleetVm.selectedId);
-                  }
-                  await act("run");
-                } catch (e) {
-                  setError(e instanceof Error ? e.message : String(e));
-                }
-              })();
+        <div className="flex flex-col gap-3">
+          <FleetVmLocationPicker
+            hosts={fleetVm.hosts}
+            value={fleetVm.hostId}
+            disabled={policyPending || pending !== null}
+            onChange={(hostId) => {
+              void fleetVm.save(hostId).then(() => setRefreshKey((key) => key + 1)).catch((e) => {
+                setError(e instanceof Error ? e.message : String(e));
+              });
             }}
-            disabled={pending !== null || Boolean(fleetVm.blockReason)}
-            className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-white hover:brightness-110 disabled:opacity-50"
-          >
-            {pending === "run" && <Loader2 size={13} className="animate-spin" />}
-            Deploy
-          </button>
+          />
+          <div className="text-[12px] leading-relaxed text-ink-secondary">
+            {fleetVm.blockReason
+              ?? (perBot
+                ? "Each bot gets its own container on that machine."
+                : "Bots take turns driving one shared desktop on that machine.")}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => {
+                if (fleetVm.blockReason) {
+                  setError(fleetVm.blockReason);
+                  return;
+                }
+                if (!botId) {
+                  setError("Create a bot first, then Deploy.");
+                  return;
+                }
+                void (async () => {
+                  try {
+                    if (fleetVm.selectedId && fleetVm.selectedId !== fleetVm.hostId) {
+                      await fleetVm.save(fleetVm.selectedId);
+                    }
+                    await act("run");
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : String(e));
+                  }
+                })();
+              }}
+              disabled={pending !== null || Boolean(fleetVm.blockReason)}
+              className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-white hover:brightness-110 disabled:opacity-50"
+            >
+              {pending === "run" && <Loader2 size={13} className="animate-spin" />}
+              Deploy
+            </button>
+          </div>
         </div>
       </Card>
 
@@ -276,48 +293,49 @@ export function LocalComputerSection() {
           ? `Private headless Chromium + shell containers on the selected fleet machine, with one container and durable workspace per bot. Distinct bots can work concurrently and idle VMs stop after 8 hours.`
           : `A shared headless Chromium + shell sandbox on the selected fleet machine: isolated, backed by one durable workspace, and automatically recycled after 8 hours without activity.`}
       >
-        <div className="flex flex-wrap items-center gap-2">
-          <span
-            className={cn(
-              "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12.5px]",
-              headerReady ? "bg-success/15 text-success" : "bg-control text-ink-secondary",
-            )}
-          >
-            {loading ? <Loader2 size={12} className="animate-spin" /> : headerReady ? <Check size={12} /> : <Circle size={9} />}
-            {loading
-              ? "Checking…"
-              : unavailable
-                ? "Status unavailable"
-                : perBot && headerReady
-                  ? "Ready for per-bot desktops"
-                  : perBotRuntimeUnsupported
-                    ? "Per-bot mode requires Docker or Podman"
-                  : ready
-                    ? "Ready"
-                    : (status?.problem ?? "Not ready")}
-          </span>
-          <button
-            onClick={() => {
-              setLoading(true);
-              setRefreshKey((key) => key + 1);
-            }}
-            disabled={loading || pending !== null}
-            className="flex items-center gap-1.5 rounded-lg border border-hairline/40 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-control hover:text-ink disabled:opacity-40"
-          >
-            <RefreshCw size={12} /> Re-check
-          </button>
-          {ready && !perBot && status?.viewer_url?.startsWith("http") && (
-            <a
-              href={status.viewer_url}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-1.5 rounded-lg border border-hairline/40 px-2.5 py-1 text-[12.5px] text-ink hover:bg-control"
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={cn(
+                "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12.5px]",
+                headerReady ? "bg-success/15 text-success" : "bg-control text-ink-secondary",
+              )}
             >
-              <ExternalLink size={12} /> Watch screen
-            </a>
+              {loading ? <Loader2 size={12} className="animate-spin" /> : headerReady ? <Check size={12} /> : <Circle size={9} />}
+              {statusLabel}
+            </span>
+            <button
+              onClick={() => {
+                setLoading(true);
+                setRefreshKey((key) => key + 1);
+              }}
+              disabled={loading || pending !== null}
+              className="flex items-center gap-1.5 rounded-full border border-hairline/40 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-control hover:text-ink disabled:opacity-40"
+            >
+              <RefreshCw size={12} /> Re-check
+            </button>
+            {ready && !perBot && status?.viewer_url?.startsWith("http") && (
+              <a
+                href={status.viewer_url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1.5 rounded-full border border-hairline/40 px-2.5 py-1 text-[12.5px] text-ink hover:bg-control"
+              >
+                <ExternalLink size={12} /> Watch screen
+              </a>
+            )}
+          </div>
+          {problemText && (
+            <div className="rounded-lg bg-warning/10 px-3 py-2.5 text-[12.5px] leading-relaxed text-warning">
+              {problemText}
+            </div>
+          )}
+          {error && (
+            <div className="rounded-lg bg-danger/10 px-3 py-2.5 text-[12.5px] leading-relaxed text-danger">
+              {error}
+            </div>
           )}
         </div>
-        {error && <div className="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger">{error}</div>}
       </Card>
 
       <Card
@@ -360,7 +378,7 @@ export function LocalComputerSection() {
       </Card>
 
       <Card title="Setup" subtitle="Once a container runtime is open, Vi Bot prepares the browser VM for you.">
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-5">
           <Step n={1} title="Install a container runtime" done={Boolean(status?.runtime)}>
             <div className="text-[13px] leading-relaxed text-ink-secondary">
               Podman and Colima are free. Docker Desktop may require a paid licence for larger companies and government use.

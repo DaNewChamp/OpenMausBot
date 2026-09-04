@@ -1347,7 +1347,10 @@ export function Sidebar({
     >
       {/* macOS owns inset traffic lights; Linux/Windows use native chrome. */}
       <div
-        className={cn("flex items-center pb-1 pt-3", density === "icons" ? "flex-col gap-1 px-2" : "justify-between px-3")}
+        className={cn(
+          "shell-header",
+          density === "icons" ? "justify-center px-2" : "justify-between px-3",
+        )}
         style={windowDragStyle}
       >
         {web && density !== "icons" ? (
@@ -1370,7 +1373,7 @@ export function Sidebar({
             onClick={toggleCollapsed}
             aria-label={density === "icons" ? "Expand sidebar" : "Collapse sidebar"}
             title={density === "icons" ? "Expand sidebar" : "Collapse sidebar"}
-            className="shell-control flex cursor-pointer items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+            className="shell-icon-btn cursor-pointer text-ink-secondary hover:bg-raised hover:text-ink"
           >
             {density === "icons" ? <PanelLeftOpen size={18} strokeWidth={2} /> : <PanelLeftClose size={18} strokeWidth={2} />}
           </button>
@@ -1380,16 +1383,16 @@ export function Sidebar({
               data-web-team-map-entry
               aria-label="Team map"
               title="Team map"
-              className="shell-control flex cursor-pointer items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+              className="shell-icon-btn cursor-pointer text-ink-secondary hover:bg-raised hover:text-ink"
             >
-              <Network size={20} strokeWidth={2} />
+              <Network size={18} strokeWidth={2} />
             </button>
           )}
           <button
             ref={importReturnRef}
             onClick={() => setPlusOpen((o) => !o)}
             aria-label="New or share"
-            className="shell-control flex items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+            className="shell-icon-btn text-ink-secondary hover:bg-raised hover:text-ink"
             title="New or share"
           >
             <Plus size={20} strokeWidth={2} />

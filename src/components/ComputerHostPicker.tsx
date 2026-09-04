@@ -50,7 +50,7 @@ export function ComputerHostPicker({
   const selected = preferredHostId(options, capability, value);
   if (!options.length) {
     return (
-      <div className="mt-2 text-[12px] leading-relaxed text-ink-secondary">
+      <div className="text-[12px] leading-relaxed text-ink-secondary">
         {capability === "local-vm"
           ? "No machine with a Linux VM is online. Pair a desktop or bridge that can host one."
           : "No paired machine is online."}
@@ -58,7 +58,7 @@ export function ComputerHostPicker({
     );
   }
   return (
-    <label className="mt-2 block">
+    <label className="block">
       <div className="mb-1 text-[11.5px] font-medium text-ink-secondary">Machine</div>
       <select
         value={selected ?? ""}
@@ -112,13 +112,13 @@ export function FleetVmLocationPicker({
   const selected = selectedFleetHostId(hosts, value);
   if (!hosts.length) {
     return (
-      <div className="mt-2 text-[12px] leading-relaxed text-ink-secondary">
+      <div className="text-[12px] leading-relaxed text-ink-secondary">
         No machine is paired. Install V Bot or a bridge on a computer in your fleet, then pick it here.
       </div>
     );
   }
   return (
-    <label className="mt-2 block">
+    <label className="block">
       <div className="mb-1 text-[11.5px] font-medium text-ink-secondary">VM location</div>
       <select
         value={selected ?? ""}
