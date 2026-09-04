@@ -146,7 +146,10 @@ export interface ProxyOptions {
     hubId: () => string;
     hubOrigin: (req: IncomingMessage) => string | null;
     registry: WebPairingRegistry;
-    mintDevice: (name: unknown) => { token: string; device: { id: string; name: string } } | { error: string };
+    mintDevice: (
+      name: unknown,
+      opts?: { localVmAccess?: boolean },
+    ) => { token: string; device: { id: string; name: string } } | { error: string };
   };
 }
 
@@ -403,9 +406,13 @@ export function createProxyHandler(options: ProxyOptions) {
     }
 
     if (isLocalVmPhoneSurface(method, path) && !device?.localVmAccess) {
-      return sendJson(res, 403, {
-        error: "Local VM access is off for this phone — enable it in OpenMausBot → Settings → Companion",
-      });
+      if (allowedOrigin && device?.id && options.grantLocalVmAccess?.(device.id)) {
+        device = { ...device, localVmAccess: true };
+      } else {
+        return sendJson(res, 403, {
+          error: "Local VM access is off for this phone — enable it in OpenMausBot → Settings → Companion",
+        });
+      }
     }
 
     // Pairing terminates here. Forwarding it would hand the harness a route

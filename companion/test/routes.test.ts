@@ -368,6 +368,18 @@ describe("what it may not", () => {
     })).toEqual({
       patch: { computer: "cloud", cloudBackend: "vps" },
     });
+    expect(validateComputerDestinationBody("PATCH", path, {
+      computer: "vm",
+      computerHostId: "bridge-mini",
+    })).toEqual({
+      patch: { computer: "vm", computerHostId: "bridge-mini" },
+    });
+    expect(validateComputerDestinationBody("PATCH", path, {
+      computer: "vm",
+      computerHostId: "../etc",
+    })).toMatchObject({
+      denial: { status: 400 },
+    });
     expect(validateComputerDestinationBody("PATCH", path, { computer: "vm", autoApprove: true })).toMatchObject({
       denial: { status: 400 },
     });

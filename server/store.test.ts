@@ -106,6 +106,19 @@ describe("Store", () => {
     expect(reloaded.taskByThread(bot.id, bot.threadId)?.usage).toEqual({ input: 2000, output: 400, costUsd: null, turns: 3 });
   });
 
+  it("persists a computer host pin and clears it", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({}, { seedMessages: false });
+    store.patchBot(bot.id, { computer: "vm", computerHostId: "bridge-mini" });
+    expect(new Store(selection).bot(bot.id)).toMatchObject({
+      computer: "vm",
+      computerHostId: "bridge-mini",
+    });
+    store.patchBot(bot.id, { computerHostId: "" as unknown as string });
+    expect(store.bot(bot.id)?.computerHostId).toBeUndefined();
+    expect(new Store(selection).bot(bot.id)?.computerHostId).toBeUndefined();
+  });
+
   it("persists the per-bot composio gate", () => {
     const store = new Store(selection);
     const bot = store.createBot();

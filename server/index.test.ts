@@ -1814,6 +1814,24 @@ describe("harness HTTP API", () => {
     await api("DELETE", `/api/bots/${bot.id}`);
   });
 
+  it("assigns a Linux VM host when creating or patching a bot", async () => {
+    const created = await api("POST", "/api/bots", { computer: "vm", computerHostId: "bridge-mini" });
+    expect(created.status).toBe(201);
+    expect(created.body.bot).toMatchObject({ computer: "vm", computerHostId: "bridge-mini" });
+
+    const moved = await api("PATCH", `/api/bots/${created.body.bot.id}`, { computerHostId: "bridge-other" });
+    expect(moved.status).toBe(200);
+    expect(moved.body.bot.computerHostId).toBe("bridge-other");
+
+    const cleared = await api("PATCH", `/api/bots/${created.body.bot.id}`, { computerHostId: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.bot.computerHostId).toBeUndefined();
+
+    const rejected = await api("POST", "/api/bots", { computer: "vm", computerHostId: "../etc" });
+    expect(rejected.status).toBe(400);
+    await api("DELETE", `/api/bots/${created.body.bot.id}`);
+  });
+
   it("offers an idempotent stop boundary for active local turns", async () => {
     const unsupported = await api("POST", "/api/local-computer/interrupt");
     expect(unsupported).toEqual({

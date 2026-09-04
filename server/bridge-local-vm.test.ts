@@ -45,6 +45,41 @@ describe("bridge local-vm relay", () => {
     vi.useRealTimers();
   });
 
+  it("pins local-vm jobs to the assigned bridge id", async () => {
+    vi.useFakeTimers();
+    const registry = new BridgeRegistry();
+    const first = registry.startPairing();
+    const mini = registry.register({ name: "mini", code: first.code, capabilities: ["shell", "local-vm"] });
+    registry.touch(mini.bridgeId);
+    const second = registry.startPairing();
+    const other = registry.register({ name: "other", code: second.code, capabilities: ["shell", "local-vm"] });
+    registry.touch(other.bridgeId);
+
+    const runPromise = runLocalVmOnBridge(registry, {
+      bridgeId: mini.bridgeId,
+      botId: "bot-a",
+      op: "status",
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    const miniJobs = registry.pollJobs(mini.bridgeId);
+    const otherJobs = registry.pollJobs(other.bridgeId);
+    expect(otherJobs).toEqual([]);
+    expect(miniJobs[0]?.kind).toBe("local-vm-status");
+    registry.storeResult({
+      jobId: miniJobs[0]!.id,
+      bridgeId: mini.bridgeId,
+      exitCode: 0,
+      stdout: JSON.stringify({ container: "running", ready: true }),
+      stderr: "",
+      truncated: false,
+      finishedAt: Date.now(),
+      generation: miniJobs[0]!.generation,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(runPromise).resolves.toMatchObject({ bridgeName: "mini" });
+    vi.useRealTimers();
+  });
+
   it("rejects local-vm jobs when capability is missing", () => {
     const registry = new BridgeRegistry();
     const { code } = registry.startPairing();

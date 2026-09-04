@@ -34,6 +34,7 @@ import {
   lookupFleetModel,
 } from "./bridge-fleet-models.ts";
 import { parseFleetModelId } from "../shared/bridge-fleet-contract.ts";
+import { parseComputerHostId } from "../shared/computer-host.ts";
 import { resolveBridge, runShellOnBridge, runSshOnBridge } from "./bridge-exec.ts";
 import { runLocalVmOnBridge, shouldRelayLocalVm } from "./bridge-local-vm.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
@@ -136,7 +137,7 @@ import { ComputerControl } from "./computer-control.ts";
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
 import { buildNotification, type Notification } from "./notify.ts";
-import { isEffortLevel, newEventId, type EffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
+import { isEffortLevel, newEventId, type CloudBackend, type EffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
 import { RETRY_MAX_ATTEMPTS } from "./drivers/retry.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
@@ -566,6 +567,39 @@ const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
   activeLeafId: store.activeLeaf(bot.threadId),
   tasks: store.tasks(bot.id).map(wireTask),
 });
+
+function localVmRelayOpts(bot: { id: string; computerHostId?: string }) {
+  return {
+    botId: bot.id,
+    ...(bot.computerHostId ? { bridgeId: bot.computerHostId } : {}),
+  };
+}
+
+function parseBotComputerAssignment(body: unknown):
+  | { ok: true; patch: { computer?: "cloud" | "vm" | "local" | "off"; computerHostId?: string; cloudBackend?: CloudBackend } }
+  | { ok: false; error: string } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: true, patch: {} };
+  const values = body as Record<string, unknown>;
+  const patch: { computer?: "cloud" | "vm" | "local" | "off"; computerHostId?: string; cloudBackend?: CloudBackend } = {};
+  if (values.computer !== undefined) {
+    if (typeof values.computer !== "string" || !["cloud", "vm", "local", "off"].includes(values.computer)) {
+      return { ok: false, error: "computer must be cloud, vm, local, or off" };
+    }
+    patch.computer = values.computer as "cloud" | "vm" | "local" | "off";
+  }
+  if (values.cloudBackend !== undefined) {
+    if (values.cloudBackend !== "box" && values.cloudBackend !== "vps") {
+      return { ok: false, error: "cloudBackend must be box or vps" };
+    }
+    patch.cloudBackend = values.cloudBackend;
+  }
+  if (values.computerHostId !== undefined) {
+    const parsed = parseComputerHostId(values.computerHostId);
+    if (!parsed.ok) return parsed;
+    if (parsed.computerHostId) patch.computerHostId = parsed.computerHostId;
+  }
+  return { ok: true, patch };
+}
 
 // The store tells us what it wrote; this is the ONE place that turns those
 // into SSE frames. No mutation path can persist without emitting — the
@@ -6638,8 +6672,11 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { message: patched });
     }
     if (method === "POST" && path === "/api/bots") {
+      const body = await readBody(req);
+      const assignment = parseBotComputerAssignment(body);
+      if (!assignment.ok) return json(res, 400, { error: assignment.error });
       const bot = store.createBot();
-      store.patchBot(bot.id, { modelSelection: await defaultSelection() });
+      store.patchBot(bot.id, { modelSelection: await defaultSelection(), ...assignment.patch });
       return json(res, 201, {
         bot: {
           ...wireBot(store.bot(bot.id)!),
@@ -6882,6 +6919,11 @@ const server = createServer(async (req, res) => {
       }
       for (const key of ["modelSelection", "unread", "computer", "cloudBackend", "mascotExpression", "pinned", "hidden"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];
+      }
+      if (body.computerHostId !== undefined) {
+        const parsedHost = parseComputerHostId(body.computerHostId);
+        if (!parsedHost.ok) return json(res, 400, { error: parsedHost.error });
+        patch.computerHostId = parsedHost.computerHostId ?? undefined;
       }
       // one pinned message per thread; null/"" clears. The id is not
       // validated against the transcript here — a pin whose message was
@@ -7591,7 +7633,7 @@ const server = createServer(async (req, res) => {
       const target = localVmTargetForBot(bot.id);
       if (await shouldRelayLocalVm(bridges)) {
         try {
-          const { data } = await runLocalVmOnBridge(bridges, { botId: bot.id, op: "status" });
+          const { data } = await runLocalVmOnBridge(bridges, { ...localVmRelayOpts(bot), op: "status" });
           const status = data as Awaited<ReturnType<typeof containerComputerStatus>>;
           return json(
             res,
@@ -7637,7 +7679,7 @@ const server = createServer(async (req, res) => {
       const target = localVmTargetForBot(bot.id);
       if (await shouldRelayLocalVm(bridges)) {
         try {
-          const { data } = await runLocalVmOnBridge(bridges, { botId: bot.id, op: "action", action });
+          const { data } = await runLocalVmOnBridge(bridges, { ...localVmRelayOpts(bot), op: "action", action });
           const status = data as Awaited<ReturnType<typeof containerComputerStatus>>;
           if (action === "run" || action === "recreate") localVmIdleFor(target).touch();
           if (action === "stop") localVmIdleFor(target).cancel();
@@ -7756,7 +7798,7 @@ const server = createServer(async (req, res) => {
       const target = localVmTargetForBot(bot.id);
       if (await shouldRelayLocalVm(bridges)) {
         try {
-          const { data } = await runLocalVmOnBridge(bridges, { botId: bot.id, op: "screenshot" });
+          const { data } = await runLocalVmOnBridge(bridges, { ...localVmRelayOpts(bot), op: "screenshot" });
           localVmIdleFor(target).touch();
           return json(res, 200, data);
         } catch (error) {

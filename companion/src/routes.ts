@@ -18,6 +18,8 @@
 // calls. Adding a feature to the phone means adding its route here, on
 // purpose, in a diff someone can read. That cost is the feature.
 
+import { parseComputerHostId } from "../../shared/computer-host.ts";
+
 /** A refusal to send back, or null to let the request through. */
 export interface Denial {
   status: number;
@@ -595,7 +597,7 @@ export function validateComputerDestinationBody(
   }
   const values = body as Record<string, unknown>;
   const keys = Object.keys(values);
-  const allowed = new Set(["computer", "acknowledgeLocalAuto", "cloudBackend"]);
+  const allowed = new Set(["computer", "acknowledgeLocalAuto", "cloudBackend", "computerHostId"]);
   const extra = keys.find((key) => !allowed.has(key));
   if (extra) {
     return { denial: { status: 400, error: `unsupported computer destination field: ${extra}` } };
@@ -616,6 +618,13 @@ export function validateComputerDestinationBody(
       return { denial: { status: 400, error: "cloudBackend must be box or vps" } };
     }
     if (computer === "cloud") patch.cloudBackend = values.cloudBackend;
+  }
+  if (values.computerHostId !== undefined) {
+    const parsed = parseComputerHostId(values.computerHostId);
+    if (!parsed.ok) return { denial: { status: 400, error: parsed.error } };
+    if (computer === "vm" || computer === "local") {
+      patch.computerHostId = parsed.computerHostId ?? null;
+    }
   }
   return { patch };
 }

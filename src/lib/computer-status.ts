@@ -31,6 +31,7 @@ export function computerStatusSummary(input: {
   linux?: boolean;
   reconstructed?: boolean;
   error?: string | null;
+  shared?: boolean;
 }): ComputerStatusSummary {
   if (input.reconstructed) {
     return {
@@ -56,8 +57,10 @@ export function computerStatusSummary(input: {
       };
     case "vm":
       return {
-        title: "Local VM ready",
-        detail: "A private per-bot workspace is running on this computer.",
+        title: "Linux VM ready",
+        detail: input.shared === false
+          ? "A private container for this bot is running on the assigned machine."
+          : "A shared Linux VM is running on the assigned machine. Bots take turns driving it.",
         tone: "positive",
       };
     case "local":

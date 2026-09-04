@@ -35,7 +35,15 @@ export async function runLocalVmOnBridge(
   },
 ): Promise<{ data: unknown; bridgeName: string }> {
   const bridge = resolveBridge(registry, { bridgeId: opts.bridgeId, name: opts.name, capability: "local-vm" });
-  if (!bridge) throw new Error("no online bridge with local-vm matched");
+  if (!bridge) {
+    if (opts.bridgeId) {
+      const assigned = registry.list().find((entry) => entry.id === opts.bridgeId);
+      if (!assigned) throw new Error("assigned Local VM host is no longer paired");
+      if (!assigned.online) throw new Error(`assigned Local VM host "${assigned.name}" is offline`);
+      throw new Error(`assigned host "${assigned.name}" cannot run a Local VM`);
+    }
+    throw new Error("no online bridge with local-vm matched");
+  }
   const kind: LocalVmBridgeJobKind =
     opts.op === "status"
       ? "local-vm-status"

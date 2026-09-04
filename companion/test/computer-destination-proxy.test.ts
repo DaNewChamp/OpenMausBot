@@ -68,10 +68,17 @@ describe("computer destination companion boundary", () => {
     seen = [];
     granted = [];
     localVmAccess = false;
-    const switched = await device("PATCH", "/api/bots/bot-1/computer-destination", { computer: "vm" });
+    const switched = await device("PATCH", "/api/bots/bot-1/computer-destination", {
+      computer: "vm",
+      computerHostId: "bridge-mini",
+    });
     expect(switched.status).toBe(200);
     expect(seen).toEqual([
-      { method: "PATCH", path: "/api/bots/bot-1", body: JSON.stringify({ computer: "vm" }) },
+      {
+        method: "PATCH",
+        path: "/api/bots/bot-1",
+        body: JSON.stringify({ computer: "vm", computerHostId: "bridge-mini" }),
+      },
     ]);
     expect(granted).toEqual(["phone-1"]);
     expect(localVmAccess).toBe(true);

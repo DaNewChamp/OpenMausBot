@@ -320,7 +320,7 @@ export class DeviceRegistry {
   }
 
   /** Mint a device token after a hub-approved invitation, without an open pairing window. */
-  mintDevice(name: unknown): { device: PublicDevice; token: string } | { error: string } {
+  mintDevice(name: unknown, opts?: { localVmAccess?: boolean }): { device: PublicDevice; token: string } | { error: string } {
     if (this.devices.length >= MAX_DEVICES) return { error: "too many paired devices — remove one first" };
     const token = `omb_${randomBytes(32).toString("base64url")}`;
     const device: DeviceRecord = {
@@ -330,7 +330,7 @@ export class DeviceRegistry {
       createdAt: Date.now(),
       lastSeenAt: Date.now(),
       cloudDesktopAccess: false,
-      localVmAccess: false,
+      localVmAccess: opts?.localVmAccess === true,
     };
     this.devices.push(device);
     try {

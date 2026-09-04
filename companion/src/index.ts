@@ -212,7 +212,7 @@ const proxy = createProxyHandler({
         return host ? `http://${host}` : null;
       },
       registry: webPairingRequests,
-      mintDevice: (name) => devices.mintDevice(name),
+      mintDevice: (name, opts) => devices.mintDevice(name, opts),
     },
     serverName: machineName,
     // Recomputed per pairing rather than cached: addresses change when the

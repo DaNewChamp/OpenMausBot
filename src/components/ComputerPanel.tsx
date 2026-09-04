@@ -45,6 +45,8 @@ import {
 } from "@/lib/local-computer";
 import { vpsComputerNeedsReplacement, type VpsComputerStatus } from "@/lib/vps-computer";
 import { computerStatusSummary } from "@/lib/computer-status";
+import { preferredHostId } from "@/lib/fleet-hosts";
+import { ComputerHostPicker, useFleetHosts } from "./ComputerHostPicker";
 
 type Phase =
   | "checking"
@@ -123,6 +125,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
   const selectedInstance = state.instances.find(
     (instance) => instance.instanceId === bot.modelSelection.instanceId,
   );
+  const hosts = useFleetHosts();
   const reconstructedEngine = selectedInstance?.driverKind === "grokReconstructed";
   const reconstructedComputerNotice =
     "Grok Reconstructed supports chat, roster, and transcript history only. Computer control, Local VM, attachments, queueing, and connected tools stay off for this engine.";
@@ -219,11 +222,9 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
       setPhase(capabilitiesReady && localAvailable && providerSupportsLocal ? "local" : "local-unavailable");
       return;
     }
-    if (bot.computer === "vm") {
-      if (!vmSupported) {
-        setError(reconstructedEngine ? null : "This model engine cannot use the Local VM. Choose Claude or an ACP engine.");
-        setPhase("vm-unavailable");
-        return;
+    if (bot.computer === "vm" || (isWebClientMode() && !bot.computer)) {
+      if (!vmSupported && bot.computer === "vm") {
+        setError(reconstructedEngine ? null : "This model engine cannot drive the Linux VM. Choose Claude or an ACP engine to control it.");
       }
       let retryTimer: number | undefined;
       api(`/api/bots/${bot.id}/local-computer`)
@@ -376,28 +377,6 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
       })
       .catch((e) => {
         if (!alive) return;
-        if (isWebClientMode() && vmSupported) {
-          return api(`/api/bots/${bot.id}/local-computer`)
-            .then((rawStatus) => {
-              if (!alive) return;
-              const status: LocalVmStatus = rawStatus;
-              setVmStatus(status);
-              const viewerUrl = String(status.viewer_url ?? "");
-              if (viewerUrl.startsWith("http")) setVmViewerUrl(viewerUrl);
-              if (status.ready) {
-                setError(null);
-                setPhase("vm");
-                return;
-              }
-              setError(status.problem ?? "The Local VM is not ready.");
-              setPhase("vm-unavailable");
-            })
-            .catch((vmErr) => {
-              if (!alive) return;
-              setError(vmErr instanceof Error ? vmErr.message : e.message);
-              setPhase("vm-unavailable");
-            });
-        }
         setError(e.message);
         setPhase("error");
       });
@@ -407,6 +386,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
   }, [
     bot.id,
     bot.computer,
+    bot.computerHostId,
     bot.autoStartVps,
     cloudBackend,
     retry,
@@ -732,6 +712,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
     linux: isLinux,
     reconstructed: reconstructedEngine,
     error,
+    shared: vmStatus?.mode !== "per-bot",
   });
 
   return (
@@ -1009,18 +990,18 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
             {(
               [
                 ["cloud", "Cloud"],
-                ["vm", "Local VM"],
-                ["local", "This computer"],
+                ["vm", "Linux VM"],
+                ["local", "This host"],
                 ["off", "Off"],
               ] as const
             ).map(([mode, label], i) => {
               const disabled =
                 (mode === "cloud" && !cloudSupported) ||
-                (mode === "vm" && !vmSupported) ||
-                (mode === "local" && !localSelectable);
+                (mode === "vm" && reconstructedEngine) ||
+                (mode === "local" && !localSelectable && !isWebClientMode());
               const unavailableTitle =
-                mode === "vm" && !vmSupported
-                  ? reconstructedEngine ? "Grok Reconstructed does not provide Local VM control" : "This model engine cannot use the Local VM"
+                mode === "vm" && reconstructedEngine
+                  ? "Grok Reconstructed does not provide Local VM control"
                   : mode === "cloud" && !cloudSupported
                     ? reconstructedEngine ? "Grok Reconstructed does not provide computer control" : "This model engine cannot use cloud computer tools"
                     : mode === "local" && !localSelectable
@@ -1032,9 +1013,23 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
                   disabled={disabled}
                   title={unavailableTitle}
                   onClick={() => {
-                    if (mode === bot.computer) return;
+                    if (mode === bot.computer && mode !== "vm" && mode !== "local") return;
+                    const hostId = mode === "vm"
+                      ? preferredHostId(hosts, "local-vm", bot.computerHostId)
+                      : mode === "local"
+                        ? preferredHostId(hosts, "shell", bot.computerHostId)
+                        : undefined;
                     if (mode === "local" && bot.autoApprove) setLocalAutoWarning(true);
-                    else dispatch({ type: "updateBot", botId: bot.id, patch: { computer: mode } });
+                    else {
+                      dispatch({
+                        type: "updateBot",
+                        botId: bot.id,
+                        patch: {
+                          computer: mode,
+                          ...(hostId && (mode === "vm" || mode === "local") ? { computerHostId: hostId } : {}),
+                        },
+                      });
+                    }
                   }}
                   className={cn(
                     "flex-1 py-1 text-[11.5px]",
@@ -1050,6 +1045,37 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
               );
             })}
           </div>
+          {(bot.computer === "vm" || (isWebClientMode() && !bot.computer)) && (
+            <>
+              <ComputerHostPicker
+                hosts={hosts}
+                capability="local-vm"
+                value={bot.computerHostId}
+                onChange={(hostId) => dispatch({
+                  type: "updateBot",
+                  botId: bot.id,
+                  patch: { computer: "vm", computerHostId: hostId },
+                })}
+              />
+              <div className="mt-1.5 text-[11.5px] leading-relaxed text-ink-secondary">
+                {vmStatus?.mode === "per-bot"
+                  ? "This bot gets its own Linux container on that machine."
+                  : "Bots assigned here share one Linux VM. Only one can drive the desktop at a time."}
+              </div>
+            </>
+          )}
+          {bot.computer === "local" && (
+            <ComputerHostPicker
+              hosts={hosts}
+              capability="shell"
+              value={bot.computerHostId}
+              onChange={(hostId) => dispatch({
+                type: "updateBot",
+                botId: bot.id,
+                patch: { computer: "local", computerHostId: hostId },
+              })}
+            />
+          )}
         </div>
 
         {error && (
@@ -1261,7 +1287,15 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
       open={localAutoWarning}
       onCancel={() => setLocalAutoWarning(false)}
       onConfirm={() => {
-        dispatch({ type: "updateBot", botId: bot.id, patch: { computer: "local", acknowledgeLocalAuto: true } });
+        dispatch({
+          type: "updateBot",
+          botId: bot.id,
+          patch: {
+            computer: "local",
+            acknowledgeLocalAuto: true,
+            computerHostId: preferredHostId(hosts, "shell", bot.computerHostId),
+          },
+        });
         setLocalAutoWarning(false);
       }}
     />

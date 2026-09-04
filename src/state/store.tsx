@@ -21,7 +21,13 @@ import type { WebhookAttempt, WebhookIngressStatus, WebhookTrigger } from "@/lib
 import { currentCall } from "@/lib/call";
 import { showNotification, type NotificationTarget } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
-import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
+import {
+  createBotPatchQueue,
+  omitComputerDestinationPatch,
+  pickComputerDestinationPatch,
+  type BotUpdatePatch,
+} from "./bot-patch-queue";
+import { hostsWithCapability, parseFleetHosts, preferredHostId } from "@/lib/fleet-hosts";
 import { skillRecorderEnabled } from "@/lib/feature-flags";
 import { desktopDemoFixture, isDesktopDemoMode } from "@/lib/desktop-demo";
 import { loadRightRailOpen } from "@/lib/shell-layout";
@@ -231,6 +237,8 @@ export interface Bot {
   modelSelection: ModelSelection;
   /** Where this bot's computer runs; unset = auto (cloud box if one exists, else local). */
   computer?: "cloud" | "vm" | "local" | "off";
+  /** Paired desktop/bridge that hosts the Linux VM or host OS. */
+  computerHostId?: string | null;
   /** Which cloud computer backs `computer: "cloud"`; absent means Box. */
   cloudBackend?: CloudBackend;
   /** Allow Auto to prepare/start the managed VPS container. Off by default. */
@@ -1340,6 +1348,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     () =>
       createBotPatchQueue({
         send: async (botId, patch, signal) => {
+          if (isWebClientMode()) {
+            const destination = pickComputerDestinationPatch(patch);
+            const rest = omitComputerDestinationPatch(patch);
+            let bot: BotAnnouncement | undefined;
+            if (Object.keys(destination).length > 0) {
+              const result: { bot: BotAnnouncement } = await api(`/api/bots/${botId}/computer-destination`, {
+                method: "PATCH",
+                body: JSON.stringify(destination),
+                signal,
+              });
+              bot = result.bot;
+            }
+            if (Object.keys(rest).length > 0) {
+              const result: { bot: BotAnnouncement } = await api(`/api/bots/${botId}`, {
+                method: "PATCH",
+                body: JSON.stringify(rest),
+                signal,
+              });
+              bot = result.bot;
+            }
+            if (!bot) throw new Error("empty bot patch");
+            return bot;
+          }
           const result: { bot: BotAnnouncement } = await api(`/api/bots/${botId}`, {
             method: "PATCH",
             body: JSON.stringify(patch),
@@ -1568,9 +1599,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "newBot":
-          api("/api/bots", { method: "POST" })
-            .then(({ bot }) => rawDispatch({ type: "botAdded", bot }))
-            .catch(showError);
+          void (async () => {
+            let payload: Record<string, unknown> = {};
+            if (isWebClientMode()) {
+              try {
+                const hosts = parseFleetHosts(await api("/api/bridges"));
+                const vmHost = preferredHostId(hosts, "local-vm");
+                if (vmHost && hostsWithCapability(hosts, "local-vm").filter((host) => host.online).length === 1) {
+                  payload = { computer: "vm", computerHostId: vmHost };
+                }
+              } catch {
+                /* create without a pin if the roster is unreachable */
+              }
+            }
+            const { bot } = await api("/api/bots", {
+              method: "POST",
+              body: JSON.stringify(payload),
+            });
+            rawDispatch({ type: "botAdded", bot });
+          })().catch(showError);
           break;
         case "duplicateBot": {
           const source = stateRef.current.bots.find((b) => b.id === action.botId);
@@ -1582,6 +1629,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             notifications: source.notifications,
             modelSelection: source.modelSelection,
             computer: source.computer,
+            computerHostId: source.computerHostId,
             cloudBackend: source.cloudBackend,
             autoStartVps: source.autoStartVps,
             avatarUrl: source.avatarUrl,

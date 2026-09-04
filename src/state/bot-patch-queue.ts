@@ -9,6 +9,7 @@ export type BotUpdatePatch = Partial<
     | "description"
     | "notifications"
     | "computer"
+    | "computerHostId"
     | "cloudBackend"
     | "autoStartVps"
     | "color"
@@ -69,6 +70,22 @@ export interface BotPatchQueue {
    * this, dispose() would permanently disable saving in development. */
   revive: () => void;
   dispose: () => void;
+}
+
+const COMPUTER_DESTINATION_KEYS = ["computer", "computerHostId", "cloudBackend", "acknowledgeLocalAuto"] as const;
+
+export function pickComputerDestinationPatch(patch: BotUpdatePatch): BotUpdatePatch {
+  const dest: BotUpdatePatch = {};
+  for (const key of COMPUTER_DESTINATION_KEYS) {
+    if (patch[key] !== undefined) dest[key] = patch[key] as never;
+  }
+  return dest;
+}
+
+export function omitComputerDestinationPatch(patch: BotUpdatePatch): BotUpdatePatch {
+  const rest: BotUpdatePatch = { ...patch };
+  for (const key of COMPUTER_DESTINATION_KEYS) delete rest[key];
+  return rest;
 }
 
 const hasFields = (patch: BotUpdatePatch): boolean => Object.keys(patch).length > 0;

@@ -229,6 +229,16 @@ describe("DeviceRegistry", () => {
     expect(registry.authenticate(token)?.cloudDesktopAccess).toBe(false);
   });
 
+  it("mints web pairings with Local VM access when asked", () => {
+    const registry = new DeviceRegistry();
+    const phone = registry.mintDevice("Invite phone");
+    if ("error" in phone) throw new Error(phone.error);
+    expect(phone.device.localVmAccess).toBe(false);
+    const web = registry.mintDevice("Chrome", { localVmAccess: true });
+    if ("error" in web) throw new Error(web.error);
+    expect(web.device.localVmAccess).toBe(true);
+  });
+
   it("keeps Local VM access off until enabled for that device", () => {
     const registry = new DeviceRegistry();
     const { token, device } = pair(registry);

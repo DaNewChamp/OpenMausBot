@@ -12,6 +12,9 @@ import { shortPath } from "@/lib/short-path";
 import { instanceSupportsLocalComputer, localComputerDisabledReason, localComputerSelectable } from "@/lib/local-computer";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
+import { ComputerHostPicker, useFleetHosts } from "./ComputerHostPicker";
+import { preferredHostId } from "@/lib/fleet-hosts";
+import { isWebClientMode } from "@/lib/web-client-mode";
 import { VoiceSettings } from "./VoiceSettings";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 
@@ -320,6 +323,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
   const providerSupportsLocal = instanceSupportsLocalComputer(state.instances, bot);
   const localSelectable = localComputerSelectable({ capabilities, providerSupportsLocal });
   const [localAutoWarning, setLocalAutoWarning] = useState<"auto" | "local" | null>(null);
+  const hosts = useFleetHosts();
   const localDisabledReason = localComputerDisabledReason({ capabilities, providerSupportsLocal });
   const patch = (
     p: Partial<
@@ -330,6 +334,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
         | "description"
         | "notifications"
         | "computer"
+        | "computerHostId"
         | "cloudBackend"
         | "autoStartVps"
         | "color"
@@ -629,18 +634,28 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
               {([
                 ["cloud", "Cloud"],
-                ["vm", "Local VM"],
-                ["local", "This computer"],
+                ["vm", "Linux VM"],
+                ["local", "This host"],
                 ["off", "Off"],
               ] as const).map(([mode, label], i) => (
                 <button
                   key={mode}
-                  disabled={mode === "local" && !localSelectable}
+                  disabled={mode === "local" && !localSelectable && !isWebClientMode()}
                   title={mode === "local" && !localSelectable ? localDisabledReason ?? undefined : undefined}
                   onClick={() => {
-                    if (mode === bot.computer) return;
+                    if (mode === bot.computer && mode !== "vm" && mode !== "local") return;
+                    const hostId = mode === "vm"
+                      ? preferredHostId(hosts, "local-vm", bot.computerHostId)
+                      : mode === "local"
+                        ? preferredHostId(hosts, "shell", bot.computerHostId)
+                        : undefined;
                     if (mode === "local" && bot.autoApprove) setLocalAutoWarning("local");
-                    else patch({ computer: mode });
+                    else {
+                      patch({
+                        computer: mode,
+                        ...(hostId && (mode === "vm" || mode === "local") ? { computerHostId: hostId } : {}),
+                      });
+                    }
                   }}
                   className={cn(
                     "flex-1 py-1.5 text-[13px] capitalize",
@@ -655,6 +670,27 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                 </button>
               ))}
             </div>
+            {(bot.computer === "vm" || (isWebClientMode() && !bot.computer)) && (
+              <>
+                <ComputerHostPicker
+                  hosts={hosts}
+                  capability="local-vm"
+                  value={bot.computerHostId}
+                  onChange={(hostId) => patch({ computer: "vm", computerHostId: hostId })}
+                />
+                <div className="mt-1.5 text-[11.5px] leading-relaxed text-ink-secondary">
+                  Bots assigned here share one Linux VM on that machine. Only one can drive the desktop at a time.
+                </div>
+              </>
+            )}
+            {bot.computer === "local" && (
+              <ComputerHostPicker
+                hosts={hosts}
+                capability="shell"
+                value={bot.computerHostId}
+                onChange={(hostId) => patch({ computer: "local", computerHostId: hostId })}
+              />
+            )}
             {(!bot.computer || bot.computer === "cloud") && (
               <>
                 <CloudBackendPicker
@@ -775,7 +811,13 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
       onCancel={() => setLocalAutoWarning(null)}
       onConfirm={() => {
         if (localAutoWarning === "auto") patch({ autoApprove: true, acknowledgeLocalAuto: true });
-        if (localAutoWarning === "local") patch({ computer: "local", acknowledgeLocalAuto: true });
+        if (localAutoWarning === "local") {
+          patch({
+            computer: "local",
+            acknowledgeLocalAuto: true,
+            computerHostId: preferredHostId(hosts, "shell", bot.computerHostId),
+          });
+        }
         setLocalAutoWarning(null);
       }}
     />

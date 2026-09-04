@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
+import {
+  createBotPatchQueue,
+  omitComputerDestinationPatch,
+  pickComputerDestinationPatch,
+  type BotUpdatePatch,
+} from "./bot-patch-queue";
 import type { Bot, BotAnnouncement } from "./store";
 
 const bot = (overrides: Partial<Bot> = {}): Bot => ({
@@ -32,6 +37,23 @@ const deferredBot = (): DeferredBot => {
   });
   return { promise, resolve, reject };
 };
+
+describe("computer destination patch split", () => {
+  it("separates the paired-safe destination fields from the rest", () => {
+    const patch: BotUpdatePatch = {
+      computer: "vm",
+      computerHostId: "bridge-mini",
+      name: "Ops",
+      acknowledgeLocalAuto: true,
+    };
+    expect(pickComputerDestinationPatch(patch)).toEqual({
+      computer: "vm",
+      computerHostId: "bridge-mini",
+      acknowledgeLocalAuto: true,
+    });
+    expect(omitComputerDestinationPatch(patch)).toEqual({ name: "Ops" });
+  });
+});
 
 describe("bot patch queue", () => {
   beforeEach(() => vi.useFakeTimers());

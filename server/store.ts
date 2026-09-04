@@ -359,6 +359,8 @@ export interface BotRecord {
   /** which computer the bot acts on: its cloud box, this Mac (local CUA),
    * or none. Unset = auto (box when it exists, else local when available). */
   computer?: "cloud" | "vm" | "local" | "off";
+  /** Paired desktop/bridge that hosts `computer: "vm"` or `"local"`. */
+  computerHostId?: string;
   /** Which cloud computer backs `computer: "cloud"`; absent means Box. */
   cloudBackend?: CloudBackend;
   /** Auto mode may prepare/start this bot's managed VPS container. Off by
@@ -1190,6 +1192,10 @@ export class Store {
     }
     if ("mascotShape" in safePatch && !botMascotShapeSchema.safeParse(safePatch.mascotShape).success) {
       delete safePatch.mascotShape;
+    }
+    if ("computerHostId" in safePatch && !safePatch.computerHostId) {
+      delete safePatch.computerHostId;
+      delete bot.computerHostId;
     }
     Object.assign(bot, safePatch);
     this.saveBots();

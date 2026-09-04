@@ -59,7 +59,10 @@ export interface WebPairingRegistryOptions {
 
 type ErrorResult = { error: string; status: number };
 type MintedDevice = { id: string; name: string };
-type MintDevice = (name: unknown) => { device: MintedDevice; token: string } | { error: string };
+type MintDevice = (
+  name: unknown,
+  opts?: { localVmAccess?: boolean },
+) => { device: MintedDevice; token: string } | { error: string };
 
 const sha256Hex = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -285,7 +288,7 @@ export class WebPairingRegistry {
     if (record.status !== "approved") return generic();
     if (!pairRequestId) return generic();
 
-    const minted = input.mintDevice(record.deviceName);
+    const minted = input.mintDevice(record.deviceName, { localVmAccess: true });
     if ("error" in minted) return { error: minted.error, status: minted.error.startsWith("too many paired devices") ? 401 : 500 };
     record.status = "redeemed";
     record.replay = { pairRequestId, result: minted };
