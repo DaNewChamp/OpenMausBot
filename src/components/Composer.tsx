@@ -162,8 +162,7 @@ export function Composer({
   const busy = group ? Boolean(group.busyBotId) : Boolean(bot?.busy);
   // an engine with a live session takes a message INTO the running turn;
   // for those the composer never locks — the server steers instead of 409
-  const canSteer =
-    !group && Boolean(bot) && state.instances.find((i) => i.instanceId === bot!.modelSelection.instanceId)?.capabilities?.queueing === true;
+  const canSteer = !group && Boolean(bot);
   // a pending approval blocks the prompt until it is answered
   const threadId = group?.threadId ?? bot?.threadId ?? "";
   // the VISIBLE branch only — an approval left on a branch you edited away
@@ -338,7 +337,7 @@ export function Composer({
       track("message_sent", { room: true });
     } else if (bot) {
       dispatch({ type: "send", botId: bot.id, text: t, replyToId: replyTo?.id });
-      track("message_sent", { driver: bot.modelSelection?.instanceId, queued: busy && !canSteer });
+      track("message_sent", { driver: bot.modelSelection?.instanceId, queued: false });
     }
     setText("");
     setAttachments([]);

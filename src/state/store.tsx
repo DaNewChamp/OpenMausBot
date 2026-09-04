@@ -1465,9 +1465,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // persist through the existing card route so an older server that
           // does not auto-dismiss still hides the quiz on this client
           if (quizBeforeSend) persistCard(action.botId, quizBeforeSend.id, { dismissed: true });
+          const sending = stateRef.current.bots.find((candidate) => candidate.id === action.botId);
           void api(`/api/bots/${action.botId}/messages`, {
             method: "POST",
-            body: JSON.stringify({ text: action.text, replyToId: action.replyToId }),
+            body: JSON.stringify({
+              text: action.text,
+              replyToId: action.replyToId,
+              ...(sending?.busy ? { delivery: "steer" } : {}),
+            }),
           })
             .then((body) => {
               if (
