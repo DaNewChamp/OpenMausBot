@@ -131,25 +131,27 @@ async function runDaemon(credentials = loadCredentials()) {
   const connectorConfigPath = join(bridgeDir, "hermes-vbot-mcp.json");
   const loaded = loadHermesVbotConnectorRegistration(connectorConfigPath);
   const socketPath = loaded.state === "available" ? loaded.socketPath : join(bridgeDir, "vbot.sock");
-  const connector = await startHermesVbotConnector({
-    ...daemonHermesVbotConnectorOptions({
-      bridgeId: credentials.bridgeId,
-      socketPath,
-      botScope: loaded.state === "available" ? loaded.botScopes[0]! : "unregistered",
-    }),
-    resolveBotScopes: () => {
-      const current = loadHermesVbotConnectorRegistration(connectorConfigPath);
-      if (current.state === "unavailable") return current;
-      if (current.state === "empty") return { state: "available", botScopes: [] };
-      return { state: "available", botScopes: current.botScopes };
-    },
-    handler: (request, context) => createHermesVbotDaemonHandler({
-      executeTool: createHermesDaemonToolExecutor({
-        ...credentials,
-        botScope: context.botScope,
+  const connector = bridgeHermesExecutionEnabled()
+    ? await startHermesVbotConnector({
+      ...daemonHermesVbotConnectorOptions({
+        bridgeId: credentials.bridgeId,
+        socketPath,
+        botScope: loaded.state === "available" ? loaded.botScopes[0]! : "unregistered",
       }),
-    })(request),
-  });
+      resolveBotScopes: () => {
+        const current = loadHermesVbotConnectorRegistration(connectorConfigPath);
+        if (current.state === "unavailable") return current;
+        if (current.state === "empty") return { state: "available", botScopes: [] };
+        return { state: "available", botScopes: current.botScopes };
+      },
+      handler: (request, context) => createHermesVbotDaemonHandler({
+        executeTool: createHermesDaemonToolExecutor({
+          ...credentials,
+          botScope: context.botScope,
+        }),
+      })(request),
+    })
+    : null;
   const inFlight = new Map<string, InFlightJob>();
   try {
   for (;;) {
@@ -218,7 +220,7 @@ async function runDaemon(credentials = loadCredentials()) {
     await new Promise((resolve) => setTimeout(resolve, bridgeHeartbeatIntervalMs(hermesActive)));
   }
   } finally {
-    await connector.close().catch(() => {});
+    await connector?.close().catch(() => {});
   }
 }
 

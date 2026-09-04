@@ -9,6 +9,16 @@ export interface AuthorizedEventStreamOptions {
   onFrame: (frame: unknown) => void;
 }
 
+/** `createSseParser` already JSON.parse'd the SSE data line. */
+export function emitAuthorizedFrame(onFrame: (frame: unknown) => void, payload: unknown): void {
+  if (payload == null) return;
+  try {
+    onFrame(typeof payload === "string" ? JSON.parse(payload) : payload);
+  } catch {
+    /* ignore malformed frames */
+  }
+}
+
 export function openAuthorizedEventStream(options: AuthorizedEventStreamOptions): () => void {
   const controller = new AbortController();
   let alive = true;
@@ -28,21 +38,9 @@ export function openAuthorizedEventStream(options: AuthorizedEventStreamOptions)
         const { done, value } = await reader.read();
         if (done) break;
         const frames = parser.feed(decoder.decode(value, { stream: true }));
-        for (const frame of frames) {
-          try {
-            options.onFrame(JSON.parse(frame.payload));
-          } catch {
-            /* ignore malformed frames */
-          }
-        }
+        for (const frame of frames) emitAuthorizedFrame(options.onFrame, frame.payload);
       }
-      for (const frame of parser.flush()) {
-        try {
-          options.onFrame(JSON.parse(frame.payload));
-        } catch {
-          /* ignore malformed frames */
-        }
-      }
+      for (const frame of parser.flush()) emitAuthorizedFrame(options.onFrame, frame.payload);
     } catch {
       if (alive) options.onError?.();
     }
