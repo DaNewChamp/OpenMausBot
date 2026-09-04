@@ -380,7 +380,7 @@ export function Composer({
         setSpeechError("Dictation is only available on macOS for now.");
       } else if (code === 1) {
         setSpeechError(
-          "Dictation needs Microphone + Speech Recognition access — System Settings → Privacy & Security.",
+          "Dictation needs Microphone + Speech Recognition access. System Settings → Privacy & Security.",
         );
       }
     });
@@ -601,13 +601,13 @@ export function Composer({
               : recording
               ? "Listening…"
               : busy && canSteer
-                ? `${busyName} is working — Enter sends this into the running turn`
+                ? `${busyName} is working. Enter sends this into the running turn`
               : busy
                 ? group
-                  ? `${busyName} is working — Enter queues your message`
-                  : `${busyName} is working — sends when this turn finishes`
+                  ? `${busyName} is working. Enter queues your message`
+                  : `${busyName} is working. Sends when this turn finishes.`
                 : group
-                  ? `Message ${group.name} — ${groupComposerHint(group, members ?? [])}`
+                  ? `Message ${group.name}: ${groupComposerHint(group, members ?? [])}`
                   : `Message ${bot ? conversationTitle(bot.name, bot.modelSelection) : ""}`
           }
             aria-label={`Message ${group ? group.name : (bot ? conversationTitle(bot.name, bot.modelSelection) : "")}`}

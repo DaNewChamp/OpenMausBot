@@ -432,7 +432,7 @@ function RoomWorkingFolder({ group }: { group: Group }) {
         >
           <input
             className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 font-mono text-[12.5px] text-ink placeholder:text-ink-secondary focus:outline-none focus:border-hairline"
-            placeholder="Each bot's own folder — or an absolute path"
+            placeholder="Each bot's own folder, or an absolute path"
             value={draft ?? group.cwd ?? ""}
             onChange={(e) => setDraft(e.target.value)}
           />
@@ -969,7 +969,7 @@ export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: ()
   const memberMauses = members.map((b) => (
     <span
       key={b.id}
-      title={`${b.name}${group.busyBotId === b.id ? " — working…" : ""}`}
+      title={`${b.name}${group.busyBotId === b.id ? " is working…" : ""}`}
       className={cn(
         "relative inline-flex rounded-full",
         group.busyBotId === b.id && "ring-2 ring-accent/50 ring-offset-1 ring-offset-app",
@@ -1041,7 +1041,7 @@ export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: ()
               type="button"
               onClick={() => setMembersOpen(true)}
               title="Manage members"
-              aria-label={`Manage members — ${members.length} ${members.length === 1 ? "bot" : "bots"} in this channel`}
+              aria-label={`Manage members: ${members.length} ${members.length === 1 ? "bot" : "bots"} in this channel`}
               className="flex items-center gap-1.5 rounded-full py-0.5 pl-1 pr-1.5 hover:bg-raised/60"
             >
               {memberMauses}
@@ -1071,7 +1071,7 @@ export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: ()
                   setBulletinOpen(false);
                 }
               }}
-              placeholder="Channel instructions — every bot in this channel follows them (who does what, tone, goals, a task checklist…)"
+              placeholder="Channel instructions: every bot in this channel follows them (who does what, tone, goals, a task checklist…)"
               rows={4}
               className="w-full resize-none bg-transparent text-[13px] leading-relaxed text-ink placeholder:text-ink-secondary focus:outline-none"
             />
@@ -1080,7 +1080,7 @@ export function GroupView({ group, onOpenInfo }: { group: Group; onOpenInfo?: ()
           <button
             onClick={() => setBulletinOpen(true)}
             className="mb-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-raised/40"
-            title="Channel bulletin — shared instructions for every bot here"
+            title="Channel bulletin: shared instructions for every bot here"
           >
             <Pin size={12} className="shrink-0 text-ink-secondary" />
             <span className={cn("truncate text-[12.5px]", group.bulletin ? "text-ink-secondary" : "text-ink-secondary/60")}>

@@ -92,7 +92,7 @@ function UpdatesRow() {
           : s?.status === "downloading"
             ? `Downloading ${Math.round(s.percent ?? 0)}%`
             : s?.status === "downloaded"
-              ? `${s.version} ready — restart to apply`
+              ? `${s.version} ready, restart to apply`
               : s?.status === "error"
                 ? `Check failed: ${s.message ?? "unknown error"}`
                 : "You're on the latest version we know of.";
@@ -129,7 +129,7 @@ function AnalyticsRow() {
   return (
     <Card
       title="Usage analytics"
-      subtitle="Anonymous product events — app opened, which features get used. Never conversations, prompts, file contents, or bot output. Your email is only attached if you shared it during setup."
+      subtitle="Anonymous product events: app opened, which features get used. Never conversations, prompts, file contents, or bot output. Your email is only attached if you shared it during setup."
     >
       <button
         role="switch"

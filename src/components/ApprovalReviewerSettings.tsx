@@ -126,7 +126,7 @@ export function ApprovalReviewerSettings() {
           >
             {status.providers.map((provider) => (
               <option key={providerKey(provider)} value={providerKey(provider)} disabled={!provider.available}>
-                {provider.available ? provider.label : `${provider.label} — ${provider.reason}`}
+                {provider.available ? provider.label : `${provider.label}: ${provider.reason}`}
               </option>
             ))}
           </select>

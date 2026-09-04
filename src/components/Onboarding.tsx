@@ -177,8 +177,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       label: instance.displayName,
       readyNote:
         instance.access === "custom"
-          ? "Installed — ready for a local model."
-          : "Installed — ready to power bots.",
+          ? "Installed, ready for a local model."
+          : "Installed, ready to run bots.",
     }));
   const readyEngines = engines.filter((e) => engineReady(e.instance));
   const setupEngines = engines.filter((e) => !engineReady(e.instance));

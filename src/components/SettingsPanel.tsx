@@ -136,7 +136,7 @@ function WorkingFolder({ bot }: { bot: Bot }) {
         >
           <input
             className={cn(inputCls, "font-mono text-[12.5px]")}
-            placeholder="Private bot workspace — or an absolute path"
+            placeholder="Private bot workspace, or an absolute path"
             value={draft ?? bot.cwd ?? ""}
             onChange={(e) => setDraft(e.target.value)}
           />
@@ -148,7 +148,7 @@ function WorkingFolder({ bot }: { bot: Bot }) {
       {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
       {pinnedElsewhere && (
         <div className="mt-2 text-[12px] text-ink-secondary">
-          New tasks start here. This task is pinned to {pinned ? <span className="font-mono">{shortPath(pinned, home)}</span> : "the home folder"} — start a new task to use the new folder.
+          New tasks start here. This task is pinned to {pinned ? <span className="font-mono">{shortPath(pinned, home)}</span> : "the home folder"}. Start a new task to use the new folder.
         </div>
       )}
     </div>
@@ -266,7 +266,7 @@ function MemoryCard({ bot }: { bot: Bot }) {
           <textarea
             className={cn(inputCls, "min-h-[160px] resize-y font-mono text-[12.5px] leading-relaxed")}
             value={text}
-            placeholder="Nothing remembered yet. The bot writes durable notes here — or add your own."
+            placeholder="Nothing remembered yet. The bot writes durable notes here, or add your own."
             aria-label="Bot memory"
             onChange={(e) => {
               setText(e.target.value);
@@ -705,10 +705,10 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
               <div className="mt-0.5 text-[13px] text-ink-secondary">
                 {bot.computer === "local"
                   ? bot.autoApprove
-                    ? "Keeps going on this computer — you'll still be asked about anything destructive, and about questions it asks you."
+                    ? "Keeps going on this computer. You'll still be asked about anything destructive, and about questions it asks you."
                     : "Approve each action on this computer yourself. Turn on to let this bot keep working without stopping to ask."
                   : bot.autoApprove
-                  ? "Keeps going on its own — you'll still be asked about anything destructive, and about questions it asks you."
+                  ? "Keeps going on its own. You'll still be asked about anything destructive, and about questions it asks you."
                   : "Approve each action yourself. Turn on to let this bot keep working without stopping to ask."}
               </div>
             </div>

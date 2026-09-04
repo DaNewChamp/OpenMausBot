@@ -38,7 +38,7 @@ final class VoiceIsland {
     /// way; only the island is missing.
     func start() -> String? {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
-            let note = "Live Activities are off for V Bot — turn them on in Settings to see the island."
+            let note = "Live Activities are off for V Bot. Turn them on in Settings to see the island."
             Self.log.error("voice island not requested: \(note, privacy: .public)")
             return note
         }

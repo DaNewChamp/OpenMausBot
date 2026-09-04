@@ -338,7 +338,7 @@ struct SettingsView: View {
                     Text("Live voice in the Dynamic Island")
                         .font(.body)
                 }
-                Text("While a live voice session is open, show its state — listening, thinking, speaking — with a stop button.")
+                Text("While a live voice session is open, show its state: listening, thinking, or speaking, with a stop button.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -480,7 +480,7 @@ struct SettingsView: View {
                 if let reviewer = approvalReviewer, !reviewer.providers.isEmpty {
                     Picker("Reviewer provider", selection: approvalReviewerProviderBinding) {
                         ForEach(reviewer.providers, id: \.pickerId) { provider in
-                            Text(provider.available ? provider.label : "\(provider.label) — unavailable")
+                            Text(provider.available ? provider.label : "\(provider.label): unavailable")
                                 .tag(provider.pickerId)
                         }
                     }

@@ -858,7 +858,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
                     ? isLinux
                       ? "Ready for approved bot actions. Start the separate preview below when you want to watch the screen."
                       : localMisses >= 3
-                      ? "No frames yet — the preview needs Screen Recording permission. After granting, relaunch the app."
+                      ? "No frames yet: the preview needs Screen Recording permission. After granting, relaunch the app."
                       : "Capturing this computer's screen…"
                     : emptyState[phase]}
               </span>
@@ -1096,9 +1096,9 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
         {(phase === "ready" || phase === "vm") && control.held && (
           <div className="mt-3 rounded-xl border border-accent/25 bg-accent/10 p-4">
             <div className="text-[13px] leading-relaxed text-ink">
-              You have the wheel — the bot's clicks and keystrokes are refused until you hand it back.
+              You have the wheel. The bot takes no clicks or keystrokes until you hand it back.
               {phase === "ready" && " Use Open desktop to drive."}
-              {phase === "vm" && " Use Open desktop to drive — the preview here is watch-only."}
+              {phase === "vm" && " Use Open desktop to drive. The preview here is watch-only."}
             </div>
             <button
               onClick={() => {

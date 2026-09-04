@@ -124,7 +124,7 @@ export function EngineSetup({
   const description = signInOnly
     ? "Finish the account sign-in in Terminal. Reopen this menu afterward and we’ll check again."
     : intent === "inject"
-      ? "Install the agent once, then you can run it with local models—no cloud sign-in required."
+      ? "Install the agent once, then run it with local models. No cloud sign-in required."
       : `Install the command-line app once. Models will appear here as soon as it’s ready${signInCommand ? "; sign-in may follow" : ""}.`;
 
   // Some engines are configured elsewhere (for example, a cloud computer

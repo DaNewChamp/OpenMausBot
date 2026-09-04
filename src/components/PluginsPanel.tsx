@@ -620,7 +620,7 @@ export function PluginsPanel() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[14px] font-medium text-ink">{card.label}</div>
                       <div className="mt-0.5 truncate text-[12.5px] text-ink-secondary">
-                        {pending ? "Finish setup in your browser" : failed && !accounts.length ? "Authorization expired — try again" : card.blurb}
+                        {pending ? "Finish setup in your browser" : failed && !accounts.length ? "Authorization expired. Try again." : card.blurb}
                       </div>
                     </div>
                     <button

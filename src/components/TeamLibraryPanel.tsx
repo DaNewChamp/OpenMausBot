@@ -539,7 +539,7 @@ export function TeamLibraryPanel({
                     </>
                   )
                 ) : (
-                  pending.kind === "package" ? "Review the complete setup, then activate the playbook." : "No channel is created—you can make one later if you want."
+                  pending.kind === "package" ? "Review the complete setup, then activate the playbook." : "No channel is created. You can make one later if you want."
                 )}
               </div>
               <button
@@ -816,7 +816,7 @@ export function TeamLibraryPanel({
 
                       {directory && directory.length > 0 && (
                         <>
-                          <div className="mt-5 text-[12px] font-medium text-ink-secondary">From the community directory — tick to add</div>
+                          <div className="mt-5 text-[12px] font-medium text-ink-secondary">From the community directory, tick to add</div>
                           <div className="mt-1 flex flex-col">
                             {directory.map((candidate) => (
                               <div key={candidate.slug} className="flex items-center gap-3 border-b border-hairline/35 px-1 py-3">

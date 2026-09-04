@@ -226,7 +226,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
           move("working");
           return;
         }
-        enqueueSpeech("Sorry — is that a yes or a no?", openApproval.member, true);
+        enqueueSpeech("Sorry, is that a yes or a no?", openApproval.member, true);
         return;
       }
 
@@ -249,7 +249,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
       if (defaultResponderRef.current.kind === "mentions" && !routed.addressed) {
         listen();
         const names = membersRef.current.map((member) => member.name).join(", ");
-        setNote("Say a member's name" + (names ? " — " + names : "") + " — or say everyone.");
+        setNote("Say a member's name" + (names ? ", like " + names : "") + ", or say everyone.");
         return;
       }
 

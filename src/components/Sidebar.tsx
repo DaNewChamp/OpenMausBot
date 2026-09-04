@@ -98,13 +98,13 @@ function UpdateButton() {
     status === "disabled"
       ? "Private update channel not configured"
       : status === "available"
-        ? `Version ${s?.version ?? ""} available — download`
+        ? `Version ${s?.version ?? ""} available, download`
         : status === "downloading"
           ? s?.percent == null
             ? "Starting download…"
             : `Downloading… ${Math.round(s.percent)}%`
           : status === "downloaded"
-            ? `Version ${s?.version ?? ""} ready — restart to update`
+            ? `Version ${s?.version ?? ""} ready, restart to update`
             : status === "installing"
               ? "Restarting to update…"
               : status === "checking"
@@ -457,7 +457,7 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
           bots={bots}
           picked={picked}
           onToggle={toggle}
-          emptyHint="Create a bot first — channels are made of bots."
+          emptyHint="Create a bot first. Channels are made of bots."
         />
         <button
           onClick={create}

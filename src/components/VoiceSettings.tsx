@@ -193,7 +193,7 @@ export function VoiceSettings({
               {voices.map((v) => (
                 <option key={v.id} value={v.id}>
                   {v.label}
-                  {v.description ? ` — ${v.description}` : ""}
+                  {v.description ? `: ${v.description}` : ""}
                 </option>
               ))}
             </select>

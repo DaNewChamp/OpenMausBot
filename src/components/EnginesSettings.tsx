@@ -158,7 +158,7 @@ function CustomPicker({ instance, cliDefault, onClose, onSaved }: {
         </div>
       )}
       {probe?.ok && probe.version && (
-        <div className="text-[12px] text-success">Test passed — {probe.version}</div>
+        <div className="text-[12px] text-success">Test passed: {probe.version}</div>
       )}
       {error && <div role="alert" className="text-[12px] text-danger">{error}</div>}
       <div className="flex justify-end gap-2">

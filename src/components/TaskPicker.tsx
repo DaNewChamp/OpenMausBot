@@ -57,7 +57,7 @@ export function TaskPicker({ bot }: { bot: Bot }) {
       <button
         onClick={() => dispatch({ type: "newTask", botId: bot.id })}
         disabled={bot.busy}
-        title={bot.busy ? "Let this turn finish first" : "New task — a fresh context on this bot"}
+        title={bot.busy ? "Let this turn finish first" : "New task: a fresh context on this bot"}
         className={cn(
           "flex items-center gap-1 rounded-full border border-hairline/40 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-40",
           COMPACT_BUBBLE,

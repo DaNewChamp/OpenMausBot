@@ -71,7 +71,7 @@ public struct CommandSkillHUDView: View {
             description: "Retry the last turn with fresh context",
             iconName: "arrow.clockwise",
             brandColor: Color(hex: "#EAB308"),
-            command: "Please retry the last turn"
+            command: "Retry the last turn"
         ),
         CommandSkillItem(
             id: "steer",

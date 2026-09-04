@@ -207,7 +207,7 @@ function RoutineCard({ item, bot, compact, onOpen }: { item: CalendarItem; bot: 
           size={compact ? 32 : 38}
           animated={animated}
           trackPointer={animated}
-          label={`${bot.name} — ${title}`}
+          label={`${bot.name}: ${title}`}
         />
         <div className="min-w-0 flex-1">
           <div className="truncate text-[12px] font-semibold text-white">{title}</div>

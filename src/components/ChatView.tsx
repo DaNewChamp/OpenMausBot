@@ -469,7 +469,7 @@ function Bubble({
                 {visibleText}
               </div>
               {message.steered && (
-                <div className="mt-1 text-[11px] text-ink-secondary/70" title="Sent while the bot was working — it saw this before its next step, inside the same turn.">
+                <div className="mt-1 text-[11px] text-ink-secondary/70" title="Sent while the bot was working: it saw this before its next step, inside the same turn.">
                   sent mid-turn
                 </div>
               )}

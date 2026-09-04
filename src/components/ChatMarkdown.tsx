@@ -176,7 +176,7 @@ function LocalFileLink({ filePath, children }: { filePath: string; children?: Re
       <button
         type="button"
         onClick={() => void save()}
-        title={`Save a copy — ${filePath}`}
+        title={`Save a copy: ${filePath}`}
         className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent"
       >
         {children}
