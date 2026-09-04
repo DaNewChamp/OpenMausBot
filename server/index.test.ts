@@ -1985,14 +1985,15 @@ describe("harness HTTP API", () => {
           "urgent follow-up",
         ]);
 
-        // The first interrupt settles the active turn and immediately drains
-        // the queued line into a second turn. Wait for that transcript append
-        // before stopping the newly active turn.
+        // Stop is authoritative: it settles the active turn and discards
+        // queued follow-ups instead of silently running work the user stopped.
         await interruptBot();
-        await waitForBot(
-          (candidate) => candidate?.messages.some((message: any) => message.text === "after this turn"),
-          "queued bot message to drain",
-        );
+        await waitForBot((candidate) => candidate?.busy === false, "bot to stop");
+        expect(
+          (await api("GET", "/api/bots?messages=20")).body.bots
+            .find((candidate: any) => candidate.id === bot.id)
+            ?.messages.some((message: any) => message.text === "after this turn"),
+        ).toBe(false);
         await stopBot();
 
         room = (await api("POST", "/api/groups", { name: "Delivery room", memberIds: [bot.id] })).body.group;
