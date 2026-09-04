@@ -158,4 +158,35 @@ describe("Local VM invoke MCP", () => {
     });
     expect(res.result.isError).toBe(false);
   });
+
+  it("advertises JPEG from the hub result and keeps legacy PNG when MIME is omitted", async () => {
+    invokeResponse = {
+      state: "ready",
+      result: {
+        text: "Captured this bot's browser.",
+        isError: false,
+        image: "jpeg-bytes",
+        imageMimeType: "image/jpeg",
+      },
+    };
+    const jpeg = await callTool("screenshot", {});
+    expect(jpeg.result.content).toEqual([
+      { type: "text", text: "Captured this bot's browser." },
+      { type: "image", mimeType: "image/jpeg", data: "jpeg-bytes" },
+    ]);
+
+    invokeResponse = {
+      state: "ready",
+      result: {
+        text: "Captured this bot's browser.",
+        isError: false,
+        image: "png-bytes",
+      },
+    };
+    const png = await callTool("screenshot", {});
+    expect(png.result.content).toEqual([
+      { type: "text", text: "Captured this bot's browser." },
+      { type: "image", mimeType: "image/png", data: "png-bytes" },
+    ]);
+  });
 });

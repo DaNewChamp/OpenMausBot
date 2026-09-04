@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import type { BridgeCapability, BridgeRegistry } from "./bridge-registry.ts";
+import type { BridgeCapability, BridgeRegistry, LocalVmBridgeJob } from "./bridge-registry.ts";
 import { IdempotencyConflictError } from "./bridge-registry.ts";
 import { runShellOnBridge } from "./bridge-exec.ts";
 import { ingestHermesEndpointDescriptors } from "./bridge-hermes.ts";
@@ -15,6 +15,7 @@ export interface BridgeRouteOpts {
   companion: boolean;
   /** Direct loopback plus the operator admin token. */
   operator: boolean;
+  localVmInvokeGuard?: (job: LocalVmBridgeJob) => { status: number; error: string } | null;
   /** Narrow Hermes MCP tool facade authenticated with the calling bridge. */
   hermesTools?: (input: {
     bridgeId: string;
@@ -153,7 +154,28 @@ export async function handleBridgeRoutes(
     if (body.localModels !== undefined) {
       ingestLocalModelCatalog(bridgeId, body.localModels, { name: bridge.name });
     }
+    for (const record of bridges.listJobs(bridgeId)) {
+      if (record.job.kind !== "local-vm-invoke" || (record.status !== "queued" && record.status !== "running")) continue;
+      if (!opts.localVmInvokeGuard || opts.localVmInvokeGuard(record.job)) bridges.cancelJob(record.id);
+    }
     return json(res, 200, { jobs: bridges.pollJobs(bridgeId), cancelJobIds: bridges.cancelRequests(bridgeId) }), true;
+  }
+
+  if (method === "POST" && path === "/api/bridge/local-vm/authorize") {
+    const body = await readJson(req);
+    bridges.reconcile();
+    const record = bridges.getJob(String(body.jobId ?? ""));
+    if (!record || record.bridgeId !== bridge.id) return json(res, 403, { error: "job does not belong to this bridge" }), true;
+    if (record.job.kind !== "local-vm-invoke" || record.status !== "running" || record.cancelRequestedAt
+      || typeof body.generation !== "number" || body.generation !== record.generation) {
+      return json(res, 409, { error: "native Local VM job is not executable" }), true;
+    }
+    const failure = opts.localVmInvokeGuard?.(record.job);
+    if (!opts.localVmInvokeGuard || failure) {
+      bridges.cancelJob(record.id);
+      return json(res, failure?.status ?? 409, { error: failure?.error ?? "native Local VM invocation is no longer active" }), true;
+    }
+    return json(res, 200, { allowed: true }), true;
   }
 
   if (method === "POST" && path === "/api/bridge/result") {

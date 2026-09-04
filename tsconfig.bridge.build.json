@@ -21,7 +21,10 @@
     "server/engines/discovery.ts",
     "server/engines/bindings.ts",
     "server/engines/hermes.ts",
-    "server/browser-vm-image.ts"
+    "server/browser-vm-image.ts",
+    "server/local-vm-invoke.ts",
+    "server/redact.ts",
+    "server/computer-observation.ts"
   ],
   "exclude": [
     "bridge/src/**/*.test.ts",

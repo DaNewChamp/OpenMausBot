@@ -118,4 +118,29 @@ describe("BridgeRegistry", () => {
     });
     expect(jobs[1] && jobs[1].kind === "ssh-exec" ? jobs[1].alias : "").toBe("windows");
   });
+
+  it("enqueues typed local-vm-invoke jobs and fingerprints the tool call", () => {
+    const registry = new BridgeRegistry();
+    const { code } = registry.startPairing();
+    const { bridgeId } = registry.register({
+      name: "worker",
+      code,
+      capabilities: ["shell", "local-vm"],
+    });
+    const job = registry.enqueueLocalVmJob(bridgeId, "local-vm-invoke", {
+      botId: "shared",
+      threadId: "thread-1",
+      tool: "computer_exec",
+      arguments: { command: "id" },
+    });
+    expect(job.kind).toBe("local-vm-invoke");
+    const [delivered] = registry.pollJobs(bridgeId);
+    expect(delivered?.kind).toBe("local-vm-invoke");
+    expect(delivered && delivered.kind === "local-vm-invoke" ? delivered.payload : null).toEqual({
+      botId: "shared",
+      threadId: "thread-1",
+      tool: "computer_exec",
+      arguments: { command: "id" },
+    });
+  });
 });

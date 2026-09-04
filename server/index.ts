@@ -36,7 +36,7 @@ import {
 import { parseFleetModelId } from "../shared/bridge-fleet-contract.ts";
 import { parseComputerHostId } from "../shared/computer-host.ts";
 import { resolveBridge, runShellOnBridge, runSshOnBridge } from "./bridge-exec.ts";
-import { runLocalVmOnBridge, shouldRelayLocalVm } from "./bridge-local-vm.ts";
+import { cancelLocalVmInvokeJobs, runLocalVmOnBridge, shouldRelayLocalVm } from "./bridge-local-vm.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import {
   decideDelivery,
@@ -305,6 +305,7 @@ import {
   localComputerMountIsVm,
   localVmSelfInvokePrompt,
   localVmTurnContract,
+  parseLocalVmInvokeResult,
   sanitizeLocalVmInvokeText,
 } from "./local-vm-invoke.ts";
 import { RepeatDetector, callKey } from "./repeat-detector.ts";
@@ -476,6 +477,27 @@ async function connectedAppsIntegration(botId: string, threadId: string, roomRun
   return integration;
 }
 
+type NativeLocalVmFailure = { status: number; error: string };
+interface NativeLocalVmInvocation {
+  botId: string;
+  threadId: string;
+  abort: AbortController;
+  jobs: Set<string>;
+  check: () => NativeLocalVmFailure | null;
+}
+const nativeLocalVmInvocations = new Set<NativeLocalVmInvocation>();
+const nativeLocalVmJobInvocations = new Map<string, NativeLocalVmInvocation>();
+
+function abortNativeLocalVmInvocation(context: NativeLocalVmInvocation): void {
+  context.abort.abort();
+  for (const jobId of context.jobs) bridges.cancelJob(jobId);
+}
+function invalidateNativeLocalVmInvocations(): void {
+  for (const context of nativeLocalVmInvocations) {
+    if (context.check()) abortNativeLocalVmInvocation(context);
+  }
+}
+
 // ── computer control (who is driving) ──────────────────────────────────
 // The person can take the wheel of a computer from the panel; while they
 // hold it, that resource's computer proxies refuse every action. Native
@@ -483,6 +505,7 @@ async function connectedAppsIntegration(botId: string, threadId: string, roomRun
 // proxies consult it over loopback with the boot token.
 const computerControl = new ComputerControl(
   (botId, snapshot) => {
+    if (snapshot.held) invalidateNativeLocalVmInvocations();
     broadcast({ kind: "computer-control", botId, held: snapshot.held, helpReason: snapshot.helpReason });
   },
   Date.now,
@@ -513,6 +536,7 @@ function publishComputerControlScopeChange(botId: string): void {
   const resourceKey = computerControlResourceKeyForBot(botId);
   const previous = computerControlResourceKeys.get(botId);
   if (previous === resourceKey) return;
+  invalidateNativeLocalVmInvocations();
   computerControlResourceKeys.set(botId, resourceKey);
   const snapshot = computerControl.snapshot(botId);
   if (previous === undefined && !snapshot.held && snapshot.helpReason === null) return;
@@ -1058,6 +1082,7 @@ async function stopBotWork(
   if (liveTurnId) rememberCancelledTaskTurn(liveTurnId);
   activeTaskTurnIds.delete(threadId);
   suppressedTaskThreads.add(threadId);
+  cancelNativeLocalVmInvokeJobs((payload) => payload.threadId === threadId);
   const interruptFailure = await interruptBotTurn(botId, threadId, runOn).then(() => null).catch((error: unknown) => error);
   if (interruptFailure instanceof HermesEngineError) {
     if (liveTurnId) {
@@ -1448,6 +1473,7 @@ function localVmIdleFor(target: LocalVmTarget): LocalVmIdleTimer {
 }
 
 function releaseLocalVmThread(threadId: string): void {
+  cancelNativeLocalVmInvokeJobs((payload) => payload.threadId === threadId);
   const target = localVmThreadTargets.get(threadId);
   if (!target) return;
   localVmLeaseFor(target).release(threadId);
@@ -1457,17 +1483,31 @@ function releaseLocalVmThread(threadId: string): void {
 
 const runLocalVmCommand = promisify(execFile);
 
-async function localVmCommandRunner(command: string, args: string[], timeout = 8000): Promise<{ stdout: string }> {
+async function localVmCommandRunner(
+  command: string,
+  args: string[],
+  timeout = 8000,
+  signal?: AbortSignal,
+): Promise<{ stdout: string }> {
   const { stdout } = await runLocalVmCommand(command, args, {
     timeout,
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
     env: { ...process.env, PATH: augmentedPath() },
+    signal,
   });
   return { stdout };
 }
 
-async function ensureLocalVmForTurn(target: LocalVmTarget, threadId: string) {
+function cancelNativeLocalVmInvokeJobs(match: (payload: { botId: string; threadId?: string }) => boolean): void {
+  cancelLocalVmInvokeJobs(bridges, match);
+  for (const context of nativeLocalVmInvocations) {
+    if (match(context)) abortNativeLocalVmInvocation(context);
+  }
+}
+
+async function ensureLocalVmForTurn(target: LocalVmTarget, threadId: string, guard?: () => void) {
+  guard?.();
   const owner = localVmLeaseFor(target).current(localVmOwnerBusy);
   const status = await containerComputerStatus(undefined, undefined, target);
   if (status.ready) return { state: "ready" as const };
@@ -1494,13 +1534,16 @@ async function ensureLocalVmForTurn(target: LocalVmTarget, threadId: string) {
       daemonUp: fresh.daemonUp,
       runtime: fresh.runtime,
       create_supported: fresh.create_supported,
+      managed: fresh.managed,
+      imageMatches: fresh.imageMatches,
     };
     const runLifecycle = async (action: "run" | "recreate") => {
-      provisioned = true;
+      guard?.();      provisioned = true;
       localVmProvisionBusy = true;
       if (action === "recreate" && fresh.container !== "missing") {
         await containerComputerAction("remove", undefined, undefined, target);
       }
+      guard?.();
       const next = await containerComputerAction("run", undefined, undefined, target);
       localVmIdleFor(target).touch();
       return {
@@ -4821,6 +4864,18 @@ const server = createServer(async (req, res) => {
       companion: isCompanionRequest(req),
       direct: isDirectLoopback(req) && !isCompanionRequest(req),
       operator: isDirectLoopback(req) && !isCompanionRequest(req) && authorizedBridgeAdmin(req.headers.authorization),
+      localVmInvokeGuard: (job) => {
+        const invocation = nativeLocalVmJobInvocations.get(job.id);
+        if (!invocation || !invocation.jobs.has(job.id)) {
+          return { status: 409, error: "native Local VM invocation is no longer active" };
+        }
+        const failure = invocation.check();
+        if (failure) return failure;
+        if (!resolveBridge(bridges, { bridgeId: job.bridgeId, capability: "local-vm" })) {
+          return { status: 409, error: "selected bridge is unavailable or Local VM permission was revoked" };
+        }
+        return null;
+      },
       hermesTools: ({ bridgeId, name, args, botScope }) =>
         executeHermesBridgeTool({
           store,
@@ -5372,8 +5427,13 @@ const server = createServer(async (req, res) => {
         const tool = String(body.tool ?? "");
         const bot = store.bot(botId);
         if (!bot || bot.computer !== "vm") return json(res, 403, { error: "this bot does not have Local VM access" });
-        const target = localVmThreadTargets.get(threadId);
-        if (!target || localVmTargetForBot(bot.id).key !== target.key) {
+        const target = localVmTargetForBot(bot.id);
+        const owner = localVmLeaseFor(target).current(localVmOwnerBusy);
+        if (!owner || owner.botId !== bot.id || owner.threadId !== threadId) {
+          return json(res, 403, { error: "this turn does not own the Local VM" });
+        }
+        const mapped = localVmThreadTargets.get(threadId);
+        if (!mapped || mapped.key !== target.key) {
           return json(res, 403, { error: "this turn does not own the Local VM" });
         }
         if (!isLocalVmInvokeTool(tool)) {
@@ -5384,50 +5444,102 @@ const server = createServer(async (req, res) => {
         }
         localVmLeaseFor(target).touch(threadId);
         localVmIdleFor(target).touch();
+        const resourceKey = computerControlResourceKeyForBot(bot.id);
+        const relayOpts = localVmRelayOpts(bot);
+        const turnId = activeTaskTurnIds.get(threadId);
+        const context: NativeLocalVmInvocation = {
+          botId, threadId, abort: new AbortController(), jobs: new Set(),
+          check: () => {
+            const currentBot = store.bot(botId);
+            if (computerControl.snapshot(botId).held) return { status: 409, error: CONTROL_REFUSAL_PLAIN };
+            if (currentBot && computerControlResourceKeyForBot(botId) !== resourceKey) {
+              return { status: 409, error: "this bot's computer assignment changed during the action" };
+            }
+            const current = localVmLeaseFor(target).current(localVmOwnerBusy);
+            if (context.abort.signal.aborted || !currentBot || currentBot.computer !== "vm"
+              || suppressedTaskThreads.has(threadId)
+              || activeTaskTurnIds.get(threadId) !== turnId
+              || !current || current.botId !== botId || current.threadId !== threadId
+              || localVmThreadTargets.get(threadId)?.key !== target.key
+              || localVmActiveThreads.get(target.key) !== threadId) {
+              return { status: 403, error: "this turn does not own the Local VM" };
+            }
+            return null;
+          },
+        };
+        const assertAllowed = () => {
+          const failure = context.check();
+          if (failure) throw new Error(failure.error);
+        };
+        const refuseIfLost = (): boolean => {
+          const failure = context.check();
+          if (!failure) return false;
+          json(res, failure.status, { error: failure.error });
+          return true;
+        };
+        nativeLocalVmInvocations.add(context);
+        const disconnected = () => abortNativeLocalVmInvocation(context);
+        res.once("close", disconnected);
         try {
-          const ensured = await ensureLocalVmForTurn(target, threadId);
-          if (ensured.state !== "ready") {
-            return json(res, 200, {
-              state: ensured.state,
-              retryable: ensured.retryable,
-              message: sanitizeLocalVmInvokeText(ensured.message),
-            });
-          }
-          const status = await containerComputerStatus(undefined, undefined, target);
-          if (!status.ready || !status.runtime) {
-            return json(res, 200, {
-              state: "starting",
-              retryable: true,
-              message: LOCAL_VM_STARTING_MESSAGE,
-            });
-          }
+          if (refuseIfLost()) return;
           const rawArgs = body.arguments;
           const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? rawArgs : {};
-          // Readiness/provisioning awaited above. A human may have taken
-          // control meanwhile; refuse before dispatching any container action.
-          if (computerControl.snapshot(bot.id).held) {
-            return json(res, 409, { error: CONTROL_REFUSAL_PLAIN });
+          const relay = await shouldRelayLocalVm(bridges, relayOpts.bridgeId);
+          if (refuseIfLost()) return;
+          if (relay) {
+            const { data } = await runLocalVmOnBridge(bridges, {
+              ...relayOpts, op: "invoke", threadId, tool, arguments: args,
+              signal: context.abort.signal,
+              onEnqueued: (jobId) => {
+                context.jobs.add(jobId);
+                nativeLocalVmJobInvocations.set(jobId, context);
+                if (context.check()) abortNativeLocalVmInvocation(context);
+              },
+            });
+            if (refuseIfLost()) return;
+            const parsed = parseLocalVmInvokeResult(data);
+            if (!parsed) return json(res, 200, { state: "blocked", retryable: false,
+              message: "bridge local-vm invoke returned an invalid result" });
+            return json(res, 200, { state: "ready", result: {
+              ...parsed, text: sanitizeLocalVmInvokeText(parsed.text),
+            } });
           }
-          const result = await executeLocalVmInvokeTool(tool, args, {
-            runtime: status.runtime,
-            containerName: target.containerName,
-            runner: localVmCommandRunner,
+          const ensured = await ensureLocalVmForTurn(target, threadId, assertAllowed);
+          if (refuseIfLost()) return;
+          if (ensured.state !== "ready") return json(res, 200, {
+            state: ensured.state, retryable: ensured.retryable,
+            message: sanitizeLocalVmInvokeText(ensured.message),
           });
-          return json(res, 200, {
-            state: "ready",
-            result: {
-              text: sanitizeLocalVmInvokeText(result.text),
-              isError: result.isError,
-              ...(result.image ? { image: result.image } : {}),
+          const status = await containerComputerStatus(undefined, undefined, target);
+          if (refuseIfLost()) return;
+          if (!status.ready || !status.runtime) return json(res, 200, {
+            state: "starting", retryable: true, message: LOCAL_VM_STARTING_MESSAGE,
+          });
+          const result = await executeLocalVmInvokeTool(tool, args, {
+            runtime: status.runtime, containerName: target.containerName,
+            signal: context.abort.signal,
+            runner: (command, commandArgs, timeout, signal) => {
+              assertAllowed();
+              return localVmCommandRunner(command, commandArgs, timeout, signal ?? context.abort.signal);
             },
           });
+          if (refuseIfLost()) return;
+          return json(res, 200, { state: "ready", result: {
+            ...result, text: sanitizeLocalVmInvokeText(result.text),
+          } });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return json(res, 200, {
-            state: "blocked",
-            retryable: false,
-            message: sanitizeLocalVmInvokeText(message),
+          if (refuseIfLost()) return;
+          return json(res, 200, { state: "blocked", retryable: false,
+            message: sanitizeLocalVmInvokeText(error instanceof Error ? error.message : String(error)),
           });
+        } finally {
+          res.off("close", disconnected);
+          nativeLocalVmInvocations.delete(context);
+          for (const jobId of context.jobs) {
+            nativeLocalVmJobInvocations.delete(jobId);
+            const record = bridges.getJob(jobId);
+            if (record?.status === "queued" || record?.status === "running") bridges.cancelJob(jobId);
+          }
         }
       }
       if (method === "POST" && path === "/api/internal/connectors/request") {
@@ -7639,10 +7751,11 @@ const server = createServer(async (req, res) => {
     // what the user's machine can host: which runtime is installed, whether
     // its daemon is up, and whether the desktop image and container exist
     if (method === "GET" && path === "/api/local-computer") {
-      if (await shouldRelayLocalVm(bridges)) {
+      const sharedRelay = localVmRelayOpts({ id: "shared" });
+      if (await shouldRelayLocalVm(bridges, sharedRelay.bridgeId)) {
         try {
           const { data } = await runLocalVmOnBridge(bridges, {
-            ...localVmRelayOpts({ id: "shared" }),
+            ...sharedRelay,
             op: "status",
           });
           const status = data as Awaited<ReturnType<typeof containerComputerStatus>>;
@@ -7680,10 +7793,11 @@ const server = createServer(async (req, res) => {
         return json(res, 409, { error: "the Local VM is being used by a bot — stop that turn first" });
       }
       const relayAction = action === "run" || action === "stop" || action === "remove" || action === "recreate";
-      if (relayAction && await shouldRelayLocalVm(bridges)) {
+      const sharedRelay = localVmRelayOpts({ id: "shared" });
+      if (relayAction && await shouldRelayLocalVm(bridges, sharedRelay.bridgeId)) {
         try {
           const { data } = await runLocalVmOnBridge(bridges, {
-            ...localVmRelayOpts({ id: "shared" }),
+            ...sharedRelay,
             op: "action",
             action,
           });
@@ -7728,10 +7842,11 @@ const server = createServer(async (req, res) => {
       }
     }
     if (method === "POST" && path === "/api/local-computer/screenshot") {
-      if (await shouldRelayLocalVm(bridges)) {
+      const sharedRelay = localVmRelayOpts({ id: "shared" });
+      if (await shouldRelayLocalVm(bridges, sharedRelay.bridgeId)) {
         try {
           const { data } = await runLocalVmOnBridge(bridges, {
-            ...localVmRelayOpts({ id: "shared" }),
+            ...sharedRelay,
             op: "screenshot",
           });
           localVmIdleFor(SHARED_LOCAL_VM_TARGET).touch();
@@ -7751,9 +7866,10 @@ const server = createServer(async (req, res) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const target = localVmTargetForBot(bot.id);
-      if (await shouldRelayLocalVm(bridges)) {
+      const botRelay = localVmRelayOpts(bot);
+      if (await shouldRelayLocalVm(bridges, botRelay.bridgeId)) {
         try {
-          const { data } = await runLocalVmOnBridge(bridges, { ...localVmRelayOpts(bot), op: "status" });
+          const { data } = await runLocalVmOnBridge(bridges, { ...botRelay, op: "status" });
           const status = data as Awaited<ReturnType<typeof containerComputerStatus>>;
           return json(
             res,
@@ -7797,9 +7913,10 @@ const server = createServer(async (req, res) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       const action = m[2] as "run" | "stop" | "recreate";
       const target = localVmTargetForBot(bot.id);
-      if (await shouldRelayLocalVm(bridges)) {
+      const botRelay = localVmRelayOpts(bot);
+      if (await shouldRelayLocalVm(bridges, botRelay.bridgeId)) {
         try {
-          const { data } = await runLocalVmOnBridge(bridges, { ...localVmRelayOpts(bot), op: "action", action });
+          const { data } = await runLocalVmOnBridge(bridges, { ...botRelay, op: "action", action });
           const status = data as Awaited<ReturnType<typeof containerComputerStatus>>;
           if (action === "run" || action === "recreate") localVmIdleFor(target).touch();
           if (action === "stop") localVmIdleFor(target).cancel();
@@ -7868,9 +7985,10 @@ const server = createServer(async (req, res) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       const action = z.enum(["run", "stop", "remove"]).parse(m[2]);
       const target = localVmTargetForBot(bot.id);
-      if (await shouldRelayLocalVm(bridges)) {
+      const botRelay = localVmRelayOpts(bot);
+      if (await shouldRelayLocalVm(bridges, botRelay.bridgeId)) {
         try {
-          const { data } = await runLocalVmOnBridge(bridges, { ...localVmRelayOpts(bot), op: "action", action });
+          const { data } = await runLocalVmOnBridge(bridges, { ...botRelay, op: "action", action });
           const status = data as Awaited<ReturnType<typeof containerComputerStatus>>;
           if (action === "run") localVmIdleFor(target).touch();
           if (action === "stop" || action === "remove") localVmIdleFor(target).cancel();
@@ -7933,9 +8051,10 @@ const server = createServer(async (req, res) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const target = localVmTargetForBot(bot.id);
-      if (await shouldRelayLocalVm(bridges)) {
+      const botRelay = localVmRelayOpts(bot);
+      if (await shouldRelayLocalVm(bridges, botRelay.bridgeId)) {
         try {
-          const { data } = await runLocalVmOnBridge(bridges, { ...localVmRelayOpts(bot), op: "screenshot" });
+          const { data } = await runLocalVmOnBridge(bridges, { ...botRelay, op: "screenshot" });
           localVmIdleFor(target).touch();
           return json(res, 200, data);
         } catch (error) {
@@ -7983,10 +8102,11 @@ const server = createServer(async (req, res) => {
       }
       const parsed = validateLocalVmPhoneInput(await readBody(req));
       if ("error" in parsed) return json(res, 400, { error: parsed.error });
-      if (await shouldRelayLocalVm(bridges)) {
+      const inputRelay = localVmRelayOpts(bot);
+      if (await shouldRelayLocalVm(bridges, inputRelay.bridgeId)) {
         try {
           const { data } = await runLocalVmOnBridge(bridges, {
-            ...localVmRelayOpts(bot),
+            ...inputRelay,
             op: "input",
             input: parsed.input,
           });

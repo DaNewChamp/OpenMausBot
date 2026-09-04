@@ -445,7 +445,14 @@ describe("Hermes live loopback fixture", () => {
           ...fixtureEnv(home, hermesHome),
           HERMES_PYTHON: launcher,
         },
-        timeouts: { initializationMs: 500, requestMs: 500, turnMs: 500, reconnectMs: 500 },
+        // Protocol errors must not race the fixture process starting up.
+        // The intentional RPC-timeout case retains its short request deadline.
+        timeouts: {
+          initializationMs: 5_000,
+          requestMs: fixtureMode === "rpc-timeout" ? 500 : 5_000,
+          turnMs: 5_000,
+          reconnectMs: 5_000,
+        },
       }) as HermesBotAdapter;
       if (phase === "turn") {
         await engine.discover();

@@ -7,9 +7,14 @@ export async function waitForBridgeJobResult(
   jobId: string,
   timeoutMs: number,
   bridgeName: string,
+  signal?: AbortSignal,
 ): Promise<BridgeJobResult> {
   const deadline = Date.now() + timeoutMs + 20_000;
   while (Date.now() < deadline) {
+    if (signal?.aborted) {
+      registry.cancelJob(jobId);
+      throw new Error(`bridge job cancelled waiting for ${bridgeName}`);
+    }
     registry.reconcile();
     const status = registry.jobStatus(jobId);
     if (status === "cancelled") throw new Error(`bridge job cancelled waiting for ${bridgeName}`);
@@ -19,7 +24,7 @@ export async function waitForBridgeJobResult(
       const record = registry.getJob(jobId);
       throw new Error(record?.error ?? `bridge job failed waiting for ${bridgeName}`);
     }
-    await sleep(400);
+    await sleep(400, undefined, { signal });
   }
   registry.reconcile(Date.now());
   const late = registry.result(jobId);

@@ -14,6 +14,9 @@ export interface BridgeJobResult {
 
 export interface LocalVmJobPayload {
   botId: string;
+  threadId?: string;
+  tool?: string;
+  arguments?: Record<string, unknown>;
   action?: "run" | "stop" | "remove" | "recreate";
   input?: {
     action: "click" | "scroll" | "type" | "key";
@@ -43,7 +46,7 @@ export type BridgeJob =
       cwd?: string;
     })
   | (BridgeJobBase & {
-      kind: "local-vm-status" | "local-vm-action" | "local-vm-screenshot" | "local-vm-input";
+      kind: "local-vm-status" | "local-vm-action" | "local-vm-screenshot" | "local-vm-input" | "local-vm-invoke";
       payload: LocalVmJobPayload;
     })
   | (BridgeJobBase & {
@@ -93,5 +96,5 @@ export type { HermesEndpointDescriptor } from "./hermes-endpoints.ts";
 
 export type LocalVmBridgeJob = Extract<
   BridgeJob,
-  { kind: "local-vm-status" | "local-vm-action" | "local-vm-screenshot" | "local-vm-input" }
+  { kind: "local-vm-status" | "local-vm-action" | "local-vm-screenshot" | "local-vm-input" | "local-vm-invoke" }
 >;

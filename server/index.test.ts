@@ -3350,6 +3350,32 @@ describe("Local VM startTurn and internal invoke API", () => {
     await api("DELETE", `/api/bots/${idleVmId}`).catch(() => {});
   });
 
+  it("does not let a peer VM bot borrow the owning thread", async () => {
+    if (!existsSync(fakeClaudeDump)) {
+      const sent = await api("POST", `/api/bots/${vmBotId}/messages`, { text: "open a page" });
+      expect(sent.status).toBe(202);
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
+    }
+    const dump = JSON.parse(readFileSync(fakeClaudeDump, "utf8"));
+    const commsToken = dump.mcpConfig?.mcpServers?.computer?.env?.OMB_COMMS_TOKEN;
+    const peer = await api("POST", "/api/bots", {});
+    const peerId = peer.body.bot.id;
+    await api("PATCH", `/api/bots/${peerId}`, { computer: "vm" });
+    const borrowed = await fetch(`${BASE}/api/internal/local-vm/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${commsToken}` },
+      body: JSON.stringify({
+        botId: peerId,
+        threadId: vmThreadId,
+        tool: "open_url",
+        arguments: { url: "https://example.com/borrow" },
+      }),
+    });
+    expect(borrowed.status).toBe(403);
+    expect(await borrowed.json()).toEqual({ error: "this turn does not own the Local VM" });
+    await api("DELETE", `/api/bots/${peerId}`).catch(() => {});
+  });
+
   it("rejects unadvertised tools on an owned VM turn", async () => {
     const dump = JSON.parse(readFileSync(fakeClaudeDump, "utf8"));
     const commsToken = dump.mcpConfig?.mcpServers?.computer?.env?.OMB_COMMS_TOKEN;
@@ -3621,4 +3647,434 @@ fi
       await routeApi("DELETE", `/api/bots/${cloudId}`).catch(() => {});
     }
   });
+
+  async function pairLocalVmBridge(name = "mini") {
+    const pairing = await routeApi("POST", "/api/bridge/pairing");
+    expect(pairing.status).toBe(200);
+    const registered = await routeApi("POST", "/api/bridge/register", {
+      name,
+      code: pairing.body.code,
+      capabilities: ["shell", "local-vm"],
+    });
+    expect(registered.status).toBe(200);
+    return registered.body as { bridgeId: string; bridgeToken: string };
+  }
+
+  async function heartbeatBridge(
+    bridge: { bridgeId: string; bridgeToken: string },
+    capabilities: string[] = ["shell", "local-vm"],
+  ) {
+    const res = await fetch(`${vmBase}/api/bridge/heartbeat`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${bridge.bridgeToken}`,
+      },
+      body: JSON.stringify({
+        bridgeId: bridge.bridgeId,
+        capabilities,
+        hostInfo: "mini",
+      }),
+    });
+    expect(res.status).toBe(200);
+    return (await res.json()) as { jobs: Array<{ id: string; kind: string; payload?: Record<string, unknown>; generation?: number }>; cancelJobIds: string[] };
+  }
+
+  async function submitBridgeResult(
+    bridge: { bridgeToken: string },
+    job: { id: string; generation?: number },
+    stdout: string,
+    extra?: { exitCode?: number; stderr?: string },
+  ) {
+    const res = await fetch(`${vmBase}/api/bridge/result`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${bridge.bridgeToken}`,
+      },
+      body: JSON.stringify({
+        jobId: job.id,
+        exitCode: extra?.exitCode ?? 0,
+        stdout,
+        stderr: extra?.stderr ?? "",
+        truncated: false,
+        generation: job.generation,
+      }),
+    });
+    expect(res.status).toBe(200);
+  }
+
+  async function listOperatorJobs(bridgeId: string) {
+    const token = readFileSync(join(vmHome, ".openmausbot", "bridge-admin.token"), "utf8").trim();
+    const res = await fetch(`${vmBase}/api/bridge/jobs?bridgeId=${encodeURIComponent(bridgeId)}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+    return (await res.json()) as {
+      jobs: Array<{ id: string; status: string; job: { kind: string; payload?: { threadId?: string; botId?: string; tool?: string } } }>;
+    };
+  }
+
+  async function startOwnedTurn(botId: string, threadId: string, text = "open a page") {
+    await routeApi("POST", `/api/bots/${botId}/interrupt`).catch(() => {});
+    rmSync(vmFakeClaudeDump, { force: true });
+    const sent = await routeApi("POST", `/api/bots/${botId}/messages`, { text });
+    expect(sent.status).toBe(202);
+    await expect.poll(() => existsSync(vmFakeClaudeDump), { timeout: 5_000 }).toBe(true);
+    const dump = JSON.parse(readFileSync(vmFakeClaudeDump, "utf8"));
+    const token = dump.mcpConfig?.mcpServers?.computer?.env?.OMB_COMMS_TOKEN as string;
+    expect(typeof token).toBe("string");
+    return { token, threadId };
+  }
+
+  async function invokeOwned(
+    token: string,
+    botId: string,
+    threadId: string,
+    tool: string,
+    args: Record<string, unknown>,
+  ) {
+    return fetch(`${vmBase}/api/internal/local-vm/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ botId, threadId, tool, arguments: args }),
+    });
+  }
+
+  it("relays authenticated owned native invoke to the selected bridge even when the hub has Docker", async () => {
+    const bridge = await pairLocalVmBridge();
+    await heartbeatBridge(bridge);
+    expect((await routeApi("PATCH", "/api/local-vm/location", { hostId: bridge.bridgeId })).status).toBe(200);
+    const { token } = await startOwnedTurn(routeBotId, routeThreadId);
+    writeFileSync(vmDockerLog, "");
+    const pending = invokeOwned(token, routeBotId, routeThreadId, "open_url", { url: "https://example.com/relay" });
+    const deadline = Date.now() + 8_000;
+    let job: { id: string; kind: string; payload?: Record<string, unknown>; generation?: number } | undefined;
+    while (Date.now() < deadline) {
+      const hb = await heartbeatBridge(bridge);
+      job = hb.jobs.find((entry) => entry.kind === "local-vm-invoke");
+      if (job) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(job?.kind).toBe("local-vm-invoke");
+    expect(job?.payload).toMatchObject({
+      botId: "shared",
+      threadId: routeThreadId,
+      tool: "open_url",
+      arguments: { url: "https://example.com/relay" },
+    });
+    await submitBridgeResult(
+      bridge,
+      job!,
+      JSON.stringify({ text: "Opened https://example.com/relay in this bot's browser.", isError: false }),
+    );
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      state: "ready",
+      result: { text: expect.stringContaining("example.com/relay"), isError: false },
+    });
+    expect(browserCdpPayloadsFromDockerLog(readFileSync(vmDockerLog, "utf8"))
+      .filter((entry) => entry.action !== "screenshot")).toEqual([]);
+    await routeApi("POST", `/api/bots/${routeBotId}/interrupt`);
+    await routeApi("PATCH", "/api/local-vm/location", { hostId: null });
+  }, 20_000);
+
+  it("uses the per-bot target identity on native invoke jobs", async () => {
+    expect((await routeApi("PATCH", "/api/config", { localVm: { mode: "per-bot", maxInstances: 2 } })).status).toBe(200);
+    const created = await routeApi("POST", "/api/bots", {});
+    const botId = created.body.bot.id;
+    const threadId = created.body.bot.threadId;
+    await routeApi("PATCH", `/api/bots/${botId}`, {
+      computer: "vm",
+      modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+    });
+    const bridge = await pairLocalVmBridge("per-bot-host");
+    await heartbeatBridge(bridge);
+    expect((await routeApi("PATCH", "/api/local-vm/location", { hostId: bridge.bridgeId })).status).toBe(200);
+    const { token } = await startOwnedTurn(botId, threadId);
+    const pending = invokeOwned(token, botId, threadId, "open_url", { url: "https://example.com/per-bot" });
+    const deadline = Date.now() + 8_000;
+    let job: { id: string; kind: string; payload?: Record<string, unknown>; generation?: number } | undefined;
+    while (Date.now() < deadline) {
+      const hb = await heartbeatBridge(bridge);
+      job = hb.jobs.find((entry) => entry.kind === "local-vm-invoke");
+      if (job) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(job?.payload).toMatchObject({ botId, threadId, tool: "open_url" });
+    expect(job?.payload?.botId).not.toBe("shared");
+    await submitBridgeResult(bridge, job!, JSON.stringify({ text: "Opened https://example.com/per-bot in this bot's browser.", isError: false }));
+    expect((await pending).status).toBe(200);
+    await routeApi("POST", `/api/bots/${botId}/interrupt`);
+    await routeApi("DELETE", `/api/bots/${botId}`);
+    const restored = await routeApi("PATCH", "/api/config", { localVm: { mode: "shared", maxInstances: 2 } });
+    expect(restored.status, JSON.stringify(restored.body)).toBe(200);
+    expect(restored.body.localVm.mode).toBe("shared");
+    await routeApi("PATCH", "/api/local-vm/location", { hostId: null });
+  }, 20_000);
+
+  it("blocks a pinned offline or grant-less host and does not execute on the hub", async () => {
+    const offline = await pairLocalVmBridge("offline");
+    const storePath = join(vmHome, ".openmausbot", "bridges.json");
+    const store = JSON.parse(readFileSync(storePath, "utf8")) as { bridges: Array<{ id: string; lastSeenAt: number }> };
+    const row = store.bridges.find((entry) => entry.id === offline.bridgeId);
+    expect(row).toBeTruthy();
+    row!.lastSeenAt = 1;
+    writeFileSync(storePath, `${JSON.stringify(store, null, 2)}\n`);
+    expect((await routeApi("PATCH", "/api/local-vm/location", { hostId: offline.bridgeId })).status).toBe(200);
+    const { token } = await startOwnedTurn(routeBotId, routeThreadId);
+    writeFileSync(vmDockerLog, "");
+    const offlineRes = await invokeOwned(token, routeBotId, routeThreadId, "open_url", { url: "https://example.com/offline" });
+    expect(offlineRes.status).toBe(200);
+    const offlineBody = (await offlineRes.json()) as { state?: string; retryable?: boolean; message?: string };
+    expect(offlineBody.state).toBe("blocked");
+    expect(offlineBody.retryable).toBe(false);
+    expect(offlineBody.message).toMatch(/offline|no longer paired|cannot run/i);
+    expect(browserCdpPayloadsFromDockerLog(readFileSync(vmDockerLog, "utf8"))
+      .filter((entry) => entry.action !== "screenshot")).toEqual([]);
+
+    const shellOnlyPairing = await routeApi("POST", "/api/bridge/pairing");
+    const shellOnly = await routeApi("POST", "/api/bridge/register", {
+      name: "shell-only",
+      code: shellOnlyPairing.body.code,
+      capabilities: ["shell"],
+    });
+    expect(shellOnly.status).toBe(200);
+    await fetch(`${vmBase}/api/bridge/heartbeat`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${shellOnly.body.bridgeToken}`,
+      },
+      body: JSON.stringify({
+        bridgeId: shellOnly.body.bridgeId,
+        capabilities: ["shell"],
+        hostInfo: "shell",
+      }),
+    });
+    expect((await routeApi("PATCH", "/api/local-vm/location", { hostId: shellOnly.body.bridgeId })).status).toBe(200);
+    writeFileSync(vmDockerLog, "");
+    const noGrant = await invokeOwned(token, routeBotId, routeThreadId, "open_url", { url: "https://example.com/nogrant" });
+    expect(noGrant.status).toBe(200);
+    const noGrantBody = (await noGrant.json()) as { state?: string; retryable?: boolean };
+    expect(noGrantBody.state).toBe("blocked");
+    expect(noGrantBody.retryable).toBe(false);
+    expect(browserCdpPayloadsFromDockerLog(readFileSync(vmDockerLog, "utf8"))
+      .filter((entry) => entry.action !== "screenshot")).toEqual([]);
+
+    expect((await routeApi("PATCH", "/api/local-vm/location", { hostId: "missing-host-id" })).status).toBe(200);
+    writeFileSync(vmDockerLog, "");
+    const unpairedRes = await invokeOwned(token, routeBotId, routeThreadId, "open_url", { url: "https://example.com/unpaired" });
+    expect(unpairedRes.status).toBe(200);
+    expect((await unpairedRes.json() as { state?: string }).state).toBe("blocked");
+    expect(browserCdpPayloadsFromDockerLog(readFileSync(vmDockerLog, "utf8"))
+      .filter((entry) => entry.action !== "screenshot")).toEqual([]);
+    await routeApi("POST", `/api/bots/${routeBotId}/interrupt`);
+    await routeApi("PATCH", "/api/local-vm/location", { hostId: null });
+  }, 25_000);
+
+  it("fails closed when an old bridge rejects local-vm-invoke instead of executing locally", async () => {
+    const bridge = await pairLocalVmBridge("old");
+    await heartbeatBridge(bridge);
+    expect((await routeApi("PATCH", "/api/local-vm/location", { hostId: bridge.bridgeId })).status).toBe(200);
+    const { token } = await startOwnedTurn(routeBotId, routeThreadId);
+    writeFileSync(vmDockerLog, "");
+    const pending = invokeOwned(token, routeBotId, routeThreadId, "open_url", { url: "https://example.com/old" });
+    const deadline = Date.now() + 8_000;
+    let job: { id: string; kind: string; generation?: number } | undefined;
+    while (Date.now() < deadline) {
+      const hb = await heartbeatBridge(bridge);
+      job = hb.jobs.find((entry) => entry.kind === "local-vm-invoke");
+      if (job) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(job).toBeTruthy();
+    await submitBridgeResult(bridge, job!, "", {
+      exitCode: 1,
+      stderr: "unsupported job kind: local-vm-invoke",
+    });
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ state: "blocked", retryable: false });
+    expect(browserCdpPayloadsFromDockerLog(readFileSync(vmDockerLog, "utf8"))
+      .filter((entry) => entry.action !== "screenshot")).toEqual([]);
+    await routeApi("POST", `/api/bots/${routeBotId}/interrupt`);
+    await routeApi("PATCH", "/api/local-vm/location", { hostId: null });
+  }, 20_000);
+
+  it("refuses held native invoke before enqueue and cancels queued jobs on takeover", async () => {
+    const bridge = await pairLocalVmBridge("held");
+    await heartbeatBridge(bridge);
+    expect((await routeApi("PATCH", "/api/local-vm/location", { hostId: bridge.bridgeId })).status).toBe(200);
+    const { token } = await startOwnedTurn(routeBotId, routeThreadId);
+    expect((await routeApi("POST", `/api/bots/${routeBotId}/computer/control`, { action: "take" })).body.held).toBe(true);
+    writeFileSync(vmDockerLog, "");
+    const before = await invokeOwned(token, routeBotId, routeThreadId, "open_url", { url: "https://example.com/held-before" });
+    expect(before.status).toBe(409);
+    expect(await before.json()).toMatchObject({ error: expect.stringContaining("taken control") });
+    expect((await listOperatorJobs(bridge.bridgeId)).jobs.filter((row) => row.job.kind === "local-vm-invoke")).toEqual([]);
+    expect((await routeApi("POST", `/api/bots/${routeBotId}/computer/control`, { action: "release" })).body.held).toBe(false);
+
+    const pending = invokeOwned(token, routeBotId, routeThreadId, "open_url", { url: "https://example.com/held-during" });
+    await expect.poll(async () => {
+      const listed = await listOperatorJobs(bridge.bridgeId);
+      return listed.jobs.some((row) => row.job.kind === "local-vm-invoke" && row.status === "queued");
+    }, { timeout: 5_000 }).toBe(true);
+    expect((await routeApi("POST", `/api/bots/${routeBotId}/computer/control`, { action: "take" })).body.held).toBe(true);
+    const during = await pending;
+    expect(during.status).toBe(409);
+    expect(await during.json()).toMatchObject({ error: expect.stringContaining("taken control") });
+    const afterTake = await listOperatorJobs(bridge.bridgeId);
+    expect(afterTake.jobs.filter((row) => row.job.kind === "local-vm-invoke" && row.status === "queued")).toEqual([]);
+    expect(afterTake.jobs.some((row) => row.job.kind === "local-vm-invoke" && row.status === "cancelled")).toBe(true);
+    const hb = await heartbeatBridge(bridge);
+    expect(hb.jobs.filter((entry) => entry.kind === "local-vm-invoke")).toEqual([]);
+    expect(browserCdpPayloadsFromDockerLog(readFileSync(vmDockerLog, "utf8"))
+      .filter((entry) => entry.action !== "screenshot")).toEqual([]);
+    await routeApi("POST", `/api/bots/${routeBotId}/computer/control`, { action: "release" });
+    await routeApi("POST", `/api/bots/${routeBotId}/interrupt`);
+    await routeApi("PATCH", "/api/local-vm/location", { hostId: null });
+  }, 25_000);
+
+  it("cancels queued native jobs on stop and refuses after lease loss", async () => {
+    const bridge = await pairLocalVmBridge("stop");
+    await heartbeatBridge(bridge);
+    expect((await routeApi("PATCH", "/api/local-vm/location", { hostId: bridge.bridgeId })).status).toBe(200);
+    const { token } = await startOwnedTurn(routeBotId, routeThreadId);
+    const pending = invokeOwned(token, routeBotId, routeThreadId, "computer_exec", { command: "sleep 30" });
+    await expect.poll(async () => {
+      const listed = await listOperatorJobs(bridge.bridgeId);
+      return listed.jobs.some((row) => row.job.kind === "local-vm-invoke" && row.status === "queued");
+    }, { timeout: 5_000 }).toBe(true);
+    expect((await routeApi("POST", `/api/bots/${routeBotId}/interrupt`)).status).toBe(200);
+    const stopped = await pending;
+    const stoppedBody = await stopped.json() as { state?: string; error?: string; retryable?: boolean };
+    expect(stopped.status === 403 || stoppedBody.state === "blocked" || stopped.status === 409).toBe(true);
+    if (stopped.status === 403) {
+      expect(stoppedBody).toEqual({ error: "this turn does not own the Local VM" });
+    } else if (stopped.status === 409) {
+      expect(String(stoppedBody.error ?? "")).toMatch(/control|stopped|interrupt/i);
+    } else {
+      expect(stoppedBody.state).toBe("blocked");
+      expect(stoppedBody.retryable).toBe(false);
+      expect(JSON.stringify(stoppedBody).toLowerCase()).not.toMatch(/killed the process|guaranteed/);
+    }
+    const afterStop = await invokeOwned(token, routeBotId, routeThreadId, "open_url", { url: "https://example.com/after-stop" });
+    expect(afterStop.status).toBe(403);
+    expect(await afterStop.json()).toEqual({ error: "this turn does not own the Local VM" });
+    await routeApi("PATCH", "/api/local-vm/location", { hostId: null });
+  }, 25_000);
+
+  it("passes JPEG MIME through the owned invoke HTTP result", async () => {
+    const bridge = await pairLocalVmBridge("jpeg");
+    await heartbeatBridge(bridge);
+    expect((await routeApi("PATCH", "/api/local-vm/location", { hostId: bridge.bridgeId })).status).toBe(200);
+    const { token } = await startOwnedTurn(routeBotId, routeThreadId);
+    const pending = invokeOwned(token, routeBotId, routeThreadId, "screenshot", {});
+    const deadline = Date.now() + 8_000;
+    let job: { id: string; kind: string; generation?: number } | undefined;
+    while (Date.now() < deadline) {
+      const hb = await heartbeatBridge(bridge);
+      job = hb.jobs.find((entry) => entry.kind === "local-vm-invoke");
+      if (job) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(job).toBeTruthy();
+    await submitBridgeResult(
+      bridge,
+      job!,
+      JSON.stringify({
+        text: "Captured this bot's browser.",
+        isError: false,
+        image: "jpeg-bytes",
+        imageMimeType: "image/jpeg",
+      }),
+    );
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      state: "ready",
+      result: {
+        text: "Captured this bot's browser.",
+        isError: false,
+        image: "jpeg-bytes",
+        imageMimeType: "image/jpeg",
+      },
+    });
+    await routeApi("POST", `/api/bots/${routeBotId}/interrupt`);
+    await routeApi("PATCH", "/api/local-vm/location", { hostId: null });
+  }, 20_000);
+
+  it("revalidates native bridge permission after delivery and before container commands", async () => {
+    const bridge = await pairLocalVmBridge("preflight-host");
+    const other = await pairLocalVmBridge("wrong-preflight-host");
+    await heartbeatBridge(bridge);
+    await routeApi("PATCH", "/api/local-vm/location", { hostId: bridge.bridgeId });
+    const { token } = await startOwnedTurn(routeBotId, routeThreadId);
+    const cloud = (await routeApi("POST", "/api/bots", { computer: "cloud" })).body.bot.id;
+    const peer = (await routeApi("POST", "/api/bots", { computer: "vm" })).body.bot.id;
+    const pending = invokeOwned(token, routeBotId, routeThreadId, "open_url", { url: "https://example.com/preflight" });
+    let job: { id: string; kind: string; generation?: number } | undefined;
+    const authorize = async (credentials = bridge, generation = job?.generation) => fetch(`${vmBase}/api/bridge/local-vm/authorize`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${credentials.bridgeToken}` },
+      body: JSON.stringify({ jobId: job?.id, generation }),
+    });
+    try {
+      await expect.poll(async () => {
+        job ??= (await heartbeatBridge(bridge)).jobs.find(entry => entry.kind === "local-vm-invoke");
+        return Boolean(job);
+      }, { timeout: 5_000 }).toBe(true);
+      const permitted = await authorize();
+      expect(permitted.status).toBe(200);
+      expect(await permitted.json()).toEqual({ allowed: true });
+      expect((await authorize(other)).status).toBe(403);
+      expect((await authorize(bridge, (job!.generation ?? 0) + 1)).status).toBe(409);
+      // A hold on an unrelated cloud computer must not cancel the shared VM.
+      await routeApi("POST", `/api/bots/${cloud}/computer/control`, { action: "take" });
+      expect((await authorize()).status).toBe(200);
+      const taken = await routeApi("POST", `/api/bots/${peer}/computer/control`, { action: "take" });
+      expect(taken.status).toBe(200);
+      expect(taken.body.held).toBe(true);
+      expect((await authorize()).status).toBe(409);
+      await submitBridgeResult(bridge, job!, "", { exitCode: 143, stderr: "cancelled" });
+      const response = await pending;
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ error: expect.stringContaining("taken control") });
+    } finally {
+      if (job) await submitBridgeResult(bridge, job, "", { exitCode: 143, stderr: "cancelled" }).catch(() => {});
+      await routeApi("POST", `/api/bots/${routeBotId}/interrupt`).catch(() => {});
+      await pending.catch(() => {});
+      await routeApi("POST", `/api/bots/${peer}/computer/control`, { action: "release" });
+      await routeApi("POST", `/api/bots/${cloud}/computer/control`, { action: "release" });
+      await routeApi("DELETE", `/api/bots/${peer}`);
+      await routeApi("DELETE", `/api/bots/${cloud}`);
+      await routeApi("PATCH", "/api/local-vm/location", { hostId: null });
+    }
+  }, 20_000);
+
+  it("cancels queued native work when the selected computer changes", async () => {
+    const first = await pairLocalVmBridge("before-move");
+    const second = await pairLocalVmBridge("after-move");
+    await heartbeatBridge(first);
+    await routeApi("PATCH", "/api/local-vm/location", { hostId: first.bridgeId });
+    const { token } = await startOwnedTurn(routeBotId, routeThreadId);
+    const pending = invokeOwned(token, routeBotId, routeThreadId, "open_url", { url: "https://example.com/old-host" });
+    try {
+      await expect.poll(async () => (await listOperatorJobs(first.bridgeId)).jobs.some(
+        row => row.job.kind === "local-vm-invoke" && row.status === "queued",
+      ), { timeout: 5000 }).toBe(true);
+      expect((await routeApi("PATCH", "/api/local-vm/location", { hostId: second.bridgeId })).status).toBe(200);
+      const refused = await pending;
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ error: expect.stringContaining("assignment changed") });
+      expect((await heartbeatBridge(first)).jobs.filter(job => job.kind === "local-vm-invoke")).toEqual([]);
+      expect((await heartbeatBridge(second)).jobs.filter(job => job.kind === "local-vm-invoke")).toEqual([]);
+    } finally {
+      await routeApi("POST", `/api/bots/${routeBotId}/interrupt`).catch(() => {});
+      await pending.catch(() => {});
+      await routeApi("PATCH", "/api/local-vm/location", { hostId: null });
+    }
+  }, 20_000);
 });

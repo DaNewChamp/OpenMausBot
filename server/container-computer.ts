@@ -40,6 +40,7 @@ export type CommandRunner = (
   command: string,
   args: string[],
   timeout?: number,
+  signal?: AbortSignal,
 ) => Promise<{ stdout: string }>;
 
 export const CUA_DRIVER_VERSION = "0.20.0";

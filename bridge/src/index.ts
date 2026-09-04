@@ -3,7 +3,7 @@ import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { heartbeat, registerBridge, submitResult } from "./client.ts";
+import { authorizeLocalVmInvoke, heartbeat, registerBridge, submitResult } from "./client.ts";
 import { credentialsPath, loadCredentials, saveCredentials } from "./config.ts";
 import { runShellJob, runSshJob } from "./exec.ts";
 import { runLocalVmJob } from "./local-vm.ts";
@@ -100,7 +100,13 @@ function hermesCapabilityDisabledResult() {
   };
 }
 
-async function handleJob(job: BridgeJob, signal?: AbortSignal) {
+async function handleJob(job: BridgeJob, signal?: AbortSignal, credentials?: BridgeCredentials) {
+  if (job.kind === "local-vm-invoke") {
+    if (!credentials || !bridgeCapabilities().includes("local-vm")) {
+      return { exitCode: 1, stdout: "", stderr: "Local VM capability is disabled locally", truncated: false };
+    }
+    return runLocalVmJob(job, undefined, signal, () => authorizeLocalVmInvoke(credentials, job, signal));
+  }
   if (job.kind === "shell") return runShellJob(job, signal);
   if (job.kind === "ssh-exec") return runSshJob(job, signal);
   if (
@@ -109,7 +115,7 @@ async function handleJob(job: BridgeJob, signal?: AbortSignal) {
     || job.kind === "local-vm-screenshot"
     || job.kind === "local-vm-input"
   ) {
-    return runLocalVmJob(job);
+    return runLocalVmJob(job, undefined, signal);
   }
   if (job.kind === "hermes-signin") {
     if (!bridgeHermesExecutionEnabled()) return hermesCapabilityDisabledResult();
@@ -200,7 +206,7 @@ async function runDaemon(credentials = loadCredentials()) {
                   ? `fleet-chat ${job.payload.model}`
                   : `${job.kind} ${"botId" in job.payload ? job.payload.botId : ""}`;
         console.log(`job ${job.id}: ${label}`);
-        const run = () => handleJob(job, abort.signal)
+        const run = () => handleJob(job, abort.signal, credentials)
           .then((result) => {
             if (job.kind === "hermes-discover") cacheHermesEndpointsFromDiscover(result, credentials);
             return submitResult(credentials, job.id, result, job.generation);

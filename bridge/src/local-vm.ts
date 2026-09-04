@@ -7,6 +7,12 @@ import { promisify } from "node:util";
 
 import type { BridgeJobResult, LocalVmBridgeJob } from "./types.ts";
 import {
+  executeLocalVmInvokeTool,
+  isLocalVmInvokeTool,
+  parseLocalVmInvokeResult,
+  sanitizeLocalVmInvokeText,
+} from "../../server/local-vm-invoke.ts";
+import {
   BROWSER_VM_CPUS,
   BROWSER_VM_IMAGE,
   BROWSER_VM_KIND,
@@ -40,7 +46,12 @@ const PIDS_LIMIT = BROWSER_VM_PIDS_LIMIT;
 const SHM_BYTES = BROWSER_VM_SHM_BYTES;
 
 export type Runtime = "docker" | "podman";
-export type CommandRunner = (command: string, args: string[], timeout?: number) => Promise<{ stdout: string }>;
+export type CommandRunner = (
+  command: string,
+  args: string[],
+  timeout?: number,
+  signal?: AbortSignal,
+) => Promise<{ stdout: string }>;
 
 export interface LocalVmTarget {
   key: string;
@@ -76,12 +87,13 @@ export function perBotLocalVmTarget(botId: string): LocalVmTarget {
   };
 }
 
-const defaultRunner: CommandRunner = async (command, args, timeout = 30_000) => {
+const defaultRunner: CommandRunner = async (command, args, timeout = 30_000, signal) => {
   const { stdout } = await execFileAsync(command, args, {
     timeout,
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
     env: process.env,
+    signal,
   });
   return { stdout };
 };
@@ -563,7 +575,72 @@ async function localVmScreenshot(botId: string, run: CommandRunner): Promise<{ i
   return { image: `data:${mime};base64,${data}` };
 }
 
-export async function runLocalVmJob(job: LocalVmBridgeJob, run: CommandRunner = defaultRunner): Promise<BridgeJobResult> {
+function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const err = error as { name?: string; code?: string };
+  return err.name === "AbortError" || err.code === "ABORT_ERR";
+}
+
+async function localVmInvoke(
+  job: LocalVmBridgeJob,
+  run: CommandRunner,
+  signal?: AbortSignal,
+): Promise<BridgeJobResult> {
+  const { botId, tool } = job.payload;
+  if (!botId) throw new Error("botId required");
+  if (!tool || !isLocalVmInvokeTool(tool)) {
+    throw new Error("that computer tool is not available on this bot's Local VM");
+  }
+  if (signal?.aborted) {
+    const abortErr = new Error("cancelled");
+    abortErr.name = "AbortError";
+    throw abortErr;
+  }
+  let status = await localVmStatus(botId, run);
+  if (status.container !== "missing" && (!status.managed || !status.imageMatches)) {
+    throw new Error(
+      status.problem ??
+        "The existing Local VM is incompatible with this browser image. Recreate it from Settings. This action will not delete it.",
+    );
+  }
+  if (status.container === "missing") {
+    status = await localVmAction(botId, "run", run);
+  }
+  if (status.container !== "missing" && (!status.managed || !status.imageMatches)) {
+    throw new Error(
+      status.problem ??
+        "The existing Local VM is incompatible with this browser image. Recreate it from Settings. This action will not delete it.",
+    );
+  }
+  if (!status.ready || !status.runtime) {
+    throw new Error(status.problem ?? "The Local VM is not ready");
+  }
+  const target = localVmTargetFor(botId);
+  const rawArgs = job.payload.arguments;
+  const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? rawArgs : {};
+  const execution = await executeLocalVmInvokeTool(tool, args, {
+    runtime: status.runtime,
+    containerName: target.containerName,
+    runner: (command, commandArgs, timeout, innerSignal) =>
+      run(command, commandArgs, timeout, innerSignal ?? signal),
+    signal,
+  });
+  const parsed = parseLocalVmInvokeResult({
+    text: sanitizeLocalVmInvokeText(execution.text),
+    isError: execution.isError,
+    ...(execution.image ? { image: execution.image } : {}),
+    ...(execution.imageMimeType ? { imageMimeType: execution.imageMimeType } : {}),
+  });
+  if (!parsed) throw new Error("local-vm invoke returned an invalid result");
+  return { exitCode: 0, stdout: JSON.stringify(parsed), stderr: "", truncated: false };
+}
+
+export async function runLocalVmJob(
+  job: LocalVmBridgeJob,
+  run: CommandRunner = defaultRunner,
+  signal?: AbortSignal,
+  beforeCommand?: () => Promise<void>,
+): Promise<BridgeJobResult> {
   try {
     const { botId, action } = job.payload;
     if (!botId) throw new Error("botId required");
@@ -599,15 +676,27 @@ export async function runLocalVmJob(job: LocalVmBridgeJob, run: CommandRunner = 
             : input.action === "type"
               ? { text: input.text }
               : { keys: input.keys };
-      await run(status.runtime, browserCdpExecArgs(action, payload, { container: target.containerName }), 30_000);
+      await run(status.runtime, browserCdpExecArgs(action, payload, { container: target.containerName }), 30_000, signal);
       return { exitCode: 0, stdout: JSON.stringify({ text: "ok", isError: false }), stderr: "", truncated: false };
+    }
+    if (job.kind === "local-vm-invoke") {
+      const checkedRun: CommandRunner = async (command, args, timeout, commandSignal) => {
+        const activeSignal = commandSignal ?? signal;
+        activeSignal?.throwIfAborted();
+        await beforeCommand?.();
+        activeSignal?.throwIfAborted();
+        return run(command, args, timeout, activeSignal);
+      };
+      await beforeCommand?.();
+      return await localVmInvoke(job, checkedRun, signal);
     }
     return { exitCode: 1, stdout: "", stderr: `unsupported local-vm job: ${job.kind}`, truncated: false };
   } catch (error) {
+    const aborted = isAbortError(error) || signal?.aborted === true;
     return {
-      exitCode: 1,
+      exitCode: aborted ? 143 : 1,
       stdout: "",
-      stderr: error instanceof Error ? error.message : String(error),
+      stderr: aborted ? "cancelled" : (error instanceof Error ? error.message : String(error)),
       truncated: false,
     };
   }

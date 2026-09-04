@@ -20,6 +20,7 @@ describe("web client companion CORS", () => {
     expect(isBrowserSafeCompanionRoute("GET", "/api/events", true)).toBe(true);
     expect(isBrowserSafeCompanionRoute("POST", "/api/pairing-invitations", true)).toBe(false);
     expect(isBrowserSafeCompanionRoute("POST", "/api/bridge/register", true)).toBe(false);
+    expect(isBrowserSafeCompanionRoute("POST", "/api/bridge/local-vm/authorize", true)).toBe(false);
     expect(isBrowserSafeCompanionRoute("GET", "/api/bots", false)).toBe(false);
     expect(isBrowserSafeCompanionRoute("POST", "/api/web-pairing/requests", false)).toBe(true);
     expect(isBrowserSafeCompanionRoute("POST", "/api/web-pairing/requests/aaaaaaaaaaaaaaaaaaaaaa/redeem", false)).toBe(true);

@@ -86,7 +86,12 @@ printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   info) echo "29.0.0" ;;
   image) cat "$FAKE_DOCKER_DIR/image.json" ;;
-  inspect) name="$2"; sed "s|__NAME__|$name|g" "$FAKE_DOCKER_DIR/container.json.tpl" ;;
+  inspect)
+    # This fixture owns only the shared container. Pretending every per-bot
+    # name exists prevents the isolation-mode cleanup from succeeding.
+    name="$2"
+    if [ "$name" != "openmausbot-computer" ]; then echo "No such container" >&2; exit 1; fi
+    sed "s|__NAME__|$name|g" "$FAKE_DOCKER_DIR/container.json.tpl" ;;
   exec)
     case "$*" in
       *"json/version"*) echo '{"Browser":"Chrome"}' ;;

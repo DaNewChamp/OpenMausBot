@@ -34,6 +34,8 @@ export interface LocalVmEnsureStatus {
   daemonUp: boolean;
   runtime: Runtime | null;
   create_supported: boolean;
+  managed?: boolean;
+  imageMatches?: boolean;
 }
 
 export type LocalVmEnsureDecision =
@@ -217,6 +219,16 @@ export function decideLocalVmEnsure(input: {
     return { action: "blocked", message: "Prepare the Local VM image on the computer before using it." };
   }
   if (input.status.ready) return { action: "ready" };
+  if (
+    input.status.container !== "missing" &&
+    (input.status.managed === false || input.status.imageMatches === false)
+  ) {
+    return {
+      action: "blocked",
+      message:
+        "The existing Local VM is incompatible with this browser image. Recreate it from Settings. This action will not delete it.",
+    };
+  }
   if (input.status.container === "running") {
     return { action: "wait", message: LOCAL_VM_STARTING_MESSAGE };
   }
@@ -313,6 +325,41 @@ export interface LocalVmInvokeExecution {
   text: string;
   isError: boolean;
   image?: string;
+  imageMimeType?: "image/png" | "image/jpeg";
+}
+
+const LOCAL_VM_INVOKE_IMAGE_MIMES = new Set(["image/png", "image/jpeg"]);
+
+export function detectLocalVmImageMime(data: string): "image/png" | "image/jpeg" | undefined {
+  const bytes = Buffer.from(data, "base64");
+  if (bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return "image/png";
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) return "image/jpeg";
+  return undefined;
+}
+
+export function parseLocalVmInvokeResult(value: unknown): LocalVmInvokeExecution | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const rec = value as Record<string, unknown>;
+  if (typeof rec.text !== "string") return null;
+  if (typeof rec.isError !== "boolean") return null;
+  const result: LocalVmInvokeExecution = { text: rec.text, isError: rec.isError };
+  if (rec.image !== undefined) {
+    if (typeof rec.image !== "string" || !rec.image) return null;
+    result.image = rec.image;
+  }
+  if (rec.imageMimeType !== undefined) {
+    if (typeof rec.imageMimeType !== "string" || !LOCAL_VM_INVOKE_IMAGE_MIMES.has(rec.imageMimeType)) return null;
+    result.imageMimeType = rec.imageMimeType as "image/png" | "image/jpeg";
+  }
+  return result;
+}
+
+function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const err = error as { name?: string; code?: string };
+  return err.name === "AbortError" || err.code === "ABORT_ERR";
 }
 
 async function cdpCall(
@@ -321,11 +368,13 @@ async function cdpCall(
   container: string,
   action: string,
   payload: object = {},
+  signal?: AbortSignal,
 ): Promise<string> {
   const { stdout } = await runner(
     runtime,
     browserCdpExecArgs(action, payload, { container }),
     30_000,
+    signal,
   );
   return stdout.trim();
 }
@@ -343,26 +392,38 @@ function parseInvokeArgs(raw: object | null): object {
 export async function executeLocalVmInvokeTool(
   name: string,
   rawArgs: object | null,
-  ctx: { runtime: Runtime; containerName: string; runner: CommandRunner },
+  ctx: { runtime: Runtime; containerName: string; runner: CommandRunner; signal?: AbortSignal },
 ): Promise<LocalVmInvokeExecution> {
   if (!isLocalVmInvokeTool(name)) {
     return { text: "That computer tool is not available on this bot's Local VM.", isError: true };
   }
   const args = parseInvokeArgs(rawArgs);
   try {
+    if (ctx.signal?.aborted) {
+      const abortErr = new Error("cancelled");
+      abortErr.name = "AbortError";
+      throw abortErr;
+    }
     if (name === "screenshot") {
-      await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "screenshot");
+      await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "screenshot", {}, ctx.signal);
       const { stdout } = await ctx.runner(
         ctx.runtime,
         ["exec", ctx.containerName, "base64", "-w0", "/tmp/openmausbot-preview.jpg"],
         30_000,
+        ctx.signal,
       );
       const data = stdout.trim();
       if (!data) return { text: "The Local VM screenshot was empty. Retry shortly.", isError: true };
-      return { text: "Captured this bot's browser.", isError: false, image: data };
+      const imageMimeType = detectLocalVmImageMime(data);
+      return {
+        text: "Captured this bot's browser.",
+        isError: false,
+        image: data,
+        ...(imageMimeType ? { imageMimeType } : {}),
+      };
     }
     if (name === "get_desktop_state") {
-      const out = await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "snapshot");
+      const out = await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "snapshot", {}, ctx.signal);
       return { text: sanitizeLocalVmInvokeText(out || "Inspected this bot's browser page."), isError: false };
     }
     if (name === "open_url") {
@@ -372,7 +433,7 @@ export async function executeLocalVmInvokeTool(
       if (!normalized || !publicUrl) {
         return { text: "open_url needs an http(s) URL.", isError: true };
       }
-      await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "navigate", { url: normalized });
+      await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "navigate", { url: normalized }, ctx.signal);
       return { text: `Opened ${publicUrl} in this bot's browser.`, isError: false };
     }
     if (name === "click") {
@@ -386,20 +447,20 @@ export async function executeLocalVmInvokeTool(
         y: Math.round(y),
         button: field(args, "button") === "right" ? "right" : "left",
         double: field(args, "double") === true,
-      });
+      }, ctx.signal);
       return { text: sanitizeLocalVmInvokeText(out || "Clicked in this bot's browser."), isError: false };
     }
     if (name === "type_text") {
       const text = field(args, "text");
       if (typeof text !== "string" || !text) return { text: "type_text needs text.", isError: true };
-      const out = await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "type", { text });
+      const out = await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "type", { text }, ctx.signal);
       return { text: sanitizeLocalVmInvokeText(out || "Typed in this bot's browser."), isError: false };
     }
     if (name === "press_key") {
       const keysRaw = field(args, "keys");
       const keys = typeof keysRaw === "string" ? keysRaw.trim() : "";
       if (!keys) return { text: "press_key needs keys.", isError: true };
-      const out = await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "key", { keys });
+      const out = await cdpCall(ctx.runner, ctx.runtime, ctx.containerName, "key", { keys }, ctx.signal);
       return { text: sanitizeLocalVmInvokeText(out || "Pressed a key in this bot's browser."), isError: false };
     }
     if (name === "launch_app") {
@@ -421,15 +482,18 @@ export async function executeLocalVmInvokeTool(
           ctx.runtime,
           ["exec", "-u", "cua", "-w", "/home/cua/workspace", "-e", "HOME=/home/cua", ctx.containerName, "bash", "-lc", trimmed],
           120_000,
+          ctx.signal,
         );
         return { text: sanitizeLocalVmInvokeText(stdout || "Command finished on this bot's Local VM."), isError: false };
       } catch (error) {
+        if (isAbortError(error) || ctx.signal?.aborted) throw error;
         const message = error instanceof Error ? error.message : String(error);
         return { text: sanitizeLocalVmInvokeText(message), isError: true };
       }
     }
     return { text: "That computer tool is not available on this bot's Local VM.", isError: true };
   } catch (error) {
+    if (isAbortError(error) || ctx.signal?.aborted) throw error;
     const message = error instanceof Error ? error.message : String(error);
     return { text: sanitizeLocalVmInvokeText(message), isError: true };
   }

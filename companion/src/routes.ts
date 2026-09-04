@@ -895,6 +895,7 @@ export function isBridgeDaemonRoute(method: string, path: string): boolean {
       path === "/api/bridge/register"
       || path === "/api/bridge/heartbeat"
       || path === "/api/bridge/result"
+      || path === "/api/bridge/local-vm/authorize"
       || path === "/api/bridge/hermes-tools"
     )
   );

@@ -25,7 +25,12 @@ export interface BridgeRecord {
 
 export type BridgeJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
-export type LocalVmBridgeJobKind = "local-vm-status" | "local-vm-action" | "local-vm-screenshot" | "local-vm-input";
+export type LocalVmBridgeJobKind =
+  | "local-vm-status"
+  | "local-vm-action"
+  | "local-vm-screenshot"
+  | "local-vm-input"
+  | "local-vm-invoke";
 
 export type HermesBridgeJobKind =
   | "hermes-discover"
@@ -59,6 +64,9 @@ export interface HermesBridgeSignInPayload {
 
 export interface LocalVmJobPayload {
   botId: string;
+  threadId?: string;
+  tool?: string;
+  arguments?: Record<string, unknown>;
   action?: "run" | "stop" | "remove" | "recreate";
   input?: {
     action: "click" | "scroll" | "type" | "key";
@@ -288,6 +296,9 @@ export function jobFingerprint(job: BridgeJob): string {
   if (job.kind === "hermes-signin") return "hermes-signin";
   if (job.kind === "fleet-chat") {
     return `fleet-chat\0${job.payload.baseUrl}\0${job.payload.model}\0${job.payload.threadId}\0${job.payload.turnId}`;
+  }
+  if (job.kind === "local-vm-invoke") {
+    return `local-vm-invoke\0${job.payload.botId}\0${job.payload.threadId ?? ""}\0${job.payload.tool ?? ""}\0${JSON.stringify(job.payload.arguments ?? {})}`;
   }
   return `${job.kind}\0${job.payload.botId}\0${job.payload.action ?? ""}`;
 }

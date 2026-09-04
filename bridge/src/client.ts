@@ -78,3 +78,20 @@ export async function submitResult(
     throw new Error(body.error ?? `result failed (${res.status})`);
   }
 }
+
+/** Recheck the live turn after job delivery and immediately before execution. */
+export async function authorizeLocalVmInvoke(
+  credentials: BridgeCredentials,
+  job: BridgeJob,
+  signal?: AbortSignal,
+): Promise<void> {
+  const timeout = AbortSignal.timeout(10_000);
+  const res = await fetch(`${credentials.url}/api/bridge/local-vm/authorize`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${credentials.bridgeToken}`, "content-type": "application/json" },
+    body: JSON.stringify({ jobId: job.id, generation: job.generation }),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+  });
+  const body = await res.json() as { allowed?: boolean; error?: string };
+  if (!res.ok || body.allowed !== true) throw new Error(body.error ?? "native Local VM execution authorization refused");
+}

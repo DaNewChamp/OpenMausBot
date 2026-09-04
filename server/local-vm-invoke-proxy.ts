@@ -18,9 +18,12 @@ type Json = Record<string, unknown>;
 const send = (msg: Json) => process.stdout.write(JSON.stringify(msg) + "\n");
 const ok = (id: unknown, result: unknown) => send({ jsonrpc: "2.0", id, result });
 const rpcErr = (id: unknown, code: number, message: string) => send({ jsonrpc: "2.0", id, error: { code, message } });
-const toolResult = (id: unknown, text: string, isError = false, image?: string) => {
+const toolResult = (id: unknown, text: string, isError = false, image?: string, imageMimeType?: string) => {
   const content: Array<Record<string, unknown>> = [{ type: "text", text }];
-  if (image) content.push({ type: "image", mimeType: "image/png", data: image });
+  if (image) {
+    const mime = imageMimeType === "image/jpeg" || imageMimeType === "image/png" ? imageMimeType : "image/png";
+    content.push({ type: "image", mimeType: mime, data: image });
+  }
   ok(id, { content, isError });
 };
 
@@ -91,8 +94,14 @@ async function handle(msg: Json) {
           toolResult(id, String(body.message ?? "The Local VM is unavailable."), true);
           return;
         }
-        const result = (body.result ?? {}) as { text?: string; isError?: boolean; image?: string };
-        toolResult(id, String(result.text ?? "Done on this bot's Local VM."), result.isError === true, result.image);
+        const result = (body.result ?? {}) as { text?: string; isError?: boolean; image?: string; imageMimeType?: string };
+        toolResult(
+          id,
+          String(result.text ?? "Done on this bot's Local VM."),
+          result.isError === true,
+          result.image,
+          result.imageMimeType,
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         toolResult(id, message, true);

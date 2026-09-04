@@ -14,6 +14,7 @@ import {
   localVmSelfInvokePrompt,
   localVmTurnContract,
   sanitizeLocalVmInvokeText,
+  parseLocalVmInvokeResult,
   type LocalVmEnsureStatus,
 } from "./local-vm-invoke.ts";
 
@@ -260,6 +261,52 @@ describe("lazy Local VM ensure", () => {
       }).action,
     ).toBe("recreate");
   });
+
+  it("blocks native ensure from deleting an incompatible existing container", () => {
+    expect(
+      decideLocalVmEnsure({
+        status: {
+          ...readyStatus(),
+          ready: false,
+          container: "running",
+          managed: false,
+          imageMatches: false,
+        },
+        lifecycleBusy: false,
+        imageBusy: false,
+        modeChangeBusy: false,
+        provisionBusy: false,
+        leaseOwnedByThisTurn: true,
+        existingCount: 1,
+        maxInstances: 2,
+        mode: "shared",
+        targetExists: true,
+      }),
+    ).toMatchObject({
+      action: "blocked",
+      message: expect.stringMatching(/incompatible|not created by OpenMausBot|will not delete|recreate/i),
+    });
+    expect(
+      decideLocalVmEnsure({
+        status: {
+          ...readyStatus(),
+          ready: false,
+          container: "stopped",
+          managed: false,
+          imageMatches: false,
+        },
+        lifecycleBusy: false,
+        imageBusy: false,
+        modeChangeBusy: false,
+        provisionBusy: false,
+        leaseOwnedByThisTurn: true,
+        existingCount: 1,
+        maxInstances: 2,
+        mode: "shared",
+        targetExists: true,
+      }).action,
+    ).toBe("blocked");
+  });
 });
 
 describe("Local VM invoke sanitization", () => {
@@ -370,6 +417,7 @@ describe("Local VM execute coverage and contract drift prevention", () => {
     const result = await executeLocalVmInvokeTool("screenshot", {}, ctx(happyRunner));
     expect(result.isError).toBe(false);
     expect(result.image).toBe("iVBORw0KGgoAAAANSUhEUg==");
+    expect(result.imageMimeType).toBe("image/png");
     expect(result.text).toContain("Captured this bot's browser");
 
     const emptyRunner = vi.fn(async (_runtime: any, args: string[]) => {
@@ -379,6 +427,73 @@ describe("Local VM execute coverage and contract drift prevention", () => {
     const emptyResult = await executeLocalVmInvokeTool("screenshot", {}, ctx(emptyRunner));
     expect(emptyResult.isError).toBe(true);
     expect(emptyResult.text).toMatch(/screenshot was empty/);
+  });
+
+  it("advertises JPEG for Chromium screenshots", async () => {
+    const jpeg = Buffer.concat([
+      Buffer.from([0xff, 0xd8]),
+      Buffer.alloc(16, 0x00),
+      Buffer.from([0xff, 0xd9]),
+    ]).toString("base64");
+    const runner = vi.fn(async (_runtime: any, args: string[]) => {
+      if (args.includes("base64")) return { stdout: jpeg };
+      return { stdout: "ok" };
+    });
+    const result = await executeLocalVmInvokeTool("screenshot", {}, ctx(runner));
+    expect(result.isError).toBe(false);
+    expect(result.image).toBe(jpeg);
+    expect(result.imageMimeType).toBe("image/jpeg");
+  });
+
+  it("runs computer_exec as cua in /home/cua/workspace", async () => {
+    const runner = vi.fn(async () => ({ stdout: "uid=1000(cua)\n" }));
+    const result = await executeLocalVmInvokeTool("computer_exec", { command: "id" }, ctx(runner));
+    expect(result.isError).toBe(false);
+    const execArgs = (runner.mock.calls as any)[0][1] as string[];
+    expect(execArgs).toEqual(expect.arrayContaining(["exec", "-u", "cua", "-w", "/home/cua/workspace"]));
+    expect(execArgs).toContain("openmausbot-computer");
+    expect(execArgs.at(-1)).toBe("id");
+  });
+
+  it("validates remote invoke result shape and supported image MIME types", () => {
+    expect(parseLocalVmInvokeResult({ text: "ok", isError: false })).toEqual({
+      text: "ok",
+      isError: false,
+    });
+    expect(
+      parseLocalVmInvokeResult({
+        text: "Captured this bot's browser.",
+        isError: false,
+        image: "abc",
+        imageMimeType: "image/jpeg",
+      }),
+    ).toEqual({
+      text: "Captured this bot's browser.",
+      isError: false,
+      image: "abc",
+      imageMimeType: "image/jpeg",
+    });
+    expect(parseLocalVmInvokeResult({ text: "legacy png", isError: false, image: "abc" })).toEqual({
+      text: "legacy png",
+      isError: false,
+      image: "abc",
+    });
+    expect(parseLocalVmInvokeResult(null)).toBeNull();
+    expect(parseLocalVmInvokeResult({ isError: false })).toBeNull();
+    expect(parseLocalVmInvokeResult({ text: "ok", isError: "no" })).toBeNull();
+    expect(
+      parseLocalVmInvokeResult({
+        text: "ok",
+        isError: false,
+        image: "abc",
+        imageMimeType: "image/gif",
+      }),
+    ).toBeNull();
+    expect(parseLocalVmInvokeResult({ text: "ok", isError: false, extra: true, imageMimeType: "image/png" })).toMatchObject({
+      text: "ok",
+      isError: false,
+      imageMimeType: "image/png",
+    });
   });
 
   it("executes get_desktop_state and returns sanitized state", async () => {

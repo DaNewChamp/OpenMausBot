@@ -126,6 +126,9 @@ function fakeRuntime(
     if (command === "docker" && args[0] === "exec" && args.includes("base64")) {
       return { stdout: jpeg.toString("base64") };
     }
+    if (command === "docker" && args[0] === "exec" && args.includes("bash") && args.at(-1) === "id") {
+      return { stdout: "uid=1000(cua) gid=1000(cua)\n" };
+    }
     throw new Error(`unexpected command: ${key}`);
   };
   return { run, calls };
@@ -200,6 +203,41 @@ describe("bridge Local VM lifecycle", () => {
     expect(perBotStatus.ready).toBe(false);
   });
 
+  function invokeJob(
+    tool: string,
+    args: Record<string, unknown> = {},
+    botId = "shared",
+  ): LocalVmBridgeJob {
+    return {
+      id: "job-invoke",
+      bridgeId: "bridge",
+      timeoutMs: 120_000,
+      createdAt: Date.now(),
+      kind: "local-vm-invoke",
+      payload: { botId, tool, arguments: args, threadId: "thread-1" },
+    } as LocalVmBridgeJob;
+  }
+
+  function cuaContainer(target: LocalVmTarget) {
+    return JSON.stringify([{
+      Config: {
+        Image: "docker.io/trycua/xfce-cua:latest",
+        Labels: {
+          "com.openmausbot.local-vm": "1",
+        },
+      },
+      HostConfig: {
+        Memory: 4 * 1024 * 1024 * 1024,
+        NanoCpus: 2_000_000_000,
+        PidsLimit: 512,
+        Privileged: false,
+      },
+      Mounts: [{ Type: "bind", Source: target.workspaceDir, Destination: guestWorkspace, RW: true }],
+      State: { Running: true },
+      Image: "sha256:cua-old",
+    }]);
+  }
+
   it("dispatches a click through CDP on the shared VM", async () => {
     const target = localVmTargetFor("shared");
     const fake = fakeRuntime(true, target);
@@ -215,5 +253,116 @@ describe("bridge Local VM lifecycle", () => {
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({ text: "ok", isError: false });
     expect(fake.calls.some((call) => call.includes("openmausbot-cdp.mjs"))).toBe(true);
+  });
+
+  it("executes native tools inside the managed container as cua in /home/cua/workspace", async () => {
+    const target = localVmTargetFor("shared");
+    const fake = fakeRuntime(true, target);
+    const result = await runLocalVmJob(
+      invokeJob("computer_exec", { command: "id" }, "shared"),
+      fake.run,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ isError: false });
+    const execCall = fake.calls.find((call) => call.includes("bash -lc")) ?? "";
+    expect(execCall).toContain("-u cua");
+    expect(execCall).toContain("-w /home/cua/workspace");
+    expect(execCall).toContain("openmausbot-computer");
+    expect(execCall).toMatch(/^docker exec -u cua -w \/home\/cua\/workspace -e HOME=\/home\/cua openmausbot-computer bash -lc id$/);
+  });
+
+  it("uses the per-bot container name for per-bot native invoke", async () => {
+    const target = perBotLocalVmTarget("bot-test");
+    const fake = fakeRuntime(true, target);
+    const result = await runLocalVmJob(
+      invokeJob("open_url", { url: "https://example.com/per-bot" }, "bot-test"),
+      fake.run,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(fake.calls.some((call) => call.includes(target.containerName) && call.includes("openmausbot-cdp.mjs"))).toBe(true);
+    expect(fake.calls.some((call) => call.includes(" --name openmausbot-computer ") && !call.includes(target.containerName))).toBe(false);
+  });
+
+  it("blocks native invoke on an incompatible existing Cua container without removing it", async () => {
+    const target = SHARED_LOCAL_VM_TARGET;
+    const calls: string[] = [];
+    const run: CommandRunner = async (command, args) => {
+      const key = [command, ...args].join(" ");
+      calls.push(key);
+      if (command === "docker" && args[0] === "info") return { stdout: "29\n" };
+      if (command === "docker" && args[0] === "image") return { stdout: preparedImage() };
+      if (command === "docker" && args[0] === "inspect" && args[1] === target.containerName) {
+        return { stdout: cuaContainer(target) };
+      }
+      throw new Error(`unexpected command: ${key}`);
+    };
+    const result = await runLocalVmJob(invokeJob("open_url", { url: "https://example.com" }), run);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/incompatible|not created by OpenMausBot|recreate/i);
+    expect(calls.some((call) => call.startsWith("docker rm") || call.startsWith("docker run") || call.startsWith("docker stop"))).toBe(false);
+  });
+
+  it("returns JPEG MIME on native screenshot invoke", async () => {
+    const target = localVmTargetFor("shared");
+    const fake = fakeRuntime(true, target);
+    const result = await runLocalVmJob(invokeJob("screenshot"), fake.run);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      isError: false,
+      imageMimeType: "image/jpeg",
+    });
+    expect(typeof JSON.parse(result.stdout).image).toBe("string");
+  });
+
+  it("passes AbortSignal through to docker exec and does not claim remote process death", async () => {
+    const target = localVmTargetFor("shared");
+    const fake = fakeRuntime(true, target);
+    const seen: AbortSignal[] = [];
+    const run: CommandRunner = async (command, args, timeout, signal) => {
+      if (signal) seen.push(signal);
+      if (args.includes("bash") && args.includes("-lc")) {
+        controller.abort();
+        const err = new Error("aborted") as NodeJS.ErrnoException;
+        err.name = "AbortError";
+        err.code = "ABORT_ERR";
+        throw err;
+      }
+      return fake.run(command, args, timeout);
+    };
+    const controller = new AbortController();
+    const result = await runLocalVmJob(invokeJob("computer_exec", { command: "sleep 30" }), run, controller.signal);
+    expect(seen).toContain(controller.signal);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toLowerCase()).toMatch(/cancel|abort/);
+    expect(result.stderr.toLowerCase()).not.toMatch(/killed the process|guaranteed|terminated the remote process/);
+  });
+
+  it("rechecks bridge permission after readiness before dispatching native input", async () => {
+    const fake = fakeRuntime(true, SHARED_LOCAL_VM_TARGET);
+    let held = false;
+    const run: CommandRunner = async (command, args, timeout, signal) => {
+      const result = await fake.run(command, args, timeout, signal);
+      if (args.some(arg => arg.includes("json/version"))) held = true;
+      return result;
+    };
+    const native: LocalVmBridgeJob = {
+      id: "preflight-ready-race", bridgeId: "bridge", timeoutMs: 1000, createdAt: Date.now(),
+      kind: "local-vm-invoke", payload: { botId: "shared", threadId: "turn", tool: "open_url", arguments: { url: "https://example.com" } },
+    };
+    const result = await runLocalVmJob(native, run, undefined, async () => {
+      if (held) throw new Error("human has taken control");
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("taken control");
+    expect(fake.calls.filter(call => call.includes("openmausbot-cdp.mjs"))).toEqual([]);
+  });
+
+  it("dispatches nothing for an already cancelled native job", async () => {
+    const fake = fakeRuntime(true, SHARED_LOCAL_VM_TARGET);
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runLocalVmJob(invokeJob("computer_exec", { command: "id" }), fake.run, controller.signal);
+    expect(result.exitCode).toBe(143);
+    expect(fake.calls).toEqual([]);
   });
 });

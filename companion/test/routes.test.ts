@@ -56,6 +56,7 @@ describe("credentials", () => {
     expect(ask("POST", "/api/bridge/register", false)).toBeNull();
     expect(ask("POST", "/api/bridge/heartbeat", false)).toBeNull();
     expect(ask("POST", "/api/bridge/result", false)).toBeNull();
+    expect(ask("POST", "/api/bridge/local-vm/authorize", false)).toBeNull();
     expect(ask("POST", "/api/bridge/hermes-tools", false)).toBeNull();
     for (const [method, path] of [
       ["GET", "/api/bridge/jobs"],
@@ -63,6 +64,8 @@ describe("credentials", () => {
       ["POST", "/api/bridge/jobs/job-1"],
       ["POST", "/api/bridge/pairing"],
       ["GET", "/api/bridge/register"],
+      ["GET", "/api/bridge/local-vm/authorize"],
+      ["POST", "/api/bridge/local-vm/authorize/extra"],
       ["POST", "/api/bridge/unknown"],
       ["DELETE", "/api/bridge/result"],
     ] as Array<[string, string]>) {
