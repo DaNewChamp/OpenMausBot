@@ -155,3 +155,9 @@ Finished the remaining Local VM closeout on `feat/fleet-models-ui`. Pushed `pers
 - Deployed the corrected bridge to the **Mac mini** using the manual runbook. Backup: `~/.openmausbot-bridge/runtime/bridge-pre-localvm-input-20260904144739`. After `launchctl kickstart -k`, `com.posival.openmaus-bridge` is running with the rebuilt `index.js` containing the `local-vm-input` dispatcher.
 - Pushed the same `feat/fleet-models-ui` head (`22e98c18`) to **both** `DaNewChamp/OpenMausBot` and `DaNewChamp/VBot`. Still **no merge** and **no TestFlight**.
 - Remaining operator check is to select the Mac mini as the fleet VM location and repeat Deploy → Take control → click/preview input if Vincent wants mini parity proven live.
+
+## Update 2026-09-04: shared takeover source closeout
+
+Continued from `e9030320` in isolated branch `fix/fleet-shared-takeover-0904`. Resource-scoped human takeover, reassignment SSE refresh, and the readiness-to-execution takeover race are repaired and independently tested. Final gate: **3,478 Vitest tests passed / 19 skipped**, all four TypeScript checks, Vite build, and **34 Electron Node tests** passed. No deployment, merge, push, TestFlight, or container cleanup occurred.
+
+Important newly confirmed limitation: native `/api/internal/local-vm/invoke` still executes on the hub instead of relaying to the selected fleet bridge. Manual controls working on Windows do not establish native-bot execution parity. See [the shared takeover closeout](agent-handoff-shared-takeover-20260904.md) for exact workspace, verification evidence, and the next native-relay boundary.

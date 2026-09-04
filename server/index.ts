@@ -134,7 +134,8 @@ import {
   type AppConfig,
   type PermissionMode,
 } from "./config.ts";
-import { ComputerControl } from "./computer-control.ts";
+import { ComputerControl, computerControlResourceKey } from "./computer-control.ts";
+import { CONTROL_REFUSAL_PLAIN } from "./control-client.ts";
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
 import { buildNotification, type Notification } from "./notify.ts";
@@ -476,12 +477,51 @@ async function connectedAppsIntegration(botId: string, threadId: string, roomRun
 }
 
 // ── computer control (who is driving) ──────────────────────────────────
-// The person can take the wheel of a bot's computer from the panel; while
-// they hold it, the bot's computer proxies refuse every action. The record
-// lives here; the proxies consult it over loopback with the boot token.
-const computerControl = new ComputerControl((botId, snapshot) => {
+// The person can take the wheel of a computer from the panel; while they
+// hold it, that resource's computer proxies refuse every action. Native
+// bots that share a Local VM share one hold. The record lives here; the
+// proxies consult it over loopback with the boot token.
+const computerControl = new ComputerControl(
+  (botId, snapshot) => {
+    broadcast({ kind: "computer-control", botId, held: snapshot.held, helpReason: snapshot.helpReason });
+  },
+  Date.now,
+  {
+    resourceKeyFor: computerControlResourceKeyForBot,
+    botsForResource: botsSharingComputerControlResource,
+  },
+);
+
+function computerControlResourceKeyForBot(botId: string): string {
+  const bot = store.bot(botId);
+  if (!bot) return `bot:${botId}`;
+  return computerControlResourceKey({
+    botId: bot.id,
+    computer: bot.computer,
+    targetKey: localVmTargetForBot(bot.id).key,
+    hostId: localVmHostId(cfg) ?? bot.computerHostId ?? null,
+  });
+}
+
+function botsSharingComputerControlResource(resourceKey: string): string[] {
+  return store.bots.filter((bot) => computerControlResourceKeyForBot(bot.id) === resourceKey).map((bot) => bot.id);
+}
+
+// Scope changes do not change the resource's hold, but the client must stop
+// displaying the previous resource's state when a bot or fleet moves.
+function publishComputerControlScopeChange(botId: string): void {
+  const resourceKey = computerControlResourceKeyForBot(botId);
+  const previous = computerControlResourceKeys.get(botId);
+  if (previous === resourceKey) return;
+  computerControlResourceKeys.set(botId, resourceKey);
+  const snapshot = computerControl.snapshot(botId);
+  if (previous === undefined && !snapshot.held && snapshot.helpReason === null) return;
   broadcast({ kind: "computer-control", botId, held: snapshot.held, helpReason: snapshot.helpReason });
-});
+}
+
+function publishComputerControlScopeChanges(): void {
+  for (const bot of store.bots) publishComputerControlScopeChange(bot.id);
+}
 
 /** The loopback endpoint a bot's computer proxy polls before acting. */
 function controlIntegration(botId: string) {
@@ -532,6 +572,9 @@ async function defaultSelection() {
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = new Store(() => bootSelection);
+const computerControlResourceKeys = new Map(
+  store.bots.map((bot) => [bot.id, computerControlResourceKeyForBot(bot.id)]),
+);
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
 
@@ -624,10 +667,14 @@ store.onChange((change) => {
       break;
     case "bot": {
       const bot = store.bot(change.botId);
-      if (bot) broadcast({ kind: "bot", bot: wireBot(bot) });
+      if (bot) {
+        broadcast({ kind: "bot", bot: wireBot(bot) });
+        publishComputerControlScopeChange(bot.id);
+      }
       break;
     }
     case "bot.deleted":
+      computerControlResourceKeys.delete(change.botId);
       broadcast({ kind: "bot.deleted", botId: change.botId });
       break;
     case "group": {
@@ -5332,6 +5379,9 @@ const server = createServer(async (req, res) => {
         if (!isLocalVmInvokeTool(tool)) {
           return json(res, 400, { error: "that computer tool is not available on this bot's Local VM" });
         }
+        if (computerControl.snapshot(bot.id).held) {
+          return json(res, 409, { error: CONTROL_REFUSAL_PLAIN });
+        }
         localVmLeaseFor(target).touch(threadId);
         localVmIdleFor(target).touch();
         try {
@@ -5353,6 +5403,11 @@ const server = createServer(async (req, res) => {
           }
           const rawArgs = body.arguments;
           const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? rawArgs : {};
+          // Readiness/provisioning awaited above. A human may have taken
+          // control meanwhile; refuse before dispatching any container action.
+          if (computerControl.snapshot(bot.id).held) {
+            return json(res, 409, { error: CONTROL_REFUSAL_PLAIN });
+          }
           const result = await executeLocalVmInvokeTool(tool, args, {
             runtime: status.runtime,
             containerName: target.containerName,
@@ -8394,6 +8449,7 @@ const server = createServer(async (req, res) => {
       if (!parsed.ok) return json(res, 400, { error: parsed.error });
       saveConfig({ localVm: { hostId: parsed.computerHostId ?? "" } } as Partial<AppConfig>);
       Object.assign(cfg, loadConfig());
+      publishComputerControlScopeChanges();
       const status = configStatus();
       broadcast({ kind: "config", ...status });
       return json(res, 200, { localVm: status.localVm });
@@ -8533,6 +8589,7 @@ const server = createServer(async (req, res) => {
           key !== "features",
       );
       if (reloadKeys.length > 0) await reloadProviders();
+      publishComputerControlScopeChanges();
       const status = configStatus();
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);

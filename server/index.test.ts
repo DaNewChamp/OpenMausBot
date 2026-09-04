@@ -3135,6 +3135,102 @@ describe("computer control API (who is driving)", () => {
     const res = await fetch(`${BASE}/api/internal/computer-control?botId=${botId}`);
     expect(res.status).toBe(401);
   });
+
+  it("covers every native bot sharing the same Local VM resource", async () => {
+    const createdA = await api("POST", "/api/bots", {});
+    const createdB = await api("POST", "/api/bots", {});
+    const createdCloud = await api("POST", "/api/bots", {});
+    const aId = createdA.body.bot.id;
+    const bId = createdB.body.bot.id;
+    const cloudId = createdCloud.body.bot.id;
+    await api("PATCH", `/api/bots/${aId}`, { computer: "vm" });
+    await api("PATCH", `/api/bots/${bId}`, { computer: "vm" });
+    await api("PATCH", `/api/bots/${cloudId}`, { computer: "cloud" });
+
+    const sse = await openSse(`${BASE}/api/events`);
+    try {
+      const took = await api("POST", `/api/bots/${aId}/computer/control`, { action: "take" });
+      expect(took.status).toBe(200);
+      expect(took.body.held).toBe(true);
+
+      await sse.until((f) => f.kind === "computer-control" && f.botId === aId && f.held === true);
+      await sse.until((f) => f.kind === "computer-control" && f.botId === bId && f.held === true);
+
+      const bSnap = await api("GET", `/api/bots/${bId}/computer/control`);
+      expect(bSnap.body.held).toBe(true);
+      expect(bSnap.body.heldSinceMs).toBe(took.body.heldSinceMs);
+      expect(bSnap.body.helpReason).toBeNull();
+
+      const cloudSnap = await api("GET", `/api/bots/${cloudId}/computer/control`);
+      expect(cloudSnap.body.held).toBe(false);
+
+      const hydrated = await api("GET", "/api/bots");
+      expect(hydrated.body.computerControl[aId]).toEqual({ held: true, helpReason: null });
+      expect(hydrated.body.computerControl[bId]).toEqual({ held: true, helpReason: null });
+      expect(hydrated.body.computerControl[cloudId]).toEqual({ held: false, helpReason: null });
+
+      const released = await api("POST", `/api/bots/${bId}/computer/control`, { action: "release" });
+      expect(released.body.held).toBe(false);
+      await sse.until((f) => f.kind === "computer-control" && f.botId === aId && f.held === false);
+      expect((await api("GET", `/api/bots/${aId}/computer/control`)).body.held).toBe(false);
+      expect((await api("GET", `/api/bots/${bId}/computer/control`)).body.held).toBe(false);
+    } finally {
+      sse.close();
+    }
+
+    await api("PATCH", "/api/config", { localVm: { mode: "per-bot" } });
+    try {
+      const isolatedTake = await api("POST", `/api/bots/${aId}/computer/control`, { action: "take" });
+      expect(isolatedTake.body.held).toBe(true);
+      expect((await api("GET", `/api/bots/${bId}/computer/control`)).body.held).toBe(false);
+      expect((await api("GET", `/api/bots/${cloudId}/computer/control`)).body.held).toBe(false);
+      await api("POST", `/api/bots/${aId}/computer/control`, { action: "release" });
+    } finally {
+      await api("PATCH", "/api/config", { localVm: { mode: "shared" } });
+    }
+
+    await api("PATCH", "/api/local-vm/location", { hostId: "bridge-mini" });
+    try {
+      expect((await api("POST", `/api/bots/${aId}/computer/control`, { action: "take" })).body.held).toBe(true);
+      expect((await api("GET", `/api/bots/${bId}/computer/control`)).body.held).toBe(true);
+      await api("PATCH", "/api/local-vm/location", { hostId: "bridge-other" });
+      expect((await api("GET", `/api/bots/${aId}/computer/control`)).body.held).toBe(false);
+      expect((await api("GET", `/api/bots/${bId}/computer/control`)).body.held).toBe(false);
+    } finally {
+      await api("POST", `/api/bots/${aId}/computer/control`, { action: "release" });
+      await api("POST", `/api/bots/${bId}/computer/control`, { action: "release" });
+      await api("PATCH", "/api/local-vm/location", { hostId: null });
+    }
+
+    expect((await api("POST", `/api/bots/${aId}/computer/control`, { action: "take" })).body.held).toBe(true);
+    await api("DELETE", `/api/bots/${aId}`);
+    expect((await api("GET", `/api/bots/${bId}/computer/control`)).body.held).toBe(true);
+    expect((await api("POST", `/api/bots/${bId}/computer/control`, { action: "release" })).body.held).toBe(false);
+
+    await api("DELETE", `/api/bots/${bId}`).catch(() => {});
+    await api("DELETE", `/api/bots/${cloudId}`).catch(() => {});
+  });
+  it("publishes control changes when a bot or fleet location is reassigned", async () => {
+    const a = (await api("POST", "/api/bots", { computer: "vm" })).body.bot.id;
+    const b = (await api("POST", "/api/bots", { computer: "vm" })).body.bot.id;
+    const sse = await openSse(`${BASE}/api/events`);
+    try {
+      expect((await api("POST", `/api/bots/${a}/computer/control`, { action: "take" })).body.held).toBe(true);
+      await sse.until((f) => f.kind === "computer-control" && f.botId === b && f.held === true);
+      expect((await api("PATCH", `/api/bots/${b}`, { computerHostId: "scope-other" })).status).toBe(200);
+      expect((await api("GET", `/api/bots/${b}/computer/control`)).body.held).toBe(false);
+      await sse.until((f) => f.kind === "computer-control" && f.botId === b && f.held === false);
+      expect((await api("PATCH", "/api/local-vm/location", { hostId: "scope-new-fleet" })).status).toBe(200);
+      expect((await api("GET", `/api/bots/${a}/computer/control`)).body.held).toBe(false);
+      await sse.until((f) => f.kind === "computer-control" && f.botId === a && f.held === false);
+    } finally {
+      sse.close();
+      await api("PATCH", "/api/local-vm/location", { hostId: null });
+      await api("POST", `/api/bots/${a}/computer/control`, { action: "release" });
+      await api("DELETE", `/api/bots/${a}`);
+      await api("DELETE", `/api/bots/${b}`);
+    }
+  });
 });
 
 describe("Local VM startTurn and internal invoke API", () => {
@@ -3397,5 +3493,132 @@ posixOnly("Local VM owned invoke route with fake runtime", () => {
     expect(payloads).toContainEqual({ action: "navigate", payload: { url } });
 
     await routeApi("POST", `/api/bots/${routeBotId}/interrupt`);
+  });
+
+  it("rechecks takeover acquired while VM readiness is pending", async () => {
+    const b = (await routeApi("POST", "/api/bots", { computer: "vm" })).body.bot.id;
+    const dockerPath = join(vmFakeBin, "docker");
+    const originalDocker = readFileSync(dockerPath, "utf8");
+    const gate = join(vmFakeBin, "pause-inspect");
+    const entered = join(vmFakeBin, "inspect-entered");
+    let pending: Promise<Response> | undefined;
+    try {
+      rmSync(vmFakeClaudeDump, { force: true });
+      expect((await routeApi("POST", `/api/bots/${routeBotId}/messages`, { text: "open a page" })).status).toBe(202);
+      await expect.poll(() => existsSync(vmFakeClaudeDump), { timeout: 5_000 }).toBe(true);
+      const dump = JSON.parse(readFileSync(vmFakeClaudeDump, "utf8"));
+      const token = dump.mcpConfig.mcpServers.computer.env.OMB_COMMS_TOKEN;
+      writeFileSync(vmDockerLog, "");
+      // Pause only the throwaway fake runtime, after the route's first hold check.
+      const barrier = `if [ "$1" = "inspect" ] && [ -f "$FAKE_DOCKER_DIR/pause-inspect" ]; then
+  touch "$FAKE_DOCKER_DIR/inspect-entered"
+  while [ -f "$FAKE_DOCKER_DIR/pause-inspect" ]; do sleep 0.01; done
+fi
+`;
+      expect(originalDocker).toContain('case "$1" in');
+      writeFileSync(dockerPath, originalDocker.replace('case "$1" in', barrier + 'case "$1" in'));
+      writeFileSync(gate, "pause");
+      pending = fetch(`${vmBase}/api/internal/local-vm/invoke`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ botId: routeBotId, threadId: routeThreadId, tool: "open_url", arguments: { url: "https://example.com/race" } }),
+      });
+      await expect.poll(() => existsSync(entered), { timeout: 5_000 }).toBe(true);
+      expect((await routeApi("POST", `/api/bots/${b}/computer/control`, { action: "take" })).body.held).toBe(true);
+      rmSync(gate, { force: true });
+      const response = await pending;
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ error: expect.stringContaining("taken control") });
+      // The UI's screen poller may still observe the page; no input may execute.
+      expect(browserCdpPayloadsFromDockerLog(readFileSync(vmDockerLog, "utf8"))
+        .filter((entry) => entry.action !== "screenshot")).toEqual([]);
+    } finally {
+      rmSync(gate, { force: true });
+      await pending?.catch(() => {});
+      writeFileSync(dockerPath, originalDocker);
+      await routeApi("POST", `/api/bots/${b}/computer/control`, { action: "release" });
+      await routeApi("POST", `/api/bots/${routeBotId}/interrupt`);
+      await routeApi("DELETE", `/api/bots/${b}`);
+    }
+  });
+
+  it("rejects owned invoke while a peer human hold covers the shared VM", async () => {
+    const createdB = await routeApi("POST", "/api/bots", {});
+    const bId = createdB.body.bot.id;
+    await routeApi("PATCH", `/api/bots/${bId}`, { computer: "vm" });
+    const createdCloud = await routeApi("POST", "/api/bots", {});
+    const cloudId = createdCloud.body.bot.id;
+    await routeApi("PATCH", `/api/bots/${cloudId}`, { computer: "cloud" });
+
+    writeFileSync(vmDockerLog, "");
+    rmSync(vmFakeClaudeDump, { force: true });
+    const sent = await routeApi("POST", `/api/bots/${routeBotId}/messages`, { text: "open a page" });
+    expect(sent.status).toBe(202);
+    await expect.poll(() => existsSync(vmFakeClaudeDump), { timeout: 5_000 }).toBe(true);
+
+    const dump = JSON.parse(readFileSync(vmFakeClaudeDump, "utf8"));
+    const commsToken = dump.mcpConfig?.mcpServers?.computer?.env?.OMB_COMMS_TOKEN;
+    expect(typeof commsToken).toBe("string");
+
+    const sse = await openSse(`${vmBase}/api/events`);
+    try {
+      const took = await routeApi("POST", `/api/bots/${bId}/computer/control`, { action: "take" });
+      expect(took.status).toBe(200);
+      expect(took.body.held).toBe(true);
+      await sse.until((f) => f.kind === "computer-control" && f.botId === routeBotId && f.held === true);
+
+      const peer = await routeApi("GET", `/api/bots/${routeBotId}/computer/control`);
+      expect(peer.body.held).toBe(true);
+      const hydrated = await routeApi("GET", "/api/bots");
+      expect(hydrated.body.computerControl[routeBotId].held).toBe(true);
+      expect(hydrated.body.computerControl[bId].held).toBe(true);
+      expect(hydrated.body.computerControl[cloudId].held).toBe(false);
+
+      const internal = await fetch(`${vmBase}/api/internal/computer-control?botId=${routeBotId}`, {
+        headers: { authorization: `Bearer ${commsToken}` },
+      });
+      expect(internal.status).toBe(200);
+      expect(await internal.json()).toMatchObject({ held: true });
+
+      const invoke = await fetch(`${vmBase}/api/internal/local-vm/invoke`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${commsToken}` },
+        body: JSON.stringify({
+          botId: routeBotId,
+          threadId: routeThreadId,
+          tool: "open_url",
+          arguments: { url: "https://example.com/held" },
+        }),
+      });
+      expect(invoke.status).toBe(409);
+      const refused = (await invoke.json()) as { error?: string };
+      expect(refused.error).toContain("taken control");
+      // The UI's screen poller may still observe the page; no input may execute.
+      expect(browserCdpPayloadsFromDockerLog(readFileSync(vmDockerLog, "utf8"))
+        .filter((entry) => entry.action !== "screenshot")).toEqual([]);
+
+      const released = await routeApi("POST", `/api/bots/${routeBotId}/computer/control`, { action: "release" });
+      expect(released.body.held).toBe(false);
+      expect((await routeApi("GET", `/api/bots/${bId}/computer/control`)).body.held).toBe(false);
+
+      const wrongThread = await fetch(`${vmBase}/api/internal/local-vm/invoke`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${commsToken}` },
+        body: JSON.stringify({
+          botId: routeBotId,
+          threadId: "wrong-thread-ownership-123",
+          tool: "open_url",
+          arguments: { url: "https://example.com/held" },
+        }),
+      });
+      expect(wrongThread.status).toBe(403);
+      expect(await wrongThread.json()).toEqual({ error: "this turn does not own the Local VM" });
+    } finally {
+      sse.close();
+      await routeApi("POST", `/api/bots/${bId}/computer/control`, { action: "release" }).catch(() => {});
+      await routeApi("POST", `/api/bots/${routeBotId}/interrupt`).catch(() => {});
+      await routeApi("DELETE", `/api/bots/${bId}`).catch(() => {});
+      await routeApi("DELETE", `/api/bots/${cloudId}`).catch(() => {});
+    }
   });
 });
