@@ -88,4 +88,70 @@ describe("bridge local-vm relay", () => {
       /local-vm capability/,
     );
   });
+
+  it("maps action and screenshot ops onto the matching bridge job kinds", async () => {
+    vi.useFakeTimers();
+    const registry = new BridgeRegistry();
+    const { code } = registry.startPairing();
+    const { bridgeId } = registry.register({
+      name: "windows",
+      code,
+      capabilities: ["shell", "local-vm"],
+    });
+    registry.touch(bridgeId);
+
+    const runPromise = runLocalVmOnBridge(registry, {
+      bridgeId,
+      botId: "shared",
+      op: "action",
+      action: "run",
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    const [actionJob] = registry.pollJobs(bridgeId);
+    expect(actionJob?.kind).toBe("local-vm-action");
+    expect(actionJob?.kind === "local-vm-action" ? actionJob.payload : null).toMatchObject({
+      botId: "shared",
+      action: "run",
+    });
+    registry.storeResult({
+      jobId: actionJob!.id,
+      bridgeId,
+      exitCode: 0,
+      stdout: JSON.stringify({ container: "running", ready: true }),
+      stderr: "",
+      truncated: false,
+      finishedAt: Date.now(),
+      generation: actionJob!.generation,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(runPromise).resolves.toMatchObject({
+      bridgeName: "windows",
+      data: { container: "running", ready: true },
+    });
+
+    const shotPromise = runLocalVmOnBridge(registry, {
+      bridgeId,
+      botId: "shared",
+      op: "screenshot",
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    const [shotJob] = registry.pollJobs(bridgeId);
+    expect(shotJob?.kind).toBe("local-vm-screenshot");
+    expect(shotJob?.kind === "local-vm-screenshot" ? shotJob.payload.botId : "").toBe("shared");
+    registry.storeResult({
+      jobId: shotJob!.id,
+      bridgeId,
+      exitCode: 0,
+      stdout: JSON.stringify({ image: "data:image/jpeg;base64,abc" }),
+      stderr: "",
+      truncated: false,
+      finishedAt: Date.now(),
+      generation: shotJob!.generation,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(shotPromise).resolves.toMatchObject({
+      data: { image: "data:image/jpeg;base64,abc" },
+    });
+    vi.useRealTimers();
+  });
 });

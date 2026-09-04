@@ -7604,7 +7604,7 @@ const server = createServer(async (req, res) => {
       }
       return json(res, 200, await localVmPayload(SHARED_LOCAL_VM_TARGET));
     }
-    m = path.match(/^\/api\/local-computer\/(pull|run|start|stop|remove)$/);
+    m = path.match(/^\/api\/local-computer\/(pull|run|start|stop|remove|recreate)$/);
     if (m && method === "POST") {
       // Requiring JSON makes these localhost lifecycle mutations non-simple
       // browser requests. A hostile web page cannot submit them with a form,
@@ -7613,22 +7613,52 @@ const server = createServer(async (req, res) => {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
-      const action = z.enum(["pull", "run", "start", "stop", "remove"]).parse(m[1]);
+      const action = z.enum(["pull", "run", "start", "stop", "remove", "recreate"]).parse(m[1]);
       if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(SHARED_LOCAL_VM_TARGET.key)) {
         return json(res, 409, { error: "another Local VM setup action is still running" });
       }
-      if (localVmMode(cfg) === "per-bot" && action === "run") {
+      if (localVmMode(cfg) === "per-bot" && (action === "run" || action === "recreate")) {
         return json(res, 409, { error: "Per-bot mode creates each desktop from that bot's Computer panel" });
       }
       const vmOwner = localVmLeaseFor(SHARED_LOCAL_VM_TARGET).current(localVmOwnerBusy);
-      if (vmOwner && (action === "stop" || action === "remove" || action === "run")) {
+      if (vmOwner && (action === "stop" || action === "remove" || action === "run" || action === "recreate")) {
         return json(res, 409, { error: "the Local VM is being used by a bot — stop that turn first" });
+      }
+      const relayAction = action === "run" || action === "stop" || action === "remove" || action === "recreate";
+      if (relayAction && await shouldRelayLocalVm(bridges)) {
+        try {
+          const { data } = await runLocalVmOnBridge(bridges, {
+            ...localVmRelayOpts({ id: "shared" }),
+            op: "action",
+            action,
+          });
+          const status = data as Awaited<ReturnType<typeof containerComputerStatus>>;
+          if (action === "run" || action === "recreate") localVmIdleFor(SHARED_LOCAL_VM_TARGET).touch();
+          if (action === "stop" || action === "remove") localVmIdleFor(SHARED_LOCAL_VM_TARGET).cancel();
+          return json(res, 200, {
+            ...status,
+            commands: setupCommands(status.runtime, process.platform, SHARED_LOCAL_VM_TARGET),
+            idle_timeout_ms: LOCAL_VM_IDLE_MS,
+            mode: localVmMode(cfg),
+            max_instances: localVmMaxInstances(cfg),
+          });
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
       }
       if (action === "pull") localVmImageBusy = true;
       else localVmLifecycleBusy.add(SHARED_LOCAL_VM_TARGET.key);
       try {
-        const status = await containerComputerAction(action, undefined, undefined, SHARED_LOCAL_VM_TARGET);
-        if (action === "run" || action === "start") localVmIdleFor(SHARED_LOCAL_VM_TARGET).touch();
+        if (action === "recreate") {
+          await containerComputerAction("remove", undefined, undefined, SHARED_LOCAL_VM_TARGET);
+        }
+        const status = await containerComputerAction(
+          action === "recreate" ? "run" : action,
+          undefined,
+          undefined,
+          SHARED_LOCAL_VM_TARGET,
+        );
+        if (action === "run" || action === "start" || action === "recreate") localVmIdleFor(SHARED_LOCAL_VM_TARGET).touch();
         if (action === "stop" || action === "remove") localVmIdleFor(SHARED_LOCAL_VM_TARGET).cancel();
         return json(res, 200, {
           ...status,
@@ -7643,6 +7673,18 @@ const server = createServer(async (req, res) => {
       }
     }
     if (method === "POST" && path === "/api/local-computer/screenshot") {
+      if (await shouldRelayLocalVm(bridges)) {
+        try {
+          const { data } = await runLocalVmOnBridge(bridges, {
+            ...localVmRelayOpts({ id: "shared" }),
+            op: "screenshot",
+          });
+          localVmIdleFor(SHARED_LOCAL_VM_TARGET).touch();
+          return json(res, 200, data);
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
       localVmIdleFor(SHARED_LOCAL_VM_TARGET).touch();
       return json(res, 200, {
         image: await containerComputerScreenshot(undefined, undefined, SHARED_LOCAL_VM_TARGET),
@@ -7771,6 +7813,23 @@ const server = createServer(async (req, res) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       const action = z.enum(["run", "stop", "remove"]).parse(m[2]);
       const target = localVmTargetForBot(bot.id);
+      if (await shouldRelayLocalVm(bridges)) {
+        try {
+          const { data } = await runLocalVmOnBridge(bridges, { ...localVmRelayOpts(bot), op: "action", action });
+          const status = data as Awaited<ReturnType<typeof containerComputerStatus>>;
+          if (action === "run") localVmIdleFor(target).touch();
+          if (action === "stop" || action === "remove") localVmIdleFor(target).cancel();
+          return json(res, 200, {
+            ...status,
+            commands: setupCommands(status.runtime, process.platform, target),
+            idle_timeout_ms: LOCAL_VM_IDLE_MS,
+            mode: localVmMode(cfg),
+            max_instances: localVmMaxInstances(cfg),
+          });
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
       if (target.key === SHARED_LOCAL_VM_TARGET.key) {
         return json(res, 409, { error: "Shared mode manages this desktop in App Settings → Local VM" });
       }
