@@ -31,8 +31,12 @@ public enum VoiceSessionEvent: Equatable, Sendable {
     /// The reply finished streaming. `shouldSpeak` is false when muted;
     /// `hasReply` is false when the run settled with nothing speakable.
     case replySettled(hasReply: Bool, shouldSpeak: Bool)
-    /// The generated voice finished playing.
+    /// The generated voice finished playing, or the streamed utterance
+    /// queue drained — either way the speaking turn is over.
     case replySpoken
+    /// Stream-and-speak: the first sentence of a still-streaming reply is
+    /// ready, so speaking starts before the run has settled.
+    case streamStarted
     /// The orb was tapped mid-turn: stop the run or the clip, go back to
     /// listening.
     case bargeIn
@@ -52,6 +56,9 @@ public enum VoiceSessionDecision: Equatable, Sendable {
     case sendTranscript
     /// Speak the settled reply.
     case speakReply
+    /// Speak a reply that is still streaming, sentence by sentence; the
+    /// turn ends when the stream closes and the utterance queue drains.
+    case speakStreamReply
     /// Tear everything down: mic, player, watchers, island.
     case stopAll
 }
@@ -83,6 +90,9 @@ public enum VoiceSessionPolicy: Sendable {
         case .replySpoken:
             guard phase == .speaking else { return .stay }
             return .listen
+        case .streamStarted:
+            guard phase == .thinking else { return .stay }
+            return .speakStreamReply
         case .bargeIn:
             switch phase {
             case .thinking, .speaking:
@@ -182,5 +192,48 @@ public struct VoiceSilenceGate: Equatable, Sendable {
             return false
         }
         return now.timeIntervalSince(anchor) >= limit
+    }
+}
+
+/// Stream-and-speak bookkeeping for one spoken reply: a generation token
+/// shared by every utterance of the reply, the count of utterances queued
+/// or still speaking, and the drain rule — the speaking turn is over only
+/// when the text stream has finished AND the queue is empty.
+///
+/// Stopping bumps the generation, so a sentence enqueued around a barge-in
+/// carries a stale token and is dropped instead of spoken.
+public struct VoiceUtteranceQueue: Equatable, Sendable {
+    public private(set) var generation: Int
+    /// Utterances queued for speech or still being spoken.
+    public private(set) var pending: Int
+    public private(set) var streamFinished: Bool
+
+    public init(generation: Int = 0) {
+        self.generation = generation
+        self.pending = 0
+        self.streamFinished = false
+    }
+
+    /// Only the utterances of the current generation may speak.
+    public func isActive(_ generation: Int) -> Bool { generation == self.generation }
+
+    /// The speaking turn is over: nothing is queued and no more is coming.
+    public var isDrained: Bool { streamFinished && pending == 0 }
+
+    public mutating func enqueue() { pending += 1 }
+
+    /// One utterance finished or was cancelled — it is off the queue
+    /// either way.
+    public mutating func utteranceFinished() { pending = max(pending - 1, 0) }
+
+    /// The text stream has delivered everything; the rest is playback.
+    public mutating func finishStream() { streamFinished = true }
+
+    /// A barge-in, a close, an interruption: everything queued is dropped
+    /// and the next stream speaks under a fresh token.
+    public mutating func stop() {
+        generation += 1
+        pending = 0
+        streamFinished = false
     }
 }

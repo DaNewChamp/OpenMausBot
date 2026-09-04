@@ -35,6 +35,22 @@ final class VoiceSessionPolicyTests: XCTestCase {
         XCTAssertEqual(decide(.thinking, .replySettled(hasReply: true, shouldSpeak: false)), .listen)
     }
 
+    // MARK: - Stream-and-speak
+
+    func testFirstStreamedSentenceStartsSpeakingBeforeTheRunSettles() {
+        XCTAssertEqual(decide(.thinking, .streamStarted), .speakStreamReply)
+    }
+
+    func testStreamStartMeansNothingOnceTheTurnIsAlreadyMoving() {
+        XCTAssertEqual(decide(.speaking, .streamStarted), .stay)
+        XCTAssertEqual(decide(.listening, .streamStarted), .stay)
+        XCTAssertEqual(decide(.idle, .streamStarted), .stay)
+    }
+
+    func testDrainedStreamEndsTheSpeakingTurnLikeAPlayedClip() {
+        XCTAssertEqual(decide(.speaking, .replySpoken), .listen)
+    }
+
     func testReplyWithNothingSpeakableGoesStraightBackToListening() {
         XCTAssertEqual(decide(.thinking, .replySettled(hasReply: false, shouldSpeak: true)), .listen)
         XCTAssertEqual(decide(.thinking, .replySettled(hasReply: false, shouldSpeak: false)), .listen)
@@ -120,6 +136,59 @@ final class VoiceSessionPolicyTests: XCTestCase {
         XCTAssertEqual(VoiceSessionPolicy.islandLine(for: .thinking), "Thinking…")
         XCTAssertEqual(VoiceSessionPolicy.islandLine(for: .speaking), "Speaking…")
         XCTAssertEqual(VoiceSessionPolicy.islandHeadline(name: "Scout", phase: .listening), "Scout is listening")
+    }
+
+    // MARK: - Stream-and-speak utterance queue
+
+    func testDrainNeedsBothTheStreamEndAndAnEmptyQueue() {
+        var queue = VoiceUtteranceQueue()
+        XCTAssertFalse(queue.isDrained, "the stream is still open")
+        queue.enqueue()
+        queue.finishStream()
+        XCTAssertFalse(queue.isDrained, "one utterance is still queued or speaking")
+        queue.utteranceFinished()
+        XCTAssertTrue(queue.isDrained)
+    }
+
+    func testDrainWithNothingQueuedHappensTheMomentTheStreamCloses() {
+        var queue = VoiceUtteranceQueue()
+        queue.finishStream()
+        XCTAssertTrue(queue.isDrained)
+    }
+
+    func testUtteranceFinishedFloorsAtZero() {
+        var queue = VoiceUtteranceQueue()
+        queue.utteranceFinished()
+        queue.utteranceFinished()
+        queue.finishStream()
+        XCTAssertTrue(queue.isDrained)
+    }
+
+    func testStopDropsTheQueueAndRetiresTheGeneration() {
+        var queue = VoiceUtteranceQueue()
+        let generation = queue.generation
+        queue.enqueue()
+        queue.enqueue()
+        queue.finishStream()
+        queue.stop()
+        XCTAssertFalse(queue.isDrained, "a stopped stream never reports a clean drain")
+        XCTAssertEqual(queue.pending, 0, "everything queued was dropped")
+        XCTAssertFalse(queue.isActive(generation), "the old generation may not speak again")
+        XCTAssertTrue(queue.isActive(queue.generation))
+    }
+
+    func testSentencesEnqueuedAroundABargeInCarryAStaleToken() {
+        var queue = VoiceUtteranceQueue()
+        let generation = queue.generation
+        queue.enqueue()
+
+        queue.stop()
+        let next = queue.generation
+        queue.enqueue()
+
+        XCTAssertFalse(queue.isActive(generation))
+        XCTAssertTrue(queue.isActive(next))
+        XCTAssertEqual(queue.pending, 1, "only the new stream's utterance counts")
     }
 
     // MARK: - Mic level math for the orb
