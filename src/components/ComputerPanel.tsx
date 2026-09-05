@@ -38,6 +38,8 @@ import { instanceSupportsLocalComputer, localComputerDisabledReason } from "@/li
 import { type VpsComputerStatus } from "@/lib/vps-computer";
 import { computerStatusSummary } from "@/lib/computer-status";
 import { FleetVmLocationPicker, useFleetVmLocation } from "./ComputerHostPicker";
+import { ComputerActivityTimeline } from "./ComputerActivityTimeline";
+import { vmPreviewCadenceMs } from "@/lib/vm-preview-cadence";
 
 type Phase =
   | "checking"
@@ -276,8 +278,10 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
     };
   }, [phase, sseFlowing, bot.id, viewerOpen, pageVisible, bot.busy]);
 
-  // Local VM preview comes directly from Cua Driver through the harness. It
-  // does not use the password-protected noVNC viewer or cloud endpoints.
+  // Local VM preview comes directly from Chromium CDP through the selected
+  // bridge. While the person holds control, keep it visually live; otherwise
+  // retain the low-cost heartbeat cadence.
+  const humanHoldingVm = state.computerControl[bot.id]?.held === true;
   const vmInFlight = useRef(false);
   useEffect(() => {
     if (isDesktopDemoMode()) return;
@@ -296,12 +300,15 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
       }
     };
     void shoot();
-    const timer = window.setInterval(() => void shoot(), bot.busy ? 3000 : 30_000);
+    const timer = window.setInterval(
+      () => void shoot(),
+      vmPreviewCadenceMs({ humanHeld: humanHoldingVm, botBusy: bot.busy === true }),
+    );
     return () => {
       alive = false;
       window.clearInterval(timer);
     };
-  }, [phase, bot.id, viewerOpen, pageVisible, bot.busy]);
+  }, [phase, bot.id, viewerOpen, pageVisible, bot.busy, humanHoldingVm]);
 
   // local preview: frames from the Electron main process. The FIRST capture
   // attempt is what makes macOS show the Screen Recording prompt (there is
@@ -822,6 +829,12 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
         <div className="mt-1.5 mb-2 text-[12.5px] text-ink-secondary">
           {conversationTitle(bot.name, bot.modelSelection)}'s screen
         </div>
+        <ComputerActivityTimeline
+          threadId={bot.threadId}
+          busy={bot.busy === true}
+          held={control.held}
+          helpReason={control.helpReason}
+        />
         <ShellHealth bot={bot} />
 
         {reconstructedEngine && (
