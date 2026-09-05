@@ -172,6 +172,7 @@ describe("what the app may do", () => {
     ["POST", "/api/routine-runs/run_1/seen"],
     ["PATCH", "/api/config/house-style"],
     ["PATCH", "/api/config/zai-key"],
+    ["PATCH", "/api/config/voice"],
     ["PATCH", "/api/local-vm/location"],
     ["GET", "/api/connectors/catalog"],
     ["GET", "/api/connectors/connected"],
@@ -445,6 +446,10 @@ describe("what it may not", () => {
     expect(allowed("PUT", "/api/config")).toBe(false);
     expect(allowed("PATCH", "/api/config")).toBe(false);
     expect(allowed("PATCH", "/api/config/unrelated")).toBe(false);
+    expect(allowed("PATCH", "/api/config/voice")).toBe(true);
+    expect(allowed("PUT", "/api/config/voice")).toBe(false);
+    expect(allowed("PATCH", "/api/config/voice/extra")).toBe(false);
+    expect(allowed("GET", "/api/config/voice")).toBe(false);
     expect(allowed("GET", "/api/attachments/../config.json")).toBe(false);
     expect(allowed("POST", "/api/routine-runs/run_1/cancel")).toBe(true);
     expect(allowed("POST", "/api/routine-runs/run_1/seen")).toBe(true);

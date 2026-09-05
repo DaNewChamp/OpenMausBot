@@ -1,5 +1,7 @@
 # Voice in OpenMausBot
 
+**Current implementation, September 2026:** the hub supports ElevenLabs, built-in macOS voices, and self-hosted Kokoro directly or through an existing fleet bridge. Native macOS and iOS call clients exist; browser microphone calling is still separate work. See [self-hosted voice](voice-self-hosted.md) for current configuration, security boundaries, and verification. The single-provider choice and Mac-only limitations below are the historical design, not the current provider matrix.
+
 Decision doc, 2026-08-14. How bots speak, and how you hold a conversation with
 one.
 

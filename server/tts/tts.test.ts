@@ -44,12 +44,20 @@ beforeAll(async () => {
         res.writeHead(200, { "content-type": "audio/mpeg" });
         return res.end(MP3);
       }
+      if (path === "/v1/audio/voices") {
+        return send(200, { voices: [{ id: "af_heart", name: "af_heart" }, { id: "af_bella", name: "Bella" }] });
+      }
+      if (path === "/v1/audio/speech") {
+        res.writeHead(200, { "content-type": "audio/mpeg" });
+        return res.end(MP3);
+      }
       send(404, { detail: "no such stub route" });
     });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const port = (server.address() as { port: number }).port;
   process.env.OMB_ELEVENLABS_API = `http://127.0.0.1:${port}/v1`;
+  process.env.OMB_KOKORO_BASE_URL = `http://127.0.0.1:${port}/v1`;
 });
 
 afterAll(() => new Promise<void>((r) => server.close(() => r())));
@@ -238,5 +246,77 @@ describe("built-in macOS voices", () => {
     expect(() => speak(cfg({ provider: "system" }), "hi", undefined, fakeSay([]))).toThrow(
       "Pick a voice in the agent profile.",
     );
+  });
+});
+
+describe("Kokoro", () => {
+  const kokoro = { provider: "kokoro" as const, voice: "af_heart" };
+
+  it("is configured from the operator URL, not a client-supplied target", async () => {
+    const { voiceConfigured, voiceReady, describeVoice, providerConfigured } = await voice();
+    expect(providerConfigured(cfg({ provider: "kokoro" }))).toBe(true);
+    expect(voiceConfigured(cfg({ provider: "kokoro" }))).toBe(false);
+    expect(voiceConfigured(cfg(kokoro))).toBe(true);
+    expect(voiceReady(cfg({ provider: "kokoro" }), "af_heart")).toBe(true);
+    expect(voiceReady(cfg({ provider: "kokoro" }), "21m00Tcm4TlvDq8ikWAM")).toBe(false);
+    expect(voiceReady(cfg({ provider: "kokoro", voice: "Albert" }))).toBe(false);
+    const described = describeVoice(cfg(kokoro));
+    expect(described).toEqual({
+      configured: true,
+      ready: true,
+      voice: "af_heart",
+      provider: "kokoro",
+    });
+    expect(JSON.stringify(described)).not.toContain("8880");
+  });
+
+  it("lists both object-shaped and string-shaped voices through the production entrypoint", async () => {
+    const { listVoices } = await voice();
+    expect(await listVoices(cfg({ provider: "kokoro" }))).toEqual([
+      { id: "af_heart", label: "af_heart" },
+      { id: "af_bella", label: "Bella" },
+    ]);
+  });
+
+  it("speaks through Kokoro and never falls back to ElevenLabs", async () => {
+    seen.length = 0;
+    const { speak } = await voice();
+    const audio = await speak(cfg(kokoro), "The overnight notes are ready.");
+    expect(audio.mime).toBe("audio/mpeg");
+    expect(Buffer.from(audio.bytes)).toEqual(MP3);
+    expect(seen.some((r) => r.url.startsWith("/v1/text-to-speech/"))).toBe(false);
+    const speech = seen.find((r) => r.url.split("?")[0] === "/v1/audio/speech")!;
+    expect(speech.method).toBe("POST");
+    expect(JSON.parse(speech.body)).toMatchObject({
+      model: "kokoro",
+      input: "The overnight notes are ready.",
+      voice: "af_heart",
+      response_format: "mp3",
+      stream: false,
+    });
+  });
+
+  it("does not call Kokoro or ElevenLabs with an incompatible leftover voice", async () => {
+    seen.length = 0;
+    const { speak, NoVoiceConfigured, voiceReady } = await voice();
+    expect(voiceReady(cfg({ provider: "kokoro", voice: "v-1" }))).toBe(false);
+    const attempt = () => speak(cfg({ provider: "kokoro", key: "el-key", voice: "v-1" }), "hi");
+    expect(attempt).toThrow(NoVoiceConfigured);
+    expect(attempt).toThrow(/pick a .*voice/i);
+    expect(seen.filter((r) => r.url.startsWith("/v1/text-to-speech/"))).toHaveLength(0);
+    expect(seen.filter((r) => r.url.split("?")[0] === "/v1/audio/speech")).toHaveLength(0);
+  });
+
+  it("does not fall back to ElevenLabs when Kokoro synthesis fails", async () => {
+    refuse = { status: 503, body: { detail: "kokoro is warming up" } };
+    seen.length = 0;
+    const { speak } = await voice();
+    const message = await speak(cfg({ provider: "kokoro", voice: "af_heart", key: "el-key" }), "hi").catch(
+      (e: Error) => e.message,
+    );
+    refuse = null;
+    expect(message).toMatch(/kokoro|warming|failed/i);
+    expect(message).not.toMatch(/falling back|elevenlabs/i);
+    expect(seen.some((r) => r.url.startsWith("/v1/text-to-speech/"))).toBe(false);
   });
 });

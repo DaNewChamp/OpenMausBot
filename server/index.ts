@@ -26,6 +26,7 @@ import { approvalGrantKey, approvalKey, autoVerdict, looksDestructive, looksSens
 import * as checkpoints from "./checkpoints.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { BridgeRegistry } from "./bridge-registry.ts";
+import { kokoroBridgeOptions } from "./tts/bridge-kokoro.ts";
 import { handleBridgeRoutes, isCompanionRequest } from "./bridge-routes.ts";
 import {
   advertisedFleetInstances,
@@ -8604,6 +8605,28 @@ const server = createServer(async (req, res) => {
       broadcast({ kind: "config", ...configStatus() });
       return json(res, 200, { zai: { configured: Boolean(cfg.zai?.apiKey) } });
     }
+    if (method === "PATCH" && path === "/api/config/voice") {
+      if (String(req.headers["content-type"] ?? "").toLowerCase().split(";")[0].trim() !== "application/json") {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      if (url.search) return json(res, 400, { error: "voice settings do not accept query parameters" });
+      const body = await readBody(req);
+      if (providerConfigBusy) return json(res, 409, { error: "provider settings are already being updated" });
+      providerConfigBusy = true;
+      try {
+        const result = await tts.applyVoiceConfigPatch(body, {
+          systemVoicesAvailable: tts.systemProviderAvailable(),
+          kokoroConfigured: tts.kokoroConfigured(),
+          save: (patch) => saveConfig(patch),
+        });
+        if (!result.ok) return json(res, 400, { error: result.error });
+        Object.assign(cfg, loadConfig());
+        broadcast({ kind: "config", ...configStatus() });
+        return json(res, 200, configStatus());
+      } finally {
+        providerConfigBusy = false;
+      }
+    }
     if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
       const body = await readBody(req);
       const patch = parseConfigPatch(body);
@@ -8732,10 +8755,15 @@ const server = createServer(async (req, res) => {
       });
     }
     if (method === "GET" && path === "/api/tts/voices") {
+      const abort = new AbortController();
+      const cancel = () => { if (!res.writableEnded) abort.abort(); };
+      res.once("close", cancel);
       try {
-        return json(res, 200, { voices: await tts.listVoices(cfg) });
+        return json(res, 200, { voices: await tts.listVoices(cfg, undefined, { ...kokoroBridgeOptions(bridges), signal: abort.signal }) });
       } catch (e) {
         return json(res, 200, { voices: [], error: e instanceof Error ? e.message : String(e) });
+      } finally {
+        res.off("close", cancel);
       }
     }
     if (method === "POST" && path === "/api/tts/speak") {
@@ -8746,8 +8774,11 @@ const server = createServer(async (req, res) => {
       // prevents an arbitrary local request from turning the user's hosted
       // voice account into an unbounded, billable synthesis job.
       if (text.length > 500) return json(res, 413, { error: "voice utterances are limited to 500 characters" });
+      const abort = new AbortController();
+      const cancel = () => { if (!res.writableEnded) abort.abort(); };
+      res.once("close", cancel);
       try {
-        const audio = await tts.speak(cfg, text, typeof body.voiceId === "string" ? body.voiceId : undefined);
+        const audio = await tts.speak(cfg, text, typeof body.voiceId === "string" ? body.voiceId : undefined, undefined, { ...kokoroBridgeOptions(bridges), signal: abort.signal });
         res.writeHead(200, {
           "content-type": audio.mime,
           "content-length": String(audio.bytes.byteLength),
@@ -8759,6 +8790,8 @@ const server = createServer(async (req, res) => {
         // the client can point at App Settings instead of showing a 502
         if (e instanceof tts.NoVoiceConfigured) return json(res, 409, { error: e.message });
         return json(res, 502, { error: e instanceof Error ? e.message : String(e) });
+      } finally {
+        res.off("close", cancel);
       }
     }
 

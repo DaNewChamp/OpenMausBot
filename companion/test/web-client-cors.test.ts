@@ -40,6 +40,13 @@ describe("web client companion CORS", () => {
     expect(isBrowserSafeCompanionRoute("POST", "/api/pairing-invitations", true)).toBe(false);
   });
 
+  it("lets an authenticated browser patch the narrow voice route, not broad /api/config", () => {
+    expect(isBrowserSafeCompanionRoute("PATCH", "/api/config/voice", true)).toBe(true);
+    expect(isBrowserSafeCompanionRoute("PATCH", "/api/config/voice", false)).toBe(false);
+    expect(isBrowserSafeCompanionRoute("PUT", "/api/config", true)).toBe(false);
+    expect(isBrowserSafeCompanionRoute("PATCH", "/api/config", true)).toBe(false);
+  });
+
   it("builds preflight headers only for allowlisted methods and headers", () => {
     expect(
       webClientPreflightHeaders(
