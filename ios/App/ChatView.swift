@@ -558,34 +558,23 @@ struct ChatView: View {
     }
 
     private func uploadSelectedAttachments() async -> [AttachmentPrompt.Item]? {
-        guard !selectedAttachments.isEmpty else { return [] }
+        await uploadAttachments(selectedAttachments)
+    }
+
+    private func uploadAttachments(_ attachments: [PendingImageAttachment]) async -> [AttachmentPrompt.Item]? {
+        guard !attachments.isEmpty else { return [] }
         isUploadingAttachments = true
         defer { isUploadingAttachments = false }
-        let ids = selectedAttachments.map(\.id)
         var items: [AttachmentPrompt.Item] = []
-        for id in ids {
-            guard let index = selectedAttachments.firstIndex(where: { $0.id == id }) else { continue }
-            if let uploaded = selectedAttachments[index].uploaded {
-                items.append(
-                    AttachmentPrompt.Item(path: uploaded.path, mime: selectedAttachments[index].mime)
-                )
+        for attachment in attachments {
+            if let uploaded = attachment.uploaded {
+                items.append(AttachmentPrompt.Item(path: uploaded.path, mime: attachment.mime))
                 continue
             }
             do {
-                let uploaded = try await session.uploadAttachment(
-                    data: selectedAttachments[index].data,
-                    mime: selectedAttachments[index].mime
-                )
-                guard let currentIndex = selectedAttachments.firstIndex(where: { $0.id == id }) else { continue }
-                selectedAttachments[currentIndex].uploaded = uploaded
-                selectedAttachments[currentIndex].error = nil
-                items.append(
-                    AttachmentPrompt.Item(path: uploaded.path, mime: selectedAttachments[currentIndex].mime)
-                )
+                let uploaded = try await session.uploadAttachment(data: attachment.data, mime: attachment.mime)
+                items.append(AttachmentPrompt.Item(path: uploaded.path, mime: attachment.mime))
             } catch {
-                if let currentIndex = selectedAttachments.firstIndex(where: { $0.id == id }) {
-                    selectedAttachments[currentIndex].error = error.localizedDescription
-                }
                 attachmentError = error.localizedDescription
                 return nil
             }
@@ -657,36 +646,46 @@ struct ChatView: View {
         dictation.stop()
         let draftAtSubmission = draft
         let replyAtSubmission = replyingTo
+        let attachmentsAtSubmission = selectedAttachments
         let text = (explicitText ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (!text.isEmpty || !selectedAttachments.isEmpty), composerRequestGate.begin() else { return }
-        // Acknowledge the tap immediately. The network receipt can arrive
-        // later (or wait for an attachment upload), so feedback belongs at
-        // the accepted-request boundary rather than after the await.
+        guard (!text.isEmpty || !attachmentsAtSubmission.isEmpty), composerRequestGate.begin() else { return }
+        // iMessage-style acknowledgement: the composer clears on the accepted
+        // tap, not after the network round trip. The captured payload below is
+        // immutable, so the user can immediately start typing the next message.
         Haptics.keyboardTap()
+        if explicitText == nil { draft = "" }
+        replyingTo = nil
+        selectedAttachments.removeAll()
+        attachmentError = nil
         let target = current
         let mode = explicitMode ?? (target.busy ? .steer : .auto)
         showCommandHUD = false
         Task { @MainActor in
             let textWithReply = promptText(text, replyingTo: replyAtSubmission, in: target)
             let prompt: String
-            if selectedAttachments.isEmpty {
+            if attachmentsAtSubmission.isEmpty {
                 prompt = textWithReply
-            } else if let items = await uploadSelectedAttachments() {
+            } else if let items = await uploadAttachments(attachmentsAtSubmission) {
                 prompt = AttachmentPrompt.compose(text: textWithReply, attachments: items)
             } else {
+                // Upload failed before the message reached the hub. Restore the
+                // captured composer only if the user has not started a new one.
+                if draft.isEmpty { draft = draftAtSubmission }
+                if replyingTo == nil { replyingTo = replyAtSubmission }
+                if selectedAttachments.isEmpty { selectedAttachments = attachmentsAtSubmission }
                 composerRequestGate.end()
                 return
             }
             let receipt = await session.send(prompt, to: target, mode: mode)
             if let receipt, receipt.ok {
                 session.recordQueueReceipt(receipt, forThread: target.threadId)
-                // The editor remains usable while the request is in flight.
-                // Do not erase a newer draft that was typed after submission.
-                if draft == draftAtSubmission { draft = "" }
-                replyingTo = nil
-                selectedAttachments.removeAll()
-                attachmentError = nil
                 SoundEffects.playSent()
+            } else if draft.isEmpty && selectedAttachments.isEmpty {
+                // Preserve iMessage-like responsiveness while making a rejected
+                // send recoverable without overwriting anything typed meanwhile.
+                draft = draftAtSubmission
+                replyingTo = replyAtSubmission
+                selectedAttachments = attachmentsAtSubmission
             }
             composerRequestGate.end()
         }
