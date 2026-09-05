@@ -27,6 +27,7 @@ import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { RoutineEditor } from "./RoutinesPage";
 import { AndroidDevicePanel, useAndroidUsbDevices } from "./AndroidDevicePanel";
 import { BrowserPanel } from "./BrowserPanel";
+import { ComputerControlButton } from "./ComputerControlButton";
 import { builtInBrowserEnabled } from "@/lib/feature-flags";
 import { LocalScreenPreview } from "./LocalScreenPreview";
 import { LinuxLocalControl } from "./LinuxLocalControl";
@@ -366,7 +367,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
   // opened after the last frame (e.g. an app reload mid-hold)
   const control = state.computerControl[bot.id] ?? { held: false, helpReason: null };
   const controlPath = computerControlPath(bot.id, bot.computer, isWebClientMode());
-  const drivingBrowser = phase === "vm" && control.held && Boolean(frameSrc);
+  const drivingBrowser = Boolean(controlPath) && phase === "vm" && control.held && Boolean(frameSrc);
   useEffect(() => {
     let alive = true;
     if (!controlPath) return;
@@ -880,7 +881,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
         )}
 
         {/* Who is driving — take the wheel / hand it back */}
-        {(phase === "ready" || phase === "vm") && control.helpReason && !control.held && (
+        {(phase === "ready" || phase === "vm") && controlPath && control.helpReason && !control.held && (
           <div className="mt-3 rounded-xl border border-warning/25 bg-warning/10 p-4">
             <div className="text-[13px] leading-relaxed text-warning">
               <b>{bot.name}</b> asked for your hands: {control.helpReason}
@@ -906,7 +907,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
             </div>
           </div>
         )}
-        {(phase === "ready" || phase === "vm") && control.held && (
+        {(phase === "ready" || phase === "vm") && controlPath && control.held && (
           <div className="mt-3 rounded-xl border border-accent/25 bg-accent/10 p-4">
             <div className="text-[13px] leading-relaxed text-ink">
               You have the wheel. The bot takes no clicks or keystrokes until you hand it back.
@@ -926,20 +927,16 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
             </button>
           </div>
         )}
-        {phase === "vm" && !isDesktopDemoMode() && !control.held && !control.helpReason && (
-          <button
-            type="button"
-            onClick={() => controlAction("take")}
-            disabled={controlPending || pending === "join"}
-            className="shell-pane-btn mt-3 w-full bg-control text-ink hover:bg-raised-hover disabled:opacity-50"
-            title="Pause the bot's hands and drive this browser yourself"
-          >
-            {controlPending ? <Loader2 size={14} className="animate-spin" /> : <Hand size={14} />}
-            Take control
-          </button>
+        {(phase === "vm" || (phase === "ready" && !controlPath)) && !isDesktopDemoMode() && (!controlPath || (!control.held && !control.helpReason)) && (
+          <ComputerControlButton
+            canControl={Boolean(controlPath)}
+            pending={controlPending || pending === "join"}
+            onTake={() => controlAction("take")}
+            onConfigure={() => dispatch({ type: "toggleSettings", open: true })}
+          />
         )}
         {/* Cloud-only actions */}
-        {phase === "ready" && (
+        {phase === "ready" && controlPath && (
           <div className="mt-3 flex gap-2">
             {!control.held && !control.helpReason && (
               <button
