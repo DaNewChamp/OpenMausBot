@@ -93,7 +93,7 @@ MacBook log: `/tmp/vbot-picker91-upload-0905.log`.
 Mini bridged log: `/tmp/vbot-picker91-upload-bridge-0905.log`.
 The single command used official `altool --upload-package ... --wait --output-format json` with the already configured App Store Connect credential. Both its JSON and the separate status query were inspected, rather than trusting only a wrapper success flag.
 
-Internal group access was not changed or independently re-read in this session; prior release history records the Vi internal group as having access to all builds. The live evidence here proves VALID and INTERNAL_ONLY, not a new group-assignment write.
+Follow-up verification confirmed the live build through App Store Connect: processing state `VALID`, en-US What to Test updated, and the internal TestFlight state `IN_BETA_TESTING`. The internal group is named **Vincent** (not Vi); its build relationship now includes build 91, so Vincent has internal access. No external group was created or assigned.
 
 Reusable lesson: the status helper works when passed the actual returned delivery UUID. Its older apple-id/version-only path rejects the request without delivery-id; the app-list helper returns only app metadata. Do not confuse asset-upload/request UUIDs with a delivery ID or retry manual private-key/JWT extraction. Use the official Apple tools and established credential lane.
 
