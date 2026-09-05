@@ -14,6 +14,17 @@
 // transcripts, and keeping it in one place is the same reasoning as the
 // server-computed approval key.
 
+import { isWebClientMode } from "../web-client-mode";
+import { assertHubApiReady, getHubDeviceToken, hubApiUrl } from "../web-client-session";
+
+function voiceFetch(path: "/api/tts/prepare" | "/api/tts/speak", init: RequestInit): Promise<Response> {
+  if (!isWebClientMode()) return fetch(path, init);
+  assertHubApiReady();
+  const headers = new Headers(init.headers);
+  headers.set("authorization", `Bearer ${getHubDeviceToken()}`);
+  return fetch(hubApiUrl(path), { ...init, headers, credentials: "omit", redirect: "error" });
+}
+
 export type SpeechStatus = "idle" | "preparing" | "speaking";
 
 export interface SpeechSnapshot {
@@ -159,7 +170,7 @@ export class Speaker {
   }
 
   private async prepare(text: string, voiceId: string | undefined, signal: AbortSignal): Promise<string[]> {
-    const res = await fetch("/api/tts/prepare", {
+    const res = await voiceFetch("/api/tts/prepare", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text, voiceId }),
@@ -168,13 +179,13 @@ export class Speaker {
     const body: TtsPrepareBody = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error ?? `the voice service returned ${res.status}`);
     if (!body.ready) {
-      throw new Error("Add the shared ElevenLabs key in an agent profile on this computer, then pick a voice for the agent.");
+      throw new Error("Configure a voice provider on the hub and choose a compatible voice for this bot.");
     }
     return body.utterances ?? [];
   }
 
   private async render(text: string, voiceId: string | undefined, signal: AbortSignal): Promise<Blob> {
-    const res = await fetch("/api/tts/speak", {
+    const res = await voiceFetch("/api/tts/speak", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text, voiceId }),

@@ -46,6 +46,7 @@ import {
   isLocalVmScreenshot,
   isLocalVmJoin,
   isLocalVmInput,
+  isLocalVmControl,
   isLocalVmViewer,
   isLocalVmPhoneSurface,
   isLocalVmViewerUpgrade,
@@ -682,6 +683,19 @@ export function createProxyHandler(options: ProxyOptions) {
         },
         (error: Error) => sendJson(res, 400, { error: error.message }),
       );
+      return;
+    }
+
+    if (isLocalVmControl(method, path)) {
+      if (fullUrl.includes("?")) return sendJson(res, 400, { error: "Local VM control does not accept query parameters" });
+      if (method === "GET") { forward(); return; }
+      const contentType = String(req.headers["content-type"] ?? "").toLowerCase().split(";")[0].trim();
+      if (contentType !== "application/json") return sendJson(res, 415, { error: "Local VM control requires application/json" });
+      readJson(req, 4096, true).then((body) => {
+        const denial = validateLocalVmActionBody(method, path, body);
+        if (denial) return sendJson(res, denial.status, { error: denial.error });
+        forward(Buffer.from(JSON.stringify({ action: body.action }), "utf8"));
+      }, (error: Error) => sendJson(res, 400, { error: error.message }));
       return;
     }
 

@@ -8932,18 +8932,24 @@ const server = createServer(async (req, res) => {
     // Who is driving this bot's computer. GET is the panel's initial read;
     // POST take/release/dismiss-help are the person's three moves. The bot
     // has no verb here at all — its only voice is the internal help plea.
-    m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/control$/);
+    m = path.match(/^\/api\/bots\/([\w-]+)\/(?:computer|local-computer)\/control$/);
     if (m) {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      const localVmOnly = path.includes("/local-computer/control");
+      if (localVmOnly && bot.computer !== "vm") return json(res, 403, { error: "This route controls only an assigned Local VM." });
+      if (localVmOnly && url.search) return json(res, 400, { error: "Local VM control does not accept query parameters" });
       if (method === "GET") return json(res, 200, computerControl.snapshot(bot.id));
       if (method === "POST") {
         // JSON-only for the same anti-form-POST reason as every other
         // computer mutation below.
-        if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        if (String(req.headers["content-type"] ?? "").toLowerCase().split(";")[0].trim() !== "application/json") {
           return json(res, 415, { error: "content-type must be application/json" });
         }
         const body = await readBody(req);
+        if (localVmOnly && (Object.keys(body).length !== 1 || typeof body.action !== "string")) {
+          return json(res, 400, { error: "Local VM control accepts only an action" });
+        }
         const action = String(body.action ?? "");
         if (action === "take") return json(res, 200, computerControl.take(bot.id));
         if (action === "release") return json(res, 200, computerControl.release(bot.id));

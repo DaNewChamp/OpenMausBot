@@ -226,6 +226,11 @@ export function isLocalVmJoin(method: string, path: string): boolean {
   return method === LOCAL_VM_JOIN_ROUTE.method && LOCAL_VM_JOIN_ROUTE.path.test(path);
 }
 
+export const LOCAL_VM_CONTROL_PATH = /^\/api\/bots\/[\w-]+\/local-computer\/control$/;
+export function isLocalVmControl(method: string, path: string): boolean {
+  return (method === "GET" || method === "POST") && LOCAL_VM_CONTROL_PATH.test(path);
+}
+
 export function isLocalVmInput(method: string, path: string): boolean {
   return method === LOCAL_VM_INPUT_ROUTE.method && LOCAL_VM_INPUT_ROUTE.path.test(path);
 }
@@ -250,6 +255,7 @@ export function isLocalVmPhoneSurface(method: string, path: string): boolean {
     || isLocalVmScreenshot(method, path)
     || isLocalVmJoin(method, path)
     || isLocalVmInput(method, path)
+    || isLocalVmControl(method, path)
     || isLocalVmViewer(method, path)
   );
 }
@@ -637,6 +643,14 @@ export function validateLocalVmActionBody(
   path: string,
   body: unknown,
 ): Denial | null {
+  if (method === "POST" && isLocalVmControl(method, path)) {
+    const record = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : null;
+    if (!record || Object.keys(record).length !== 1 || typeof record.action !== "string"
+      || !["take", "release", "dismiss-help"].includes(record.action)) {
+      return { status: 400, error: "Local VM control accepts only take, release, or dismiss-help" };
+    }
+    return null;
+  }
   if (!isLocalVmAction(method, path) && !isLocalVmScreenshot(method, path) && !isLocalVmJoin(method, path)) {
     return null;
   }
@@ -783,6 +797,8 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   LOCAL_VM_SCREENSHOT_ROUTE,
   LOCAL_VM_JOIN_ROUTE,
   LOCAL_VM_INPUT_ROUTE,
+  { method: "GET", path: LOCAL_VM_CONTROL_PATH },
+  { method: "POST", path: LOCAL_VM_CONTROL_PATH },
   LOCAL_VM_VIEWER_ROUTE,
 
   // rooms — making one, and talking in one

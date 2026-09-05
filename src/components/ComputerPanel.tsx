@@ -86,6 +86,9 @@ function nextRunLabel(at: number | null) {
   return `${sameDay ? "Today" : date.toLocaleDateString([], { month: "short", day: "numeric" })}, ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 }
 
+import { isWebClientMode } from "@/lib/web-client-mode";
+import { computerControlPath } from "@/lib/computer-control-path";
+
 export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrowser?: (botId: string) => void }) {
   const { state, dispatch } = useStore();
   const { capabilities } = useDesktopCapabilities();
@@ -362,10 +365,12 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
   // who-is-driving: SSE keeps this fresh; the mount fetch covers a panel
   // opened after the last frame (e.g. an app reload mid-hold)
   const control = state.computerControl[bot.id] ?? { held: false, helpReason: null };
+  const controlPath = computerControlPath(bot.id, bot.computer, isWebClientMode());
   const drivingBrowser = phase === "vm" && control.held && Boolean(frameSrc);
   useEffect(() => {
     let alive = true;
-    api(`/api/bots/${bot.id}/computer/control`)
+    if (!controlPath) return;
+    api(controlPath)
       .then((snap) => {
         if (!alive) return;
         dispatch({
@@ -380,9 +385,10 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bot.id]);
+  }, [bot.id, controlPath]);
   const requestControl = async (action: "take" | "release" | "dismiss-help") => {
-    const snap = await api(`/api/bots/${bot.id}/computer/control`, {
+    if (!controlPath) throw new Error("Only this bot's Local VM is controllable from the paired web client.");
+    const snap = await api(controlPath, {
       method: "POST",
       body: JSON.stringify({ action }),
     });
