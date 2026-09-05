@@ -1732,42 +1732,87 @@ struct CardView: View {
     @ViewBuilder
     private func cardContent(_ card: OptionCard) -> some View {
         if card.isPermission && card.isPending {
-            Button {
-                Haptics.soft()
-                showingApprovalDetails = true
-            } label: {
-                VStack(alignment: .leading, spacing: 5) {
-                    Label("\(chat.name) needs your approval", systemImage: "hand.raised.fill")
-                        .font(typography.detail.weight(.semibold))
-                        .foregroundStyle(tint)
-                    Text(actionSummary(for: card))
-                        .font(typography.font(size: 16, relativeTo: .body, weight: .medium))
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 5) {
-                        Text("Tap to review")
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
+            let presentation = ToolApprovalPresentationPolicy.presentation(actor: chat.name, card: card)
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    Haptics.soft()
+                    showingApprovalDetails = true
+                } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Label("Approval needed", systemImage: "hand.raised.fill")
+                                .font(typography.detail.weight(.semibold))
+                                .foregroundStyle(tint)
+                            Spacer()
+                            HStack(spacing: 4) {
+                                Text("Review")
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 10, weight: .semibold))
+                            }
+                            .font(typography.compact.weight(.medium))
+                            .foregroundStyle(tint)
+                        }
+                        Text(presentation.headline)
+                            .font(typography.font(size: 16, relativeTo: .headline, weight: .semibold))
+                            .foregroundStyle(Color.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(presentation.changeDescription)
+                            .font(typography.font(size: 14, relativeTo: .subheadline))
+                            .foregroundStyle(presentation.isReadOnly ? Color.secondary : Color.orange)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .font(typography.compact)
-                    .foregroundStyle(Color.secondary)
+                    .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityLabel(presentation.headline)
+                .accessibilityValue(presentation.changeDescription)
+                .accessibilityHint("Opens details and approval actions")
+
+                DisclosureGroup {
+                    Text(presentation.detailsText)
+                        .font(typography.code)
+                        .foregroundStyle(Color.primary.opacity(0.86))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(VBotSurface.controlSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .padding(.top, 2)
+                } label: {
+                    Text("Details")
+                        .font(typography.compact.weight(.semibold))
+                        .foregroundStyle(Color.secondary)
+                }
+                .tint(Color.secondary)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(chat.name) needs your approval")
-            .accessibilityValue(actionSummary(for: card))
-            .accessibilityHint("Opens details and approval actions")
         } else if card.isPermission {
-            VStack(alignment: .leading, spacing: 5) {
+            let presentation = ToolApprovalPresentationPolicy.presentation(actor: chat.name, card: card)
+            VStack(alignment: .leading, spacing: 8) {
                 Text(resolvedTitle(for: card))
                     .font(typography.font(size: 16, relativeTo: .headline, weight: .semibold))
                     .foregroundStyle(card.answered?.lowercased().contains("deny") == true ? Color.red.opacity(0.9) : Color.primary)
-                Text(actionSummary(for: card))
-                    .font(typography.font(size: 15, relativeTo: .subheadline))
+                Text(presentation.headline)
+                    .font(typography.font(size: 15, relativeTo: .body))
+                    .foregroundStyle(Color.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(presentation.changeDescription)
+                    .font(typography.font(size: 14, relativeTo: .subheadline))
                     .foregroundStyle(Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                DisclosureGroup {
+                    Text(presentation.detailsText)
+                        .font(typography.code)
+                        .foregroundStyle(Color.primary.opacity(0.86))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(VBotSurface.controlSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .padding(.top, 2)
+                } label: {
+                    Text("Details")
+                        .font(typography.compact.weight(.semibold))
+                        .foregroundStyle(Color.secondary)
+                }
+                .tint(Color.secondary)
             }
             .accessibilityElement(children: .combine)
         } else {
@@ -1853,17 +1898,14 @@ private struct ApprovalDetailSheet: View {
     @Environment(\.conversationTypography) private var typography
     @State private var answering = false
 
+    private var presentation: ToolApprovalPresentation {
+        ToolApprovalPresentationPolicy.presentation(actor: chat.name, card: card)
+    }
+
     private var allowChoice: String { card.permissionAllowChoice ?? "Allow" }
     private var denyChoice: String { card.permissionDenyChoice ?? "Deny" }
-    private var actionSummary: String {
-        if let summary = card.actionSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty { return OptionCard.sanitizedPresentation(summary) }
-        if let toolLabel = card.toolLabel, let hostLabel = card.hostLabel { return OptionCard.sanitizedPresentation("Run \(toolLabel.lowercased()) on \(hostLabel)") }
-        return OptionCard.sanitizedPresentation(card.title.replacingOccurrences(of: "?", with: ""))
-    }
-    private var details: String? {
-        let value = OptionCard.sanitizedPresentation(card.details ?? card.subtitle)
-        return value.isEmpty ? nil : value
-    }
+    private var actionSummary: String { presentation.headline }
+    private var details: String { presentation.detailsText }
     private var reason: String {
         if let value = card.reason?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
             return OptionCard.sanitizedPresentation(value)
@@ -1918,16 +1960,15 @@ private struct ApprovalDetailSheet: View {
         .padding(16)
         .background(VBotSurface.assistantBubble, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
-    private var detailsLabel: String {
-        card.toolLabel?.caseInsensitiveCompare("Terminal") == .orderedSame ? "Command" : "Details"
-    }
+    private var detailsLabel: String { "Details" }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Text("Bot needs your approval")
-                        .font(typography.font(size: 24, relativeTo: .title2, weight: .bold))
+                    Text(presentation.headline)
+                        .font(typography.font(size: 22, relativeTo: .title2, weight: .bold))
+                        .fixedSize(horizontal: false, vertical: true)
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Reason")
@@ -1952,11 +1993,13 @@ private struct ApprovalDetailSheet: View {
                     .padding(16)
                     .background(VBotSurface.assistantBubble, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
+                    explanationBlock("Changes", presentation.changeDescription, color: presentation.isReadOnly ? .secondary : .primary)
+
                     if let executiveSummary {
                         explanationBlock("What this does", executiveSummary)
                     }
-                    if let changeSummary, changeSummary.caseInsensitiveCompare("Nothing; read-only") != .orderedSame {
-                        explanationBlock("What changes", changeSummary)
+                    if let changeSummary, changeSummary.caseInsensitiveCompare("Nothing; read-only") != .orderedSame, changeSummary != presentation.changeDescription {
+                        explanationBlock("Additional change details", changeSummary)
                     }
                     if let resourceSummary {
                         explanationBlock("Where", resourceSummary)
@@ -1974,23 +2017,21 @@ private struct ApprovalDetailSheet: View {
                             .foregroundStyle(.orange)
                     }
 
-                    if let details {
-                        DisclosureGroup {
-                            Text(details)
-                                .font(typography.code)
-                                .foregroundStyle(Color.primary.opacity(0.86))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(14)
-                                .background(VBotSurface.controlSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                .padding(.top, 4)
-                        } label: {
-                            Text(detailsLabel)
-                                .font(typography.compact.weight(.semibold))
-                                .foregroundStyle(Color.secondary)
-                        }
-                        .tint(Color.secondary)
+                    DisclosureGroup {
+                        Text(details)
+                            .font(typography.code)
+                            .foregroundStyle(Color.primary.opacity(0.86))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                            .background(VBotSurface.controlSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .padding(.top, 4)
+                    } label: {
+                        Text(detailsLabel)
+                            .font(typography.compact.weight(.semibold))
+                            .foregroundStyle(Color.secondary)
                     }
+                    .tint(Color.secondary)
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Request")
