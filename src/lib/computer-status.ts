@@ -25,6 +25,15 @@ export interface ComputerStatusSummary {
  * separate from action labels: a ready preview is not the same thing as an
  * interactive viewer, and an unavailable VM should never look like a retry
  * spinner. */
+function offlineBrowserSummary(hostName?: string | null): ComputerStatusSummary {
+  const name = hostName?.trim();
+  return {
+    title: name ? `${name} is offline` : "Selected machine is offline",
+    detail: "The browser container is unavailable while that machine is offline.",
+    tone: "warning",
+  };
+}
+
 export function computerStatusSummary(input: {
   phase: ComputerPanelPhase;
   cloudBackend?: "box" | "vps";
@@ -32,6 +41,8 @@ export function computerStatusSummary(input: {
   reconstructed?: boolean;
   error?: string | null;
   shared?: boolean;
+  hostName?: string | null;
+  hostOnline?: boolean | null;
 }): ComputerStatusSummary {
   if (input.reconstructed) {
     return {
@@ -56,11 +67,16 @@ export function computerStatusSummary(input: {
         tone: "positive",
       };
     case "vm":
+      if (input.hostOnline === false) return offlineBrowserSummary(input.hostName);
       return {
-        title: "Linux VM ready",
+        title: input.shared === false ? "Own browser ready" : "Shared browser ready",
         detail: input.shared === false
-          ? "A private browser + shell container for this bot is running on the selected fleet machine. Take control to drive the browser."
-          : "Every bot shares this browser + shell on the selected fleet machine. Take control to drive the browser; bots take turns.",
+          ? input.hostName
+            ? `A Chromium container for this bot is running on ${input.hostName}. Take control to drive it.`
+            : "A Chromium container for this bot is running on the selected machine. Take control to drive it."
+          : input.hostName
+            ? `Every bot shares one Chromium container on ${input.hostName}. Take control to drive it; bots take turns.`
+            : "Every bot shares one Chromium container on the selected machine. Take control to drive it; bots take turns.",
         tone: "positive",
       };
     case "local":
@@ -82,7 +98,12 @@ export function computerStatusSummary(input: {
     case "vps-incompatible":
       return { title: "VPS computer needs replacement", detail: "This workspace belongs to an older V Bot image.", tone: "warning" };
     case "vm-unavailable":
-      return { title: "Linux VM unavailable", detail: "Pick a fleet machine and Deploy to create the shared Linux VM.", tone: "warning" };
+      if (input.hostOnline === false) return offlineBrowserSummary(input.hostName);
+      return {
+        title: "Browser not ready",
+        detail: "Set up the Local VM in Settings to create the Chromium container on the selected machine.",
+        tone: "warning",
+      };
     case "local-unavailable":
       return { title: "This computer unavailable", detail: "Enable the required desktop permissions, then try again.", tone: "warning" };
     case "error":

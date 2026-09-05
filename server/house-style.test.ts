@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_HOUSE_STYLE_INSTRUCTIONS, type AppConfig } from "./config.ts";
-import { HOUSE_STYLE_OPT_OUT_MARKER, houseStylePreamble } from "./house-style.ts";
+import {
+  GLOBAL_STYLE_OPT_OUT_MARKER,
+  HOUSE_STYLE_OPT_OUT_MARKER,
+  globalStylePreamble,
+  houseStylePreamble,
+} from "./house-style.ts";
 
 function cfg(patch?: AppConfig["houseStyle"]): AppConfig {
   return { houseStyle: patch };
@@ -42,8 +47,23 @@ describe("house style preamble", () => {
     expect(houseStylePreamble(cfg({ enabled: false, instructions: "Always rhyme." }), "")).toBe("");
   });
 
-  it("treats undefined bot instructions like empty ones", () => {
-    expect(houseStylePreamble(cfg(), undefined)).toContain(DEFAULT_HOUSE_STYLE_INSTRUCTIONS);
-    expect(houseStylePreamble(cfg(), null)).toContain(DEFAULT_HOUSE_STYLE_INSTRUCTIONS);
+  it("suppresses the block when the bot's own instructions carry global-style opt-out markers", () => {
+    expect(houseStylePreamble(cfg(), GLOBAL_STYLE_OPT_OUT_MARKER)).toBe("");
+    expect(houseStylePreamble(cfg(), "  [global-style: off]  ")).toBe("");
+    expect(houseStylePreamble(cfg(), "global style: off")).toBe("");
+    expect(houseStylePreamble(cfg(), "Global Style: Off")).toBe("");
+  });
+
+  it("never duplicates prompt blocks if preamble was already applied", () => {
+    const existingPreamble = houseStylePreamble(cfg(), "");
+    expect(existingPreamble).toBeTruthy();
+    const secondCall = houseStylePreamble(cfg(), `${existingPreamble}\nBot instructions`);
+    expect(secondCall).toBe("");
+  });
+
+  it("exposes globalStylePreamble alias that behaves identically", () => {
+    expect(globalStylePreamble(cfg(), "")).toBe(houseStylePreamble(cfg(), ""));
+    expect(globalStylePreamble(cfg({ enabled: false }), "")).toBe("");
+    expect(globalStylePreamble(cfg(), GLOBAL_STYLE_OPT_OUT_MARKER)).toBe("");
   });
 });

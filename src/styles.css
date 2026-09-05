@@ -422,6 +422,19 @@ body {
   line-height: 0;
 }
 
+.shell-pane-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  min-height: var(--shell-header-control);
+  padding: 0 0.75rem;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1;
+  box-sizing: border-box;
+}
+
 .shell-search {
   min-height: var(--shell-control);
   border-radius: var(--shell-search-radius);
@@ -450,6 +463,49 @@ body {
 @container transcript (min-width: 36rem) {
   .shell-bubble-fit {
     max-width: var(--shell-bubble-max);
+  }
+}
+
+/* Inline hover controls must not steal a narrow transcript's text width.
+   On phones and narrow panes the bubble gets its own row, with a compact,
+   always reachable action bar below it. The full emoji palette stays behind +. */
+@container transcript (max-width: 35.999rem) {
+  .shell-message-row {
+    flex-wrap: wrap;
+    row-gap: 0.25rem;
+  }
+
+  .shell-message-row > .shell-bubble-fit {
+    order: -2;
+    flex: 0 0 100%;
+    max-width: 100%;
+  }
+
+  .shell-message-row > :not(.shell-bubble-fit) {
+    flex-shrink: 0;
+  }
+
+  .shell-message-row > span {
+    order: 0;
+    align-self: center;
+  }
+
+  .shell-message-row .shell-message-extra {
+    flex-direction: row;
+    align-self: center;
+  }
+
+  .shell-message-row .opacity-0 {
+    opacity: 1;
+  }
+
+  .shell-message-row button {
+    min-width: 32px;
+    min-height: 32px;
+  }
+
+  .shell-message-row .shell-reaction-presets > button:not(:last-child) {
+    display: none;
   }
 }
 

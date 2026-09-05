@@ -52,8 +52,8 @@ export function ComputerHostPicker({
     return (
       <div className="text-[12px] leading-relaxed text-ink-secondary">
         {capability === "local-vm"
-          ? "No machine with a Linux VM is online. Pair a desktop or bridge that can host one."
-          : "No paired machine is online."}
+          ? "No computer with an Isolated VM is online. Connect a computer that can host one."
+          : "No connected computer is online."}
       </div>
     );
   }
@@ -82,7 +82,9 @@ export function useFleetVmLocation() {
   const hostId = state.config?.localVm.hostId ?? null;
   const selectedId = selectedFleetHostId(hosts, hostId);
   const selected = hosts.find((host) => host.id === selectedId);
-  const blockReason = fleetVmDeployBlockReason(selected);
+  const blockReason = hostId && !selected
+    ? "The selected machine is unavailable. Choose another machine explicitly to relocate the browser."
+    : fleetVmDeployBlockReason(selected);
 
   const save = async (nextId: string) => {
     const body = await api("/api/local-vm/location", {
@@ -113,7 +115,7 @@ export function FleetVmLocationPicker({
   if (!hosts.length) {
     return (
       <div className="text-[12px] leading-relaxed text-ink-secondary">
-        No machine is paired. Install V Bot or a bridge on a computer in your fleet, then pick it here.
+        {value ? "The selected computer is unavailable. Reconnect it or choose another computer when the fleet is available." : "No computers connected to this hub yet."}
       </div>
     );
   }
@@ -126,6 +128,9 @@ export function FleetVmLocationPicker({
         onChange={(event) => onChange(event.target.value)}
         className="w-full cursor-pointer rounded-lg border border-hairline/40 bg-inset px-2 py-1.5 text-[12.5px] text-ink disabled:cursor-not-allowed disabled:opacity-50"
       >
+        {selected && !hosts.some((host) => host.id === selected) && (
+          <option value={selected} disabled>Selected machine unavailable</option>
+        )}
         {hosts.map((host) => (
           <option key={host.id} value={host.id}>
             {fleetHostLabel(host)}

@@ -1,12 +1,15 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   DATA_DIR,
+  DEFAULT_GLOBAL_STYLE_INSTRUCTIONS,
   DEFAULT_HOUSE_STYLE_INSTRUCTIONS,
   defaultPermissionMode,
+  globalStyleEnabled,
+  globalStyleInstructions,
   houseStyleEnabled,
   houseStyleInstructions,
   instanceConfigs,
@@ -18,6 +21,7 @@ import {
   parseConfigPatch,
   parseStoredConfig,
   roomTurnTimeoutMinutes,
+  saveConfig,
   skillRecorderEnabled,
   stripWorkspaceCredentialEnv,
   syncCredentialEnv,
@@ -138,6 +142,30 @@ describe("configuration boundaries", () => {
     expect(houseStyleInstructions({ houseStyle: { instructions: "   " } })).toBe(DEFAULT_HOUSE_STYLE_INSTRUCTIONS);
     expect(() => parseConfigPatch({ houseStyle: { instructions: 42 } })).toThrow("houseStyle.instructions");
     expect(() => parseConfigPatch({ houseStyle: { enabled: "yes" } })).toThrow("houseStyle.enabled");
+  });
+
+  it("exposes product-neutral global style while preserving legacy houseStyle storage compatibility", () => {
+    expect(globalStyleEnabled({})).toBe(true);
+    expect(globalStyleInstructions({})).toBe(DEFAULT_GLOBAL_STYLE_INSTRUCTIONS);
+
+    expect(globalStyleEnabled({ houseStyle: { enabled: false } })).toBe(false);
+    expect(globalStyleInstructions({ houseStyle: { instructions: "Be concise." } })).toBe("Be concise.");
+
+    expect(houseStyleEnabled({ globalStyle: { enabled: false } })).toBe(false);
+    expect(houseStyleInstructions({ globalStyle: { instructions: "Be concise." } })).toBe("Be concise.");
+
+    expect(parseConfigPatch({ globalStyle: { enabled: false, instructions: "Always rhyme." } })).toEqual({
+      globalStyle: { enabled: false, instructions: "Always rhyme." },
+    });
+
+    saveConfig({ globalStyle: { enabled: true, instructions: "Keep it simple." } });
+    const rawDisk = JSON.parse(readFileSync(join(DATA_DIR, "config.json"), "utf8"));
+    expect(rawDisk.houseStyle).toEqual({ enabled: true, instructions: "Keep it simple." });
+    expect(rawDisk.globalStyle).toBeUndefined();
+
+    const loaded = loadConfig();
+    expect(loaded.houseStyle?.instructions).toBe("Keep it simple.");
+    expect(loaded.globalStyle?.instructions).toBe("Keep it simple.");
   });
 
   it.each([0, 1.5, 5, "2", null])("rejects an invalid per-bot VM limit: %j", (maxInstances) => {

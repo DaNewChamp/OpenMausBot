@@ -2,15 +2,38 @@ import type { BridgeJobResult, BridgeRegistry, LocalVmBridgeJobKind, LocalVmJobP
 import { waitForBridgeJobResult } from "./bridge-job-wait.ts";
 import { resolveBridge } from "./bridge-exec.ts";
 import { containerRuntimeStatus } from "./container-computer.ts";
+import {
+  type BridgeCandidate,
+  type SelectedMachineResolution,
+  resolveSelectedMachine,
+} from "./selected-machine.ts";
+
+export { resolveSelectedMachine };
+export type { BridgeCandidate, SelectedMachineResolution };
 
 export type LocalVmBridgeOp = "status" | "action" | "screenshot" | "input" | "invoke";
 
-export async function shouldRelayLocalVm(registry: BridgeRegistry, bridgeId?: string): Promise<boolean> {
-  if (bridgeId) return true;
-  if (process.env.OMB_LOCAL_VM_RELAY === "1") return true;
+export async function resolveLocalVmTarget(
+  registry: BridgeRegistry,
+  bridgeId?: string | null,
+): Promise<SelectedMachineResolution> {
   const runtime = await containerRuntimeStatus();
-  if (runtime.runtime && runtime.daemonUp) return false;
-  return resolveBridge(registry, { capability: "local-vm" }) !== null;
+  const hubDockerAvailable = Boolean(runtime.runtime && runtime.daemonUp);
+  return resolveSelectedMachine({
+    hostId: bridgeId,
+    bridges: registry,
+    hubDockerAvailable,
+    capability: "local-vm",
+    envRelay: process.env.OMB_LOCAL_VM_RELAY === "1",
+  });
+}
+
+export async function shouldRelayLocalVm(registry: BridgeRegistry, bridgeId?: string): Promise<boolean> {
+  const target = await resolveLocalVmTarget(registry, bridgeId);
+  if (target.kind === "bridge" || target.kind === "blocked") {
+    return true;
+  }
+  return false;
 }
 
 export function cancelLocalVmInvokeJobs(
@@ -56,6 +79,16 @@ export async function runLocalVmOnBridge(
     onEnqueued?: (jobId: string) => void;
   },
 ): Promise<{ data: unknown; bridgeName: string }> {
+  if (opts.bridgeId) {
+    const resolution = resolveSelectedMachine({
+      hostId: opts.bridgeId,
+      bridges: registry,
+      capability: "local-vm",
+    });
+    if (resolution.kind === "blocked") {
+      throw new Error(resolution.reason);
+    }
+  }
   const bridge = resolveBridge(registry, { bridgeId: opts.bridgeId, name: opts.name, capability: "local-vm" });
   if (!bridge) {
     if (opts.bridgeId) {

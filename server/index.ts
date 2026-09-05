@@ -36,7 +36,7 @@ import {
 import { parseFleetModelId } from "../shared/bridge-fleet-contract.ts";
 import { parseComputerHostId } from "../shared/computer-host.ts";
 import { resolveBridge, runShellOnBridge, runSshOnBridge } from "./bridge-exec.ts";
-import { cancelLocalVmInvokeJobs, runLocalVmOnBridge, shouldRelayLocalVm } from "./bridge-local-vm.ts";
+import { cancelLocalVmInvokeJobs, resolveLocalVmTarget, runLocalVmOnBridge, shouldRelayLocalVm } from "./bridge-local-vm.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import {
   decideDelivery,
@@ -4498,6 +4498,10 @@ function configStatus() {
       enabled: houseStyleEnabled(cfg),
       instructions: houseStyleInstructions(cfg),
     },
+    globalStyle: {
+      enabled: houseStyleEnabled(cfg),
+      instructions: houseStyleInstructions(cfg),
+    },
   };
 }
 
@@ -5484,11 +5488,23 @@ const server = createServer(async (req, res) => {
           if (refuseIfLost()) return;
           const rawArgs = body.arguments;
           const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? rawArgs : {};
-          const relay = await shouldRelayLocalVm(bridges, relayOpts.bridgeId);
+          const targetResolution = await resolveLocalVmTarget(bridges, relayOpts.bridgeId);
           if (refuseIfLost()) return;
-          if (relay) {
+          if (targetResolution.kind === "blocked") {
+            return json(res, 200, {
+              state: "blocked",
+              retryable: false,
+              message: targetResolution.reason,
+            });
+          }
+          if (targetResolution.kind === "bridge") {
             const { data } = await runLocalVmOnBridge(bridges, {
-              ...relayOpts, op: "invoke", threadId, tool, arguments: args,
+              ...relayOpts,
+              bridgeId: targetResolution.bridgeId,
+              op: "invoke",
+              threadId,
+              tool,
+              arguments: args,
               signal: context.abort.signal,
               onEnqueued: (jobId) => {
                 context.jobs.add(jobId);
@@ -8576,7 +8592,7 @@ const server = createServer(async (req, res) => {
     }
     // Phone-writable config slices. Deliberately narrow: the broad
     // /api/config writer stays computer-only.
-    if (method === "PATCH" && path === "/api/config/house-style") {
+    if (method === "PATCH" && (path === "/api/config/house-style" || path === "/api/config/global-style")) {
       const body = await readBody(req);
       const section: Record<string, unknown> = {};
       if (body.enabled !== undefined) {
@@ -8591,7 +8607,8 @@ const server = createServer(async (req, res) => {
       saveConfig({ houseStyle: section } as Partial<AppConfig>);
       Object.assign(cfg, loadConfig());
       broadcast({ kind: "config", ...configStatus() });
-      return json(res, 200, { houseStyle: { enabled: houseStyleEnabled(cfg), instructions: houseStyleInstructions(cfg) } });
+      const stylePayload = { enabled: houseStyleEnabled(cfg), instructions: houseStyleInstructions(cfg) };
+      return json(res, 200, { houseStyle: stylePayload, globalStyle: stylePayload });
     }
     if (method === "PATCH" && path === "/api/config/zai-key") {
       const body = await readBody(req);

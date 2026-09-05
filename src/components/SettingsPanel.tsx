@@ -10,8 +10,15 @@ import { botUsage, costCaption, formatTokens, formatUsd, hasFiniteCost } from "@
 import { shortPath } from "@/lib/short-path";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
-import { FleetVmLocationPicker, useFleetVmLocation } from "./ComputerHostPicker";
+import { FleetVmLocationPicker, useFleetHosts, useFleetVmLocation } from "./ComputerHostPicker";
+import { BotComputerChoice } from "./BotComputerChoice";
 import { VoiceSettings } from "./VoiceSettings";
+import {
+  globalStyleComposeInstructions,
+  globalStyleIsOptedOut,
+  globalStyleStatusDescription,
+  globalStyleStripOptOutMarkers,
+} from "@/lib/global-style";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 
 function Field({
@@ -317,6 +324,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
   const [localAutoWarning, setLocalAutoWarning] = useState(false);
   const fleetVm = useFleetVmLocation();
+  const hosts = useFleetHosts();
   const patch = (
     p: Partial<
       Pick<
@@ -413,9 +421,37 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
               className={cn(inputCls, "min-h-[96px] resize-none")}
               maxLength={BOT_PROFILE_LIMITS.description}
               placeholder="What this agent is for"
-              value={bot.description}
-              onChange={(e) => patch({ description: e.target.value })}
+              value={globalStyleStripOptOutMarkers(bot.description)}
+              onChange={(e) =>
+                patch({
+                  description: globalStyleComposeInstructions(
+                    e.target.value,
+                    !globalStyleIsOptedOut(bot.description),
+                  ),
+                })
+              }
             />
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <span className="text-[12px] text-ink-secondary">
+                {globalStyleStatusDescription(state.config, bot.description)}
+              </span>
+              <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-ink">
+                <input
+                  type="checkbox"
+                  checked={!globalStyleIsOptedOut(bot.description)}
+                  onChange={(e) =>
+                    patch({
+                      description: globalStyleComposeInstructions(
+                        bot.description ?? "",
+                        e.target.checked,
+                      ),
+                    })
+                  }
+                  className="rounded border-hairline/40 text-accent focus:ring-0"
+                />
+                Apply global style
+              </label>
+            </div>
           </Field>
 
           <div className={cn(
@@ -620,28 +656,38 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
           <div className="rounded-xl bg-card p-4">
             <div className="text-[15px] font-medium text-ink">Computer</div>
             <div className="mt-1 text-[13px] leading-relaxed text-ink-secondary">
-              Every bot uses one Linux VM on a machine from your fleet.
+              Where this bot runs tools: automatically, on a specific computer, or in an Isolated VM.
             </div>
-            <div className="mt-4 flex flex-col gap-3">
-              <FleetVmLocationPicker
-                hosts={fleetVm.hosts}
-                value={fleetVm.hostId}
-                onChange={(hostId) => {
-                  void fleetVm.save(hostId).catch(() => {});
-                }}
+            <div className="mt-4">
+              <BotComputerChoice
+                computer={bot.computer}
+                computerHostId={bot.computerHostId}
+                hosts={hosts}
+                onChange={(patchObj) => patch(patchObj)}
               />
-              <div className="text-[12px] leading-relaxed text-ink-secondary">
-                {fleetVm.blockReason
-                  ?? "Bots take turns driving this browser + shell. Deploy it from the Computer pane or App Settings → Local VM."}
-              </div>
-              <button
-                type="button"
-                onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "computer" })}
-                className="self-start rounded-lg bg-control px-3 py-1.5 text-[12.5px] text-ink hover:bg-raised-hover"
-              >
-                Open Local VM setup
-              </button>
             </div>
+            {bot.computer === "vm" && (
+              <div className="mt-3 flex flex-col gap-2 border-t border-hairline/30 pt-3">
+                <FleetVmLocationPicker
+                  hosts={fleetVm.hosts}
+                  value={fleetVm.hostId}
+                  onChange={(hostId) => {
+                    void fleetVm.save(hostId).catch(() => {});
+                  }}
+                />
+                <div className="text-[12px] leading-relaxed text-ink-secondary">
+                  {fleetVm.blockReason
+                    ?? "Bots take turns driving this Chromium container. Set it up in App Settings → Computers."}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "computer" })}
+                  className="self-start rounded-lg bg-control px-3 py-1.5 text-[12.5px] text-ink hover:bg-raised-hover"
+                >
+                  Open Isolated VM setup
+                </button>
+              </div>
+            )}
           </div>
 
           <BotUsageCard bot={bot} />

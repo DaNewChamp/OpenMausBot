@@ -38,6 +38,11 @@ describe("fleet hosts", () => {
     expect(preferredHostId(hosts, "local-vm", "missing")).toBe("bridge-mini");
   });
 
+  it("never replaces a pinned machine when its roster row disappears", () => {
+    expect(selectedFleetHostId([mini], "missing-pinned-machine")).toBe("missing-pinned-machine");
+    expect(selectedFleetHostId([], "bridge-win")).toBe("bridge-win");
+  });
+
   it("keeps an explicit fleet pick and explains why Deploy is blocked", () => {
     const hosts = parseFleetHosts({ bridges: [windows, mini] });
     expect(selectedFleetHostId(hosts, "bridge-win")).toBe("bridge-win");

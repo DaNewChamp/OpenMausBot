@@ -47,7 +47,8 @@ export function selectedFleetHostId(
   hosts: readonly FleetHost[],
   pinned?: string | null,
 ): string | undefined {
-  if (pinned && hosts.some((host) => host.id === pinned)) return pinned;
+  // A missing pinned row is unavailable, not permission to relocate the VM.
+  if (pinned) return pinned;
   return preferredHostId(hosts, "local-vm") ?? hosts.find((host) => host.online)?.id ?? hosts[0]?.id;
 }
 
@@ -59,7 +60,7 @@ export function fleetHostLabel(host: FleetHost): string {
 }
 
 export function fleetVmDeployBlockReason(host: FleetHost | undefined): string | null {
-  if (!host) return "Pair a desktop or bridge, then pick it here.";
+  if (!host) return "Connect a computer to this hub, then pick it here.";
   if (!host.online) return `${host.name} is offline.`;
   if (!host.capabilities.includes("local-vm")) {
     return `${host.name} is connected, but it isn't hosting a Linux VM. Start Docker on that machine to Deploy.`;

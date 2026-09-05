@@ -316,10 +316,9 @@ export interface ConfigStatus {
   localVm: { mode: "shared" | "per-bot"; maxInstances: number; hostId?: string | null };
   opencodeGo?: { configured: boolean };
   zai?: { configured: boolean };
-  /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
-   * a voice, which is what it takes to actually speak. The key itself is
-   * never echoed back. */
-  tts?: { configured: boolean; ready: boolean; voice: string; provider?: "elevenlabs" | "system" };
+  /** Voice provider configuration, not a live connectivity check. Credentials
+   * and operator-owned endpoint addresses are never echoed back. */
+  tts?: { configured: boolean; ready: boolean; voice: string; provider?: "elevenlabs" | "system" | "kokoro" };
   /** Shared write-only credential for on-demand GPT Image avatars. */
   imageGen?: { configured: boolean };
   /** who's using the app — collected in onboarding, shown in the sidebar */

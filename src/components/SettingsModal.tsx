@@ -11,6 +11,8 @@ import { ApiKeyRow, VpsConnection } from "./ApiKeys";
 import { useUpdaterState } from "@/lib/updater";
 import { EnginesSettings } from "./EnginesSettings";
 import { LocalComputerSection } from "./LocalComputerSection";
+import { FleetPresentationCard } from "./FleetPresentationCard";
+import { useFleetHosts } from "./ComputerHostPicker";
 import { CompanionSection } from "./CompanionSection";
 import { Card } from "./SettingsPrimitives";
 import { UsageSection } from "./UsageSection";
@@ -18,7 +20,7 @@ import { SkinPicker } from "./SkinPicker";
 import { RoomTurnTimeoutSettings } from "./RoomTurnTimeoutSettings";
 import { ApprovalReviewerSettings } from "./ApprovalReviewerSettings";
 import { TranscriptionSettings } from "./TranscriptionSettings";
-import { HouseStyleSettings } from "./HouseStyleSettings";
+import { GlobalStyleSettings } from "./GlobalStyleSettings";
 import { cn } from "@/lib/cn";
 
 const SECTIONS: Array<{
@@ -27,11 +29,11 @@ const SECTIONS: Array<{
   icon: typeof User;
   keywords: string[];
 }> = [
-  { id: "general", label: "General", icon: User, keywords: ["profile", "name", "email", "skin", "theme", "appearance", "analytics", "updates", "approval", "reviewer", "house style", "voice", "instructions", "persona"] },
+  { id: "general", label: "General", icon: User, keywords: ["profile", "name", "email", "skin", "theme", "appearance", "analytics", "updates", "approval", "reviewer", "global style", "voice", "instructions", "persona"] },
   { id: "connections", label: "Connections", icon: KeyRound, keywords: ["keys", "api", "composio", "box", "xai", "vps"] },
   { id: "engines", label: "Engines", icon: Terminal, keywords: ["models", "claude", "grok", "providers", "cli"] },
   { id: "companion", label: "Phone", icon: Smartphone, keywords: ["companion", "phone", "pair", "mobile"] },
-  { id: "computer", label: "Local VM", icon: Monitor, keywords: ["vm", "virtual", "desktop"] },
+  { id: "computer", label: "Computers", icon: Monitor, keywords: ["computers", "fleet", "hub", "available computers", "vm", "virtual", "desktop"] },
   { id: "usage", label: "Usage", icon: Coins, keywords: ["tokens", "cost", "billing"] },
 ];
 
@@ -254,6 +256,7 @@ function DiagnosticsRow() {
 
 export function SettingsModal() {
   const { state, dispatch } = useStore();
+  const hosts = useFleetHosts();
   const section = state.appSettingsSection;
   const dialogRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
@@ -392,16 +395,16 @@ export function SettingsModal() {
                   <RoomTurnTimeoutSettings />
                 </Card>
                 <Card
-                  title="Approval summaries"
-                  subtitle="Optionally rewrite approval cards in plain language. The local explanation still decides risk, and you still approve or deny."
+                  title="Explain tool requests"
+                  subtitle="Optionally rewrite approval requests in plain language. Local safety checks always decide whether to pause, and you still approve or deny."
                 >
                   <ApprovalReviewerSettings />
                 </Card>
                 <Card
-                  title="House style"
+                  title="Global style"
                   subtitle="One voice for every bot: a global instruction block each bot receives before its own instructions."
                 >
-                  <HouseStyleSettings />
+                  <GlobalStyleSettings />
                 </Card>
                 <ExperimentalFeaturesRow />
                 <UpdatesRow />
@@ -444,7 +447,15 @@ export function SettingsModal() {
 
             {section === "companion" && <CompanionSection profileEmail={state.config?.profile?.email} />}
 
-            {section === "computer" && <LocalComputerSection />}
+            {section === "computer" && (
+              <div className="flex flex-col gap-4">
+                <FleetPresentationCard
+                  hubName={state.config?.profile?.name ? `${state.config.profile.name}’s Hub` : "Hub"}
+                  hosts={hosts}
+                />
+                <LocalComputerSection />
+              </div>
+            )}
 
             {section === "usage" && <UsageSection />}
           </div>

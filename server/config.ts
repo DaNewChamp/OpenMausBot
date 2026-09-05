@@ -146,6 +146,7 @@ const appConfigSchema = z.object({
   permissions: permissionConfigSchema.optional(),
   approvalReviewer: approvalReviewerConfigSchema.optional(),
   houseStyle: houseStyleConfigSchema.optional(),
+  globalStyle: houseStyleConfigSchema.optional(),
   vbot: vbotConfigSchema.optional(),
   bridgeSshTargets: bridgeSshTargetsConfigSchema.optional(),
   instances: instanceConfigMapSchema.optional(),
@@ -185,6 +186,8 @@ export interface AppConfig {
    * own instructions win when they say otherwise (see server/house-style.ts
    * for the opt-out marker). */
   houseStyle?: { enabled?: boolean; instructions?: string };
+  /** Product-neutral alias for global style instructions. */
+  globalStyle?: { enabled?: boolean; instructions?: string };
   /** V Bot engine selection. OpenMaus remains the default fallback. */
   vbot?: {
     primaryEngine?: "openmaus" | "grokReconstructed";
@@ -257,18 +260,24 @@ export function defaultPermissionMode(cfg: AppConfig): PermissionMode {
  * bots to sound: no em dashes, no AI-isms, no corporate hedging. */
 export const DEFAULT_HOUSE_STYLE_INSTRUCTIONS =
   'Sound like a real person talking. Plain words, contractions, short sentences. No em dashes. No AI-isms ("I\'m an AI", "Great question", "As an AI", "I cannot", disclaimers nobody asked for). No emoji unless the person uses them first. Get to the point, answer what was actually asked, and it\'s fine to have a personality.';
+export const DEFAULT_GLOBAL_STYLE_INSTRUCTIONS = DEFAULT_HOUSE_STYLE_INSTRUCTIONS;
 
 /** House style is on unless the hub owner turned it off. */
 export function houseStyleEnabled(cfg: AppConfig): boolean {
+  if (cfg.globalStyle?.enabled !== undefined) return cfg.globalStyle.enabled !== false;
   return cfg.houseStyle?.enabled !== false;
 }
+
+export const globalStyleEnabled = houseStyleEnabled;
 
 /** The effective global instructions: the saved text when the owner wrote
  * one, otherwise the shipped default. */
 export function houseStyleInstructions(cfg: AppConfig): string {
-  const saved = cfg.houseStyle?.instructions?.trim();
+  const saved = (cfg.globalStyle?.instructions ?? cfg.houseStyle?.instructions)?.trim();
   return saved ? saved : DEFAULT_HOUSE_STYLE_INSTRUCTIONS;
 }
+
+export const globalStyleInstructions = houseStyleInstructions;
 
 /** Hermes Bot Chat is an opt-in adapter separate from generic Hermes ACP. */
 export function hermesBotEnabled(cfg: AppConfig): boolean {
@@ -333,6 +342,11 @@ export function loadConfig(): AppConfig {
   if (process.env.OMB_TTS_KEY !== undefined) cfg.tts.key = process.env.OMB_TTS_KEY;
   cfg.imageGen = { ...cfg.imageGen };
   if (process.env.OMB_OPENAI_IMAGE_KEY !== undefined) cfg.imageGen.key = process.env.OMB_OPENAI_IMAGE_KEY;
+  if (cfg.houseStyle && !cfg.globalStyle) {
+    cfg.globalStyle = { ...cfg.houseStyle };
+  } else if (cfg.globalStyle && !cfg.houseStyle) {
+    cfg.houseStyle = { ...cfg.globalStyle };
+  }
   return cfg;
 }
 
@@ -432,6 +446,13 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     const merged: JsonObject = current.success ? { ...current.data } : {};
     Object.assign(merged, section);
     disk[key] = merged;
+  }
+  if (checkedPatch.globalStyle) {
+    const current = jsonObjectSchema.safeParse(disk.houseStyle);
+    const merged: JsonObject = current.success ? { ...current.data } : {};
+    Object.assign(merged, checkedPatch.globalStyle);
+    disk.houseStyle = merged;
+    delete disk.globalStyle;
   }
   if (checkedPatch.vps !== undefined) disk.vps = normalizeVpsConfig(checkedPatch.vps);
   if (checkedPatch.bridgeSshTargets !== undefined) disk.bridgeSshTargets = checkedPatch.bridgeSshTargets;
