@@ -422,6 +422,19 @@ body {
   line-height: 0;
 }
 
+.shell-pane-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  min-height: var(--shell-header-control);
+  padding: 0 0.75rem;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1;
+  box-sizing: border-box;
+}
+
 .shell-search {
   min-height: var(--shell-control);
   border-radius: var(--shell-search-radius);

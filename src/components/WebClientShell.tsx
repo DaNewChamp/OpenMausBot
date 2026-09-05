@@ -432,7 +432,7 @@ function RoomInfoPanel({ group, onClose }: { group: Group; onClose: () => void }
   return (
     <aside
       aria-label={`${group.name} room info`}
-      className="animate-panel-in flex h-full w-[min(320px,100vw)] shrink-0 flex-col border-l border-hairline/40 bg-panel"
+      className="shell-right animate-panel-in flex h-full flex-col border-l border-hairline/40 bg-panel"
     >
       <header className="shell-header justify-between gap-2 px-3">
         <span className="text-[15px] font-semibold text-ink">Room info</span>

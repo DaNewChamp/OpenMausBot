@@ -8,14 +8,41 @@ describe("computer status summary", () => {
       title: "VPS computer ready",
       tone: "positive",
     });
-    expect(computerStatusSummary({ phase: "vm" })).toMatchObject({
-      title: "Linux VM ready",
-      detail: expect.stringContaining("Take control"),
+    expect(computerStatusSummary({ phase: "vm", hostName: "VincentPC", hostOnline: true })).toMatchObject({
+      title: "Shared browser ready",
+      detail: expect.stringMatching(/Chromium container/),
+      tone: "positive",
     });
-    expect(computerStatusSummary({ phase: "vm", shared: false })).toMatchObject({
-      title: "Linux VM ready",
-      detail: expect.stringContaining("private browser"),
+    expect(computerStatusSummary({
+      phase: "vm",
+      shared: false,
+      hostName: "VincentPC",
+      hostOnline: true,
+    })).toMatchObject({
+      title: "Own browser ready",
+      detail: expect.stringMatching(/this bot/i),
     });
+  });
+
+  it("does not look ready when the selected fleet host is offline", () => {
+    const summary = computerStatusSummary({
+      phase: "vm",
+      hostName: "VincentPC",
+      hostOnline: false,
+      shared: true,
+    });
+    expect(summary.tone).toBe("warning");
+    expect(summary.title).toMatch(/VincentPC is offline/);
+    expect(summary.detail).not.toMatch(/ready/i);
+    expect(summary.detail).toMatch(/container/);
+  });
+
+  it("sends Local VM setup to Settings instead of Deploy from the Computer pane", () => {
+    const summary = computerStatusSummary({ phase: "vm-unavailable" });
+    expect(summary.title).toBe("Browser not ready");
+    expect(summary.detail).toMatch(/Settings/);
+    expect(summary.detail).not.toMatch(/Deploy/i);
+    expect(summary.tone).toBe("warning");
   });
 
   it("does not promise computer control for the reconstructed engine", () => {

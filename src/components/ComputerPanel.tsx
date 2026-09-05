@@ -37,7 +37,14 @@ import { DESKTOP_DEMO_SCREEN_DATA_URL, isDesktopDemoMode } from "@/lib/desktop-d
 import { instanceSupportsLocalComputer, localComputerDisabledReason } from "@/lib/local-computer";
 import { type VpsComputerStatus } from "@/lib/vps-computer";
 import { computerStatusSummary } from "@/lib/computer-status";
-import { FleetVmLocationPicker, useFleetVmLocation } from "./ComputerHostPicker";
+import { useFleetVmLocation } from "./ComputerHostPicker";
+import {
+  ComputerPaneStatus,
+  computerPaneContext,
+  computerPaneLifecycleNav,
+  computerPaneLooksReady,
+  localVmSettingsAction,
+} from "./ComputerPaneStatus";
 
 type Phase =
   | "checking"
@@ -96,7 +103,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
   const [vpsStatus, setVpsStatus] = useState<VpsComputerStatus | null>(null);
   const [localFrame, setLocalFrame] = useState<string | null>(null);
   const [pending, setPending] = useState<
-    "join" | "sleep" | "provision" | "vps-replace" | "vm-create" | "vm-recreate" | "vm-delete" | null
+    "join" | "sleep" | "provision" | "vps-replace" | null
   >(null);
   const [controlPending, setControlPending] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -204,8 +211,13 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
         setVmStatus(status);
         const viewerUrl = String(status.viewer_url ?? "");
         if (viewerUrl.startsWith("http")) setVmViewerUrl(viewerUrl);
-        if (status.ready) {
+        const looksReady = computerPaneLooksReady({
+          statusReady: status.ready,
+          hostOnline: fleetVm.selected?.online,
+        });
+        if (looksReady) {
           vmReadinessAttempts.current = 0;
+          setError(null);
           setPhase("vm");
         } else if (
           status.container === "running" &&
@@ -215,6 +227,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
           status.security === "hardened" &&
           status.persistence === "durable" &&
           !status.desktopReady &&
+          fleetVm.selected?.online !== false &&
           vmReadinessAttempts.current < 15
         ) {
           vmReadinessAttempts.current += 1;
@@ -222,8 +235,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
           setPhase("checking");
           retryTimer = window.setTimeout(() => setRetry((n) => n + 1), 2000);
         } else {
-          const canDeploy = !fleetVm.blockReason && (status.container === "missing" || status.create_supported || Boolean(status.image));
-          setError(canDeploy ? fleetVm.blockReason : `${status.problem ?? "The Linux VM is not ready"}. Pick a fleet machine and Deploy.`);
+          setError(status.problem && !fleetVm.blockReason ? status.problem : null);
           setPhase("vm-unavailable");
         }
       })
@@ -243,6 +255,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
     vmSupported,
     fleetVm.blockReason,
     fleetVm.hostId,
+    fleetVm.selected?.online,
   ]);
 
   // cloud preview: SSE frames win while the bot works; otherwise poll.
@@ -511,49 +524,6 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
       .finally(() => setPending(null));
   };
 
-  const runVmAction = async (action: "vm-create" | "vm-recreate" | "vm-delete") => {
-    if (
-      (action === "vm-recreate" || action === "vm-delete") &&
-      !window.confirm(
-        action === "vm-delete"
-          ? `Delete ${bot.name}'s Local VM? Its private durable workspace will remain.`
-          : `Replace ${bot.name}'s Local VM? Its private durable workspace will remain.`,
-      )
-    ) return;
-    setPending(action);
-    setError(null);
-    setVmStatus(null);
-    vmReadinessAttempts.current = 0;
-    try {
-      if (fleetVm.selectedId && fleetVm.selectedId !== fleetVm.hostId) {
-        await fleetVm.save(fleetVm.selectedId);
-      }
-      if (action !== "vm-create") {
-        await api(`/api/bots/${bot.id}/local-computer/remove`, {
-          method: "POST",
-          body: "{}",
-        });
-      }
-      if (action !== "vm-delete") {
-        const status: LocalVmStatus = await api(`/api/bots/${bot.id}/local-computer/run`, {
-          method: "POST",
-          body: "{}",
-        });
-        setVmStatus(status);
-        setPhase(status.ready ? "vm" : "checking");
-      } else {
-        setVmStatus((current) => current ? { ...current, container: "missing", ready: false } : current);
-        setPhase("vm-unavailable");
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setPhase("vm-unavailable");
-    } finally {
-      setPending(null);
-      setRetry((n) => n + 1);
-    }
-  };
-
   const replaceVpsComputer = async () => {
     if (!window.confirm(`Replace ${bot.name}'s VPS computer with the version required by this V Bot update? Files stored only inside the disposable container will be deleted.`)) return;
     setPending("vps-replace");
@@ -578,8 +548,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
   };
 
   const openVmSettings = () => {
-    window.sessionStorage.setItem("openmausbot.settings.section", "computer");
-    dispatch({ type: "toggleAppSettings", open: true });
+    dispatch(localVmSettingsAction());
   };
 
   const openConnectionSettings = () => {
@@ -594,17 +563,28 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
     "vps-incompatible": "This VPS computer belongs to an earlier V Bot version",
     "vps-stopped": "The managed VPS computer is stopped",
     "local-unavailable": reconstructedEngine ? reconstructedComputerNotice : localDisabledReason ?? "Local computer control isn't ready.",
-    "vm-unavailable": reconstructedEngine ? reconstructedComputerNotice : "The Local VM isn't available for this bot",
+    "vm-unavailable": reconstructedEngine ? reconstructedComputerNotice : "The browser isn't available for this bot",
     off: "This bot's computer is off",
     error: reconstructedEngine ? reconstructedComputerNotice : "Couldn't reach the computer",
   } satisfies Record<Exclude<Phase, "ready" | "local" | "vm">, string>;
+  const isolation = vmStatus?.mode ?? state.config?.localVm.mode ?? null;
+  const paneContext = computerPaneContext({
+    host: fleetVm.selected ?? null,
+    isolation,
+  });
   const statusSummary = computerStatusSummary({
     phase,
     cloudBackend,
     linux: isLinux,
     reconstructed: reconstructedEngine,
     error,
-    shared: vmStatus?.mode !== "per-bot",
+    shared: isolation !== "per-bot",
+    hostName: paneContext.hostName || null,
+    hostOnline: fleetVm.selected?.online,
+  });
+  const lifecycle = computerPaneLifecycleNav({
+    container: vmStatus?.container,
+    ready: phase === "vm",
   });
 
   return (
@@ -616,6 +596,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
           type="button"
           onClick={() => dispatch({ type: "toggleSettings", open: true })}
           className="shell-icon-btn text-ink-secondary hover:bg-control hover:text-ink"
+          aria-label="Bot settings"
           title="Bot settings"
         >
           <Settings size={18} />
@@ -690,18 +671,13 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
         </div>
       ) : (
       <div className="flex-1 overflow-y-auto px-4 pb-4 pt-3">
-          <div
-            data-computer-status={phase}
-            className={cn(
-              "mb-2 rounded-xl border px-3 py-2.5",
-              statusSummary.tone === "positive" && "border-success/25 bg-success/8",
-              statusSummary.tone === "warning" && "border-warning/25 bg-warning/8",
-              statusSummary.tone === "danger" && "border-danger/25 bg-danger/8",
-              statusSummary.tone === "neutral" && "border-hairline/35 bg-card",
-            )}
-          >
-            <div className="text-[12.5px] font-medium text-ink">{statusSummary.title}</div>
-            <div className="mt-0.5 text-[11.5px] leading-relaxed text-ink-secondary">{statusSummary.detail}</div>
+          <div data-computer-status={phase}>
+            <ComputerPaneStatus
+              context={paneContext}
+              summary={statusSummary}
+              lifecycle={lifecycle}
+              onOpenSettings={openVmSettings}
+            />
           </div>
           {/* Screen preview */}
         <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-lg bg-card">
@@ -748,7 +724,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
                 {phase === "ready"
                   ? "Waiting for the first frame…"
                   : phase === "vm"
-                    ? "Capturing the Local VM screen…"
+                    ? "Capturing the browser screen…"
                   : phase === "local"
                     ? isLinux
                       ? "Ready for approved bot actions. Start the separate preview below when you want to watch the screen."
@@ -759,37 +735,18 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
               </span>
               {phase === "local" && !isLinux && localMisses >= 3 && (
                 <button
+                  type="button"
                   onClick={() => window.ogb?.permOpenSettings?.("screen")}
-                  className="mt-1 rounded-lg bg-control px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover"
+                  className="shell-pane-btn mt-1 bg-control text-ink hover:bg-raised-hover"
                 >
                   Open Settings
                 </button>
               )}
-              {phase === "vm-unavailable" && !reconstructedEngine && (
-                fleetVm.blockReason ? (
-                  <button
-                    onClick={openVmSettings}
-                    className="mt-1 rounded-lg bg-control px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover"
-                  >
-                    Open Local VM setup
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => void runVmAction("vm-create")}
-                    disabled={pending !== null}
-                    className="mt-1 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-50"
-                  >
-                    {pending === "vm-create" && (
-                      <Loader2 size={13} className="mr-1.5 inline animate-spin" />
-                    )}
-                    Deploy
-                  </button>
-                )
-              )}
               {(phase === "vps-unconfigured" || phase === "vps-stopped") && !reconstructedEngine && (
                 <button
+                  type="button"
                   onClick={openConnectionSettings}
-                  className="mt-1 rounded-lg bg-control px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover"
+                  className="shell-pane-btn mt-1 bg-control text-ink hover:bg-raised-hover"
                 >
                   Open VPS settings
                 </button>
@@ -797,22 +754,24 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
               {(phase === "vps-stopped" || (phase === "vps-unconfigured" && vpsStatus?.configured)) && !reconstructedEngine &&
                 (bot.computer === "cloud" || bot.autoStartVps) && (
                 <button
+                  type="button"
                   onClick={() => run("provision")}
                   disabled={pending === "provision"}
-                  className="mt-1 rounded-lg bg-control px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover disabled:opacity-50"
+                  className="shell-pane-btn mt-1 bg-control text-ink hover:bg-raised-hover disabled:opacity-50"
                 >
-                  {pending === "provision" && <Loader2 size={13} className="mr-1.5 inline animate-spin" />}
+                  {pending === "provision" && <Loader2 size={13} className="animate-spin" />}
                   {phase === "vps-stopped" ? "Start VPS computer" : "Prepare VPS computer"}
                 </button>
               )}
               {phase === "vps-incompatible" && !reconstructedEngine && vpsStatus?.managed &&
                 (bot.computer === "cloud" || bot.autoStartVps) && (
                 <button
+                  type="button"
                   onClick={() => void replaceVpsComputer()}
                   disabled={pending === "vps-replace"}
-                  className="mt-1 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-50"
+                  className="shell-pane-btn mt-1 bg-accent font-medium hover:brightness-110 disabled:opacity-50"
                 >
-                  {pending === "vps-replace" && <Loader2 size={13} className="mr-1.5 inline animate-spin" />}
+                  {pending === "vps-replace" && <Loader2 size={13} className="animate-spin" />}
                   Replace VPS computer
                 </button>
               )}
@@ -830,7 +789,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
             <button
               type="button"
               onClick={openNativeEnginePicker}
-              className="mt-2 rounded-lg bg-control px-3 py-1.5 text-[12px] font-medium text-ink hover:bg-raised-hover"
+              className="shell-pane-btn mt-2 bg-control font-medium text-ink hover:bg-raised-hover"
             >
               Choose Vi Bot engine
             </button>
@@ -882,25 +841,6 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
           )}
         </div>
 
-        <div className="mt-3 flex flex-col gap-2">
-          <FleetVmLocationPicker
-            hosts={fleetVm.hosts}
-            value={fleetVm.hostId}
-            disabled={reconstructedEngine}
-            onChange={(hostId) => {
-              void fleetVm.save(hostId).then(() => setRetry((n) => n + 1)).catch((e) => {
-                setError(e instanceof Error ? e.message : String(e));
-              });
-            }}
-          />
-          <div className="text-[12px] leading-relaxed text-ink-secondary">
-            {fleetVm.blockReason
-              ?? (vmStatus?.mode === "per-bot"
-                ? "This bot gets its own Linux container on that machine."
-                : "Every bot uses this Linux browser + shell. Only one can drive it at a time.")}
-          </div>
-        </div>
-
         {error && (
           <div className="mt-3 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2.5 text-[12.5px] leading-relaxed text-danger">
             {error}
@@ -923,8 +863,9 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
               Configure the VPS SSH alias in App Settings → Connections. Auto only reuses an existing ready container.
             </div>
             <button
+              type="button"
               onClick={openConnectionSettings}
-              className="rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover"
+              className="shell-pane-btn bg-control text-ink hover:bg-raised-hover"
             >
               Open VPS settings
             </button>
@@ -943,7 +884,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
                   phase === "ready" ? void openDesktop() : controlAction("take")
                 }
                 disabled={controlPending || pending === "join"}
-                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-accent py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
+                className="shell-pane-btn flex-1 bg-accent font-medium hover:brightness-110 disabled:opacity-50"
               >
                 {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Hand size={14} />}
                 Take control
@@ -951,7 +892,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
               <button
                 onClick={() => controlAction("dismiss-help")}
                 disabled={controlPending}
-                className="rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
+                className="shell-pane-btn bg-control text-ink hover:bg-raised-hover disabled:opacity-50"
               >
                 Dismiss
               </button>
@@ -971,7 +912,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
                 void window.ogb?.desktopViewer?.close(bot.id);
               }}
               disabled={controlPending}
-              className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-accent py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
+              className="shell-pane-btn mt-2 w-full bg-accent font-medium hover:brightness-110 disabled:opacity-50"
             >
               <Hand size={14} />
               Hand control back
@@ -980,24 +921,14 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
         )}
         {phase === "vm" && !isDesktopDemoMode() && !control.held && !control.helpReason && (
           <button
+            type="button"
             onClick={() => controlAction("take")}
             disabled={controlPending || pending === "join"}
-            className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
+            className="shell-pane-btn mt-3 w-full bg-control text-ink hover:bg-raised-hover disabled:opacity-50"
             title="Pause the bot's hands and drive this browser yourself"
           >
             {controlPending ? <Loader2 size={14} className="animate-spin" /> : <Hand size={14} />}
             Take control
-          </button>
-        )}
-        {phase === "vm" && !isDesktopDemoMode() && vmStatus?.mode === "per-bot" && (
-          <button
-            onClick={() => void runVmAction("vm-delete")}
-            disabled={pending !== null || bot.busy}
-            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-danger/30 py-2 text-[13px] text-danger hover:bg-danger/10 disabled:opacity-50"
-            title={bot.busy ? "Stop this bot's turn before deleting its VM" : `Delete ${bot.name}'s Local VM`}
-          >
-            {pending === "vm-delete" ? <Loader2 size={14} className="animate-spin" /> : <Power size={14} />}
-            Delete this bot's VM
           </button>
         )}
         {/* Cloud-only actions */}
@@ -1009,7 +940,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
                   void openDesktop()
                 }
                 disabled={controlPending || pending === "join"}
-                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
+                className="shell-pane-btn flex-1 bg-control text-ink hover:bg-raised-hover disabled:opacity-50"
                 title="Pause the bot's hands and drive this computer yourself"
               >
                 {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Hand size={14} />}
@@ -1020,7 +951,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
               <button
                 onClick={() => void openDesktop()}
                 disabled={pending === "join"}
-                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
+                className="shell-pane-btn flex-1 bg-control text-ink hover:bg-raised-hover disabled:opacity-50"
               >
                 {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Monitor size={14} />}
                 Open live desktop
@@ -1030,7 +961,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
               <button
                 onClick={() => run("sleep")}
                 disabled={pending === "sleep"}
-                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
+                className="shell-pane-btn flex-1 bg-control text-ink hover:bg-raised-hover disabled:opacity-50"
                 title="Put the computer to sleep"
               >
                 {pending === "sleep" ? <Loader2 size={14} className="animate-spin" /> : <Moon size={14} />}

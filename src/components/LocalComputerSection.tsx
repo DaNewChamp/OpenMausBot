@@ -421,7 +421,7 @@ export function LocalComputerSection() {
                 {perBotRuntimeUnsupported
                   ? "Apple container requires an explicit host port, so Vi Bot will not guess or expose one. Install or start Docker or Podman for safe per-bot dynamic loopback ports."
                   : <>
-                      Choose <b className="text-ink">Local VM</b> for a bot, open that bot's Computer panel, then create its desktop there. Vi Bot assigns a private workspace and an available loopback viewer port automatically.
+                      Choose <b className="text-ink">Local VM</b> for a bot, then Deploy here to create its private Chromium container. Vi Bot assigns a private workspace and an available loopback debugger port automatically.
                     </>}
               </div>
             ) : needsRecreate ? (
