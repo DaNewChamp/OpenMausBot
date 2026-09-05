@@ -140,4 +140,57 @@ final class BridgePresentationPolicyTests: XCTestCase {
         XCTAssertEqual(presented.map(\.id), ["br-fqdn", "br-short"])
         XCTAssertTrue(presented[1].stale)
     }
+
+    func testConnectedComputerCountExcludesOfflineAndStaleNodes() {
+        let bridges = [
+            BridgeRosterEntry(
+                id: "br-mini-online",
+                name: "mini",
+                capabilities: ["shell"],
+                grantedCapabilities: ["shell"],
+                createdAt: 10,
+                lastSeenAt: 20,
+                hostInfo: "macmini.local",
+                online: true
+            ),
+            BridgeRosterEntry(
+                id: "br-windows-online",
+                name: "windows",
+                capabilities: ["shell"],
+                grantedCapabilities: ["shell"],
+                createdAt: 10,
+                lastSeenAt: 20,
+                hostInfo: "pc.lan",
+                online: true
+            ),
+            BridgeRosterEntry(
+                id: "br-linux-offline",
+                name: "linux",
+                capabilities: ["shell"],
+                grantedCapabilities: ["shell"],
+                createdAt: 5,
+                lastSeenAt: 15,
+                hostInfo: "vps.lan",
+                online: false
+            ),
+            BridgeRosterEntry(
+                id: "br-mini-stale",
+                name: "mini",
+                capabilities: ["shell"],
+                grantedCapabilities: ["shell"],
+                createdAt: 1,
+                lastSeenAt: 2,
+                hostInfo: "macmini.local",
+                online: false
+            ),
+        ]
+
+        let count = BridgePresentationPolicy.connectedComputerCount(in: bridges)
+        XCTAssertEqual(count, 2)
+        XCTAssertEqual(
+            ConnectionPresentationPolicy.computerSummary(hubCount: 1, connectedComputerCount: count),
+            "1 hub · 2 connected computers"
+        )
+    }
 }
+

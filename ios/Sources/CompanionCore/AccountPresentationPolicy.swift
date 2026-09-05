@@ -56,8 +56,34 @@ public enum ConnectionPresentationPolicy: Sendable {
         }
     }
 
-    public static let hubSectionTitle = "This V Bot hub"
-    public static let bridgeSectionTitle = "Execution bridges"
+    public static func computerSummary(hubCount: Int, connectedComputerCount: Int) -> String {
+        let safeHubs = max(0, hubCount)
+        let safeComputers = max(0, connectedComputerCount)
+        let hubPart = safeHubs == 1 ? "1 hub" : "\(safeHubs) hubs"
+        let computerPart = safeComputers == 1 ? "1 connected computer" : "\(safeComputers) connected computers"
+        return "\(hubPart) · \(computerPart)"
+    }
+
+    public static func computerSummary(hubCount: Int, bridges: [BridgeRosterEntry]) -> String {
+        computerSummary(
+            hubCount: hubCount,
+            connectedComputerCount: BridgePresentationPolicy.connectedComputerCount(in: bridges)
+        )
+    }
+
+    public static func computerSummary(hubCount: Int, presentedBridges: [PresentedBridgeEntry]) -> String {
+        computerSummary(
+            hubCount: hubCount,
+            connectedComputerCount: BridgePresentationPolicy.connectedComputerCount(in: presentedBridges)
+        )
+    }
+
+    public static let hubSectionTitle = "Hub"
+    public static let bridgeSectionTitle = "Available computers"
+    public static let availableComputersSectionTitle = "Available computers"
     public static let bridgeSectionFooter =
-        "Bridges run jobs for this hub. They are separate from the phone pairing that connects you to the hub."
+        "Computers connected to this hub run tasks for your bots. They are managed through the hub rather than paired directly with your phone."
+    public static let availableComputersSectionFooter = bridgeSectionFooter
 }
+
+

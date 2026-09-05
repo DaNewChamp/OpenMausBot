@@ -294,6 +294,15 @@ public enum BridgePresentationPolicy: Sendable {
         return best
     }
 
+    public static func connectedComputerCount(in bridges: [BridgeRosterEntry]) -> Int {
+        present(bridges).filter { $0.entry.online && !$0.stale }.count
+    }
+
+    public static func connectedComputerCount(in presented: [PresentedBridgeEntry]) -> Int {
+        presented.filter { $0.entry.online && !$0.stale }.count
+    }
+
+
     private static func capabilityLabel(_ raw: String) -> String {
         switch raw {
         case "shell": return "Shell"
@@ -303,3 +312,4 @@ public enum BridgePresentationPolicy: Sendable {
         }
     }
 }
+

@@ -804,10 +804,17 @@ struct SettingsView: View {
     private var statusText: String { session.status.settingsText(previouslyLive: session.previouslyLive) }
 
     private var computerStatusText: String {
-        guard session.connections.count > 1 else { return statusText }
-        return "\(statusText) · \(session.connections.count) saved"
+        guard session.status == .live else {
+            guard session.connections.count > 1 else { return statusText }
+            return "\(statusText) · \(session.connections.count) saved"
+        }
+        return ConnectionPresentationPolicy.computerSummary(
+            hubCount: 1,
+            bridges: session.bridgeRoster
+        )
     }
 }
+
 
 private struct ComputerSettingsRow: View {
     let name: String
@@ -873,7 +880,7 @@ struct ConnectedComputersView: View {
     @EnvironmentObject private var session: Session
     @State private var pendingRemoval: Connection?
 
-    private var otherComputers: [Connection] {
+    private var otherHubs: [Connection] {
         session.connections.filter { $0.id != session.connection?.id }
     }
 
@@ -893,20 +900,20 @@ struct ConnectedComputersView: View {
                 }
             }
 
-            if !otherComputers.isEmpty {
-                Section("Other computers") {
-                    ForEach(otherComputers) { computer in
+            if !otherHubs.isEmpty {
+                Section("Other hubs") {
+                    ForEach(otherHubs) { hub in
                         Button {
                             Haptics.selection()
-                            session.switchComputer(to: computer.id)
+                            session.switchComputer(to: hub.id)
                         } label: {
                             HStack(spacing: 12) {
                                 ProfileAvatar(
-                                    name: ConnectionPresentationPolicy.displayName(for: computer),
+                                    name: ConnectionPresentationPolicy.displayName(for: hub),
                                     size: 38
                                 )
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(ConnectionPresentationPolicy.displayName(for: computer))
+                                    Text(ConnectionPresentationPolicy.displayName(for: hub))
                                         .foregroundStyle(.primary)
                                         .lineLimit(1)
                                     Text("Tap to switch")
@@ -922,17 +929,17 @@ struct ConnectedComputersView: View {
                         }
                         .buttonStyle(.plain)
                         .swipeActions {
-                            Button("Remove", role: .destructive) { pendingRemoval = computer }
+                            Button("Remove", role: .destructive) { pendingRemoval = hub }
                         }
                     }
                 }
             }
 
             if session.bridgeRosterLoading {
-                Section(ConnectionPresentationPolicy.bridgeSectionTitle) {
+                Section(ConnectionPresentationPolicy.availableComputersSectionTitle) {
                     HStack {
                         ProgressView()
-                        Text("Loading bridges…")
+                        Text("Loading computers…")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -960,23 +967,28 @@ struct ConnectedComputersView: View {
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
-                            if !bridge.stale {
-                                Text(bridge.roleLabel.rawValue)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            DisclosureGroup("Advanced") {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(bridge.roleLabel.rawValue)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text(BridgePresentationPolicy.capabilitySummary(bridge.entry.capabilities))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.top, 2)
                             }
-                            Text(BridgePresentationPolicy.capabilitySummary(bridge.entry.capabilities))
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 2)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(BridgePresentationPolicy.accessibilityLabel(for: bridge))
                     }
                 } header: {
-                    Text(ConnectionPresentationPolicy.bridgeSectionTitle)
+                    Text(ConnectionPresentationPolicy.availableComputersSectionTitle)
                 } footer: {
-                    Text(ConnectionPresentationPolicy.bridgeSectionFooter)
+                    Text(ConnectionPresentationPolicy.availableComputersSectionFooter)
                 }
             }
 
@@ -985,17 +997,17 @@ struct ConnectedComputersView: View {
                     Haptics.selection()
                     session.beginPairing()
                 } label: {
-                    Label("Connect another computer", systemImage: "plus.circle.fill")
+                    Label("Connect another hub", systemImage: "plus.circle.fill")
                 }
             } footer: {
-                Text("Each computer is paired separately. Only the selected computer is active at a time.")
+                Text("Each hub is paired separately. Only the selected hub is active at a time.")
             }
         }
         .navigationTitle("Computers")
         .navigationBarTitleDisplayMode(.inline)
         .task { await session.refreshBridgeRoster() }
         .confirmationDialog(
-            "Remove \(pendingRemoval.map { ConnectionPresentationPolicy.displayName(for: $0) } ?? "this computer")?",
+            "Remove \(pendingRemoval.map { ConnectionPresentationPolicy.displayName(for: $0) } ?? "this hub")?",
             isPresented: Binding(
                 get: { pendingRemoval != nil },
                 set: { if !$0 { pendingRemoval = nil } }
@@ -1013,6 +1025,7 @@ struct ConnectedComputersView: View {
         }
     }
 }
+
 
 struct ConnectionSecurityView: View {
     @EnvironmentObject private var session: Session
@@ -1360,11 +1373,13 @@ struct AccountSheet: View {
     }
 
     private var fleetSubtitle: String {
-        let summary = ConnectionPresentationPolicy.fleetSummary(count: session.connections.count)
-        guard let connection = session.connection else { return summary }
-        let current = ConnectionPresentationPolicy.displayName(for: connection)
-        return "\(summary) · \(current) active"
+        let hubCount = session.connection == nil ? 0 : 1
+        return ConnectionPresentationPolicy.computerSummary(
+            hubCount: hubCount,
+            bridges: session.bridgeRoster
+        )
     }
+
 
     private func rowLabel(title: String, subtitle: String, systemImage: String) -> some View {
         HStack(spacing: 14) {

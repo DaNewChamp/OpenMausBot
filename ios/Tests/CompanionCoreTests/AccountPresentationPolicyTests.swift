@@ -89,4 +89,35 @@ final class AccountPresentationPolicyTests: XCTestCase {
         XCTAssertEqual(ConnectionPresentationPolicy.fleetSummary(count: 1), "1 computer paired")
         XCTAssertEqual(ConnectionPresentationPolicy.fleetSummary(count: 3), "3 computers paired")
     }
+
+    func testComputerSummaryFormatsHubAndConnectedComputers() {
+        XCTAssertEqual(
+            ConnectionPresentationPolicy.computerSummary(hubCount: 1, connectedComputerCount: 2),
+            "1 hub · 2 connected computers"
+        )
+        XCTAssertEqual(
+            ConnectionPresentationPolicy.computerSummary(hubCount: 1, connectedComputerCount: 1),
+            "1 hub · 1 connected computer"
+        )
+        XCTAssertEqual(
+            ConnectionPresentationPolicy.computerSummary(hubCount: 1, connectedComputerCount: 0),
+            "1 hub · 0 connected computers"
+        )
+        XCTAssertEqual(
+            ConnectionPresentationPolicy.computerSummary(hubCount: 0, connectedComputerCount: 0),
+            "0 hubs · 0 connected computers"
+        )
+        XCTAssertEqual(
+            ConnectionPresentationPolicy.computerSummary(hubCount: 2, connectedComputerCount: 3),
+            "2 hubs · 3 connected computers"
+        )
+    }
+
+    func testSectionTitlesUseHubAndAvailableComputers() {
+        XCTAssertEqual(ConnectionPresentationPolicy.hubSectionTitle, "Hub")
+        XCTAssertEqual(ConnectionPresentationPolicy.bridgeSectionTitle, "Available computers")
+        XCTAssertEqual(ConnectionPresentationPolicy.availableComputersSectionTitle, "Available computers")
+        XCTAssertFalse(ConnectionPresentationPolicy.bridgeSectionTitle.contains("Execution bridge"))
+    }
 }
+
