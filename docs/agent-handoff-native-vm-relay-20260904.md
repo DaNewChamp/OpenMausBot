@@ -103,3 +103,16 @@ Native Windows parity for this boundary is now live-proven rather than inferred 
 ## Preserved boundaries
 
 No main merge, TestFlight, Oracle/web deployment, firewall change, fleet reassignment, image rebuild, or Docker stop/remove/recreate. Existing Windows shared/per-bot browser and legacy Cua/VPS containers and Mini Cua containers were left alone. Root `/Users/Vincent/Github/OpenMausBot` unrelated dirty Peekaboo/build/package/docs work was not reset, stashed, cleaned, staged, or committed.
+
+## Update 2026-09-04 10:00pm CDT: computer UX closeout
+
+Finished the remaining bounded OpenBot-parity computer UX on `feat/fleet-models-ui`.
+
+- Commit `1b25331b7b6bc06a46061a226bb409a668690fc0` pushed to both `personal` and `vbot-private`.
+- Added a compact Computer Activity timeline in `ComputerPanel`, backed only by existing `GET /api/threads/:threadId/events`. The formatter accepts runtime events only and never renders native protocol records, raw arguments, request bodies, file contents, assistant/reasoning text, or secrets.
+- Timeline shows safe state like turn start/finish, tool activity, permission request/resolve, retries, takeover/help state.
+- Local VM preview switches to 650 ms CDP screenshot cadence while the human holds control; active bot cadence remains 3 s, idle remains 30 s. No new stream protocol or weaker auth path was added.
+- TDD: `src/lib/computer-activity.test.ts` and `src/lib/vm-preview-cadence.test.ts` were written red first, then passed. `tsc -b`, Vite production build, and `git diff --check` passed before commit.
+- Full `test-floor` was run twice. Run 1: 3511 passed, 24 skipped, one unrelated `decision-log-wiring` server-start timeout; that file then passed 5/5 in isolation. Run 2: 3515 passed, 19 skipped, one unrelated room responder chain timing failure; that exact test then passed in isolation. No unrelated timeout/test code was changed.
+- Web bundle deployed only to Oracle `/opt/docker/www/vbot`; hub/sidecar/bridges were not restarted. `DEPLOYED_COMMIT=1b25331b`. Local, Oracle, and public index hashes all matched `6e5d3b7de5ffa0ef27044768001ff9394b3ed6f60eb47fc4a36c4cadae3d3ad6`; public root returned HTTP 200.
+- Existing native Cursor -> Windows shared VM screenshot E2E remains proven from the earlier live probe. No permanent bots, fleet assignment, containers, main merge, TestFlight, or firewall state changed.
