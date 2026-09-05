@@ -72,7 +72,7 @@ final class VoiceModeController: ObservableObject {
     /// fresh reply is recognized by identity, not by content.
     private var sentAt: Date?
     private var sawBusy = false
-    private var preSendBotLineId: String?
+    private var preSendBotLineIds: Set<String> = []
     /// Whether a card was already pending when the session opened — those
     /// do not close voice mode; only ones that arrive do.
     private var openedWithPendingApproval = false
@@ -430,13 +430,18 @@ final class VoiceModeController: ObservableObject {
         voiceLevel = 0
         sentAt = Date()
         sawBusy = false
-        streamSpeakWanted = VoiceOutputSettings.load().engine == .onDevice
+        // Direct bot calls may speak sentences as they stream. Team calls wait
+        // until the room turn settles so replies from multiple agents can be
+        // spoken once, in transcript order, with speaker names.
+        streamSpeakWanted = VoiceOutputSettings.load().engine == .onDevice && target.isBot
         replyChunker = streamSpeakWanted ? VoiceReplyChunker() : nil
         fedStreamCount = 0
         streamSettled = false
-        preSendBotLineId = session.state
-            .visibleTranscript(forThread: threadId)
-            .last(where: { $0.role == .bot && $0.kind == .text })?.id
+        preSendBotLineIds = Set(
+            session.state.visibleTranscript(forThread: threadId)
+                .filter { $0.role == .bot && $0.kind == .text }
+                .map(\.id)
+        )
         let voiceText = text
         Task { [weak self] in
             guard let self else { return }
@@ -535,16 +540,30 @@ final class VoiceModeController: ObservableObject {
     /// the stream ends here even though speaking began sentences ago.
     private func evaluateSettled(_ state: CompanionState) {
         guard let sentAt, phase == .thinking || (streamSpeakWanted && !streamSettled) else { return }
-        let busy = bot(in: state)?.busy == true
+        let target = current
+        let busy: Bool
+        switch target {
+        case .bot:
+            busy = bot(in: state)?.busy == true
+        case let .room(room):
+            busy = state.rooms.first(where: { $0.id == room.id })?.busyBotId != nil
+        case nil:
+            busy = false
+        }
         if busy { sawBusy = true }
-        let lastBotLine = state.visibleTranscript(forThread: threadId)
-            .last(where: { $0.role == .bot && $0.kind == .text })
+
+        let transcript = state.visibleTranscript(forThread: threadId)
+        let newBotLines = transcript.filter {
+            $0.role == .bot && $0.kind == .text && !preSendBotLineIds.contains($0.id)
+        }
         let elapsed = Date().timeIntervalSince(sentAt)
-        let hasNewLine = lastBotLine?.id != preSendBotLineId
+        let hasNewLine = !newBotLines.isEmpty
         let timedOut = elapsed >= VoiceSessionPolicy.replyTimeout
         if (sawBusy && !busy) || (hasNewLine && !busy && elapsed > 1) || timedOut {
-            if lastBotLine?.text?.isEmpty == false {
-                replyText = lastBotLine?.text ?? ""
+            if case .room = target {
+                replyText = VoiceSessionPolicy.teamReplyText(messages: transcript, excluding: preSendBotLineIds)
+            } else if let lastBotLine = newBotLines.last, lastBotLine.text?.isEmpty == false {
+                replyText = lastBotLine.text ?? ""
             } else if let streaming = state.streaming[threadId], !streaming.isEmpty {
                 replyText = streaming
             } else {

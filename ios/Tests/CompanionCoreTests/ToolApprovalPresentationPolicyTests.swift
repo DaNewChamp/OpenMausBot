@@ -191,4 +191,54 @@ final class ToolApprovalPresentationPolicyTests: XCTestCase {
         )
         XCTAssertEqual(ToolApprovalPresentationPolicy.scope(for: cardWithoutScope), "local")
     }
+
+    func testAmbiguousToolCardPromotesSpecificAdvisoryInsteadOfGenericBoilerplate() {
+        let card = OptionCard(
+            title: "Chief Keef needs your approval",
+            subtitle: "echo hello > Info.plist",
+            options: ["Allow", "Deny"],
+            requestId: "req-ambiguous",
+            tool: "terminal",
+            toolLabel: "Terminal",
+            hostLabel: "Windows",
+            reason: "This request needs your approval because the bot wants to run a tool requested by the bot on Windows. Nothing runs unless you approve.",
+            actionSummary: "Run a tool requested by the bot",
+            details: "echo hello > Info.plist",
+            executiveSummary: "Runs a tool requested by the bot",
+            changeSummary: "The effect could not be fully determined from the request",
+            resourceSummary: "Info.plist on Windows",
+            riskLevel: "high",
+            advisorySummary: "Writes the text ‘hello’ into Info.plist on Windows, replacing the file’s previous contents."
+        )
+
+        let presentation = ToolApprovalPresentationPolicy.presentation(actor: "Chief Keef", card: card)
+        XCTAssertEqual(
+            presentation.primaryExplanation,
+            "Writes the text ‘hello’ into Info.plist on Windows, replacing the file’s previous contents."
+        )
+        XCTAssertFalse(presentation.primaryExplanation.localizedCaseInsensitiveContains("requested by the bot"))
+    }
+
+    func testAmbiguousToolCardFallsBackToExactCommandWhenReviewerIsUnavailable() {
+        let card = OptionCard(
+            title: "Chief Keef needs your approval",
+            subtitle: "echo hello > Info.plist",
+            options: ["Allow", "Deny"],
+            requestId: "req-no-reviewer",
+            tool: "terminal",
+            toolLabel: "Terminal",
+            hostLabel: "Windows",
+            actionSummary: "Run a tool requested by the bot",
+            details: "echo hello > Info.plist",
+            executiveSummary: "Runs a tool requested by the bot",
+            changeSummary: "The effect could not be fully determined from the request",
+            resourceSummary: "Info.plist on Windows",
+            riskLevel: "high"
+        )
+
+        let presentation = ToolApprovalPresentationPolicy.presentation(actor: "Chief Keef", card: card)
+        XCTAssertEqual(presentation.primaryExplanation, "Runs echo hello > Info.plist on Windows.")
+        XCTAssertFalse(presentation.primaryExplanation.localizedCaseInsensitiveContains("requested by the bot"))
+    }
+
 }

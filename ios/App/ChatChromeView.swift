@@ -84,25 +84,25 @@ struct ChatChromeView: View {
 
             Spacer(minLength: ConversationLayoutPolicy.chromeButtonGap)
 
-            if case .bot = current {
-                Button {
-                    Haptics.selection()
-                    session.presentVoice(chat: current)
-                } label: {
-                    Image(systemName: "waveform")
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(Color.primary)
-                        .frame(
-                            width: ConversationLayoutPolicy.chromeButtonDiameter,
-                            height: ConversationLayoutPolicy.chromeButtonDiameter
-                        )
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .glassCircle()
-                .fixedSize()
-                .accessibilityLabel("Live voice with \(current.name)")
+            Button {
+                Haptics.selection()
+                session.presentVoice(chat: current)
+            } label: {
+                Image(systemName: "waveform")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(Color.primary)
+                    .frame(
+                        width: ConversationLayoutPolicy.chromeButtonDiameter,
+                        height: ConversationLayoutPolicy.chromeButtonDiameter
+                    )
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .glassCircle()
+            .fixedSize()
+            .accessibilityLabel(current.isBot ? "Call \(current.name)" : "Team call with \(current.name)")
 
+            if case .bot = current {
                 Button {
                     Haptics.selection()
                     showingComputer = true

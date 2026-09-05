@@ -195,6 +195,20 @@ public enum VoiceSessionPolicy: Sendable {
             ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
             : String(format: "%d:%02d", minutes, seconds)
     }
+
+    /// Team-call speech for one room turn. Only messages that appeared after
+    /// the send are spoken, in transcript order, and each agent names itself
+    /// so multiple replies are intelligible over audio.
+    public static func teamReplyText(messages: [Message], excluding existingIds: Set<String>) -> String {
+        messages
+            .filter { $0.role == .bot && $0.kind == .text && !existingIds.contains($0.id) }
+            .compactMap { message -> String? in
+                guard let raw = message.text?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+                let speaker = message.from?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return speaker.isEmpty ? raw : "\(speaker): \(raw)"
+            }
+            .joined(separator: "\n\n")
+    }
 }
 
 /// Audio and background rules for a user-started agent call.

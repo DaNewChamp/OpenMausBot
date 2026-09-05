@@ -391,4 +391,21 @@ final class VoiceSessionPolicyTests: XCTestCase {
         let atThreshold = VoiceSessionPolicy.normalizedMicLevel(rms: VoiceSessionPolicy.voiceThreshold)
         XCTAssertGreaterThan(atThreshold, 0.2)
     }
+
+    func testTeamCallReplySpeaksEveryNewAgentOnceInOrder() {
+        let old = Message(id: "old", role: .bot, kind: .text, at: 1, text: "old", from: Sender(botId: "a", name: "Scout", color: "blue"))
+        let first = Message(id: "one", role: .bot, kind: .text, at: 2, text: "Weather is clear.", from: Sender(botId: "a", name: "Scout", color: "blue"))
+        let second = Message(id: "two", role: .bot, kind: .text, at: 3, text: "Traffic is light.", from: Sender(botId: "b", name: "Driver", color: "green"))
+        let user = Message(id: "user", role: .user, kind: .text, at: 4, text: "thanks")
+
+        XCTAssertEqual(
+            VoiceSessionPolicy.teamReplyText(messages: [old, first, second, user], excluding: ["old"]),
+            "Scout: Weather is clear.\n\nDriver: Traffic is light."
+        )
+    }
+
+    func testTeamCallReplyFallsBackToBotTextWhenSenderIsMissing() {
+        let reply = Message(id: "one", role: .bot, kind: .text, at: 2, text: "Done.")
+        XCTAssertEqual(VoiceSessionPolicy.teamReplyText(messages: [reply], excluding: []), "Done.")
+    }
 }

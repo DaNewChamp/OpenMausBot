@@ -1992,22 +1992,17 @@ private struct ApprovalDetailSheet: View {
                     .padding(16)
                     .background(VBotSurface.assistantBubble, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
+                    explanationBlock("What this does", presentation.primaryExplanation)
                     explanationBlock("Changes", presentation.changeDescription, color: presentation.isReadOnly ? .secondary : .primary)
 
-                    if let executiveSummary {
-                        explanationBlock("What this does", executiveSummary)
-                    }
-                    if let changeSummary, changeSummary.caseInsensitiveCompare("Nothing; read-only") != .orderedSame, changeSummary != presentation.changeDescription {
-                        explanationBlock("Additional change details", changeSummary)
+                    if let changeSummary, changeSummary.caseInsensitiveCompare("Nothing; read-only") != .orderedSame, changeSummary != presentation.changeDescription, !presentation.changeDescription.localizedCaseInsensitiveContains(changeSummary) {
+                        explanationBlock("More about the change", changeSummary, color: .secondary)
                     }
                     if let resourceSummary {
                         explanationBlock("Where", resourceSummary)
                     }
                     if let riskSummary {
                         explanationBlock("Risk", riskSummary, color: riskColor)
-                    }
-                    if let advisorySummary {
-                        explanationBlock("AI review · advisory", advisorySummary, color: .secondary)
                     }
 
                     if let held = card.held {
@@ -2032,15 +2027,6 @@ private struct ApprovalDetailSheet: View {
                     }
                     .tint(Color.secondary)
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Request")
-                            .font(typography.compact.weight(.semibold))
-                            .foregroundStyle(Color.secondary)
-                        Text(actionSummary)
-                            .font(typography.font(size: 16, relativeTo: .body))
-                            .foregroundStyle(Color.primary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                 }
                 .padding(.horizontal, 22)
                 .padding(.top, 18)

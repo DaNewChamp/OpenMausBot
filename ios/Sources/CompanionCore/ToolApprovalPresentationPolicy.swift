@@ -3,6 +3,7 @@ import Foundation
 public struct ToolApprovalPresentation: Equatable, Sendable {
     public var headline: String
     public var changeDescription: String
+    public var primaryExplanation: String
     public var isReadOnly: Bool
     public var rawTool: String
     public var rawCommand: String
@@ -12,6 +13,7 @@ public struct ToolApprovalPresentation: Equatable, Sendable {
     public init(
         headline: String,
         changeDescription: String,
+        primaryExplanation: String,
         isReadOnly: Bool,
         rawTool: String,
         rawCommand: String,
@@ -20,6 +22,7 @@ public struct ToolApprovalPresentation: Equatable, Sendable {
     ) {
         self.headline = headline
         self.changeDescription = changeDescription
+        self.primaryExplanation = primaryExplanation
         self.isReadOnly = isReadOnly
         self.rawTool = rawTool
         self.rawCommand = rawCommand
@@ -33,6 +36,7 @@ public enum ToolApprovalPresentationPolicy: Sendable {
     public static func presentation(actor: String, card: OptionCard) -> ToolApprovalPresentation {
         let hl = headline(actor: actor, card: card)
         let cd = changeDescription(for: card)
+        let pe = primaryExplanation(actor: actor, card: card)
         let ro = isReadOnly(card)
         let rt = rawTool(for: card)
         let rc = rawCommand(for: card)
@@ -41,6 +45,7 @@ public enum ToolApprovalPresentationPolicy: Sendable {
         return ToolApprovalPresentation(
             headline: hl,
             changeDescription: cd,
+            primaryExplanation: pe,
             isReadOnly: ro,
             rawTool: rt,
             rawCommand: rc,
@@ -109,6 +114,45 @@ public enum ToolApprovalPresentationPolicy: Sendable {
 
         let readOnly = isReadOnly(card)
         return "\(effectiveActor) wants to run \(readOnly ? "a read-only tool" : "a tool") on \(safeHost)"
+    }
+
+    /// The first plain-language explanation users should read. A successful
+    /// display-only reviewer may make the wording clearer, but deterministic
+    /// risk/change facts remain separate and authoritative. Generic provider
+    /// boilerplate is never promoted; exact command text is the fail-safe.
+    public static func primaryExplanation(actor: String, card: OptionCard) -> String {
+        if let advisory = card.advisorySummary?.trimmingCharacters(in: .whitespacesAndNewlines), !advisory.isEmpty {
+            let clean = OptionCard.sanitizedPresentation(advisory)
+            if !clean.isEmpty { return clean }
+        }
+
+        if let executive = card.executiveSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !executive.isEmpty {
+            let clean = OptionCard.sanitizedPresentation(executive)
+            if !clean.isEmpty && !isGenericExplanation(clean) { return clean }
+        }
+
+        let command = rawCommand(for: card)
+        let host = card.hostLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !command.isEmpty && isCommandLineTool(card) {
+            return host.isEmpty ? "Runs \(command)." : "Runs \(command) on \(host)."
+        }
+
+        if let action = card.actionSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !action.isEmpty {
+            let clean = OptionCard.sanitizedPresentation(action)
+            if !clean.isEmpty && !isGenericExplanation(clean) { return clean }
+        }
+
+        return headline(actor: actor, card: card)
+    }
+
+    private static func isGenericExplanation(_ value: String) -> Bool {
+        let normalized = value.lowercased().replacingOccurrences(of: "  ", with: " ")
+        return normalized.contains("tool requested by the bot")
+            || normalized == "runs a tool"
+            || normalized == "run a tool"
+            || normalized == "uses a tool"
+            || normalized == "use a tool"
+            || normalized.contains("requested action")
     }
 
     /// Second line clearly stating whether the requested tool changes anything.

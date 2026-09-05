@@ -991,7 +991,6 @@ final class Session: ObservableObject {
     /// Starts (or re-presents) live voice for a bot chat. The waveform
     /// button on any bot chat calls this; the root cover is what shows.
     func presentVoice(chat: Chat) {
-        guard chat.isBot else { return }
         let islandEnabled = UserDefaults.standard.object(forKey: PrefKey.voiceIsland) as? Bool ?? true
         voiceMode.activate(
             chat: chat,
