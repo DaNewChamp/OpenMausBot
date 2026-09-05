@@ -2,7 +2,7 @@
 // show a short suggested list with search and an explicit all-models view;
 // engines that need setup show one focused action instead of a disabled wall.
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Search, Zap } from "lucide-react";
 import { useStore, type Bot, type InstanceInfo, type ModelSelection } from "@/state/store";
 import { filterCustomModels, partitionCustomModels, suggestedModels } from "@/lib/custom-models";
 import { isCustomOnly, isFleetInstance, splitEngineRail } from "@/lib/engine-rail";
@@ -12,6 +12,18 @@ import { EngineGroupLabel } from "./EngineGroupLabel";
 import { cn } from "@/lib/cn";
 import { COMPACT_SQUARE } from "@/lib/compact-chip";
 import { isVBotReconstructedActive, vbotProviderInstances } from "@/lib/vbot-engine";
+import {
+  buildModelFamilies,
+  createModelDraft,
+  browseProvider,
+  selectModelInDraft,
+  toggleFastInDraft,
+  toggleOneMInDraft,
+  setEffortInDraft,
+  selectSourceInDraft,
+  isDraftDirty,
+  type ModelDraftState,
+} from "@/lib/model-family";
 
 type ModelOption = InstanceInfo["models"]["options"][number];
 const COMPACT_MODEL_COUNT = 5;
@@ -97,6 +109,7 @@ export function ModelPicker({
   className,
   contained = false,
   label,
+  initialOpen = false,
 }: {
   bot: Bot;
   className?: string;
@@ -104,9 +117,10 @@ export function ModelPicker({
    * narrow parent (the Agent profile sidebar). */
   contained?: boolean;
   label?: ReactNode;
+  initialOpen?: boolean;
 }) {
   const { state, dispatch, refreshInstances, refreshEngineSync } = useStore();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initialOpen);
   const [railId, setRailId] = useState<string | null>(null);
   const [pane, setPane] = useState<"main" | "custom">("main");
   const [query, setQuery] = useState("");
@@ -116,10 +130,18 @@ export function ModelPicker({
   const selection = bot.modelSelection;
   const reconstructedActive = isVBotReconstructedActive(state.engineSync);
   const pickerInstances = reconstructedActive ? vbotProviderInstances(state.engineSync!) : state.instances;
+  const [draft, setDraft] = useState<ModelDraftState>(() => createModelDraft(selection, pickerInstances));
   const active = pickerInstances.find((instance) => instance.instanceId === selection.instanceId);
   const railInstance =
-    pickerInstances.find((instance) => instance.instanceId === (railId ?? selection.instanceId)) ?? pickerInstances[0];
+    pickerInstances.find((instance) => instance.instanceId === (railId ?? draft.draftInstanceId ?? selection.instanceId)) ?? pickerInstances[0];
   const engineSelectionBlocked = state.engineSync?.primaryEngine === "grokReconstructed" && !reconstructedActive;
+
+  useEffect(() => {
+    if (!open) {
+      setDraft(createModelDraft(selection, pickerInstances));
+      setRailId(selection.instanceId);
+    }
+  }, [open, selection, pickerInstances]);
 
   useEffect(() => {
     if (!open) return;
@@ -169,18 +191,36 @@ export function ModelPicker({
 
   const selectRail = (instance: InstanceInfo) => {
     setRailId(instance.instanceId);
+    setDraft((prev) => browseProvider(prev, instance.instanceId));
     const official = instance.models.options.filter((option) => !option.custom);
     setPane(isFleetInstance(instance) || !(isCustomOnly(instance) || official.length === 0) ? "main" : "custom");
     resetList();
   };
 
-  const pick = (instance: InstanceInfo, model: string) => {
-    const sameInstance = instance.instanceId === selection.instanceId;
+  const pick = (instance: InstanceInfo, modelId: string) => {
+    const families = buildModelFamilies(pickerInstances);
+    const family =
+      families.find((f) =>
+        f.sources.some((s) => s.instanceId === instance.instanceId && s.variants.some((v) => v.modelId === modelId))
+      ) ?? families.find((f) => f.key === modelId);
+
+    if (family) {
+      setDraft((prev) => selectModelInDraft(prev, family, instance.instanceId, modelId));
+    } else {
+      setDraft((prev) => ({
+        ...prev,
+        draftInstanceId: instance.instanceId,
+        draftModel: modelId,
+      }));
+    }
+  };
+
+  const applyChanges = () => {
     const nextSelection: ModelSelection = {
-      instanceId: instance.instanceId,
-      model,
+      instanceId: draft.draftInstanceId,
+      model: draft.draftModel,
     };
-    if (sameInstance && selection.effort) nextSelection.effort = selection.effort;
+    if (draft.draftEffort) nextSelection.effort = draft.draftEffort as any;
     dispatch({
       type: "setModel",
       botId: bot.id,
@@ -213,11 +253,28 @@ export function ModelPicker({
   const canOpenCustom = Boolean(railInstance && !needsCli(railInstance));
   const canReturnToOfficial = official.length > 0 && !isCustomOnly(railInstance);
 
+  const families = buildModelFamilies(pickerInstances);
+  const draftFamily =
+    families.find((f) =>
+      f.sources.some(
+        (s) => s.instanceId === draft.draftInstanceId && s.variants.some((v) => v.modelId === draft.draftModel)
+      )
+    ) ?? families.find((f) => f.key === draft.draftModel);
+  const draftSource = draftFamily?.sources.find((s) => s.instanceId === draft.draftInstanceId);
+  const supportsFast = Boolean(draftSource?.variants.some((v) => v.axes.fast));
+  const supportsOneM = Boolean(draftSource?.variants.some((v) => v.axes.oneM));
+  const capabilityEfforts = draftSource?.capabilityEffortLevels ?? [];
+  const encodedEfforts = draftSource?.effortEncodedInModelId
+    ? (Array.from(new Set(draftSource.variants.map((v) => v.axes.effort).filter(Boolean))) as string[])
+    : [];
+  const effortLevels = capabilityEfforts.length > 0 ? capabilityEfforts : encodedEfforts;
+  const availableSources = draftFamily?.sources.filter((s) => s.available) ?? [];
+
   const renderRow = (option: ModelOption) => (
     <ModelRow
       key={option.id}
       option={option}
-      current={selection.instanceId === railInstance?.instanceId && selection.model === option.id}
+      current={draft.draftInstanceId === railInstance?.instanceId && draft.draftModel === option.id}
       defaultId={railInstance?.models.default ?? ""}
       onPick={() => railInstance && pick(railInstance, option.id)}
     />
@@ -487,6 +544,121 @@ export function ModelPicker({
                     </span>
                   </button>
                 )}
+
+                {(supportsFast || supportsOneM || effortLevels.length > 0 || availableSources.length > 1) && (
+                  <div className="flex flex-wrap items-center gap-2 border-t border-hairline/30 bg-inset/50 px-3 py-2 text-[12px]">
+                    {supportsFast && (
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={draft.draftFast}
+                        aria-label="Fast generation"
+                        onClick={() => draftFamily && setDraft((prev) => toggleFastInDraft(prev, draftFamily))}
+                        className={cn(
+                          "flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11.5px] font-medium transition-colors",
+                          draft.draftFast
+                            ? "bg-accent text-white"
+                            : "border border-hairline/40 bg-control text-ink-secondary hover:text-ink",
+                        )}
+                        title="Uses the advertised Fast variant of this exact model on the same source."
+                      >
+                        <Zap size={12} />
+                        Fast generation
+                      </button>
+                    )}
+
+                    {supportsOneM && (
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={draft.draftOneM}
+                        aria-label="1M context"
+                        onClick={() => draftFamily && setDraft((prev) => toggleOneMInDraft(prev, draftFamily))}
+                        className={cn(
+                          "flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11.5px] font-medium transition-colors",
+                          draft.draftOneM
+                            ? "bg-accent text-white"
+                            : "border border-hairline/40 bg-control text-ink-secondary hover:text-ink",
+                        )}
+                        title="Use 1M context window"
+                      >
+                        1M context
+                      </button>
+                    )}
+
+                    {effortLevels.length > 0 && (
+                      <div className="flex items-center gap-1">
+                        <span className="text-[11px] text-ink-secondary">Reasoning:</span>
+                        <div className="flex overflow-hidden rounded border border-hairline/40">
+                          {([undefined, ...effortLevels] as const).map((level) => (
+                            <button
+                              key={level ?? "default"}
+                              type="button"
+                              onClick={() => draftFamily && setDraft((prev) => setEffortInDraft(prev, draftFamily, level))}
+                              className={cn(
+                                "px-1.5 py-0.5 text-[10.5px] capitalize",
+                                draft.draftEffort === level
+                                  ? "bg-control font-medium text-ink"
+                                  : "text-ink-secondary hover:text-ink",
+                              )}
+                            >
+                              {level === "xhigh" ? "X-High" : (level ?? "Default")}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {availableSources.length > 1 && (
+                      <div className="flex items-center gap-1">
+                        <span className="text-[11px] text-ink-secondary">Source:</span>
+                        <select
+                          value={draft.draftInstanceId}
+                          onChange={(e) =>
+                            draftFamily && setDraft((prev) => selectSourceInDraft(prev, draftFamily, e.target.value))
+                          }
+                          className="rounded border border-hairline/40 bg-control px-1.5 py-0.5 text-[11px] text-ink"
+                        >
+                          {availableSources.map((s) => (
+                            <option key={s.instanceId} value={s.instanceId}>
+                              {s.displayName}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between border-t border-hairline/40 bg-panel/70 px-3 py-2">
+                  <div className="min-w-0 flex-1 truncate text-[11.5px] text-ink-secondary">
+                    {isDraftDirty(draft) ? (
+                      <span className="font-medium text-accent">Unsaved changes</span>
+                    ) : (
+                      <span>Current selection</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDraft(createModelDraft(selection, pickerInstances));
+                        setOpen(false);
+                      }}
+                      className="rounded-lg px-2.5 py-1 text-[12px] text-ink-secondary hover:bg-control hover:text-ink"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!isDraftDirty(draft)}
+                      onClick={applyChanges}
+                      className="rounded-lg bg-accent px-3 py-1 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-40 disabled:hover:brightness-100"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                </div>
               </>
             ) : (
               <div className="px-4 py-5 text-[13px] text-ink-secondary">No model providers are available.</div>

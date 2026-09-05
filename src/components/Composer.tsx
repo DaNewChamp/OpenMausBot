@@ -464,7 +464,7 @@ export function Composer({
             can type again, so a waiting bot is impossible to miss. */}
         {approval && (
           <div className="mb-2 overflow-hidden rounded-xl border border-accent/40 bg-card">
-            <PendingApprovalPanel pending={approval} count={approvals.length} index={0} />
+            <PendingApprovalPanel pending={approval} count={approvals.length} index={0} bot={approvalBot} />
             <PendingApprovalActions
               pending={approval}
               threadId={threadId}
