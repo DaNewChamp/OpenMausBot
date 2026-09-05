@@ -47,7 +47,8 @@ export function selectedFleetHostId(
   hosts: readonly FleetHost[],
   pinned?: string | null,
 ): string | undefined {
-  if (pinned && hosts.some((host) => host.id === pinned)) return pinned;
+  // A missing pinned row is unavailable, not permission to relocate the VM.
+  if (pinned) return pinned;
   return preferredHostId(hosts, "local-vm") ?? hosts.find((host) => host.online)?.id ?? hosts[0]?.id;
 }
 

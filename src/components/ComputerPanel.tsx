@@ -120,6 +120,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
     (instance) => instance.instanceId === bot.modelSelection.instanceId,
   );
   const fleetVm = useFleetVmLocation();
+  const fleetHostOnline = fleetVm.hostId && !fleetVm.selected ? false : fleetVm.selected?.online;
   const reconstructedEngine = selectedInstance?.driverKind === "grokReconstructed";
   const reconstructedComputerNotice =
     "Grok Reconstructed supports chat, roster, and transcript history only. Computer control, Local VM, attachments, queueing, and connected tools stay off for this engine.";
@@ -213,7 +214,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
         if (viewerUrl.startsWith("http")) setVmViewerUrl(viewerUrl);
         const looksReady = computerPaneLooksReady({
           statusReady: status.ready,
-          hostOnline: fleetVm.selected?.online,
+          hostOnline: fleetHostOnline,
         });
         if (looksReady) {
           vmReadinessAttempts.current = 0;
@@ -227,7 +228,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
           status.security === "hardened" &&
           status.persistence === "durable" &&
           !status.desktopReady &&
-          fleetVm.selected?.online !== false &&
+          fleetHostOnline !== false &&
           vmReadinessAttempts.current < 15
         ) {
           vmReadinessAttempts.current += 1;
@@ -255,7 +256,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
     vmSupported,
     fleetVm.blockReason,
     fleetVm.hostId,
-    fleetVm.selected?.online,
+    fleetHostOnline,
   ]);
 
   // cloud preview: SSE frames win while the bot works; otherwise poll.
@@ -580,7 +581,7 @@ export function ComputerPanel({ bot, onExpandBrowser }: { bot: Bot; onExpandBrow
     error,
     shared: isolation !== "per-bot",
     hostName: paneContext.hostName || null,
-    hostOnline: fleetVm.selected?.online,
+    hostOnline: fleetHostOnline,
   });
   const lifecycle = computerPaneLifecycleNav({
     container: vmStatus?.container,

@@ -1,5 +1,5 @@
 // One-place setup for the isolated Local VM image and its shared/per-bot policy.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -12,13 +12,24 @@ import {
   Trash2,
 } from "lucide-react";
 import { Card, CommandLine } from "./SettingsPrimitives";
+import { isWebClientMode } from "@/lib/web-client-mode";
 import { cn } from "@/lib/cn";
 import { api, useStore } from "@/state/store";
 import { FleetVmLocationPicker, useFleetVmLocation } from "./ComputerHostPicker";
 
-type Action = "pull" | "run" | "start" | "stop" | "remove" | "recreate";
+import { localVmSettingsBotId, localVmSettingsActionPath, localVmContainerExists, type LocalVmSettingsAction } from "@/lib/local-vm-settings";
+
+type Action = LocalVmSettingsAction;
 
 interface Status {
+  // The companion deliberately projects a safe status rather than host paths.
+  daemon_up?: boolean;
+  image_ready?: boolean;
+  desktop_ready?: boolean;
+  can_create?: boolean;
+  can_stop?: boolean;
+  can_recreate?: boolean;
+  busy?: boolean;
   platform: string;
   runtime: string | null;
   available: string[];
@@ -80,17 +91,19 @@ function ActionButton({
   children,
   onClick,
   danger = false,
+  disabled = false,
 }: {
   action: Action;
   pending: Action | null;
   children: React.ReactNode;
   onClick: () => void;
   danger?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      disabled={pending !== null}
+      disabled={pending !== null || disabled}
       className={cn(
         "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-medium disabled:opacity-50",
         danger ? "bg-danger/15 text-danger hover:bg-danger/20" : "bg-accent text-white hover:brightness-110",
@@ -104,9 +117,15 @@ function ActionButton({
 
 export function LocalComputerSection() {
   const { state } = useStore();
+  const pairedClient = isWebClientMode();
   const fleetVm = useFleetVmLocation();
-  const botId = state.bots[0]?.id;
   const [status, setStatus] = useState<Status | null>(null);
+  const [explicitBotId, setExplicitBotId] = useState<string | undefined>();
+  const mode = status?.mode ?? state.config?.localVm.mode ?? "shared";
+  const botId = localVmSettingsBotId({ bots: state.bots, selectedId: state.selectedId, explicitBotId, mode });
+  const targetBot = state.bots.find((bot) => bot.id === botId);
+  const responseVersion = useRef(0);
+  useEffect(() => setExplicitBotId(undefined), [state.selectedId]);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<Action | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -114,14 +133,23 @@ export function LocalComputerSection() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   const refresh = useCallback(async () => {
+    const version = ++responseVersion.current;
+    if (pairedClient && !botId) {
+      setStatus(null);
+      setError(null);
+      return;
+    }
     const path = botId ? `/api/bots/${botId}/local-computer` : "/api/local-computer";
     const body = await api(path);
+    if (version !== responseVersion.current) return;
     setStatus(body as Status);
     setError(null);
-  }, [botId]);
+  }, [botId, pairedClient]);
 
   useEffect(() => {
     let active = true;
+    setStatus(null);
+    setLoading(true);
     let timer: number | undefined;
     const poll = async () => {
       try {
@@ -141,24 +169,26 @@ export function LocalComputerSection() {
     void poll();
     return () => {
       active = false;
+      responseVersion.current += 1;
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [refresh, refreshKey]);
 
-  const post = async (action: Exclude<Action, "recreate">) => {
-    const perBot = botId && (action === "run" || action === "stop");
-    const path = perBot ? `/api/bots/${botId}/local-computer/${action}` : `/api/local-computer/${action}`;
-    const body = await api(path, {
-      method: "POST",
-      body: "{}",
-    });
-    setStatus(body as Status);
+  const post = async (action: Action) => {
+    const path = localVmSettingsActionPath({ botId, mode, action, pairedClient });
+    const version = ++responseVersion.current;
+    const body = await api(path, { method: "POST", body: "{}" });
+    if (version === responseVersion.current) setStatus(body as Status);
   };
 
   const act = async (action: Action) => {
+    if (mode === "per-bot" && action !== "pull" && (!targetBot || targetBot.busy)) {
+      setError(targetBot?.busy ? "Stop this bot's turn before managing its browser." : "Choose a bot first.");
+      return;
+    }
     if (
       action === "remove" &&
-      !window.confirm("Delete the Local VM? Files and browser sign-ins in its durable workspace will remain.")
+      !window.confirm(`Delete ${mode === "per-bot" ? `${targetBot?.name ?? "this bot"}'s` : "the shared"} browser container? Its durable files and browser sign-ins will remain.`)
     ) return;
     if (
       action === "recreate" &&
@@ -167,12 +197,8 @@ export function LocalComputerSection() {
     setPending(action);
     setError(null);
     try {
-      if (action === "recreate") {
-        await post("remove");
-        await post("run");
-      } else {
-        await post(action);
-      }
+      // Keep replacement atomic under the hub's existing lifecycle guard.
+      await post(action);
       // The desktop starts after the container process; keep the progress
       // state honest and let the regular poll mark it Ready a few seconds on.
       await refresh();
@@ -202,7 +228,7 @@ export function LocalComputerSection() {
 
   const c = status?.commands;
   const ready = status?.ready === true;
-  const existing = status?.container !== "missing";
+  const existing = localVmContainerExists(status);
   const needsRecreate = Boolean(
     existing &&
       (status?.container === "stopped" ||
@@ -213,12 +239,16 @@ export function LocalComputerSection() {
         status?.persistence === "unsafe"),
   );
   const unavailable = !loading && !status;
-  const perBot = status?.mode === "per-bot";
+  const perBot = mode === "per-bot";
   const perBotRuntimeUnsupported = perBot && status?.runtime === "container";
-  const headerReady = perBot ? Boolean(status?.daemonUp && status?.image && !perBotRuntimeUnsupported) : ready;
+  const headerReady = ready && fleetVm.selected?.online !== false && (!perBot || Boolean(targetBot));
   const statusLabel = loading
     ? "Checking…"
-    : unavailable
+    : perBot && !targetBot
+      ? "Choose a bot"
+      : fleetVm.selected?.online === false
+        ? "Machine offline"
+        : unavailable
       ? "Status unavailable"
       : perBot && headerReady
         ? "Ready for per-bot desktops"
@@ -232,11 +262,70 @@ export function LocalComputerSection() {
       ? status.problem
       : null;
 
+  // The web app uses the companion contract, not desktop-only commands or
+  // broad configuration writes. Keep that distinction visible and actionable.
+  if (pairedClient) {
+    const busy = status?.busy === true || targetBot?.busy === true;
+    const blocked = loading || pending !== null || busy || Boolean(fleetVm.blockReason) || !botId;
+    return (
+      <>
+        <Card title="Browser location" subtitle="Run Chromium on a paired machine while V Bot stays connected to your hub.">
+          <div className="flex flex-col gap-3">
+            <FleetVmLocationPicker hosts={fleetVm.hosts} value={fleetVm.hostId}
+              disabled={pending !== null || busy}
+              onChange={(hostId) => {
+                void fleetVm.save(hostId).then(() => setRefreshKey((key) => key + 1)).catch((e) => {
+                  setError(e instanceof Error ? e.message : String(e));
+                });
+              }} />
+            {fleetVm.blockReason && <p className="text-[12.5px] text-warning">{fleetVm.blockReason}</p>}
+            {perBot && (
+              <label className="flex flex-col gap-1.5 text-[13px] text-ink-secondary">
+                Bot workspace
+                <select aria-label="Bot workspace" value={botId ?? ""} disabled={pending !== null}
+                  onChange={(event) => setExplicitBotId(event.target.value)}
+                  className="rounded-lg border border-hairline/40 bg-control px-3 py-2 text-ink">
+                  <option value="">Choose a bot</option>
+                  {state.bots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name}</option>)}
+                </select>
+              </label>
+            )}
+          </div>
+        </Card>
+        <Card title={perBot ? "Private browser" : "Shared browser"}
+          subtitle={perBot ? "This bot has its own Chromium container and durable workspace." : "Bots take turns in one Chromium container and share its browser profile and workspace."}>
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center gap-2 text-[13px]">
+              {loading ? <Loader2 size={14} className="animate-spin" /> : headerReady ? <Check size={14} className="text-success" /> : <Circle size={10} />}
+              <span>{!botId ? "Choose a bot" : statusLabel}</span>
+              <button type="button" disabled={loading || pending !== null}
+                onClick={() => { setLoading(true); setRefreshKey((key) => key + 1); }}
+                className="shell-pane-btn ml-auto text-ink-secondary hover:bg-control">
+                <RefreshCw size={13} /> Re-check
+              </button>
+            </div>
+            {!botId && <p className="text-[13px] text-ink-secondary">Choose a bot above to manage its private browser.</p>}
+            {status?.problem && !ready && <p className="text-[13px] leading-relaxed text-warning">{status.problem}</p>}
+            {error && <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-[13px] text-danger">{error}</p>}
+            {busy && <p className="text-[12.5px] text-ink-secondary">A bot is using this browser. Stop its turn before changing the container.</p>}
+            <div className="flex flex-wrap gap-2">
+              {status?.can_create && <ActionButton action="run" pending={pending} disabled={blocked} onClick={() => void act("run")}>Deploy browser</ActionButton>}
+              {status?.can_stop && <ActionButton action="stop" pending={pending} disabled={blocked} onClick={() => void act("stop")}><Square size={12} /> Stop</ActionButton>}
+              {!ready && status?.can_recreate && <ActionButton action="recreate" pending={pending} disabled={blocked} onClick={() => void act("recreate")}><RotateCcw size={12} /> Recreate browser</ActionButton>}
+            </div>
+            <p className="text-[12px] leading-relaxed text-ink-secondary">Use the Computer pane to watch the screen and take control. Browser files in the durable workspace survive container replacement.</p>
+          </div>
+        </Card>
+        <Card title="Host-managed settings" subtitle="Image preparation, shared/private isolation policy, capacity limits, and container deletion stay in desktop Settings. This paired web client does not expose the host's administrative configuration." />
+      </>
+    );
+  }
+
   return (
     <>
       <Card
-        title="VM location"
-        subtitle="Every bot uses this Linux browser + shell. Pick a machine from your connected fleet, then Deploy."
+        title="Browser location"
+        subtitle="Choose a connected machine for the Chromium container. Shared and private workspaces are managed here."
       >
         <div className="flex flex-col gap-3">
           <FleetVmLocationPicker
@@ -255,6 +344,22 @@ export function LocalComputerSection() {
                 ? "Each bot gets its own container on that machine."
                 : "Bots take turns driving one shared desktop on that machine.")}
           </div>
+          {perBot && (
+            <label className="flex flex-col gap-1.5 text-[13px] text-ink-secondary">
+              Bot workspace
+              <select
+                aria-label="Bot workspace"
+                value={botId ?? ""}
+                disabled={pending !== null}
+                onChange={(event) => setExplicitBotId(event.target.value)}
+                className="rounded-lg border border-hairline/40 bg-control px-3 py-2 text-ink"
+              >
+                <option value="">Choose a bot</option>
+                {state.bots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name}</option>)}
+              </select>
+              {targetBot?.busy && <span>Stop this bot's turn before managing its browser.</span>}
+            </label>
+          )}
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => {
@@ -277,7 +382,7 @@ export function LocalComputerSection() {
                   }
                 })();
               }}
-              disabled={pending !== null || Boolean(fleetVm.blockReason)}
+              disabled={pending !== null || Boolean(fleetVm.blockReason) || !botId || (perBot && Boolean(targetBot?.busy))}
               className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-white hover:brightness-110 disabled:opacity-50"
             >
               {pending === "run" && <Loader2 size={13} className="animate-spin" />}
@@ -413,17 +518,13 @@ export function LocalComputerSection() {
 
           <Step
             n={4}
-            title={perBot ? "Create a private desktop from each bot's Computer panel" : needsRecreate ? "Replace the older or unsafe VM" : "Create and start the Local VM"}
-            done={!perBot && ready}
+            title={needsRecreate ? "Replace the older or unsafe container" : "Create and start the browser container"}
+            done={headerReady}
           >
-            {perBot ? (
-              <div className="text-[13px] leading-relaxed text-ink-secondary">
-                {perBotRuntimeUnsupported
-                  ? "Apple container requires an explicit host port, so Vi Bot will not guess or expose one. Install or start Docker or Podman for safe per-bot dynamic loopback ports."
-                  : <>
-                      Choose <b className="text-ink">Local VM</b> for a bot, then Deploy here to create its private Chromium container. Vi Bot assigns a private workspace and an available loopback debugger port automatically.
-                    </>}
-              </div>
+            {perBot && !targetBot ? (
+              <div className="text-[13px] text-ink-secondary">Choose a bot above to manage its private browser.</div>
+            ) : perBotRuntimeUnsupported ? (
+              <div className="text-[13px] text-ink-secondary">This runtime cannot allocate private loopback ports. Use Docker or Podman for per-bot containers.</div>
             ) : needsRecreate ? (
               <>
                 <div className="flex gap-2 text-[13px] text-warning">
@@ -468,18 +569,18 @@ export function LocalComputerSection() {
         {existing && (
           <div className="flex flex-wrap gap-2">
             {status?.container === "running" && (
-              <ActionButton action="stop" pending={pending} onClick={() => void act("stop")}>
+              <ActionButton action="stop" pending={pending} disabled={perBot && (!targetBot || targetBot.busy)} onClick={() => void act("stop")}>
                 <Square size={12} /> Stop
               </ActionButton>
             )}
-            <ActionButton action="remove" pending={pending} onClick={() => void act("remove")} danger>
-              <Trash2 size={12} /> {perBot ? "Delete legacy shared VM" : "Delete VM"}
+            <ActionButton action="remove" pending={pending} disabled={perBot && (!targetBot || targetBot.busy)} onClick={() => void act("remove")} danger>
+              <Trash2 size={12} /> {perBot ? "Delete this bot's browser" : "Delete shared browser"}
             </ActionButton>
           </div>
         )}
         <div className="mt-3 break-all text-[11px] text-ink-secondary">
           Durable workspace: {status?.workspace_path ?? "not created"} ·{" "}
-          Cua Driver: {status?.driver_version ?? "0.20.0"} · Local image: {status?.image_ref ?? "not prepared"}
+          Browser image: {status?.image_ref ?? "not prepared"}
           {status?.base_image_ref ? <> · Base: {status.base_image_ref}</> : null}
         </div>
       </Card>

@@ -374,7 +374,7 @@ function Bubble({
 
   return (
     <div className={cn("group animate-msg-in flex w-full flex-col", user ? "items-end" : "items-start")}>
-      <div className={cn("flex w-full items-start gap-1.5", user ? "justify-end" : "justify-start")}>
+      <div className={cn("shell-message-row flex w-full items-start gap-1.5", user ? "justify-end" : "justify-start")}>
         {/* editing rewinds the thread, so it waits for the turn to end —
             same rule as the version switcher below */}
         {user && message.kind === "text" && !webhookView && !bot.busy && (
@@ -488,7 +488,7 @@ function Bubble({
         </div>
         </div>
         {!user && (
-          <div className="flex flex-col gap-0.5 self-end pb-0.5">
+          <div className="shell-message-extra flex flex-col gap-0.5 self-end pb-0.5">
             <CopyButton text={text} />
             {message.kind === "text" && (
               <SpeakButton text={text} botId={bot.id} messageId={message.id} voiceId={bot.voice} />

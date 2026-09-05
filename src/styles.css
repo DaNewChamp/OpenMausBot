@@ -466,6 +466,49 @@ body {
   }
 }
 
+/* Inline hover controls must not steal a narrow transcript's text width.
+   On phones and narrow panes the bubble gets its own row, with a compact,
+   always reachable action bar below it. The full emoji palette stays behind +. */
+@container transcript (max-width: 35.999rem) {
+  .shell-message-row {
+    flex-wrap: wrap;
+    row-gap: 0.25rem;
+  }
+
+  .shell-message-row > .shell-bubble-fit {
+    order: -2;
+    flex: 0 0 100%;
+    max-width: 100%;
+  }
+
+  .shell-message-row > :not(.shell-bubble-fit) {
+    flex-shrink: 0;
+  }
+
+  .shell-message-row > span {
+    order: 0;
+    align-self: center;
+  }
+
+  .shell-message-row .shell-message-extra {
+    flex-direction: row;
+    align-self: center;
+  }
+
+  .shell-message-row .opacity-0 {
+    opacity: 1;
+  }
+
+  .shell-message-row button {
+    min-width: 32px;
+    min-height: 32px;
+  }
+
+  .shell-message-row .shell-reaction-presets > button:not(:last-child) {
+    display: none;
+  }
+}
+
 .shell-right {
   width: var(--shell-right-width);
   min-width: var(--shell-right-min);
