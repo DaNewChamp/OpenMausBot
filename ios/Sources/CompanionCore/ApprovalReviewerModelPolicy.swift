@@ -1,10 +1,23 @@
 import Foundation
 
-/// Compact, subscription-first model lists for the approval-summary reviewer.
+/// Policy for approval request explanations and reviewer model configuration.
 public enum ApprovalReviewerModelPolicy: Sendable {
-    public static let sectionTitle = "Approval summary model"
+    public static let sectionTitle = "Explain tool requests"
     public static let sectionExplanation =
-        "Rewrites approval requests into a short executive summary. This never controls the bot's main reasoning and never approves or denies."
+        "Explains approval requests in plain language. This never controls the bot's main reasoning and never approves or denies."
+
+    /// Builds an update patch for approval reviewer mode, preserving any configured
+    /// provider and model choices so simplifying the UI does not erase server config.
+    public static func patch(
+        mode: ApprovalReviewerMode,
+        preserving status: ApprovalReviewerStatus?
+    ) -> ApprovalReviewerPatch {
+        ApprovalReviewerPatch(
+            mode: mode,
+            instanceId: status?.selection?.instanceId,
+            model: status?.selection?.model
+        )
+    }
 
     public static func compactModels(
         providerId: String,

@@ -51,6 +51,8 @@ struct AgentProfileView: View {
     @State private var selectedShape = MascotMark.droplet
     @State private var showingInstructions = false
     @State private var instructionsBaseline = ""
+    @State private var instructionsDraft = ""
+    @State private var applyGlobalStyleDraft = true
     @State private var showingRoutines = false
     @State private var showingSkills = false
     @State private var routines: [Routine] = []
@@ -281,8 +283,7 @@ struct AgentProfileView: View {
                 .disabled(!canEdit || !hasUnsavedChanges || busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                 Button("Edit instructions", systemImage: "doc.text") {
-                    instructionsBaseline = description
-                    showingInstructions = true
+                    openInstructionsEditor()
                 }
                 .disabled(!canEdit)
                 Button("Tasks & routines", systemImage: "clock") {
@@ -679,19 +680,37 @@ struct AgentProfileView: View {
         return false
     }
 
+    private var globalStyleStatusText: String {
+        GlobalStylePresentationPolicy.statusDescription(
+            config: config,
+            instructions: description
+        )
+    }
+
+    private func openInstructionsEditor() {
+        instructionsBaseline = description
+        instructionsDraft = GlobalStylePresentationPolicy.stripOptOutMarkers(from: description)
+        applyGlobalStyleDraft = !GlobalStylePresentationPolicy.isOptedOut(instructions: description)
+        showingInstructions = true
+    }
+
     private var instructionsRow: some View {
         Button {
-            instructionsBaseline = description
-            showingInstructions = true
+            openInstructionsEditor()
         } label: {
             HStack(spacing: 14) {
                 Image(systemName: "doc.text")
                     .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 26)
-                Text("Instructions")
-                    .font(.body)
-                    .foregroundStyle(Color.primary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Instructions")
+                        .font(.body)
+                        .foregroundStyle(Color.primary)
+                    Text(globalStyleStatusText)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
@@ -1143,24 +1162,51 @@ struct AgentProfileView: View {
             .padding(.horizontal, 18)
     }
 
+    private var instructionsEditorGlobalStyleStatus: String {
+        let composed = GlobalStylePresentationPolicy.composeInstructions(
+            userText: instructionsDraft,
+            applyGlobalStyle: applyGlobalStyleDraft
+        )
+        return GlobalStylePresentationPolicy.statusDescription(
+            config: config,
+            instructions: composed
+        )
+    }
+
     private var instructionsEditor: some View {
         NavigationStack {
             ZStack(alignment: .topLeading) {
                 VBotSurface.background.ignoresSafeArea()
-                TextEditor(text: $description)
-                    .font(.body)
-                    .scrollContentBackground(.hidden)
-                    .disabled(!canEdit)
-                    .padding(18)
-                    .vbotCard()
-                    .padding(24)
-                if description.isEmpty {
-                    Text("Tell this Bot how to work, what to prioritize, and when to ask for help.")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 42)
-                        .padding(.top, 42)
-                        .allowsHitTesting(false)
+                VStack(spacing: 16) {
+                    ZStack(alignment: .topLeading) {
+                        TextEditor(text: $instructionsDraft)
+                            .font(.body)
+                            .scrollContentBackground(.hidden)
+                            .disabled(!canEdit)
+                            .padding(18)
+                            .vbotCard()
+                        if instructionsDraft.isEmpty {
+                            Text("Tell this Bot how to work, what to prioritize, and when to ask for help.")
+                                .font(.body)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 18)
+                                .padding(.top, 18)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 16)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle("Apply global style", isOn: $applyGlobalStyleDraft)
+                            .disabled(!canEdit)
+
+                        Text(instructionsEditorGlobalStyleStatus)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 16)
                 }
             }
             .navigationTitle("Instructions")
@@ -1174,6 +1220,10 @@ struct AgentProfileView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
+                        description = GlobalStylePresentationPolicy.composeInstructions(
+                            userText: instructionsDraft,
+                            applyGlobalStyle: applyGlobalStyleDraft
+                        )
                         Task {
                             await saveAll()
                             showingInstructions = false

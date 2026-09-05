@@ -56,7 +56,7 @@ struct SettingsView: View {
                     busySection
                     permissionsSection
                     approvalReviewerSection
-                    houseStyleSection
+                    globalStyleSection
                     providerKeysSection
                 }
             }
@@ -459,12 +459,10 @@ struct SettingsView: View {
     private var approvalReviewerSection: some View {
         VBotSurfaceGroup(
             title: ApprovalReviewerModelPolicy.sectionTitle,
-            footer: approvalReviewerFooter
+            footer: ApprovalReviewerModelPolicy.sectionExplanation
         ) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("When to summarize")
-                    .font(.body)
-                Picker("When to summarize", selection: approvalReviewerModeBinding) {
+                Picker(ApprovalReviewerModelPolicy.sectionTitle, selection: approvalReviewerModeBinding) {
                     ForEach(ApprovalReviewerMode.allCases, id: \.self) { mode in
                         Text(mode.label).tag(mode)
                     }
@@ -472,45 +470,6 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .disabled(!approvalReviewerLoaded)
-
-                Text(ApprovalReviewerModelPolicy.sectionExplanation)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-
-                if let reviewer = approvalReviewer, !reviewer.providers.isEmpty {
-                    Picker("Reviewer provider", selection: approvalReviewerProviderBinding) {
-                        ForEach(reviewer.providers, id: \.pickerId) { provider in
-                            Text(provider.available ? provider.label : "\(provider.label): unavailable")
-                                .tag(provider.pickerId)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .disabled(!approvalReviewerLoaded)
-                    if let active = selectedReviewerProvider {
-                        let compactModels = ApprovalReviewerModelPolicy.compactModels(
-                            providerId: active.id,
-                            models: active.models,
-                            selectedModelId: modelId(in: active)
-                        )
-                        if compactModels.count > 1 {
-                            Picker("Approval summary model", selection: approvalReviewerModelBinding) {
-                                ForEach(compactModels) { model in
-                                    Text(model.label).tag(model.id)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .disabled(!approvalReviewerLoaded || !active.available)
-                        } else if let only = compactModels.first {
-                            HStack {
-                                Text("Summary model")
-                                Spacer()
-                                Text(only.label)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .font(.body)
-                        }
-                    }
-                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -518,24 +477,17 @@ struct SettingsView: View {
         }
     }
 
-    private var approvalReviewerFooter: String {
-        if let reason = selectedReviewerProvider?.reason, selectedReviewerProvider?.available == false {
-            return reason
-        }
-        return ApprovalReviewerModelPolicy.sectionExplanation
-    }
-
-    private var houseStyleSection: some View {
+    private var globalStyleSection: some View {
         VBotSurfaceGroup(
-            title: "House style",
-            footer: "Applies to every bot. A bot's own instructions can opt out with a line: [house-style: off]"
+            title: GlobalStylePresentationPolicy.sectionTitle,
+            footer: GlobalStylePresentationPolicy.sectionFooter
         ) {
             VStack(alignment: .leading, spacing: 10) {
                 Toggle(isOn: houseStyleEnabledBinding) {
                     Label {
                         Text("Enabled")
                     } icon: {
-                        SettingsIcon(symbol: "house", color: .indigo)
+                        SettingsIcon(symbol: "globe", color: .indigo)
                     }
                 }
                 .disabled(!houseStyleLoaded || houseStyleSaving)
@@ -543,7 +495,7 @@ struct SettingsView: View {
                 TextEditor(text: $houseStyleInstructions)
                     .frame(minHeight: 96)
                     .disabled(!houseStyleLoaded || houseStyleSaving)
-                    .accessibilityLabel("House style instructions")
+                    .accessibilityLabel(GlobalStylePresentationPolicy.instructionsAccessibilityLabel)
 
                 if houseStyleDirty {
                     Button {
@@ -645,62 +597,21 @@ struct SettingsView: View {
         return effective.caption
     }
 
-    private var selectedReviewerProvider: ApprovalReviewerProvider? {
-        guard let reviewer = approvalReviewer else { return nil }
-        if let selection = reviewer.selection {
-            return reviewer.providers.first {
-                $0.instanceId == selection.instanceId && $0.models.contains(where: { $0.id == selection.model })
-            }
-        }
-        return reviewer.providers.first(where: \.available) ?? reviewer.providers.first
-    }
-
     private var approvalReviewerModeBinding: Binding<ApprovalReviewerMode> {
         Binding(
             get: { approvalReviewer?.mode ?? .whenUnclear },
             set: { mode in
                 guard approvalReviewerLoaded else { return }
-                Task { await saveApprovalReviewer(mode: mode, provider: selectedReviewerProvider, modelId: selectedReviewerProvider.flatMap { modelId(in: $0) }) }
+                Task { await saveApprovalReviewer(mode: mode) }
             }
         )
     }
 
-    private var approvalReviewerProviderBinding: Binding<String> {
-        Binding(
-            get: { selectedReviewerProvider?.pickerId ?? "" },
-            set: { pickerId in
-                guard approvalReviewerLoaded, let reviewer = approvalReviewer,
-                      let provider = reviewer.providers.first(where: { $0.pickerId == pickerId })
-                else { return }
-                Task { await saveApprovalReviewer(mode: reviewer.mode, provider: provider, modelId: provider.models.first?.id) }
-            }
+    private func saveApprovalReviewer(mode: ApprovalReviewerMode) async {
+        let patch = ApprovalReviewerModelPolicy.patch(
+            mode: mode,
+            preserving: approvalReviewer
         )
-    }
-
-    private var approvalReviewerModelBinding: Binding<String> {
-        Binding(
-            get: { selectedReviewerProvider.flatMap { modelId(in: $0) } ?? "" },
-            set: { modelId in
-                guard approvalReviewerLoaded, let reviewer = approvalReviewer, let provider = selectedReviewerProvider else { return }
-                Task { await saveApprovalReviewer(mode: reviewer.mode, provider: provider, modelId: modelId) }
-            }
-        )
-    }
-
-    private func modelId(in provider: ApprovalReviewerProvider) -> String? {
-        if let selected = approvalReviewer?.selection, selected.instanceId == provider.instanceId,
-           provider.models.contains(where: { $0.id == selected.model }) {
-            return selected.model
-        }
-        return provider.models.first?.id
-    }
-
-    private func saveApprovalReviewer(mode: ApprovalReviewerMode, provider: ApprovalReviewerProvider?, modelId: String?) async {
-        var patch = ApprovalReviewerPatch(mode: mode)
-        if let provider, let modelId, provider.available {
-            patch.instanceId = provider.instanceId
-            patch.model = modelId
-        }
         if let saved = await session.updateApprovalReviewer(patch) {
             approvalReviewer = saved
         }
