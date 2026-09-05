@@ -495,6 +495,68 @@ export function resolveStoredSelection(
   return { instanceId: selection.instanceId, model: selection.model };
 }
 
+const LUNA_MODEL_HINT = /(?:^|[._:-])luna(?:$|[._:-])/i;
+const HAIKU_MODEL_HINT = /(?:^|[._:-])haiku(?:$|[._:-])/i;
+const FLASH_MODEL_HINT = /(?:^|[._:-])flash(?:$|[._:-])/i;
+const FAST_LOW_COST_MODEL_HINT = /(?:^|[._:-])(?:spark|mini|fast|composer-2\.5-fast)(?:$|[._:-])/i;
+
+/** Choose an available fast low-cost model internally from advertised catalogs,
+ * preferring Luna/Haiku/Flash class without crossing authority/runtime boundaries. */
+export function autoSelectApprovalReviewer(
+  providers: readonly ApprovalReviewerProvider[],
+): { instanceId: string; model: string } | null {
+  const availableProviders = providers.filter((p) => p.available && p.models.length > 0);
+  if (!availableProviders.length) return null;
+
+  const candidates: Array<{ instanceId: string; model: string; id: string; label: string }> = [];
+  for (const provider of availableProviders) {
+    for (const model of provider.models) {
+      candidates.push({
+        instanceId: provider.instanceId,
+        model: model.id,
+        id: model.id,
+        label: model.label || model.id,
+      });
+    }
+  }
+  if (!candidates.length) return null;
+
+  // 1. Luna class
+  const luna = candidates.find((c) => LUNA_MODEL_HINT.test(c.id) || LUNA_MODEL_HINT.test(c.label));
+  if (luna) return { instanceId: luna.instanceId, model: luna.model };
+
+  // 2. Haiku class
+  const haiku = candidates.find((c) => HAIKU_MODEL_HINT.test(c.id) || HAIKU_MODEL_HINT.test(c.label));
+  if (haiku) return { instanceId: haiku.instanceId, model: haiku.model };
+
+  // 3. Flash class
+  const flash = candidates.find((c) => FLASH_MODEL_HINT.test(c.id) || FLASH_MODEL_HINT.test(c.label));
+  if (flash) return { instanceId: flash.instanceId, model: flash.model };
+
+  // 4. Other fast/mini/spark low-cost models
+  const fast = candidates.find((c) => FAST_LOW_COST_MODEL_HINT.test(c.id) || FAST_LOW_COST_MODEL_HINT.test(c.label));
+  if (fast) return { instanceId: fast.instanceId, model: fast.model };
+
+  // 5. First available model
+  const first = candidates[0]!;
+  return { instanceId: first.instanceId, model: first.model };
+}
+
+/** Preserve an explicit configured reviewer if valid; otherwise choose an
+ * available fast low-cost model internally from advertised catalogs. */
+export function resolveEffectiveReviewerSelection(
+  selection: ApprovalReviewerSelection,
+  providers: readonly ApprovalReviewerProvider[],
+): { instanceId: string; model: string } | null {
+  if (selection.instanceId && selection.model) {
+    const provider = findReviewerProvider(providers, selection.instanceId, selection.model);
+    if (provider?.available) {
+      return { instanceId: selection.instanceId, model: selection.model };
+    }
+  }
+  return autoSelectApprovalReviewer(providers);
+}
+
 export function buildApprovalReviewerStatus(
   cfg: { approvalReviewer?: { mode?: ApprovalReviewerMode; instanceId?: string; model?: string } },
   instances: readonly ReviewerCatalogInstance[],

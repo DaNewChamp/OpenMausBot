@@ -8,6 +8,7 @@ import { PassThrough } from "node:stream";
 import { explainApproval, reviewApproval, type ApprovalReviewInput } from "./approval-explainer.ts";
 import {
   approvalReviewerSelection,
+  autoSelectApprovalReviewer,
   buildApprovalReviewerCatalog,
   buildApprovalReviewerStatus,
   buildApprovalReviewPrompt,
@@ -19,12 +20,14 @@ import {
   parseApprovalReviewerPatch,
   reviewDriverFamily,
   reviewerCacheIdentity,
+  resolveEffectiveReviewerSelection,
   resolveStoredSelection,
   sanitizeApprovalReviewerStatus,
   shouldReviewApproval,
   validateReviewerSelection,
   XAI_REVIEW_INSTANCE_ID,
 } from "./approval-reviewer.ts";
+import { bindApprovalReviewer } from "./approval-reviewer-bind.ts";
 import {
   chatCompletionReviewPayload,
   createDirectReviewer,
@@ -796,5 +799,217 @@ describe("prompt and JSON extraction", () => {
     expect(prompt).toContain("STAFF.md");
     expect(extractReviewedJson("```json\n{\"purpose\":\"Reads STAFF.md\",\"change\":\"Nothing\",\"where\":\"STAFF.md\",\"risk\":\"low\"}\n```"))
       .toMatchObject({ purpose: "Reads STAFF.md" });
+  });
+});
+
+describe("automatic approval reviewer policy", () => {
+  const sampleProviders = [
+    {
+      id: "codex",
+      label: "Codex",
+      instanceId: "codex",
+      available: true,
+      configured: true,
+      reason: null,
+      models: [
+        { id: "gpt-5.6-sol", label: "Sol" },
+        { id: "gpt-5.6-luna", label: "Luna" },
+      ],
+    },
+    {
+      id: "claude",
+      label: "Claude",
+      instanceId: "claude",
+      available: true,
+      configured: true,
+      reason: null,
+      models: [
+        { id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+        { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
+      ],
+    },
+    {
+      id: "openrouter",
+      label: "OpenRouter",
+      instanceId: "openrouter",
+      available: true,
+      configured: true,
+      reason: null,
+      models: [
+        { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+        { id: "meta/llama-3-8b-instruct", label: "Llama 3 8B" },
+      ],
+    },
+  ];
+
+  it("preserves an explicit configured reviewer when valid and available", () => {
+    const selection = {
+      mode: "when-unclear" as const,
+      instanceId: "claude",
+      model: "claude-sonnet-5",
+    };
+    const effective = resolveEffectiveReviewerSelection(selection, sampleProviders);
+    expect(effective).toEqual({ instanceId: "claude", model: "claude-sonnet-5" });
+  });
+
+  it("falls back automatically to preferred fast model when explicit reviewer is unavailable", () => {
+    const selection = {
+      mode: "when-unclear" as const,
+      instanceId: "claude",
+      model: "non-existent-model",
+    };
+    const effective = resolveEffectiveReviewerSelection(selection, sampleProviders);
+    expect(effective).toEqual({ instanceId: "codex", model: "gpt-5.6-luna" });
+  });
+
+  it("prefers Luna, then Haiku, then Flash class models", () => {
+    expect(autoSelectApprovalReviewer(sampleProviders)).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.6-luna",
+    });
+
+    const withoutLuna = [
+      {
+        ...sampleProviders[0]!,
+        models: [{ id: "gpt-5.6-sol", label: "Sol" }],
+      },
+      sampleProviders[1]!,
+      sampleProviders[2]!,
+    ];
+    expect(autoSelectApprovalReviewer(withoutLuna)).toEqual({
+      instanceId: "claude",
+      model: "claude-haiku-4-5",
+    });
+
+    const withoutLunaOrHaiku = [
+      {
+        ...sampleProviders[0]!,
+        models: [{ id: "gpt-5.6-sol", label: "Sol" }],
+      },
+      {
+        ...sampleProviders[1]!,
+        models: [{ id: "claude-sonnet-5", label: "Claude Sonnet 5" }],
+      },
+      sampleProviders[2]!,
+    ];
+    expect(autoSelectApprovalReviewer(withoutLunaOrHaiku)).toEqual({
+      instanceId: "openrouter",
+      model: "google/gemini-2.5-flash",
+    });
+  });
+
+  it("falls back to other fast/mini models if Luna/Haiku/Flash are not in catalog", () => {
+    const providers = [
+      {
+        id: "xai",
+        label: "Grok",
+        instanceId: "xai-api",
+        available: true,
+        configured: true,
+        reason: null,
+        models: [
+          { id: "grok-4", label: "Grok 4" },
+          { id: "grok-3-mini", label: "Grok 3 Mini" },
+        ],
+      },
+    ];
+    expect(autoSelectApprovalReviewer(providers)).toEqual({
+      instanceId: "xai-api",
+      model: "grok-3-mini",
+    });
+  });
+
+  it("returns null when all catalogs are unavailable without crossing boundaries", () => {
+    const unavailableProviders = sampleProviders.map((p) => ({
+      ...p,
+      available: false,
+      reason: "Not configured",
+    }));
+    expect(autoSelectApprovalReviewer(unavailableProviders)).toBeNull();
+    expect(resolveEffectiveReviewerSelection({ mode: "when-unclear" }, unavailableProviders)).toBeNull();
+  });
+
+  it("never persists an automatic choice unless config semantics require it", () => {
+    const status = buildApprovalReviewerStatus(
+      { approvalReviewer: { mode: "when-unclear" } },
+      [{ instanceId: "codex", driverKind: "codex", models: { options: [{ id: "gpt-5.6-luna", label: "Luna" }] } }],
+      {},
+    );
+    expect(status.selection).toBeNull();
+    expect(status.mode).toBe("when-unclear");
+  });
+
+  it("bindApprovalReviewer binds auto-selected fast reviewer when selection is unconfigured", () => {
+    const instances = [
+      {
+        instanceId: "openrouter",
+        driverKind: "openai-compat",
+        models: { options: [{ id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash" }] },
+      },
+    ];
+    const providers = [
+      {
+        id: "openrouter",
+        label: "OpenRouter",
+        instanceId: "openrouter",
+        available: true,
+        configured: true,
+        reason: null,
+        models: [{ id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash" }],
+      },
+    ];
+    const bound = bindApprovalReviewer({
+      selection: { mode: "when-unclear" },
+      providers,
+      instances,
+      credentials: { openaiCompat: { key: "sk-test", url: "https://openrouter.ai/api/v1" } },
+    });
+    expect(bound).not.toBeNull();
+    expect(bound?.identity).toBe("openrouter:google/gemini-2.5-flash");
+  });
+
+  it("falls back deterministically on timeout and malformed output without altering risk", async () => {
+    const timedOut = await reviewApproval(
+      "terminal",
+      "rm -rf /",
+      "Mac mini",
+      async (_input, signal) => {
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+        return { purpose: "test", change: "test", where: "test", risk: "low" };
+      },
+      50,
+      "test-timeout-identity",
+    );
+    expect(timedOut.source).toBe("local");
+    expect(timedOut.riskLevel).toBe("high");
+
+    const malformed = await reviewApproval(
+      "terminal",
+      "rm -rf /",
+      "Mac mini",
+      async () => "not a valid json object",
+      500,
+      "test-malformed-identity",
+    );
+    expect(malformed.source).toBe("local");
+    expect(malformed.riskLevel).toBe("high");
+
+    const validAdvisory = await reviewApproval(
+      "terminal",
+      "rm -rf /",
+      "Mac mini",
+      async () => ({
+        purpose: "Clean up system files",
+        change: "Deletes root directory",
+        where: "/ on Mac mini",
+        risk: "low",
+        advisory: "This will delete your entire system",
+      }),
+      500,
+      "test-advisory-identity",
+    );
+    expect(validAdvisory.source).toBe("ai-reviewed");
+    expect(validAdvisory.riskLevel).toBe("high");
+    expect(validAdvisory.advisorySummary).toBe("This will delete your entire system");
   });
 });

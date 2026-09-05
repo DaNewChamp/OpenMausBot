@@ -8,6 +8,7 @@ import {
   XAI_REVIEW_INSTANCE_ID,
   findReviewerProvider,
   isAllowedReviewerUrl,
+  resolveEffectiveReviewerSelection,
   reviewDriverFamily,
   reviewerCacheIdentity,
   type ApprovalReviewerProvider,
@@ -69,15 +70,16 @@ export function bindApprovalReviewer(input: {
   runCli?: IsolatedCliRunner;
   env?: NodeJS.ProcessEnv;
 }): BoundApprovalReviewer | null {
-  if (!input.selection.instanceId || !input.selection.model) return null;
-  const provider = findReviewerProvider(input.providers, input.selection.instanceId, input.selection.model);
+  const effective = resolveEffectiveReviewerSelection(input.selection, input.providers);
+  if (!effective) return null;
+  const provider = findReviewerProvider(input.providers, effective.instanceId, effective.model);
   if (!provider?.available) return null;
-  const instance = input.instances.find((row) => row.instanceId === input.selection.instanceId);
+  const instance = input.instances.find((row) => row.instanceId === effective.instanceId);
   const family = reviewDriverFamily(
-    instance?.driverKind || (input.selection.instanceId === XAI_REVIEW_INSTANCE_ID ? "grok" : ""),
-    input.selection.instanceId,
+    instance?.driverKind || (effective.instanceId === XAI_REVIEW_INSTANCE_ID ? "grok" : ""),
+    effective.instanceId,
   );
-  const identity = reviewerCacheIdentity(input.selection.instanceId, input.selection.model);
+  const identity = reviewerCacheIdentity(effective.instanceId, effective.model);
   if (family === "openai-compat" || family === "xai") {
     const key = directKey(family, input.credentials);
     const url = directUrl(family, input.credentials);
@@ -85,7 +87,7 @@ export function bindApprovalReviewer(input: {
     const review: ApprovalExplanationReviewer = createDirectReviewer({
       url,
       apiKey: key,
-      model: input.selection.model,
+      model: effective.model,
       fetchImpl: input.fetchImpl,
     });
     return { identity, review };
@@ -97,7 +99,7 @@ export function bindApprovalReviewer(input: {
     return {
       identity,
       review: createCodexOAuthReviewer({
-        model: input.selection.model,
+        model: effective.model,
         fetchImpl: input.fetchImpl,
         env: input.env,
       }),
@@ -111,7 +113,7 @@ export function bindApprovalReviewer(input: {
       review: createCliReviewer({
         cli,
         family,
-        model: input.selection.model,
+        model: effective.model,
         run: input.runCli,
         env: input.env,
       }),
