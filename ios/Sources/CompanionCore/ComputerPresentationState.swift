@@ -409,3 +409,186 @@ public struct ComputerWatchLifecycle: Equatable, Sendable {
         failed("No screen frame arrived. The computer may be asleep or unavailable.")
     }
 }
+
+/// The pure presentation decision for a computer desktop surface.
+///
+/// Fleet Local VM prefers the lightweight screenshot/CDP interactive preview
+/// when guarded input and frames are available, even if the optional full
+/// viewer failed. Live viewer is reserved for backends whose safe projection
+/// explicitly advertises it.
+public enum ComputerPresentationDecision: Equatable, Sendable {
+    case interactivePreview
+    case liveViewer
+    case watchOnly
+    case starting(message: String)
+    case unavailable(message: String, retry: Bool)
+
+    public var isInteractive: Bool {
+        switch self {
+        case .interactivePreview, .liveViewer:
+            return true
+        case .watchOnly, .starting, .unavailable:
+            return false
+        }
+    }
+
+    public var showsRetry: Bool {
+        if case let .unavailable(_, retry) = self { return retry }
+        return false
+    }
+
+    public var presentationState: ComputerPresentationState {
+        switch self {
+        case .interactivePreview, .liveViewer, .watchOnly:
+            return .watching
+        case .starting:
+            return .starting
+        case let .unavailable(message, _):
+            return .unavailable(message: message)
+        }
+    }
+
+    public static func resolve(
+        bot: Bot,
+        hasGuardedInput: Bool,
+        hasFrame: Bool,
+        viewerFailed: Bool = false,
+        viewerReady: Bool = false,
+        advertisesLiveViewer: Bool? = nil,
+        status: LocalVmStatus? = nil,
+        loadFailure: String? = nil
+    ) -> ComputerPresentationDecision {
+        if let loadFailure {
+            let message = loadFailure.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .unavailable(
+                message: message.isEmpty ? "We couldn't load this computer right now." : message,
+                retry: true
+            )
+        }
+
+        if !ComputerPresentationState.hasKnownComputer(bot) {
+            return .unavailable(
+                message: ComputerPresentationState.unavailableMessage(for: bot),
+                retry: false
+            )
+        }
+
+        let isTrueBox = bot.computer == "cloud" && (bot.cloudBackend == nil || bot.cloudBackend == "box")
+        let explicitlyAdvertisesLive = advertisesLiveViewer ?? isTrueBox
+
+        if explicitlyAdvertisesLive {
+            if viewerFailed {
+                if hasGuardedInput && hasFrame {
+                    return .interactivePreview
+                }
+                return .unavailable(
+                    message: LocalVmDesktopPolicy.viewerConnectFailureMessage,
+                    retry: true
+                )
+            }
+            if viewerReady || isTrueBox {
+                return .liveViewer
+            }
+            if hasFrame && hasGuardedInput {
+                return .interactivePreview
+            }
+            return .starting(message: LocalVmDesktopPolicy.openingLiveDesktopMessage)
+        }
+
+        if LocalVmDesktopPolicy.isLocalVm(bot) {
+            guard hasGuardedInput else {
+                if hasFrame { return .watchOnly }
+                return .unavailable(
+                    message: LocalVmDesktopPolicy.accessOffMessage,
+                    retry: false
+                )
+            }
+
+            if let status {
+                switch status.state {
+                case .missing:
+                    return .unavailable(
+                        message: status.problem ?? LocalVmDesktopPolicy.notCreatedMessage,
+                        retry: false
+                    )
+                case .stopped:
+                    return .unavailable(
+                        message: status.problem ?? LocalVmDesktopPolicy.stoppedMessage,
+                        retry: false
+                    )
+                case .unavailable:
+                    return .unavailable(
+                        message: status.problem ?? "The Local VM desktop is unavailable.",
+                        retry: true
+                    )
+                case .unknown, .running:
+                    if hasFrame {
+                        return .interactivePreview
+                    }
+                    return .starting(
+                        message: status.problem
+                            ?? (status.state == .running
+                                ? LocalVmDesktopPolicy.startingDesktopMessage
+                                : LocalVmDesktopPolicy.checkingMessage)
+                    )
+                case .ready:
+                    break
+                }
+            }
+
+            if hasFrame {
+                return .interactivePreview
+            }
+
+            if viewerFailed {
+                return .unavailable(
+                    message: LocalVmDesktopPolicy.viewerConnectFailureMessage,
+                    retry: true
+                )
+            }
+
+            return .starting(
+                message: (status?.ready == true)
+                    ? LocalVmDesktopPolicy.loadingPreviewMessage
+                    : LocalVmDesktopPolicy.checkingMessage
+            )
+        }
+
+        if ComputerPresentationState.isVpsWatchOnly(bot) {
+            if bot.busy != true && !hasFrame {
+                return .unavailable(message: CloudViewerPolicy.vpsWatchCopy, retry: false)
+            }
+            return hasFrame ? .watchOnly : .starting(message: CloudViewerPolicy.vpsBusyWatchCopy)
+        }
+
+        if bot.busy != true && !hasFrame {
+            return .unavailable(message: ComputerPresentationState.idleWaitingMessage, retry: false)
+        }
+
+        if hasFrame {
+            return .watchOnly
+        }
+
+        return .starting(message: ComputerPresentationState.startingCopy(for: bot))
+    }
+
+    public static func resolve(
+        bot: Bot,
+        snapshot: LocalVmDesktopPolicy.Snapshot,
+        advertisesLiveViewer: Bool? = nil,
+        loadFailure: String? = nil
+    ) -> ComputerPresentationDecision {
+        resolve(
+            bot: bot,
+            hasGuardedInput: snapshot.accessGranted,
+            hasFrame: snapshot.hasScreenshot,
+            viewerFailed: snapshot.viewerFailed,
+            viewerReady: snapshot.viewerReady,
+            advertisesLiveViewer: advertisesLiveViewer,
+            status: snapshot.status,
+            loadFailure: loadFailure
+        )
+    }
+}
+
+public typealias ComputerDesktopPresentation = ComputerPresentationDecision

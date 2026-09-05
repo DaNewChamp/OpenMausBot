@@ -654,4 +654,108 @@ final class ComputerPresentationStateTests: XCTestCase {
             ComputerPresentationState.distinctSecondaryCopy(primary: "Body", secondary: "   ")
         )
     }
+
+    func testFleetLocalVmWithViewerFailureAndUsableFrameChoosesInteractivePreview() {
+        let vm = bot(computer: "vm", busy: false)
+        let readyStatus = LocalVmStatus(
+            mode: .perBot,
+            maxInstances: 2,
+            state: .ready,
+            container: "running",
+            daemonUp: true,
+            imageReady: true,
+            desktopReady: true,
+            ready: true,
+            createSupported: true,
+            busy: false,
+            canCreate: false,
+            canStop: true,
+            canRecreate: true,
+            problem: nil
+        )
+        let decision = ComputerPresentationDecision.resolve(
+            bot: vm,
+            hasGuardedInput: true,
+            hasFrame: true,
+            viewerFailed: true,
+            viewerReady: false,
+            status: readyStatus
+        )
+        XCTAssertEqual(decision, .interactivePreview)
+    }
+
+    func testTrueBoxBackendChoosesLiveViewer() {
+        let box = bot(computer: "cloud", cloudBackend: "box", busy: false)
+        let decision = ComputerPresentationDecision.resolve(
+            bot: box,
+            hasGuardedInput: true,
+            hasFrame: true,
+            viewerFailed: false,
+            viewerReady: true
+        )
+        XCTAssertEqual(decision, .liveViewer)
+    }
+
+    func testFleetLocalVmSnapshotWithViewerFailureChoosesInteractivePreview() {
+        let vm = bot(computer: "vm", busy: false)
+        let readyStatus = LocalVmStatus(
+            mode: .perBot,
+            maxInstances: 2,
+            state: .ready,
+            container: "running",
+            daemonUp: true,
+            imageReady: true,
+            desktopReady: true,
+            ready: true,
+            createSupported: true,
+            busy: false,
+            canCreate: false,
+            canStop: true,
+            canRecreate: true,
+            problem: nil
+        )
+        let snapshot = LocalVmDesktopPolicy.Snapshot(
+            status: readyStatus,
+            accessGranted: true,
+            hasScreenshot: true,
+            viewerURLPresent: true,
+            viewerFailed: true,
+            viewerReady: false
+        )
+        let decision = ComputerPresentationDecision.resolve(
+            bot: vm,
+            snapshot: snapshot
+        )
+        XCTAssertEqual(decision, .interactivePreview)
+    }
+
+    func testExplicitLiveViewerAdvertisedBackendChoosesLiveViewer() {
+        let vm = bot(computer: "vm", busy: false)
+        let readyStatus = LocalVmStatus(
+            mode: .perBot,
+            maxInstances: 2,
+            state: .ready,
+            container: "running",
+            daemonUp: true,
+            imageReady: true,
+            desktopReady: true,
+            ready: true,
+            createSupported: true,
+            busy: false,
+            canCreate: false,
+            canStop: true,
+            canRecreate: true,
+            problem: nil
+        )
+        let decision = ComputerPresentationDecision.resolve(
+            bot: vm,
+            hasGuardedInput: true,
+            hasFrame: true,
+            viewerFailed: false,
+            viewerReady: true,
+            advertisesLiveViewer: true,
+            status: readyStatus
+        )
+        XCTAssertEqual(decision, .liveViewer)
+    }
 }

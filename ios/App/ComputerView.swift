@@ -84,8 +84,15 @@ struct ComputerView: View {
         nonmutating set { vmPointerModeRaw = newValue.rawValue }
     }
 
+    private var presentationDecision: ComputerPresentationDecision {
+        ComputerPresentationDecision.resolve(
+            bot: current,
+            snapshot: localVmSnapshot
+        )
+    }
+
     private var localVmInteractive: Bool {
-        isLocalVm && localVmStatus?.ready == true && session.localVmAccess
+        isLocalVm && presentationDecision.isInteractive
     }
 
     /// Clipboard toggle + keyboard chrome for every Local VM session,
@@ -95,12 +102,13 @@ struct ComputerView: View {
     }
 
     private var usingLiveViewer: Bool {
-        desktopSurface == .liveViewer && localVmViewerURL != nil
+        presentationDecision == .liveViewer && localVmViewerURL != nil
     }
 
     private var openingLiveViewer: Bool {
         isLocalVm && LocalVmDesktopPolicy.shouldJoinViewer(bot: current, snapshot: localVmSnapshot)
             && !viewerReady && !viewerLoadFailed
+            && presentationDecision == .liveViewer
     }
 
     private static let firstFrameTimeout = ComputerWatchLifecycle.firstFrameTimeout
@@ -144,11 +152,14 @@ struct ComputerView: View {
             watchFailure: screenWatch.failureMessage,
             wantsScreenPreview: wantsScreenPreview
         )
+        if isLocalVm && loadFailure == nil && decodeFailure == nil {
+            return presentationDecision.presentationState
+        }
         return ComputerPresentationState.resolve(
             bot: current,
             frame: image == nil ? nil : frame,
             loadFailure: loadFailure ?? decodeFailure,
-            localVm: isLocalVm && loadFailure == nil && decodeFailure == nil ? localVmSnapshot : nil
+            localVm: nil
         )
     }
 
@@ -243,7 +254,7 @@ struct ComputerView: View {
     }
 
     private var canRetryScreen: Bool {
-        if isLocalVm { return desktopSurface.showsRetry || viewerLoadFailed }
+        if isLocalVm { return presentationDecision.showsRetry || (viewerLoadFailed && image == nil) }
         return ComputerPresentationState.hasKnownComputer(current)
             && wantsScreenPreview
             && (screenWatch.failureMessage != nil || streamFailure != nil)
@@ -495,12 +506,12 @@ struct ComputerView: View {
                     try? await Task.sleep(for: LocalVmDesktopPolicy.statusPollInterval)
                 }
             }
-            .task(id: "local-vm-preview-\(current.id)-\(current.computer ?? "")-\(session.localVmAccess)-\(viewerReady)") {
+            .task(id: "local-vm-preview-\(current.id)-\(current.computer ?? "")-\(session.localVmAccess)-\(viewerReady)-\(presentationDecision)") {
                 guard isLocalVm else { return }
-                guard LocalVmDesktopPolicy.shouldPollScreenshot(bot: current, snapshot: localVmSnapshot) else { return }
+                guard LocalVmDesktopPolicy.shouldPollScreenshot(bot: current, snapshot: localVmSnapshot) || presentationDecision == .interactivePreview else { return }
                 while !Task.isCancelled {
                     await session.refreshLocalVmPreview(for: current)
-                    if !LocalVmDesktopPolicy.shouldPollScreenshot(bot: current, snapshot: localVmSnapshot) {
+                    if !LocalVmDesktopPolicy.shouldPollScreenshot(bot: current, snapshot: localVmSnapshot) && presentationDecision != .interactivePreview {
                         break
                     }
                     try? await Task.sleep(for: LocalVmDesktopPolicy.screenshotPollInterval)
@@ -652,16 +663,15 @@ struct ComputerView: View {
     @ViewBuilder
     private var localVmDesktop: some View {
         ZStack {
-            if case .unavailable = desktopSurface {
+            if case .unavailable = presentationDecision {
                 stateCard
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                if let image, !viewerReady {
+                if let image, !usingLiveViewer || !viewerReady {
                     localVmScreenshotSurface(image)
                 }
 
-                if let localVmViewerURL,
-                   LocalVmDesktopPolicy.shouldJoinViewer(bot: current, snapshot: localVmSnapshot) || usingLiveViewer {
+                if let localVmViewerURL, usingLiveViewer {
                     VMViewerWebView(
                         url: localVmViewerURL,
                         pointerMode: vmPointerMode,
@@ -677,16 +687,16 @@ struct ComputerView: View {
                     .accessibilityLabel("\(current.name)'s Local VM")
                 }
 
-                if !viewerReady, image == nil {
+                if (!usingLiveViewer || !viewerReady), image == nil {
                     CalmDesktopSkeleton(message: localVmStartingMessage)
                 }
 
                 if viewerLoadFailed, image != nil {
                     Button {
                         Haptics.selection()
-                        retryLiveViewer()
+                        Task { await session.refreshLocalVmPreview(for: current) }
                     } label: {
-                        Label("Try live desktop again", systemImage: "arrow.clockwise")
+                        Label("Refresh frame", systemImage: "arrow.clockwise")
                             .font(.footnote.weight(.semibold))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
@@ -703,7 +713,7 @@ struct ComputerView: View {
 
     @ViewBuilder
     private func localVmScreenshotSurface(_ image: UIImage) -> some View {
-        if desktopSurface.isInteractive || (localVmInteractive && desktopSurface != .screenshotWatchOnly) {
+        if presentationDecision.isInteractive || (localVmInteractive && presentationDecision != .watchOnly) {
             RemoteDesktopCanvas(
                 image: image,
                 pointerMode: vmPointerMode,
@@ -1237,7 +1247,10 @@ struct ComputerView: View {
 
     private func retryScreen() {
         if isLocalVm {
-            retryLiveViewer()
+            Task { await session.refreshLocalVmPreview(for: current) }
+            if presentationDecision == .liveViewer {
+                retryLiveViewer()
+            }
         }
         guard ComputerPresentationState.hasKnownComputer(current) else { return }
         restartScreenWatch()
@@ -1271,7 +1284,7 @@ struct ComputerView: View {
         }
         viewerLoadFailed = true
         viewerReady = false
-        if image == nil {
+        if presentationDecision != .interactivePreview && image == nil {
             localVmSurfaceError = message
         }
     }
