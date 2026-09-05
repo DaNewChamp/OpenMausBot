@@ -84,19 +84,21 @@ companion/index.js 918f2763750f9833247242aef5657ecacec3c580c2e8817da11b44d44bae5
 
 A rollback should restore these runtime snapshots and restart only the corresponding idle services after checking live bot/job state. Do not alter credentials, service environments, Docker containers, or unrelated applications.
 
-## Live native smoke: remaining validation
+## Live native smoke: proven after retry
 
-Global mode/host remained shared Windows (`6b9c61f5-3517-4a59-9abe-25f3af311fef`). GET `/api/local-computer` confirmed the existing shared browser container ready before the check. Permanent Chief Keef bot `94a201dd-537d-40be-8da3-e723532c982b` uses Cursor / auto. No permanent bot was reconfigured.
+Global mode/host remained shared Windows (`6b9c61f5-3517-4a59-9abe-25f3af311fef`). Permanent Chief Keef `94a201dd-537d-40be-8da3-e723532c982b` stayed untouched on Cursor / auto.
 
-A disposable VM bot copied that model selection and was asked for exactly one screenshot, without navigation, input, shell execution, or file changes. Permission settings were not broadened. It failed to finish within the verification window. The live bridge job audit contains **no job at all for that verification thread**, so this attempt did not reach the native relay. The provider/tool-mount/approval cause is unconfirmed.
+The first disposable retry showed the earlier timeout was not a relay failure: a default-permission temporary bot was still busy before emitting any tool request. A second disposable bot copied Chief Keef's Cursor / auto selection and used temporary `permissionMode=allow` / `autoApprove=true` only for the probe. Cursor emitted the screenshot tool call, the hub created native bridge job `f29a9866-d555-401e-bfc8-15e4300b1aa6`, and the job ran on the selected Windows bridge with payload `botId=shared`, the temporary thread id, and `tool=screenshot`.
 
-Temporary bot `74204c32-a32b-45b4-8ca2-2bdf0fb41309`, thread `fc07b2d1-d917-4ede-8b0a-1f306889433f`, was interrupted and deleted in cleanup. The log confirms 15 bots remain. The smoke job is terminal; no worker was left monitoring it.
+The bridge job completed `succeeded`, exit 0, and returned `isError:false`, `imageMimeType:image/jpeg`, with a real JPEG payload. Cursor consumed the tool result and then completed the turn with the text `done`. This proves the complete native path: **Cursor turn → native MCP → hub ownership/relay → selected Windows bridge → shared managed browser container → JPEG result → Cursor turn completion**.
 
-- Script: `/tmp/vbot-native-live-smoke-0904.py`
-- Log: `/tmp/vbot-native-live-smoke-0904.log`
-- Managed job: `20260904T235138-command-b45b43e6` (failed, exit 1; verification timeout, cleanup completed).
+Temporary live-proof bot `ce6e2b37-6f00-42f3-88f6-fa11cb44b44f`, thread `20d27faa-67b9-4cb6-b7df-738442ee51ad`, was interrupted/deleted by the probe cleanup. No permanent bot settings changed.
 
-Next bounded investigation is why the native Cursor turn did not emit the screenshot job. Inspect provider readiness, tool mount, and approval state before changing relay code or broadening permissions. A successful future live check must prove an owned native turn creates a Windows `local-vm-invoke` screenshot job for target `shared`, completes with a valid JPEG, and is cleaned up afterward. Passing manual screenshot controls alone does not establish that path.
+- Live probe log: `/tmp/vbot-cursor-live-hold.log`
+- Managed probe job: `20260905T000358-command-9ceffaab`
+- Native bridge job: `f29a9866-d555-401e-bfc8-15e4300b1aa6`
+
+Native Windows parity for this boundary is now live-proven rather than inferred from fixtures or manual controls.
 
 ## Preserved boundaries
 
