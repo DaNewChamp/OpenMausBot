@@ -5,6 +5,7 @@ struct VmKeyboardBar: View {
     @Binding var text: String
     var isFocused: FocusState<Bool>.Binding
     let onSend: () -> Void
+    let onDismiss: () -> Void
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
@@ -21,7 +22,13 @@ struct VmKeyboardBar: View {
 
             Button("Send", action: onSend)
                 .font(.subheadline.weight(.semibold))
+                .frame(minHeight: VBotSurface.Hit.minimum)
                 .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+            Button("Done", action: onDismiss)
+                .font(.subheadline.weight(.semibold))
+                .frame(minHeight: VBotSurface.Hit.minimum)
+                .accessibilityLabel("Done")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)

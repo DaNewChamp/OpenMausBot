@@ -299,7 +299,8 @@ struct ComputerView: View {
                             VmKeyboardBar(
                                 text: $vmTypeDraft,
                                 isFocused: $vmKeyboardFocused,
-                                onSend: { Task { await submitVmTypedText() } }
+                                onSend: { Task { await submitVmTypedText() } },
+                                onDismiss: { dismissVmKeyboard() }
                             )
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
@@ -403,6 +404,7 @@ struct ComputerView: View {
                 syncScreenWatch(resetFrame: false)
             }
             .onDisappear {
+                dismissVmKeyboard()
                 desktopURL = nil
                 localVmViewerURL = nil
                 viewerReady = false
@@ -451,6 +453,7 @@ struct ComputerView: View {
                 }
             }
             .onChange(of: current.computer) { _, newValue in
+                dismissVmKeyboard()
                 let mode = newValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 if mode == "vm" {
                     resetLiveViewerSession()
@@ -460,6 +463,11 @@ struct ComputerView: View {
                     viewerLoadFailed = false
                 }
                 syncScreenWatch(resetFrame: mode != "vm")
+            }
+            .onChange(of: localVmInteractive) { _, interactive in
+                if !interactive && vmKeyboardFocused {
+                    dismissVmKeyboard()
+                }
             }
             .onChange(of: current.cloudBackend) { _, _ in
                 syncScreenWatch(resetFrame: true)
@@ -536,6 +544,7 @@ struct ComputerView: View {
         HStack(spacing: 8) {
             GlassButton(systemImage: "chevron.left") {
                 Haptics.selection()
+                dismissVmKeyboard()
                 dismiss()
             }
             .accessibilityLabel("Back")
@@ -750,12 +759,26 @@ struct ComputerView: View {
     }
 
     @MainActor
+    private func dismissVmKeyboard() {
+        let next = VmKeyboardPresentationPolicy.transition(
+            state: .init(isPresented: vmKeyboardFocused, draftText: vmTypeDraft),
+            event: .dismiss
+        )
+        vmKeyboardFocused = next.isPresented
+        vmTypeDraft = next.draftText
+    }
+
+    @MainActor
     private func toggleVmKeyboard() {
         Haptics.selection()
         if vmKeyboardFocused {
-            vmKeyboardFocused = false
+            dismissVmKeyboard()
         } else {
-            vmKeyboardFocused = true
+            let next = VmKeyboardPresentationPolicy.transition(
+                state: .init(isPresented: false, draftText: vmTypeDraft),
+                event: .toggle(canType: localVmInteractive)
+            )
+            vmKeyboardFocused = next.isPresented
         }
     }
 
@@ -774,7 +797,7 @@ struct ComputerView: View {
         await sendLocalVmInput(["action": "type", "text": text])
         vmTypeDraft = ""
         if !usingLiveViewer {
-            vmKeyboardFocused = false
+            dismissVmKeyboard()
         }
     }
 
@@ -1114,6 +1137,7 @@ struct ComputerView: View {
         else { return }
         session.stageComposerText(text)
         Haptics.selection()
+        dismissVmKeyboard()
         dismiss()
     }
 
@@ -1158,11 +1182,13 @@ struct ComputerView: View {
         guard mode == "vm" || mode == "cloud" else { return }
         guard destination != mode else { return }
         Haptics.selection()
+        dismissVmKeyboard()
         Task { await applyDestination(mode) }
     }
 
     @MainActor
     private func applyDestination(_ mode: String) async {
+        dismissVmKeyboard()
         savingDestination = true
         defer { savingDestination = false }
         if mode == "vm" {

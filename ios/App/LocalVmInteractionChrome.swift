@@ -40,11 +40,16 @@ struct LocalVmInteractionChrome: View {
                     accessibilityLabel: keyboardActive ? "Hide keyboard" : "Show keyboard",
                     action: onToggleKeyboard
                 )
-                .disabled(!canType)
+                .disabled(!canType && !keyboardActive)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: clipboardExpanded)
         .animation(.easeInOut(duration: 0.2), value: pointerMode)
+        .onChange(of: keyboardActive) { _, active in
+            if active {
+                clipboardExpanded = false
+            }
+        }
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 10)
