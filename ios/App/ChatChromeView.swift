@@ -193,18 +193,33 @@ struct ChatChromeView: View {
             .disabled(session.pendingPinnedChats.contains(current.stableID))
         }
         .accessibilityLabel(current.isBot ? "Open \(current.name) profile" : "Open \(current.name) group profile")
+        .accessibilityValue(identityAccessibilityValue)
         .accessibilityHint(current.isBot ? "Edits this agent's identity, avatar, notifications, and voice" : "Shows group members, instructions, and routines")
+    }
+
+    private var identityAccessibilityValue: String {
+        switch current {
+        case let .bot(bot):
+            let live = session.state.bot(bot.id) ?? bot
+            let summary = ModelSelectionPolicy.headerSummary(
+                selection: live.modelSelection,
+                instances: session.modelCatalog
+            )
+            return "\(summary.title), \(summary.source)"
+        case .room:
+            return current.name
+        }
     }
 
     private var identityLabel: String {
         switch current {
         case let .bot(bot):
             let live = session.state.bot(bot.id) ?? bot
-            let model = AdvertisedModelCatalog.humanModelLabel(
+            let summary = ModelSelectionPolicy.headerSummary(
                 selection: live.modelSelection,
                 instances: session.modelCatalog
             )
-            return ConversationLayoutPolicy.identityTitle(name: live.name, modelLabel: model)
+            return ConversationLayoutPolicy.identityTitle(name: live.name, modelLabel: summary.title)
         case .room:
             if case let .room(room) = current,
                let title = BotChannelPolicy.perspectiveTitle(

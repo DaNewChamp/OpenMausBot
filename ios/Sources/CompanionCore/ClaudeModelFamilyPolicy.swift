@@ -1,72 +1,140 @@
 import Foundation
 
-/// Collapses advertised Claude model duplicates into one row per family with
-/// an optional 1M-context toggle when both counterparts exist.
+/// Claude-facing family rows built on `ModelFamilyPolicy`. Thinking is an
+/// independent axis; it is never treated as a 1M counterpart.
 public struct CompactClaudeModelRow: Hashable, Sendable, Identifiable {
-    public var id: String { standardModelId }
+    public var familyKey: String
     public var label: String
-    public var standardModelId: String
-    public var oneMModelId: String?
     public var instanceId: String
+    public var variants: [ModelAdvertisedVariant]
+    public var showsOneMToggle: Bool
+    public var showsThinkingToggle: Bool
 
-    public var showsOneMToggle: Bool { oneMModelId != nil }
+    public var id: String { familyKey }
+    public var rawModelIds: [String] { variants.map(\.modelId) }
 
-    public init(label: String, standardModelId: String, oneMModelId: String?, instanceId: String) {
+    public init(
+        familyKey: String,
+        label: String,
+        instanceId: String,
+        variants: [ModelAdvertisedVariant],
+        showsOneMToggle: Bool,
+        showsThinkingToggle: Bool
+    ) {
+        self.familyKey = familyKey
         self.label = label
-        self.standardModelId = standardModelId
-        self.oneMModelId = oneMModelId
         self.instanceId = instanceId
+        self.variants = variants
+        self.showsOneMToggle = showsOneMToggle
+        self.showsThinkingToggle = showsThinkingToggle
     }
 
-    public func selectedModelId(forOneMEnabled enabled: Bool) -> String {
-        if enabled, let oneMModelId { return oneMModelId }
-        return standardModelId
-    }
-
-    public func oneMEnabled(for selectedModelId: String) -> Bool {
-        guard let oneMModelId else { return false }
-        return selectedModelId == oneMModelId
+    public func selectedModelId(
+        oneMEnabled: Bool,
+        thinking: Bool,
+        fast: Bool,
+        effort: String?
+    ) -> String? {
+        let family = ModelFamily(
+            key: familyKey,
+            providerId: "claude",
+            label: label,
+            sources: [
+                ModelFamilySource(
+                    instanceId: instanceId,
+                    displayName: instanceId,
+                    available: true,
+                    unavailableReason: nil,
+                    variants: variants,
+                    capabilityEffortLevels: [],
+                    effortEncodedInModelId: variants.contains { $0.axes.effort != nil }
+                )
+            ],
+            privacyNotices: variants.compactMap(\.privacyNotice)
+        )
+        return ModelFamilyPolicy.resolveVariant(
+            in: family,
+            instanceId: instanceId,
+            effort: effort,
+            thinking: thinking,
+            fast: fast,
+            oneM: oneMEnabled
+        )?.modelId
     }
 }
 
 public enum ClaudeModelFamilyPolicy: Sendable {
-    private static let oneMSuffixes = ["-1m", "-thinking-high", "-thinking-medium", "-thinking-low", "-thinking"]
-
     public static func compactRows(
         from models: [MobileCatalogModel],
         preservingSelection selectionId: String? = nil
     ) -> [CompactClaudeModelRow] {
-        var groups: [String: [MobileCatalogModel]] = [:]
-        for model in models {
-            let key = familyKey(for: model.id)
-            groups[key, default: []].append(model)
-        }
-
-        var rows: [CompactClaudeModelRow] = groups.values.compactMap { group in
-            guard let standard = pickStandard(in: group) else { return nil }
-            let oneM = pickOneM(in: group, standardId: standard.id)
-            return CompactClaudeModelRow(
-                label: displayLabel(for: standard),
-                standardModelId: standard.id,
-                oneMModelId: oneM?.id,
-                instanceId: standard.instanceId
+        let byInstance = Dictionary(grouping: models, by: \.instanceId)
+        let instances = byInstance.map { instanceId, rows in
+            Instance(
+                instanceId: instanceId,
+                driverKind: "claudeAgent",
+                displayName: "Claude",
+                snapshot: ProviderSnapshot(state: "available", reason: nil, authenticated: true, version: nil),
+                models: ModelCatalog(
+                    default: rows.first?.id ?? "",
+                    options: rows.map { ModelOption(id: $0.id, label: $0.label, instanceId: $0.instanceId) }
+                )
             )
         }
-        .sorted {
-            if $0.label != $1.label { return $0.label < $1.label }
-            return $0.standardModelId < $1.standardModelId
-        }
+        let seed = selectionId ?? models.first?.id ?? ""
+        let catalog = ModelFamilyPolicy.catalog(
+            from: instances,
+            selection: ModelSelection(instanceId: models.first?.instanceId ?? "claude", model: seed)
+        )
+        var rows = catalog.families
+            .filter { $0.providerId == "claude" || $0.key.hasPrefix("claude") }
+            .map { family -> CompactClaudeModelRow in
+                let source = family.sources.first
+                let variants = source?.variants ?? []
+                return CompactClaudeModelRow(
+                    familyKey: family.key,
+                    label: family.label,
+                    instanceId: source?.instanceId ?? models.first?.instanceId ?? "claude",
+                    variants: variants,
+                    showsOneMToggle: ModelFamilyPolicy.contextClaim(for: variants) == .toggle,
+                    showsThinkingToggle: ModelFamilyPolicy.thinkingIsIndependent(in: variants)
+                )
+            }
+            .sorted {
+                if $0.label != $1.label { return $0.label < $1.label }
+                return $0.familyKey < $1.familyKey
+            }
 
         if let selectionId,
-           !rows.contains(where: { $0.standardModelId == selectionId || $0.oneMModelId == selectionId }) {
+           !rows.contains(where: { $0.rawModelIds.contains(selectionId) || $0.familyKey == ModelFamilyPolicy.parse(selectionId).familyKey }) {
             let orphan = models.first { $0.id == selectionId }
             rows.append(
                 CompactClaudeModelRow(
-                    label: orphan.map { displayLabel(for: $0) }
+                    familyKey: ModelFamilyPolicy.parse(selectionId).familyKey,
+                    label: orphan.map { cleaned($0.label, fallback: $0.id) }
                         ?? AdvertisedModelCatalog.displayModelLabel(selectionId),
-                    standardModelId: selectionId,
-                    oneMModelId: nil,
-                    instanceId: orphan?.instanceId ?? models.first?.instanceId ?? "claude"
+                    instanceId: orphan?.instanceId ?? models.first?.instanceId ?? "claude",
+                    variants: orphan.map {
+                        [
+                            ModelAdvertisedVariant(
+                                instanceId: $0.instanceId,
+                                modelId: $0.id,
+                                label: $0.label,
+                                axes: ModelFamilyPolicy.parse($0.id).axes,
+                                privacyNotice: ModelFamilyPolicy.privacyNotice(from: $0.label)
+                            )
+                        ]
+                    } ?? [
+                        ModelAdvertisedVariant(
+                            instanceId: models.first?.instanceId ?? "claude",
+                            modelId: selectionId,
+                            label: AdvertisedModelCatalog.displayModelLabel(selectionId),
+                            axes: ModelFamilyPolicy.parse(selectionId).axes,
+                            privacyNotice: nil
+                        )
+                    ],
+                    showsOneMToggle: false,
+                    showsThinkingToggle: false
                 )
             )
         }
@@ -82,52 +150,21 @@ public enum ClaudeModelFamilyPolicy: Sendable {
             MobileCatalogModel(id: $0.id, label: $0.label, instanceId: $0.instanceId ?? instanceId, isDefault: false)
         }
         return compactRows(from: mobile, preservingSelection: selectionId).map {
-            ModelOption(id: $0.standardModelId, label: $0.label, instanceId: $0.instanceId)
+            ModelOption(id: $0.familyKey, label: $0.label, instanceId: $0.instanceId)
         }
     }
 
-    private static func familyKey(for modelId: String) -> String {
-        var key = ProviderCatalogPolicy.isClaudeModelId(modelId) ? modelBase(modelId) : modelId
-        for suffix in oneMSuffixes.sorted(by: { $0.count > $1.count }) {
-            if key.hasSuffix(suffix) {
-                key = String(key.dropLast(suffix.count))
-                break
-            }
-        }
-        return key
-    }
-
-    private static func modelBase(_ modelId: String) -> String {
-        let normalized = modelId.lowercased()
-        return String(normalized.split(separator: "[", maxSplits: 1, omittingEmptySubsequences: false).first ?? Substring(normalized))
-    }
-
-    private static func isOneMVariant(_ modelId: String) -> Bool {
-        let lower = modelBase(modelId)
-        if lower.hasSuffix("-1m") { return true }
-        for suffix in oneMSuffixes where suffix != "-1m" {
-            if lower.hasSuffix(suffix) { return true }
-        }
-        return false
-    }
-
-    private static func pickStandard(in group: [MobileCatalogModel]) -> MobileCatalogModel? {
-        group.first { !isOneMVariant($0.id) }
-            ?? group.min(by: { $0.id.count < $1.id.count })
-    }
-
-    private static func pickOneM(in group: [MobileCatalogModel], standardId: String) -> MobileCatalogModel? {
-        group.first { $0.id != standardId && isOneMVariant($0.id) }
-    }
-
-    private static func displayLabel(for model: MobileCatalogModel) -> String {
-        let trimmed = model.label.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            return trimmed
-                .replacingOccurrences(of: " 1M Thinking", with: "")
-                .replacingOccurrences(of: " (Thinking)", with: "")
-                .replacingOccurrences(of: " 1M", with: "")
-        }
-        return AdvertisedModelCatalog.displayModelLabel(model.id)
+    private static func cleaned(_ label: String, fallback: String) -> String {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return AdvertisedModelCatalog.displayModelLabel(fallback) }
+        return ModelFamilyPolicy.familyLabel(from: [
+            ModelAdvertisedVariant(
+                instanceId: "",
+                modelId: fallback,
+                label: trimmed,
+                axes: ModelFamilyPolicy.parse(fallback).axes,
+                privacyNotice: ModelFamilyPolicy.privacyNotice(from: trimmed)
+            )
+        ])
     }
 }

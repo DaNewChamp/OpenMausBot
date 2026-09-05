@@ -32,8 +32,8 @@ public struct MobileProviderCatalog: Codable, Hashable, Sendable {
 /// phone catalog. Mirrors `server/provider-catalog.ts`.
 public enum ProviderCatalogPolicy: Sendable {
     public static let namedOrder = ["openai", "claude", "cursor", "openrouter", "grok-auth"]
-    /// Keep the OpenAI rail intentionally small and stable. Entries are
-    /// admitted only when the paired server advertises the exact ID.
+    /// Ranked first on the OpenAI rail. Not a whitelist — every advertised
+    /// model remains selectable under More models.
     public static let preferredOpenAIModelOrder = [
         "gpt-5.6-sol",
         "gpt-5.6-sol-1m",
@@ -217,47 +217,41 @@ public enum ProviderCatalogPolicy: Sendable {
         hostWideEngine: Bool
     ) -> Bool {
         let rail = resolvedRail(advertised: advertised, selection: selection, activeRailId: activeRailId)
-        if ModelSelectionPolicy.modelsDisabled(for: rail, hostWideEngine: hostWideEngine) {
-            return true
-        }
-        guard let rail else { return hostWideEngine }
-        if contains(selection, in: rail) { return false }
-        // A direct OpenAI selection can point at a retired model after a
-        // server refresh. Keep the preferred replacement rows actionable so
-        // the user can repair the persisted choice in place.
-        return !(
-            rail.instanceId == "openai"
-                && !shouldDisplaySelection(selection, advertised: advertised)
-                && advertised.contains {
-                    $0.instanceId == selection.instanceId
-                        && isDirectOpenAIInstance(instanceId: $0.instanceId, driverKind: $0.driverKind)
-                }
-        )
+        return ModelSelectionPolicy.modelsDisabled(for: rail, hostWideEngine: hostWideEngine)
     }
 
+    public static func rowIdentity(_ model: MobileCatalogModel) -> String {
+        ModelFamilyPolicy.compositeId(instanceId: model.instanceId, modelId: model.id)
+    }
+
+    /// Provider tabs only change browsing state. They never rewrite the draft
+    /// or persisted model.
     public static func selectionAfterProviderTap(
         current: ModelSelection,
         tapped: Instance,
         advertised: [Instance]
     ) -> ModelSelection? {
-        guard tapped.allowsInstanceChange || contains(current, in: tapped) else { return nil }
-        if contains(current, in: tapped) { return current }
-        guard let option = defaultOption(in: tapped) else { return nil }
-        return ModelSelection(
-            instanceId: option.instanceId ?? tapped.instanceId,
-            model: option.id,
-            effort: current.effort
-        )
+        _ = (current, tapped, advertised)
+        return nil
     }
 
     public static func selectionAfterModelTap(
         current: ModelSelection,
         rail: Instance?,
-        modelId: String
+        modelId: String,
+        sourceInstanceId: String? = nil
     ) -> ModelSelection? {
-        guard let rail, rail.allowsModelChange,
-              let option = rail.models.options.first(where: { $0.id == modelId })
-        else { return nil }
+        guard let rail, rail.allowsModelChange else { return nil }
+        let matches = rail.models.options.filter { $0.id == modelId }
+        let option: ModelOption?
+        if let sourceInstanceId {
+            option = matches.first { ($0.instanceId ?? rail.instanceId) == sourceInstanceId }
+        } else if matches.count <= 1 {
+            option = matches.first
+        } else {
+            option = matches.first { ($0.instanceId ?? rail.instanceId) == current.instanceId }
+        }
+        guard let option else { return nil }
         let instanceId = option.instanceId ?? rail.instanceId
         return ModelSelection(instanceId: instanceId, model: modelId, effort: current.effort)
     }
@@ -295,17 +289,10 @@ public enum ProviderCatalogPolicy: Sendable {
         AdvertisedModelCatalog.isEmpty(groupedInstances(advertised: advertised, selection: selection))
     }
 
-    /// Whether a persisted selection may be shown as an orphan row. Retired
-    /// OpenAI models are intentionally hidden rather than echoed back into the
-    /// picker after a catalog refresh.
+    /// Missing current selections stay visible as "Current model unavailable".
     public static func shouldDisplaySelection(_ selection: ModelSelection, advertised: [Instance]) -> Bool {
-        guard let source = advertised.first(where: { $0.instanceId == selection.instanceId }) else {
-            return true
-        }
-        guard isDirectOpenAIInstance(instanceId: source.instanceId, driverKind: source.driverKind) else {
-            return true
-        }
-        return preferredOpenAIModelOrder.contains(selection.model)
+        _ = (selection, advertised)
+        return true
     }
 
     private static func instance(from group: MobileCatalogProvider, advertisedById: [String: Instance]) -> Instance {
@@ -362,11 +349,8 @@ public enum ProviderCatalogPolicy: Sendable {
         driverKind: String,
         snapshot: ProviderSnapshot
     ) -> Bool {
-        guard providerId == "openai",
-              isDirectOpenAIInstance(instanceId: instanceId, driverKind: driverKind)
-        else { return true }
-        guard snapshot.isAvailable else { return false }
-        return preferredOpenAIModelOrder.contains(option.id)
+        _ = (option, providerId, instanceId, driverKind, snapshot)
+        return true
     }
 
     private static func containsSecretKey(_ value: Any) -> Bool {

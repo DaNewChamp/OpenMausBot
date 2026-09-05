@@ -113,10 +113,7 @@ struct ModelEffortPicker: View {
     }
 
     static func effortLabel(_ level: String) -> String {
-        switch level {
-        case "xhigh": return "X-High"
-        default: return level.split(separator: "-").map { $0.capitalized }.joined(separator: " ")
-        }
+        ModelSelectionPolicy.effortDisplayName(level)
     }
 }
 
@@ -148,84 +145,75 @@ private struct EffortChip: View {
     }
 }
 
-/// Premium model picker for bot profiles and settings. Mirrors the desktop
-/// `ModelPicker` rail + list pattern with V Bot solid surfaces.
+/// Compact family picker. Provider tabs browse only; family/toggles stay
+/// on the draft until the host Applies.
 struct ModelPickerView: View {
     let instances: [Instance]
-    @Binding var selectedInstanceId: String
-    @Binding var selectedModelId: String
+    @Binding var draft: ModelPickerDraft
     var disabled: Bool = false
-    var modelsDisabled: Bool = false
+    var hostWide: Bool = false
     var footerHint: String?
-    var onSelectionChange: () -> Void
 
-    @State private var railInstanceId: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var railInstances: [Instance] {
-        ProviderCatalogPolicy.groupedInstances(
-            advertised: instances,
-            selection: ModelSelection(instanceId: selectedInstanceId, model: selectedModelId)
+    private var catalog: ModelFamilyCatalog {
+        ModelFamilyPolicy.catalog(
+            from: instances,
+            selection: ModelSelection(instanceId: draft.instanceId, model: draft.modelId, effort: draft.effort)
         )
     }
 
-    private var activeRailId: String {
-        if let railInstanceId { return railInstanceId }
-        return ProviderCatalogPolicy.resolvedRail(
-            advertised: instances,
-            selection: currentSelection,
-            activeRailId: nil
-        )?.instanceId ?? selectedInstanceId
+    private var providerTabs: [MobileCatalogProvider] {
+        ProviderCatalogPolicy.catalog(from: instances).providers
     }
 
-    private var currentSelection: ModelSelection {
-        ModelSelection(instanceId: selectedInstanceId, model: selectedModelId)
-    }
-
-    private var railInstance: Instance? {
-        ProviderCatalogPolicy.resolvedRail(
-            advertised: instances,
-            selection: currentSelection,
-            activeRailId: activeRailId
-        )
-    }
-
-    private var models: [ModelOption] {
-        railInstance?.models.options ?? []
-    }
-
-    private var claudeRows: [CompactClaudeModelRow] {
-        guard railInstance?.instanceId == "claude" else { return [] }
-        let mobile = models.map {
-            MobileCatalogModel(
-                id: $0.id,
-                label: $0.label,
-                instanceId: $0.instanceId ?? railInstance?.instanceId ?? "claude",
-                isDefault: $0.id == railInstance?.models.default
-            )
+    private var activeProviderId: String {
+        if providerTabs.contains(where: { $0.id == draft.browsingProviderId }) {
+            return draft.browsingProviderId
         }
-        return ClaudeModelFamilyPolicy.compactRows(from: mobile, preservingSelection: selectedModelId)
+        return providerTabs.first?.id ?? draft.browsingProviderId
     }
 
-    private var rowsDisabled: Bool {
-        disabled || modelsDisabled || ProviderCatalogPolicy.modelsDisabled(
-            advertised: instances,
-            selection: currentSelection,
-            activeRailId: activeRailId,
-            hostWideEngine: false
-        )
+    private var providerFamilies: [ModelFamily] {
+        catalog.families.filter { $0.providerId == activeProviderId }
     }
 
-    private func optionIsSelected(_ option: ModelOption, rail: Instance) -> Bool {
-        (option.instanceId ?? rail.instanceId) == selectedInstanceId && selectedModelId == option.id
+    private var featured: [ModelFamily] {
+        ModelFamilyPolicy.featuredFamilies(providerFamilies, selection: draftSelection, limit: 4)
+    }
+
+    private var moreFamilies: [ModelFamily] {
+        let featuredIds = Set(featured.map(\.id))
+        let rest = draft.searchText.isEmpty ? providerFamilies.filter { !featuredIds.contains($0.id) } : providerFamilies
+        return ModelFamilyPolicy.visibleFamilies(rest, search: draft.searchText)
+    }
+
+    private var draftSelection: ModelSelection {
+        ModelSelection(instanceId: draft.instanceId, model: draft.modelId, effort: draft.effort)
+    }
+
+    private var selectedFamily: ModelFamily? {
+        catalog.families.first { $0.key == draft.familyKey && $0.sources.contains { $0.instanceId == draft.instanceId } }
+            ?? catalog.families.first { $0.key == draft.familyKey }
+            ?? catalog.families.first { $0.id == ModelFamilyPolicy.compositeId(instanceId: activeProviderId, modelId: draft.familyKey) }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if ProviderCatalogPolicy.isEmpty(advertised: instances, selection: currentSelection) {
+            if ProviderCatalogPolicy.isEmpty(advertised: instances, selection: draftSelection) {
                 ModelPickerEmptyView()
             } else {
-                engineRail
-                modelList
+                if !catalog.currentIsAdvertised {
+                    Label(
+                        catalog.currentUnavailableLabel ?? ModelSelectionPolicy.currentModelUnavailable,
+                        systemImage: "exclamationmark.circle"
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(minHeight: VBotSurface.Hit.minimum, alignment: .leading)
+                }
+                familyLists
+                if let selectedFamily { familyConfiguration(selectedFamily) }
             }
 
             if let footerHint {
@@ -236,150 +224,289 @@ struct ModelPickerView: View {
         }
     }
 
-    private var engineRail: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(railInstances) { instance in
-                    EngineChip(
-                        instance: instance,
-                        selected: instance.instanceId == activeRailId,
-                        selectedInstanceId: selectedInstanceId,
-                        selectedModelId: selectedModelId,
-                        disabled: disabled || (!instance.allowsInstanceChange && instance.instanceId != activeRailId),
-                        unavailable: !instance.snapshot.isAvailable || !instance.allowsInstanceChange
-                    ) {
-                        guard let next = ProviderCatalogPolicy.selectionAfterProviderTap(
-                            current: currentSelection,
-                            tapped: instance,
-                            advertised: instances
-                        ) else { return }
-                        railInstanceId = instance.instanceId
-                        if next.instanceId != selectedInstanceId || next.model != selectedModelId {
-                            selectedInstanceId = next.instanceId
-                            selectedModelId = next.model
-                            onSelectionChange()
+    private var familyLists: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if draft.searchText.isEmpty { familyGroup(featured) }
+            if !moreFamilies.isEmpty || draft.showingMore || !draft.searchText.isEmpty {
+                Button {
+                    if reduceMotion {
+                        draft = ModelPickerDraftPolicy.setShowingMore(!draft.showingMore, draft: draft)
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            draft = ModelPickerDraftPolicy.setShowingMore(!draft.showingMore, draft: draft)
                         }
                     }
+                } label: {
+                    Label(draft.showingMore ? "Fewer models" : ModelSelectionPolicy.moreModels,
+                          systemImage: draft.showingMore ? "chevron.up" : "chevron.down")
+                        .font(.subheadline.weight(.medium))
+                        .frame(maxWidth: .infinity, minHeight: VBotSurface.Hit.minimum, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                if draft.showingMore {
+                    TextField("Search models", text: Binding(
+                        get: { draft.searchText },
+                        set: { draft = ModelPickerDraftPolicy.setSearch($0, draft: draft) }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minHeight: VBotSurface.Hit.minimum)
+                    familyGroup(moreFamilies)
+                }
+            }
+        }
+    }
+
+    private func familyGroup(_ families: [ModelFamily]) -> some View {
+        VStack(spacing: 0) {
+            if families.isEmpty {
+                Text(ModelSelectionPolicy.engineEmptyExplanation)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+            } else {
+                ForEach(Array(families.enumerated()), id: \.element.id) { index, family in
+                    ModelRow(
+                        label: familyRowLabel(family),
+                        selected: family.key == draft.familyKey,
+                        isDefault: false,
+                        disabled: disabled
+                    ) {
+                        if let next = ModelPickerDraftPolicy.selectFamily(
+                            family.key,
+                            draft: draft,
+                            instances: instances
+                        ) {
+                            draft = next
+                            if draft.browsingProviderId != family.providerId {
+                                draft = ModelPickerDraftPolicy.browseProvider(family.providerId, draft: draft)
+                            }
+                        } else {
+                            draft.familyKey = family.key
+                        }
+                    }
+                    if index < families.count - 1 {
+                        Divider().overlay(ModelPickerStyle.divider).padding(.leading, 14)
+                    }
+                }
+            }
+        }
+        .background(ModelPickerStyle.listSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func familyRowLabel(_ family: ModelFamily) -> String {
+        family.label
+    }
+
+    @ViewBuilder
+    private func familyConfiguration(_ family: ModelFamily) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(family.label)
+                .font(.subheadline.weight(.semibold))
+                .padding(.bottom, 6)
+            sourcePicker(family)
+            if let source = family.sources.first(where: { $0.instanceId == draft.instanceId }),
+               source.variants.contains(where: { $0.modelId == draft.modelId }) {
+                Divider().overlay(ModelPickerStyle.divider)
+                reasoningPicker(family, source: source)
+                if ModelFamilyPolicy.thinkingIsIndependent(in: source.variants) {
+                    Toggle(ModelSelectionPolicy.thinkingTitle, isOn: Binding(
+                        get: { draft.thinking },
+                        set: { enabled in
+                            if let next = ModelPickerDraftPolicy.setThinking(enabled, draft: draft, instances: instances) { draft = next }
+                        }
+                    ))
+                    .disabled(disabled || hostWide || !source.available
+                        || ModelPickerDraftPolicy.setThinking(!draft.thinking, draft: draft, instances: instances) == nil)
+                    .frame(minHeight: VBotSurface.Hit.minimum)
+                }
+                if source.variants.contains(where: { $0.axes.fast }) {
+                    Toggle(ModelSelectionPolicy.fastGenerationTitle, isOn: Binding(
+                        get: { draft.fast },
+                        set: { enabled in
+                            if let next = ModelPickerDraftPolicy.setFast(enabled, draft: draft, instances: instances) { draft = next }
+                        }
+                    ))
+                    .disabled(disabled || hostWide || !source.available
+                        || ModelPickerDraftPolicy.setFast(!draft.fast, draft: draft, instances: instances) == nil)
+                    .frame(minHeight: VBotSurface.Hit.minimum)
+                }
+                switch ModelFamilyPolicy.contextClaim(for: source.variants) {
+                case .toggle:
+                    Toggle(ModelSelectionPolicy.oneMContext, isOn: Binding(
+                        get: { draft.oneM },
+                        set: { enabled in
+                            if let next = ModelPickerDraftPolicy.setOneM(enabled, draft: draft, instances: instances) { draft = next }
+                        }
+                    ))
+                    .disabled(disabled || hostWide || !source.available
+                        || ModelPickerDraftPolicy.setOneM(!draft.oneM, draft: draft, instances: instances) == nil)
+                    .frame(minHeight: VBotSurface.Hit.minimum)
+                case .included:
+                    Label(ModelSelectionPolicy.oneMIncluded, systemImage: "checkmark.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 8)
+                case .none:
+                    EmptyView()
+                }
+                if !source.available {
+                    Text(source.unavailableReason ?? "This source is unavailable.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                if let notice = source.variants.first(where: { $0.modelId == draft.modelId })?.privacyNotice {
+                    Label(notice, systemImage: "info.circle")
+                        .font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                }
+                DisclosureGroup(ModelSelectionPolicy.advancedDetails) {
+                    Text(draft.modelId)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 8)
+                    if source.variants.count > 1 {
+                        Picker("Exact variant", selection: Binding(
+                            get: { draft.modelId },
+                            set: { id in
+                                if let next = ModelPickerDraftPolicy.selectRawVariant(id, draft: draft, instances: instances) { draft = next }
+                            }
+                        )) {
+                            ForEach(source.variants) { variant in
+                                Text(variant.modelId).tag(variant.modelId)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .disabled(disabled || hostWide || !source.available)
+                    }
+                    Text("Fast generation keeps this model and source. Context options appear only when advertised.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .font(.footnote)
+                .frame(minHeight: VBotSurface.Hit.minimum)
+            } else {
+                Text("Choose a source above to use this model. Your current model is unchanged until Apply.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+            }
+        }
+        .padding(14)
+        .background(ModelPickerStyle.listSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func sourcePicker(_ family: ModelFamily) -> some View {
+        HStack {
+            Text(ModelSelectionPolicy.runVia)
+            Spacer(minLength: 8)
+            Picker(ModelSelectionPolicy.runVia, selection: Binding(
+            get: { family.sources.contains(where: { $0.instanceId == draft.instanceId
+                && $0.variants.contains(where: { $0.modelId == draft.modelId }) }) ? draft.instanceId : "" },
+            set: { id in
+                if let next = ModelPickerDraftPolicy.selectSource(id, familyKey: family.key, draft: draft, instances: instances) {
+                    draft = next
+                }
+            }
+        )) {
+            if !family.sources.contains(where: { $0.instanceId == draft.instanceId && $0.variants.contains(where: { $0.modelId == draft.modelId }) }) {
+                Text("Choose source").tag("")
+            }
+            ForEach(family.sources) { source in
+                let instance = instances.first { $0.instanceId == source.instanceId }
+                Text(source.displayName + (source.available ? "" : " · Unavailable"))
+                    .tag(source.instanceId)
+                    .disabled(!source.available || instance?.allowsModelChange == false
+                        || (source.instanceId != draft.openedWith.instanceId && instance?.allowsInstanceChange == false))
+            }
+        }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .tint(.primary)
+            .disabled(disabled || hostWide)
+        }
+        .frame(minHeight: VBotSurface.Hit.minimum)
+    }
+
+    @ViewBuilder
+    private func reasoningPicker(_ family: ModelFamily, source: ModelFamilySource) -> some View {
+        let levels = source.effortEncodedInModelId
+            ? orderedEfforts(source.variants.compactMap(\.axes.effort)) : source.capabilityEffortLevels
+        if !levels.isEmpty, !hostWide {
+            HStack {
+                Text("Reasoning")
+                Spacer(minLength: 8)
+                Picker("Reasoning", selection: Binding(
+                get: { draft.effort ?? "__default" },
+                set: { value in
+                    if let next = ModelPickerDraftPolicy.setEffort(value == "__default" ? nil : value, draft: draft, instances: instances) {
+                        draft = next
+                    }
+                }
+            )) {
+                Text("Default").tag("__default")
+                    .disabled(ModelPickerDraftPolicy.setEffort(nil, draft: draft, instances: instances) == nil)
+                ForEach(levels, id: \.self) { level in
+                    Text(ModelSelectionPolicy.effortDisplayName(level)).tag(level)
+                        .disabled(ModelPickerDraftPolicy.setEffort(level, draft: draft, instances: instances) == nil)
+                }
+            }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .tint(.primary)
+                .disabled(disabled || !source.available)
+            }
+            .frame(minHeight: VBotSurface.Hit.minimum)
+        }
+    }
+
+    private func orderedEfforts(_ values: [String]) -> [String] {
+        let rank = ["none": 0, "low": 1, "medium": 2, "high": 3, "xhigh": 4, "extra-high": 5, "max": 6]
+        return Array(Set(values)).sorted { (rank[$0] ?? 99) < (rank[$1] ?? 99) }
+    }
+}
+
+private struct ModelPickerProviderRail: View {
+    let instances: [Instance]
+    @Binding var draft: ModelPickerDraft
+    var disabled: Bool = false
+
+    private var providers: [MobileCatalogProvider] {
+        ProviderCatalogPolicy.catalog(from: instances).providers
+    }
+    private var activeId: String {
+        providers.contains(where: { $0.id == draft.browsingProviderId })
+            ? draft.browsingProviderId : providers.first?.id ?? draft.browsingProviderId
+    }
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(providers, id: \.id) { provider in
+                    providerButton(provider)
                 }
             }
             .padding(.horizontal, 2)
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
-
-    @ViewBuilder
-    private var modelList: some View {
-        if let railInstance {
-            VStack(alignment: .leading, spacing: 8) {
-                if !railInstance.snapshot.isAvailable, let reason = railInstance.snapshot.reason {
-                    Label(reason, systemImage: "exclamationmark.circle")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 2)
-                }
-
-                VStack(spacing: 0) {
-                    if models.isEmpty {
-                        Text(ModelSelectionPolicy.engineEmptyExplanation)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 12)
-                    } else if railInstance.instanceId == "claude" {
-                        claudeModelRows(rail: railInstance)
-                    } else {
-                        ForEach(Array(models.enumerated()), id: \.element.id) { index, option in
-                            ModelRow(
-                                label: option.label,
-                                selected: optionIsSelected(option, rail: railInstance),
-                                isDefault: option.id == railInstance.models.default,
-                                disabled: rowsDisabled
-                            ) {
-                                guard let next = ProviderCatalogPolicy.selectionAfterModelTap(
-                                    current: currentSelection,
-                                    rail: railInstance,
-                                    modelId: option.id
-                                ) else { return }
-                                selectedInstanceId = next.instanceId
-                                selectedModelId = next.model
-                                onSelectionChange()
-                            }
-
-                            if index < models.count - 1 {
-                                Divider().overlay(ModelPickerStyle.divider).padding(.leading, 14)
-                            }
-                        }
-
-                        if models.contains(where: { optionIsSelected($0, rail: railInstance) }) == false,
-                           ProviderCatalogPolicy.shouldDisplaySelection(
-                            currentSelection,
-                            advertised: instances
-                           ),
-                           ProviderCatalogPolicy.resolvedRail(
-                            advertised: instances,
-                            selection: currentSelection,
-                            activeRailId: railInstance.instanceId
-                           )?.instanceId == railInstance.instanceId {
-                            Divider().overlay(ModelPickerStyle.divider).padding(.leading, 14)
-                            ModelRow(
-                                label: AdvertisedModelCatalog.displayModelLabel(selectedModelId),
-                                selected: true,
-                                isDefault: false,
-                                disabled: rowsDisabled
-                            ) {
-                                guard ProviderCatalogPolicy.selectionAfterModelTap(
-                                    current: currentSelection,
-                                    rail: railInstance,
-                                    modelId: selectedModelId
-                                ) != nil else { return }
-                                onSelectionChange()
-                            }
-                        }
-                    }
-                }
-                .background(ModelPickerStyle.listSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    private func providerButton(_ provider: MobileCatalogProvider) -> some View {
+        let selected = provider.id == activeId
+        return Button {
+            draft = ModelPickerDraftPolicy.browseProvider(provider.id, draft: draft)
+        } label: {
+            HStack(spacing: 6) {
+                ProviderMarks.mark(for: provider.markKey, size: 16)
+                Text(provider.label).font(.subheadline.weight(selected ? .semibold : .medium))
             }
+            .foregroundStyle(selected ? Color.primary : Color.secondary)
+            .padding(.horizontal, 12)
+            .frame(minHeight: VBotSurface.Hit.minimum)
+            .background(selected ? ModelPickerStyle.chipSelected : ModelPickerStyle.chip, in: Capsule())
+            .overlay(Capsule().strokeBorder(selected ? Color.primary.opacity(0.16) : .clear, lineWidth: 1))
+            .contentShape(Capsule())
         }
-    }
-
-    @ViewBuilder
-    private func claudeModelRows(rail: Instance) -> some View {
-        ForEach(Array(claudeRows.enumerated()), id: \.element.id) { index, row in
-            VStack(alignment: .leading, spacing: 8) {
-                ModelRow(
-                    label: row.label,
-                    selected: selectedModelId == row.standardModelId || selectedModelId == row.oneMModelId,
-                    isDefault: row.standardModelId == rail.models.default || row.oneMModelId == rail.models.default,
-                    disabled: rowsDisabled
-                ) {
-                    let nextId = row.selectedModelId(forOneMEnabled: row.oneMEnabled(for: selectedModelId))
-                    guard selectedModelId != nextId else { return }
-                    selectedInstanceId = row.instanceId
-                    selectedModelId = nextId
-                    onSelectionChange()
-                }
-                if row.showsOneMToggle {
-                    Toggle("1M context", isOn: Binding(
-                        get: { row.oneMEnabled(for: selectedModelId) },
-                        set: { enabled in
-                            let nextId = row.selectedModelId(forOneMEnabled: enabled)
-                            guard selectedModelId != nextId else { return }
-                            selectedInstanceId = row.instanceId
-                            selectedModelId = nextId
-                            onSelectionChange()
-                        }
-                    ))
-                    .font(.footnote)
-                    .disabled(rowsDisabled)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 8)
-                }
-            }
-
-            if index < claudeRows.count - 1 {
-                Divider().overlay(ModelPickerStyle.divider).padding(.leading, 14)
-            }
-        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityLabel(provider.label)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -519,20 +646,15 @@ struct ModelPickerCatalogHost: View {
     let canEdit: Bool
     let working: Bool
     let saving: Bool
-    @Binding var selectedInstanceId: String
-    @Binding var selectedModelId: String
-    var effortLevels: [String] = []
-    @Binding var selectedEffort: String?
-    var showsEffort: Bool = false
+    @Binding var draft: ModelPickerDraft
     var hostWide: Bool = false
     var onRetry: () -> Void
-    var onSelectionChange: () -> Void
     var hermesEndpoints: [HermesEndpointOption] = []
     var selectedHermesId: String? = nil
     var onSelectHermes: ((HermesEndpointOption) -> Void)? = nil
 
     private var currentSelection: ModelSelection {
-        ModelSelection(instanceId: selectedInstanceId, model: selectedModelId)
+        ModelSelection(instanceId: draft.instanceId, model: draft.modelId, effort: draft.effort)
     }
 
     private var presentation: ModelCatalogPresentation {
@@ -548,6 +670,7 @@ struct ModelPickerCatalogHost: View {
     private var switchBlocked: Bool {
         presentation.selectionDisabled
             || !ModelSelectionPolicy.allowsSwitch(working: working, saving: saving, catalogLoading: loading)
+            || hostWide
     }
 
     private var footer: String {
@@ -578,51 +701,45 @@ struct ModelPickerCatalogHost: View {
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel(ModelSelectionPolicy.refreshingExplanation)
                 }
-                ModelPickerView(
-                    instances: instances,
-                    selectedInstanceId: $selectedInstanceId,
-                    selectedModelId: $selectedModelId,
-                    disabled: switchBlocked,
-                    modelsDisabled: ProviderCatalogPolicy.modelsDisabled(
-                        advertised: instances,
-                        selection: currentSelection,
-                        activeRailId: selectedInstanceId,
-                        hostWideEngine: hostWide
-                    ) || presentation.selectionDisabled,
-                    footerHint: footer
-                ) {
-                    onSelectionChange()
-                }
-
-                if !hermesEndpoints.isEmpty {
-                    HermesRuntimePickerRows(
-                        endpoints: hermesEndpoints,
-                        selectedId: selectedHermesId,
-                        onSelect: { endpoint in onSelectHermes?(endpoint) }
-                    )
-                }
-
-                if canEdit, !loading {
-                    Button(ModelSelectionPolicy.refreshModels) {
-                        onRetry()
-                    }
-                    .font(.footnote.weight(.medium))
-                    .disabled(presentation.selectionDisabled && !presentation.isRefreshing)
-                }
-
-                if showsEffort {
-                    ModelEffortPicker(
-                        levels: effortLevels,
-                        selection: $selectedEffort,
+                VStack(alignment: .leading, spacing: 12) {
+                    ModelPickerProviderRail(
+                        instances: instances,
+                        draft: $draft,
                         disabled: switchBlocked
-                    ) {
-                        onSelectionChange()
-                    }
-                }
+                    )
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            ModelPickerView(
+                                instances: instances,
+                                draft: $draft,
+                                disabled: switchBlocked,
+                                hostWide: hostWide,
+                                footerHint: footer
+                            )
 
-                if saving {
-                    Label("Saving…", systemImage: "arrow.triangle.2.circlepath")
-                        .foregroundStyle(.secondary)
+                            if !hermesEndpoints.isEmpty {
+                                HermesRuntimePickerRows(
+                                    endpoints: hermesEndpoints,
+                                    selectedId: selectedHermesId,
+                                    onSelect: { endpoint in onSelectHermes?(endpoint) }
+                                )
+                            }
+
+                            if canEdit, !loading {
+                                Button(ModelSelectionPolicy.refreshModels) {
+                                    onRetry()
+                                }
+                                .font(.footnote.weight(.medium))
+                                .frame(minHeight: VBotSurface.Hit.minimum)
+                                .disabled(presentation.selectionDisabled && !presentation.isRefreshing)
+                            }
+
+                            if saving {
+                                Label("Saving…", systemImage: "arrow.triangle.2.circlepath")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -737,32 +854,56 @@ struct HermesRuntimePickerRows: View {
 #if DEBUG
 /// Debug-only screenshot host. Launch with `-open-provider-settings`.
 struct ProviderSettingsPreviewHost: View {
-    @State private var instanceId = "cursor"
-    @State private var modelId = "auto"
-    @State private var effort: String?
+    private let instances: [Instance]
+    @State private var saved: ModelSelection
+    @State private var draft: ModelPickerDraft
+    @State private var applyCount = 0
+
+    init() {
+        var catalog = Session.storePreviewProviderCatalog()
+        if let path = ProcessInfo.processInfo.environment["VBOT_MODEL_CATALOG_FIXTURE"],
+           let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+           let fixture = try? JSONDecoder().decode(InstanceList.self, from: data) {
+            catalog = fixture.instances
+        }
+        instances = catalog
+        let selection = ModelSelection(instanceId: "codex", model: "gpt-5.6-sol", effort: "medium")
+        _saved = State(initialValue: selection)
+        _draft = State(initialValue: ModelPickerDraftPolicy.makeDraft(selection: selection, instances: catalog,
+            catalog: ModelFamilyPolicy.catalog(from: catalog, selection: selection)))
+    }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                ModelPickerCatalogHost(
-                    instances: Session.storePreviewProviderCatalog(),
-                    loading: false,
-                    error: nil,
-                    canEdit: true,
-                    working: false,
-                    saving: false,
-                    selectedInstanceId: $instanceId,
-                    selectedModelId: $modelId,
-                    selectedEffort: $effort,
-                    onRetry: {},
-                    onSelectionChange: {}
-                )
-                .padding(.horizontal, VBotSurface.Space.page)
-                .padding(.top, VBotSurface.Space.section)
-                .padding(.bottom, VBotSurface.Space.section)
+            VStack(spacing: 8) {
+                ModelPickerCatalogHost(instances: instances, loading: false, error: nil,
+                    canEdit: true, working: false, saving: false, draft: $draft, onRetry: {})
+                Text("Saved: \(saved.instanceId) / \(saved.model) / \(saved.effort ?? "default") · applies \(applyCount)")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("model-preview-saved")
             }
-            .navigationTitle("Bot Settings")
+            .padding(.horizontal, VBotSurface.Space.page)
+            .padding(.top, 12)
+            .navigationTitle("Model")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        draft = ModelPickerDraftPolicy.makeDraft(selection: saved, instances: instances,
+                            catalog: ModelFamilyPolicy.catalog(from: instances, selection: saved))
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Apply") {
+                        guard let next = ModelPickerDraftPolicy.resolvedSelection(draft: draft, instances: instances) else { return }
+                        saved = next
+                        applyCount += 1
+                        draft.openedWith = next
+                    }
+                    .disabled(ModelPickerDraftPolicy.applyBlock(draft: draft, remote: saved, working: false,
+                        canEdit: true, saving: false, catalogLoading: false, hostWide: false, instances: instances) != nil)
+                }
+            }
             .vbotCanvas()
         }
     }
@@ -799,6 +940,15 @@ private enum ModelPickerPreviewData {
         """
         return (try? JSONDecoder().decode([Instance].self, from: Data(json.utf8))) ?? []
     }()
+
+    static func draft(instanceId: String, modelId: String, instances: [Instance]) -> ModelPickerDraft {
+        let selection = ModelSelection(instanceId: instanceId, model: modelId)
+        return ModelPickerDraftPolicy.makeDraft(
+            selection: selection,
+            instances: instances,
+            catalog: ModelFamilyPolicy.catalog(from: instances, selection: selection)
+        )
+    }
 }
 
 #Preview("Catalog loading") {
@@ -822,10 +972,13 @@ private enum ModelPickerPreviewData {
 #Preview("Catalog ready") {
     ModelPickerView(
         instances: ModelPickerPreviewData.instances,
-        selectedInstanceId: .constant("claude"),
-        selectedModelId: .constant("claude-sonnet-5"),
+        draft: .constant(ModelPickerPreviewData.draft(
+            instanceId: "claude",
+            modelId: "claude-sonnet-5",
+            instances: ModelPickerPreviewData.instances
+        )),
         footerHint: ModelSelectionPolicy.idleHint
-    ) {}
+    )
     .padding()
     .vbotCanvas()
 }
@@ -833,11 +986,14 @@ private enum ModelPickerPreviewData {
 #Preview("Catalog busy") {
     ModelPickerView(
         instances: ModelPickerPreviewData.instances,
-        selectedInstanceId: .constant("claude"),
-        selectedModelId: .constant("claude-sonnet-5"),
+        draft: .constant(ModelPickerPreviewData.draft(
+            instanceId: "claude",
+            modelId: "claude-sonnet-5",
+            instances: ModelPickerPreviewData.instances
+        )),
         disabled: true,
         footerHint: ModelSelectionPolicy.busyExplanation
-    ) {}
+    )
     .padding()
     .vbotCanvas()
 }
@@ -845,12 +1001,14 @@ private enum ModelPickerPreviewData {
 #Preview("Catalog offline cached") {
     ModelPickerView(
         instances: ModelPickerPreviewData.instances,
-        selectedInstanceId: .constant("claude"),
-        selectedModelId: .constant("claude-sonnet-5"),
+        draft: .constant(ModelPickerPreviewData.draft(
+            instanceId: "claude",
+            modelId: "claude-sonnet-5",
+            instances: ModelPickerPreviewData.instances
+        )),
         disabled: true,
-        modelsDisabled: true,
         footerHint: CalmSurfacePolicy.reconnectToEdit
-    ) {}
+    )
     .padding()
     .vbotCanvas()
 }

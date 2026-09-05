@@ -1,7 +1,7 @@
 import CompanionCore
 import SwiftUI
 
-/// Inline model picker for the chat header — compact chip + sheet.
+/// Shared chat/profile model picker. Draft edits never PATCH until Apply.
 struct ChatModelPickerSheet: View {
     let bot: Bot
     @EnvironmentObject private var session: Session
@@ -10,10 +10,11 @@ struct ChatModelPickerSheet: View {
     @State private var instances: [Instance]
     @State private var instancesLoading: Bool
     @State private var instancesError: String?
-    @State private var pickedInstanceId: String
-    @State private var pickedModel: String
-    @State private var pickedEffort: String?
+    @State private var draft: ModelPickerDraft
+    @State private var openedConnectionId: String?
+    @State private var initializedDraft = false
     @State private var savingModel = false
+    @State private var saveError: String?
     @State private var modelSaveRevision = 0
     @State private var showingHermesConversion = false
     @State private var selectedHermesEndpoint: HermesEndpointOption?
@@ -21,9 +22,18 @@ struct ChatModelPickerSheet: View {
 
     init(bot: Bot) {
         self.bot = bot
-        _pickedInstanceId = State(initialValue: bot.modelSelection.instanceId)
-        _pickedModel = State(initialValue: bot.modelSelection.model)
-        _pickedEffort = State(initialValue: bot.modelSelection.effort)
+        let selection = bot.modelSelection
+        _draft = State(initialValue: ModelPickerDraft(
+            browsingProviderId: selection.instanceId,
+            familyKey: ModelFamilyPolicy.parse(selection.model).familyKey,
+            instanceId: selection.instanceId,
+            modelId: selection.model,
+            effort: ModelFamilyPolicy.parse(selection.model).axes.effort ?? selection.effort,
+            thinking: ModelFamilyPolicy.parse(selection.model).axes.thinking,
+            fast: ModelFamilyPolicy.parse(selection.model).axes.fast,
+            oneM: ModelFamilyPolicy.parse(selection.model).axes.explicitOneM,
+            openedWith: selection
+        ))
         _instances = State(initialValue: [])
         _instancesLoading = State(initialValue: true)
         _instancesError = State(initialValue: nil)
@@ -33,39 +43,42 @@ struct ChatModelPickerSheet: View {
     private var canEdit: Bool {
         CalmSurfacePolicy.canEditRemoteContent(
             isLive: session.status == .live,
-            hasConnection: session.connection != nil
+            hasConnection: session.connection != nil && session.connection?.id == openedConnectionId
         )
     }
-    private var pickedInstance: Instance? {
-        AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances)
-    }
-    private var effortLevels: [String] { pickedInstance?.capabilities?.effortLevels ?? [] }
     private var hostWide: Bool { EngineSyncPolicy.hostWideSelection(session.engineSync) }
-    private var showsEffortPicker: Bool {
-        ModelSelectionPolicy.showsEffortPicker(levels: effortLevels, hostWideEngine: hostWide)
+    private var catalogLoading: Bool {
+        ModelCatalogLoadPolicy.hostLoading(
+            localLoading: instancesLoading,
+            sessionRefreshing: session.modelCatalogRefreshing
+        )
+    }
+    private var applyBlock: ModelPickerApplyBlock? {
+        ModelPickerDraftPolicy.applyBlock(
+            draft: draft,
+            remote: current.modelSelection,
+            working: current.busy == true,
+            canEdit: canEdit,
+            saving: savingModel,
+            catalogLoading: catalogLoading,
+            hostWide: hostWide,
+            instances: instances
+        )
     }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            VStack(spacing: 0) {
                 ModelPickerCatalogHost(
                     instances: instances,
-                    loading: ModelCatalogLoadPolicy.hostLoading(
-                        localLoading: instancesLoading,
-                        sessionRefreshing: session.modelCatalogRefreshing
-                    ),
+                    loading: catalogLoading,
                     error: instancesError,
                     canEdit: canEdit,
                     working: current.busy == true,
                     saving: savingModel,
-                    selectedInstanceId: $pickedInstanceId,
-                    selectedModelId: $pickedModel,
-                    effortLevels: effortLevels,
-                    selectedEffort: $pickedEffort,
-                    showsEffort: showsEffortPicker,
+                    draft: $draft,
                     hostWide: hostWide,
                     onRetry: { Task { await loadInstances() } },
-                    onSelectionChange: { Task { await saveModel() } },
                     hermesEndpoints: session.hermesEndpointOptions,
                     selectedHermesId: selectedHermesEndpoint?.id ?? session.defaultHermesEndpoint()?.id,
                     onSelectHermes: { endpoint in
@@ -76,18 +89,40 @@ struct ChatModelPickerSheet: View {
                         }
                     }
                 )
-                .padding(20)
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                if let message = saveError ?? applyMessage(applyBlock) {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 12)
+                }
             }
             .background(VBotSurface.background.ignoresSafeArea())
             .navigationTitle("Model")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .disabled(savingModel)
+                        .frame(minHeight: VBotSurface.Hit.minimum)
+                }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button(ModelSelectionPolicy.applyTitle) {
+                        Task { await applyDraft() }
+                    }
+                    .disabled(applyBlock != nil)
+                    .frame(minHeight: VBotSurface.Hit.minimum)
                 }
             }
         }
-        .task { await loadInstances() }
+        .interactiveDismissDisabled(savingModel)
+        .task {
+            if openedConnectionId == nil { openedConnectionId = session.connection?.id }
+            await loadInstances()
+        }
         .sheet(isPresented: $showingHermesConversion) {
             hermesConversionSheet
         }
@@ -97,20 +132,24 @@ struct ChatModelPickerSheet: View {
         .onChange(of: session.modelCatalog) { _, _ in
             applySessionCatalogSnapshot()
         }
-        .onChange(of: current.modelSelection) { _, selection in
-            pickedInstanceId = selection.instanceId
-            pickedModel = selection.model
-            pickedEffort = selection.effort
+        .onChange(of: session.connection?.id) { _, newId in
+            if openedConnectionId == nil, newId != nil {
+                saveError = "A computer connected after this picker opened. Cancel and reopen to verify this agent."
+            }
+            if let openedConnectionId, newId != openedConnectionId {
+                modelSaveRevision &+= 1
+                session.invalidateModelUpdates(for: bot.id)
+                savingModel = false
+                saveError = "The connected computer changed. Cancel and reopen the model picker."
+            }
         }
         .onChange(of: current.busy) { was, isBusy in
             if ModelSelectionPolicy.shouldRevertDraft(wasWorking: was == true, isWorking: isBusy == true) {
                 modelSaveRevision &+= 1
                 session.invalidateModelUpdates(for: current.id)
-                let selection = current.modelSelection
-                pickedInstanceId = selection.instanceId
-                pickedModel = selection.model
-                pickedEffort = selection.effort
+                resetDraft(to: current.modelSelection)
                 savingModel = false
+                saveError = nil
             }
         }
     }
@@ -182,11 +221,6 @@ struct ChatModelPickerSheet: View {
             sessionRefreshing: refreshing
         ) {
             instances = session.modelCatalog
-            if !instances.isEmpty {
-                let resolved = ProviderCatalogPolicy.resolveSelection(current.modelSelection, in: instances)
-                pickedInstanceId = resolved.instanceId
-                pickedModel = resolved.model
-            }
         }
         instancesError = session.modelCatalogError
         instancesLoading = ModelCatalogLoadPolicy.localLoadingAfterSessionPublish(
@@ -197,15 +231,16 @@ struct ChatModelPickerSheet: View {
     private func loadInstances() async {
         if instances.isEmpty {
             instances = session.modelCatalog
+            if !instances.isEmpty {
+                hydrateDraftIfUnchanged()
+            }
         }
         instancesLoading = true
         switch await session.loadModelCatalog() {
         case let .loaded(loaded):
             instances = loaded
             instancesError = nil
-            let resolved = ProviderCatalogPolicy.resolveSelection(current.modelSelection, in: loaded)
-            pickedInstanceId = resolved.instanceId
-            pickedModel = resolved.model
+            hydrateDraftIfUnchanged()
             instancesLoading = false
         case let .failed(message):
             instancesError = message
@@ -219,44 +254,77 @@ struct ChatModelPickerSheet: View {
         }
     }
 
-    private func saveModel() async {
-        guard ModelSelectionPolicy.allowsSwitch(
+    private func hydrateDraftIfUnchanged() {
+        guard !initializedDraft else { return }
+        initializedDraft = true
+        guard ModelPickerDraftPolicy.cancelDiscardsWithoutPatch(draft: draft, openedWith: draft.openedWith) else { return }
+        // A catalog refresh changes available options, never the user's draft.
+        resetDraft(to: draft.openedWith)
+    }
+
+    private func resetDraft(to selection: ModelSelection) {
+        draft = ModelPickerDraftPolicy.makeDraft(
+            selection: selection,
+            instances: instances,
+            catalog: ModelFamilyPolicy.catalog(from: instances, selection: selection)
+        )
+    }
+
+    private func applyDraft() async {
+        guard session.connection?.id == openedConnectionId, session.state.bot(bot.id) != nil else {
+            saveError = "This agent is no longer available on the connected computer."
+            return
+        }
+        let remote = current.modelSelection
+        let block = ModelPickerDraftPolicy.applyBlock(
+            draft: draft,
+            remote: remote,
             working: current.busy == true,
-            saving: false,
-            catalogLoading: ModelCatalogLoadPolicy.hostLoading(
-                localLoading: instancesLoading,
-                sessionRefreshing: session.modelCatalogRefreshing
-            )
-        ), canEdit else { return }
+            canEdit: canEdit,
+            saving: savingModel,
+            catalogLoading: catalogLoading,
+            hostWide: hostWide,
+            instances: instances
+        )
+        guard block == nil, let patch = ModelPickerDraftPolicy.patch(from: draft, instances: instances) else {
+            saveError = applyMessage(block)
+            return
+        }
         modelSaveRevision &+= 1
         let revision = modelSaveRevision
         savingModel = true
+        saveError = nil
         defer {
             if ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: modelSaveRevision) {
                 savingModel = false
             }
         }
-        let effortPatch: BotModelPatch.EffortUpdate = {
-            if showsEffortPicker {
-                if let pickedEffort { return .set(pickedEffort) }
-                return .clear
+        guard let updated = await session.updateModel(patch, for: current) else {
+            if ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: modelSaveRevision) {
+                saveError = session.actionError ?? "Could not save model."
             }
-            return .omitted
-        }()
-        let patch = BotModelPatch(
-            instanceId: pickedInstanceId,
-            model: pickedModel,
-            effort: effortPatch
-        )
-        guard let updated = await session.updateModel(patch, for: current) else { return }
+            return
+        }
         guard ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: modelSaveRevision) else { return }
-        pickedInstanceId = updated.modelSelection.instanceId
-        pickedModel = updated.modelSelection.model
-        pickedEffort = updated.modelSelection.effort
+        guard session.connection?.id == openedConnectionId else { return }
+        resetDraft(to: updated.modelSelection)
+        Haptics.success()
+        dismiss()
+    }
+
+    private func applyMessage(_ block: ModelPickerApplyBlock?) -> String? {
+        switch block {
+        case .busy: return ModelSelectionPolicy.busyExplanation
+        case .offline: return CalmSurfacePolicy.reconnectToEdit
+        case .remoteUpdated: return "This agent's model changed on the computer. Cancel and reopen to avoid overwriting it."
+        case .invalid: return "That combination is not advertised for this source."
+        case .hostWide: return ModelSelectionPolicy.hostWideHint
+        default: return nil
+        }
     }
 }
 
-/// Compact header chip showing the bot's current engine + model.
+/// Compact header chip showing the bot's current model, effort, and Fast.
 struct ChatModelPickerButton: View {
     let bot: Bot
     @Binding var showingPicker: Bool
@@ -264,18 +332,11 @@ struct ChatModelPickerButton: View {
 
     private var current: Bot { session.state.bot(bot.id) ?? bot }
     private var working: Bool { current.busy == true }
-    private var modelTitle: String {
-        AdvertisedModelCatalog.humanModelLabel(
+    private var summary: (title: String, source: String) {
+        ModelSelectionPolicy.headerSummary(
             selection: current.modelSelection,
             instances: session.modelCatalog
         )
-    }
-    private var instanceTitle: String {
-        AdvertisedModelCatalog.instance(
-            id: current.modelSelection.instanceId,
-            in: session.modelCatalog
-        )?.pickerTitle
-            ?? AdvertisedModelCatalog.displayModelLabel(current.modelSelection.instanceId)
     }
 
     var body: some View {
@@ -291,7 +352,7 @@ struct ChatModelPickerButton: View {
                     ),
                     size: 14
                 )
-                Text(modelTitle)
+                Text(summary.title)
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
             }
@@ -302,14 +363,14 @@ struct ChatModelPickerButton: View {
         }
         .buttonStyle(.plain)
         .glassCapsuleBackdrop()
-        .fixedSize()
+        .fixedSize(horizontal: false, vertical: true)
         .opacity(working ? 0.7 : 1)
-        .accessibilityLabel("Model, \(instanceTitle), \(modelTitle)")
+        .accessibilityLabel("Model, \(summary.source), \(summary.title)")
         .accessibilityHint(
             working
                 ? ModelSelectionPolicy.busyExplanation
                 : "Opens model picker"
         )
-        .accessibilityValue(working ? ModelSelectionPolicy.busyExplanation : modelTitle)
+        .accessibilityValue(working ? ModelSelectionPolicy.busyExplanation : "\(summary.title), \(summary.source)")
     }
 }

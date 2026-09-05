@@ -57,6 +57,7 @@ struct AgentProfileView: View {
     @State private var routinesLoading = true
     @State private var showingMedia = false
     @State private var showingModelPicker = false
+    @State private var showingCallVoicePicker = false
     @State private var showingHermesConversion = false
     @State private var selectedHermesEndpoint: HermesEndpointOption?
     @State private var includeContextSummary = false
@@ -95,12 +96,6 @@ struct AgentProfileView: View {
     private var voiceConfigured: Bool { config?.isTTSConfigured == true }
     private var hasWorkspaceDefaultVoice: Bool { config?.hasWorkspaceDefaultVoice == true }
     private var selectedVoiceCanSpeak: Bool { config?.canSpeak(agentVoice: voice) == true }
-    private var pickedInstance: Instance? { AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances) }
-    private var effortLevels: [String] { pickedInstance?.capabilities?.effortLevels ?? [] }
-    private var hostWide: Bool { EngineSyncPolicy.hostWideSelection(session.engineSync) }
-    private var showsEffortPicker: Bool {
-        ModelSelectionPolicy.showsEffortPicker(levels: effortLevels, hostWideEngine: hostWide)
-    }
     private var modelSwitchBlocked: Bool {
         busy || !ModelSelectionPolicy.allowsSwitch(
             working: current.busy == true,
@@ -988,18 +983,34 @@ struct AgentProfileView: View {
                     .buttonStyle(.plain)
                     .disabled(!canEdit && instances.isEmpty)
 
-                    Toggle(isOn: $fastMode) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Fast mode")
-                            Text(ModelSelectionPolicy.fastModeHint)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                    DisclosureGroup("Advanced") {
+                        Toggle(isOn: $fastMode) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(ModelSelectionPolicy.fastModeTitle)
+                                Text(ModelSelectionPolicy.fastModeHint)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .disabled(!canEdit || modelSwitchBlocked)
+                        .frame(minHeight: VBotSurface.Hit.minimum)
+                        .onChange(of: fastMode) { _, enabled in
+                            Task { _ = await session.updateFastMode(enabled, for: current) }
                         }
                     }
-                    .disabled(!canEdit || modelSwitchBlocked)
-                    .onChange(of: fastMode) { _, enabled in
-                        Task { _ = await session.updateFastMode(enabled, for: current) }
-                    }
+                    .font(.body)
+                }
+
+                Button {
+                    showingCallVoicePicker = true
+                } label: {
+                    Label("Call voice", systemImage: "waveform")
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .sheet(isPresented: $showingCallVoicePicker) {
+                    CallVoicePickerSheet(botId: current.id, botName: current.name,
+                        serverVoice: current.voice, hasActiveCall: session.voiceMode.isCallActive)
                 }
 
                 if voiceConfigured || !canEdit {
@@ -1014,66 +1025,21 @@ struct AgentProfileView: View {
     }
 
     private var modelSelectionSummary: ModelSelectionSummaryRow {
-        let selection = ModelSelection(instanceId: pickedInstanceId, model: pickedModel)
-        let rail = ProviderCatalogPolicy.resolvedRail(
-            advertised: instances,
-            selection: selection,
-            activeRailId: nil
-        )
+        let selection = ModelSelection(instanceId: pickedInstanceId, model: pickedModel, effort: pickedEffort)
+        let summary = ModelSelectionPolicy.headerSummary(selection: selection, instances: instances)
         return ModelSelectionSummaryRow(
-            instanceTitle: rail?.pickerTitle ?? AdvertisedModelCatalog.displayModelLabel(pickedInstanceId),
-            modelTitle: rail?.modelLabel(for: pickedModel) ?? AdvertisedModelCatalog.displayModelLabel(pickedModel),
-            providerKey: rail?.markKey ?? pickedInstanceId,
+            instanceTitle: summary.source,
+            modelTitle: summary.title,
+            providerKey: AdvertisedModelCatalog.providerMarkKey(instanceId: pickedInstanceId, instances: instances),
             subtitle: savingModel ? "Saving…" : nil,
             disabled: modelSwitchBlocked
         )
     }
 
     private var profileModelPickerSheet: some View {
-        NavigationStack {
-            ScrollView {
-                ModelPickerCatalogHost(
-                    instances: instances,
-                    loading: ModelCatalogLoadPolicy.hostLoading(
-                        localLoading: instancesLoading,
-                        sessionRefreshing: session.modelCatalogRefreshing
-                    ),
-                    error: instancesError,
-                    canEdit: canEdit,
-                    working: current.busy == true,
-                    saving: savingModel,
-                    selectedInstanceId: $pickedInstanceId,
-                    selectedModelId: $pickedModel,
-                    effortLevels: effortLevels,
-                    selectedEffort: $pickedEffort,
-                    showsEffort: showsEffortPicker,
-                    hostWide: hostWide,
-                    onRetry: { Task { await loadInstances() } },
-                    onSelectionChange: {
-                        let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances)?.capabilities?.effortLevels ?? []
-                        if let effort = pickedEffort, !levels.contains(effort) {
-                            pickedEffort = nil
-                        }
-                        scheduleModelSave()
-                    },
-                    hermesEndpoints: session.hermesEndpointOptions,
-                    selectedHermesId: selectedHermesEndpoint?.id ?? session.defaultHermesEndpoint()?.id,
-                    onSelectHermes: { endpoint in
-                        selectedHermesEndpoint = endpoint
-                    }
-                )
-                .padding(20)
-            }
-            .background(VBotSurface.background.ignoresSafeArea())
-            .navigationTitle("Model")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { showingModelPicker = false }
-                }
-            }
-        }
-        .presentationDragIndicator(.visible)
+        ChatModelPickerSheet(bot: current)
+            .environmentObject(session)
+            .presentationDragIndicator(.visible)
     }
 
     private var mediaControls: some View {
@@ -1227,13 +1193,6 @@ struct AgentProfileView: View {
             sessionRefreshing: refreshing
         ) {
             instances = session.modelCatalog
-            if !instances.isEmpty {
-                let resolved = ProviderCatalogPolicy.resolveSelection(current.modelSelection, in: instances)
-                pickedInstanceId = resolved.instanceId
-                pickedModel = resolved.model
-                let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: instances)?.capabilities?.effortLevels ?? []
-                pickedEffort = current.modelSelection.effort.flatMap { levels.contains($0) ? $0 : nil }
-            }
         }
         instancesError = session.modelCatalogError
         instancesLoading = ModelCatalogLoadPolicy.localLoadingAfterSessionPublish(
@@ -1251,11 +1210,6 @@ struct AgentProfileView: View {
         case let .loaded(loaded):
             instances = loaded
             instancesError = nil
-            let resolved = ProviderCatalogPolicy.resolveSelection(current.modelSelection, in: loaded)
-            pickedInstanceId = resolved.instanceId
-            pickedModel = resolved.model
-            let levels = AdvertisedModelCatalog.instance(id: pickedInstanceId, in: loaded)?.capabilities?.effortLevels ?? []
-            pickedEffort = current.modelSelection.effort.flatMap { levels.contains($0) ? $0 : nil }
             instancesLoading = false
         case let .failed(message):
             instancesError = message
@@ -1267,80 +1221,6 @@ struct AgentProfileView: View {
                 sessionRefreshing: session.modelCatalogRefreshing
             )
         }
-    }
-
-    private func scheduleModelSave() {
-        modelSaveRevision &+= 1
-        let revision = modelSaveRevision
-        modelSaveTask?.cancel()
-
-        let selection = current.modelSelection
-        guard pickedInstanceId != selection.instanceId
-            || pickedModel != selection.model
-            || pickedEffort != selection.effort
-        else {
-            savingModel = false
-            modelSaveTask = nil
-            return
-        }
-        guard current.busy != true else {
-            pickedInstanceId = selection.instanceId
-            pickedModel = selection.model
-            pickedEffort = selection.effort
-            savingModel = false
-            modelSaveTask = nil
-            session.actionError = ModelSelectionPolicy.busyExplanation
-            return
-        }
-
-        savingModel = true
-        modelSaveTask = Task { @MainActor in
-            await saveModelIfNeeded(revision: revision, previous: selection)
-            if ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: modelSaveRevision) {
-                modelSaveTask = nil
-            }
-        }
-    }
-
-    private func saveModelIfNeeded(revision: Int, previous: ModelSelection) async {
-        defer {
-            if ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: modelSaveRevision) {
-                savingModel = false
-            }
-        }
-        guard ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: modelSaveRevision) else { return }
-        let requested = BotModelPatch(
-            instanceId: pickedInstanceId,
-            model: pickedModel,
-            effort: showsEffortPicker ? (pickedEffort.map(BotModelPatch.EffortUpdate.set) ?? .clear) : .omitted
-        )
-        guard requested.instanceId != previous.instanceId
-            || requested.model != previous.model
-            || pickedEffort != previous.effort
-        else { return }
-
-        guard let updated = await session.updateModel(requested, for: current) else {
-            // A newer picker value owns the form now. If another client
-            // changed the bot while this request was in flight, follow that
-            // server state rather than rolling back over it.
-            guard ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: modelSaveRevision) else { return }
-            let latest = current.modelSelection
-            if latest.instanceId == requested.instanceId && latest.model == requested.model && latest.effort == pickedEffort {
-                pickedInstanceId = previous.instanceId
-                pickedModel = previous.model
-                pickedEffort = previous.effort
-            } else {
-                pickedInstanceId = latest.instanceId
-                pickedModel = latest.model
-                pickedEffort = latest.effort
-            }
-            return
-        }
-
-        guard ModelSelectionPolicy.shouldApplyResponse(requestRevision: revision, currentRevision: modelSaveRevision) else { return }
-        pickedInstanceId = updated.modelSelection.instanceId
-        pickedModel = updated.modelSelection.model
-        pickedEffort = updated.modelSelection.effort
     }
 
     private func profilePatch() -> BotProfilePatch {

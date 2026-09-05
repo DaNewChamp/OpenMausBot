@@ -15,6 +15,7 @@ import CompanionCore
 struct VoiceModesView: View {
     @EnvironmentObject private var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var controller: VoiceModeController
     @State private var typed = ""
     @State private var showingCallVoice = false
@@ -66,15 +67,20 @@ struct VoiceModesView: View {
         // cover must not start or tear down the mic/TTS/island.
         .onChange(of: controller.phase) { oldPhase, newPhase in
             guard oldPhase != newPhase else { return }
-            VoiceCallFeedback.haptic(for: newPhase)
-            VoiceCallFeedback.tone(for: newPhase)
+            VoiceCallFeedback.haptic(
+                for: newPhase,
+                isForeground: scenePhase == .active,
+                isMuted: controller.isMuted,
+                isDisconnected: session.status != .live
+            )
         }
         .sheet(isPresented: $showingCallVoice) {
             if let bot = callBot {
                 CallVoicePickerSheet(
                     botId: bot.id,
                     botName: bot.name,
-                    serverVoice: bot.voice
+                    serverVoice: bot.voice,
+                    hasActiveCall: true
                 )
             }
         }
@@ -86,6 +92,18 @@ struct VoiceModesView: View {
             }
         }
 #endif
+    }
+
+    private var callStatusText: String {
+        guard session.status == .live else {
+            return session.status == .unauthorized || session.status == .unpaired ? "Connection unavailable" : "Reconnecting"
+        }
+        return VoiceSessionPolicy.callStatusLine(for: controller.phase, micMuted: controller.isMuted)
+    }
+
+    private func interactionHaptic() {
+        guard scenePhase == .active, controller.phase != .listening || controller.isMuted else { return }
+        Haptics.selection()
     }
 
     private var callHeader: some View {
@@ -105,7 +123,7 @@ struct VoiceModesView: View {
                         .accessibilityLabel("Time in call")
                 }
             }
-            Text(VoiceSessionPolicy.callStatusLine(for: controller.phase, micMuted: controller.isMuted))
+            Text(callStatusText)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(Color.white.opacity(0.7))
                 .accessibilityAddTraits(.updatesFrequently)
@@ -116,26 +134,26 @@ struct VoiceModesView: View {
     // MARK: - The orb
 
     private var orb: some View {
-        TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 1.0 / 30.0, paused: reduceMotion)) { timeline in
-            let _ = timeline.date
-            PremiumVoiceOrb(
-                phase: controller.phase,
-                micLevel: controller.micLevel,
-                voiceLevel: controller.voiceLevel,
-                reduceMotion: reduceMotion
-            )
-            .frame(width: 190, height: 190)
-            .contentShape(Circle())
-            .onTapGesture {
-                Haptics.selection()
-                composerFocused = false
-                controller.orbTapped()
-            }
-            .accessibilityElement()
-            .accessibilityLabel(accessibilityText)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityHint(controller.phase == .idle ? "Starts listening" : "Stops or interrupts")
+        PremiumVoiceOrb(
+            phase: controller.phase,
+            micLevel: controller.micLevel,
+            voiceLevel: controller.voiceLevel,
+            isMuted: controller.isMuted,
+            isDisconnected: session.status != .live,
+            reduceMotion: reduceMotion,
+            isBackground: scenePhase != .active
+        )
+        .frame(width: 190, height: 190)
+        .contentShape(Circle())
+        .onTapGesture {
+            interactionHaptic()
+            composerFocused = false
+            controller.orbTapped()
         }
+        .accessibilityElement()
+        .accessibilityLabel(accessibilityText)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint(controller.phase == .idle ? "Starts listening" : "Stops or interrupts")
     }
 
     /// The one line under the orb: what was heard or what the bot is saying.
@@ -150,6 +168,7 @@ struct VoiceModesView: View {
     }
 
     private var statusText: String {
+        if session.status != .live { return callStatusText }
         switch controller.phase {
         case .idle:
             return VoiceSessionPolicy.callStatusLine(for: .idle, micMuted: controller.isMuted)
@@ -176,6 +195,7 @@ struct VoiceModesView: View {
     }
 
     private var accessibilityText: String {
+        if session.status != .live { return callStatusText }
         switch controller.phase {
         case .idle: return controller.isMuted ? "Call muted. Tap to talk" : "Call idle. Tap to talk"
         case .listening: return "Listening. Tap to send"
@@ -190,7 +210,7 @@ struct VoiceModesView: View {
         VStack(spacing: 22) {
             HStack(spacing: 36) {
                 Button {
-                    Haptics.selection()
+                    interactionHaptic()
                     controller.toggleMute()
                 } label: {
                     Image(systemName: controller.isMuted ? "mic.slash.fill" : "mic.fill")
@@ -213,7 +233,7 @@ struct VoiceModesView: View {
                     .accessibilityLabel("Audio output")
 
                 Button {
-                    Haptics.selection()
+                    interactionHaptic()
                     showingCallVoice = true
                 } label: {
                     Image(systemName: "waveform")
@@ -229,7 +249,7 @@ struct VoiceModesView: View {
             }
 
             Button {
-                Haptics.selection()
+                interactionHaptic()
                 controller.close()
             } label: {
                 Image(systemName: "phone.down.fill")
@@ -270,7 +290,7 @@ struct VoiceModesView: View {
                 .background(Capsule().fill(Color.white.opacity(0.10)))
                 .onSubmit { sendTyped() }
             Button {
-                Haptics.selection()
+                interactionHaptic()
                 sendTyped()
             } label: {
                 Image(systemName: "arrow.up")
@@ -355,7 +375,10 @@ struct VoiceOrb: View {
     let phase: VoiceSessionPhase
     let level: Float
     let voiceLevel: Float
+    var isMuted: Bool = false
+    var isDisconnected: Bool = false
     let reduceMotion: Bool
+    var isBackground: Bool = false
 
     @State private var breathing = false
     @State private var orbiting = false
@@ -364,18 +387,21 @@ struct VoiceOrb: View {
     @State private var listenFlash = false
 
     /// The amplitude driving this phase, already 0...1 from LevelFollower.
+    /// Uses VoiceFeedbackPolicy: no fake amplitude in muted, disconnected, idle, or thinking.
     private var activeLevel: CGFloat {
-        let raw: Float
-        switch phase {
-        case .listening: raw = level
-        case .speaking: raw = voiceLevel
-        case .idle, .thinking: raw = 0
-        }
-        return CGFloat(min(max(raw, 0), 1))
+        CGFloat(VoiceFeedbackPolicy.effectiveAmplitude(
+            phase: phase,
+            micLevel: level,
+            voiceLevel: voiceLevel,
+            isMuted: isMuted,
+            isDisconnected: isDisconnected
+        ))
     }
 
     private var coreScale: CGFloat {
-        if reduceMotion { return 1 }
+        if reduceMotion || isBackground { return 1.0 }
+        if isDisconnected { return 0.96 }
+        if isMuted && (phase == .listening || phase == .idle) { return 0.98 }
         switch phase {
         case .idle:
             return breathing ? 1.0 : 1.04
@@ -389,6 +415,8 @@ struct VoiceOrb: View {
     }
 
     private var coreOpacity: Double {
+        if isDisconnected { return 0.30 }
+        if isMuted && (phase == .listening || phase == .idle) { return 0.35 }
         if reduceMotion {
             switch phase {
             case .idle: return 0.4
@@ -405,7 +433,9 @@ struct VoiceOrb: View {
 
     /// The bloom behind the core: loud is bright. Idle keeps a faint ash.
     private var glowOpacity: Double {
-        guard !reduceMotion else { return phase == .idle ? 0.1 : 0.2 }
+        if isDisconnected { return 0.04 }
+        if isMuted && (phase == .listening || phase == .idle) { return 0.06 }
+        guard !reduceMotion && !isBackground else { return phase == .idle ? 0.1 : 0.2 }
         switch phase {
         case .idle: return 0.12
         case .thinking: return 0.28
@@ -444,16 +474,16 @@ struct VoiceOrb: View {
                 }
                 .shadow(color: Color.white.opacity(glowOpacity), radius: 44)
 
-            if phase == .thinking {
+            if phase == .thinking && !isDisconnected {
                 Circle()
                     .stroke(
                         AngularGradient(
-                            colors: [Color.white.opacity(0), Color.white.opacity(0.9), Color.white.opacity(0)],
+                            colors: [Color.white.opacity(0), Color.white.opacity(reduceMotion ? 0.4 : 0.85), Color.white.opacity(0)],
                             center: .center,
                             startAngle: .degrees(orbiting ? 360 : 0),
                             endAngle: .degrees(orbiting ? 720 : 360)
                         ),
-                        lineWidth: 3
+                        lineWidth: 2.5
                     )
                     .padding(9)
             }
@@ -461,31 +491,28 @@ struct VoiceOrb: View {
         .scaleEffect(coreScale)
         .opacity(coreOpacity)
         .brightness(reduceMotion ? 0 : (listenFlash ? 0.3 : 0))
-        // The step up is quick; the settle back is slower, so the flash
-        // reads as one beat, not a blink.
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: listenFlash)
-        // TimelineView is the animation engine: it samples mic/voice level
-        // every frame. Binding scale to `.animation(value:)` here made the
-        // orb look frozen — SwiftUI coalesced the 50 Hz assignments into
-        // one interpolation that never visibly moved.
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.9), value: phase)
         .onAppear { runAnimations() }
         .onChange(of: phase) { _, _ in runAnimations() }
+        .onChange(of: reduceMotion) { _, _ in runAnimations() }
+        .onChange(of: isBackground) { _, _ in runAnimations() }
+        .onChange(of: isMuted) { _, _ in runAnimations() }
+        .onChange(of: isDisconnected) { _, _ in runAnimations() }
     }
 
     private func runAnimations() {
         breathing = false
         orbiting = false
-        guard !reduceMotion else { return }
+        listenFlash = false
+        guard !reduceMotion, !isBackground, !isDisconnected else { return }
         switch phase {
         case .idle:
             withAnimation(.easeInOut(duration: 3.4).repeatForever(autoreverses: true)) {
                 breathing = true
             }
         case .listening:
-            // The level does the moving here; a still core reads as dead
-            // mic, so silence keeps the idle breath. Entering the phase
-            // flashes brighter first — the loop is visibly back to you.
+            guard !isMuted else { return }
             withAnimation(.easeInOut(duration: 3.4).repeatForever(autoreverses: true)) {
                 breathing = true
             }
@@ -494,11 +521,11 @@ struct VoiceOrb: View {
                 listenFlash = false
             }
         case .thinking:
-            withAnimation(.linear(duration: 2.6).repeatForever(autoreverses: false)) {
+            // Restrained distinct non-audio movement
+            withAnimation(.linear(duration: 3.2).repeatForever(autoreverses: false)) {
                 orbiting = true
             }
         case .speaking:
-            // Voice amplitude drives the swell; no synthetic pulse.
             break
         }
     }

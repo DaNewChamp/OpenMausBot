@@ -35,6 +35,10 @@ final class ModelSelectionPolicyTests: XCTestCase {
             ModelSelectionPolicy.emptyCatalogExplanation,
             ModelSelectionPolicy.hostWideHint,
             ModelSelectionPolicy.fastModeHint,
+            ModelSelectionPolicy.fastModeTitle,
+            ModelSelectionPolicy.fastGenerationTitle,
+            ModelSelectionPolicy.fastGenerationHint,
+            ModelSelectionPolicy.currentModelUnavailable,
             ModelSelectionPolicy.providerKeepsLocalModel,
             ModelSelectionPolicy.refreshingExplanation,
             ModelSelectionPolicy.managedByServer,
@@ -46,6 +50,11 @@ final class ModelSelectionPolicyTests: XCTestCase {
             XCTAssertFalse(copy.localizedCaseInsensitiveContains("cursor"))
         }
         XCTAssertEqual(ModelSelectionPolicy.emptyCatalogExplanation, "No models on computer")
+        XCTAssertEqual(ModelSelectionPolicy.fastModeTitle, "Auto-pick a faster model")
+        XCTAssertEqual(ModelSelectionPolicy.fastGenerationTitle, "Fast generation")
+        XCTAssertEqual(ModelSelectionPolicy.currentModelUnavailable, "Current model unavailable")
+        XCTAssertNotEqual(ModelSelectionPolicy.fastModeTitle, ModelSelectionPolicy.fastGenerationTitle)
+        XCTAssertFalse(ModelSelectionPolicy.fastModeHint.localizedCaseInsensitiveContains("fast generation"))
     }
 
     func testStaleRevisionIsIgnored() {

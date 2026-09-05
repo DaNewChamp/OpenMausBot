@@ -14,8 +14,20 @@ public enum ModelSelectionPolicy: Sendable {
     public static let hostWideHint =
         "This engine uses one provider and model for every agent on this computer."
     public static let providerKeepsLocalModel = "This provider keeps its local model."
+    public static let fastModeTitle = "Auto-pick a faster model"
     public static let fastModeHint =
-        "Uses a quicker model and lower reasoning when this engine supports it."
+        "May switch this agent to a different engine, model, and lower reasoning. This is not same-model speed."
+    public static let fastGenerationTitle = "Fast generation"
+    public static let fastGenerationHint =
+        "Uses the advertised Fast variant of this exact model on the same source."
+    public static let currentModelUnavailable = "Current model unavailable"
+    public static let moreModels = "More models"
+    public static let runVia = "Run via"
+    public static let oneMContext = "1M context"
+    public static let oneMIncluded = "1M included"
+    public static let thinkingTitle = "Thinking"
+    public static let applyTitle = "Apply"
+    public static let advancedDetails = "Advanced details"
 
     public static func allowsSwitch(
         working: Bool,
@@ -66,6 +78,50 @@ public enum ModelSelectionPolicy: Sendable {
 
     public static func allowsHermesRuntimeSwitch(working: Bool) -> Bool {
         allowsSwitch(working: working)
+    }
+
+    public static func compactHeaderSummary(familyLabel: String, effort: String?, fast: Bool) -> String {
+        var parts = [familyLabel]
+        if let effort, !effort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(effortDisplayName(effort))
+        }
+        if fast { parts.append("Fast") }
+        return parts.joined(separator: " · ")
+    }
+
+    public static func compactHeaderSourceLabel(instanceDisplayName: String) -> String {
+        instanceDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    public static func effortDisplayName(_ level: String) -> String {
+        switch level {
+        case "xhigh": return "X-High"
+        case "extra-high": return "Extra High"
+        default:
+            return level.split(separator: "-").map { $0.capitalized }.joined(separator: " ")
+        }
+    }
+
+    public static func headerSummary(
+        selection: ModelSelection,
+        instances: [Instance]
+    ) -> (title: String, source: String) {
+        let catalog = ModelFamilyPolicy.catalog(from: instances, selection: selection)
+        let parsed = ModelFamilyPolicy.parse(selection.model)
+        let family = ModelFamilyPolicy.family(for: selection, in: catalog)
+        let familyLabel = family?.label ?? AdvertisedModelCatalog.humanModelLabel(
+            selection: selection,
+            instances: instances
+        )
+        let source = family.flatMap { ModelFamilyPolicy.source(for: selection, in: $0) }
+        let effort = source?.effortEncodedInModelId == true ? parsed.axes.effort : selection.effort
+        let title = compactHeaderSummary(familyLabel: familyLabel, effort: effort, fast: parsed.axes.fast)
+        let sourceName = compactHeaderSourceLabel(
+            instanceDisplayName: source?.displayName
+                ?? AdvertisedModelCatalog.instance(id: selection.instanceId, in: instances)?.pickerTitle
+                ?? AdvertisedModelCatalog.displayModelLabel(selection.instanceId)
+        )
+        return (title, sourceName)
     }
 
     /// Revert unsaved picker values when a turn starts; keep them when it ends.
