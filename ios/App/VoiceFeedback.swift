@@ -43,19 +43,27 @@ struct PremiumVoiceOrb: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 1.0 / 30.0, paused: reduceMotion)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
-            let breathe = reduceMotion ? 0 : (sin(t * 2.2) + 1) * 0.5
+            let breathe: CGFloat = reduceMotion ? 0 : CGFloat((sin(t * 2.2) + 1) * 0.5)
+            let coreScale: CGFloat = 1 + activity * 0.08 + breathe * 0.02
+            let haloScale: CGFloat = 1.08 + activity * 0.12 + breathe * 0.04
+            let outerScale: CGFloat = 1.28 + breathe * 0.06
+            let coreOpacity = Double(0.05 + activity * 0.08)
+            let haloOpacity = Double(0.18 + activity * 0.42)
+            let outerOpacity = Double(0.08 + activity * 0.25)
+            let haloWidth: CGFloat = 1.5 + activity * 2.5
+            let haloBlur: CGFloat = 2 + activity * 5
             ZStack {
                 Circle()
                     .fill(.ultraThinMaterial)
-                    .overlay(Circle().fill(Color.white.opacity(0.05 + activity * 0.08)))
-                    .scaleEffect(1 + activity * 0.08 + breathe * 0.02)
+                    .overlay(Circle().fill(Color.white.opacity(coreOpacity)))
+                    .scaleEffect(coreScale)
                 Circle()
-                    .stroke(Color.white.opacity(0.18 + activity * 0.42), lineWidth: 1.5 + activity * 2.5)
-                    .scaleEffect(1.08 + activity * 0.12 + breathe * 0.04)
-                    .blur(radius: 2 + activity * 5)
+                    .stroke(Color.white.opacity(haloOpacity), lineWidth: haloWidth)
+                    .scaleEffect(haloScale)
+                    .blur(radius: haloBlur)
                 Circle()
-                    .stroke(Color.white.opacity(0.08 + activity * 0.25), lineWidth: 1)
-                    .scaleEffect(1.28 + breathe * 0.06)
+                    .stroke(Color.white.opacity(outerOpacity), lineWidth: 1)
+                    .scaleEffect(outerScale)
                 VoiceOrb(phase: phase, level: micLevel, voiceLevel: voiceLevel, reduceMotion: reduceMotion)
                     .scaleEffect(0.82)
             }
