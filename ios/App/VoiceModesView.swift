@@ -17,14 +17,21 @@ struct VoiceModesView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var controller: VoiceModeController
     @State private var typed = ""
+    @State private var showingCallVoice = false
     @FocusState private var composerFocused: Bool
 
     private var chatName: String { controller.chat?.name ?? "bot" }
+    private var callBot: Bot? {
+        guard let chat = controller.chat, case let .bot(bot) = chat else { return nil }
+        return session.state.bot(bot.id) ?? bot
+    }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             VStack(spacing: 0) {
+                callHeader
+                    .padding(.top, 12)
                 Spacer()
                 orb
 #if DEBUG
@@ -37,7 +44,7 @@ struct VoiceModesView: View {
                 }
 #endif
                 statusLine
-                    .padding(.top, 36)
+                    .padding(.top, 28)
                 if controller.phase == .speaking {
                     VoiceAmplitudeBars(level: controller.voiceLevel, reduceMotion: reduceMotion)
                         .padding(.top, 10)
@@ -50,12 +57,27 @@ struct VoiceModesView: View {
                         .padding(.top, 10)
                 }
                 Spacer()
+                callControls
                 bottomBar
             }
             .padding(.horizontal, 24)
         }
         // Session owns the controller. Appearing or disappearing this
         // cover must not start or tear down the mic/TTS/island.
+        .onChange(of: controller.phase) { oldPhase, newPhase in
+            guard oldPhase != newPhase else { return }
+            VoiceCallFeedback.haptic(for: newPhase)
+            VoiceCallFeedback.tone(for: newPhase)
+        }
+        .sheet(isPresented: $showingCallVoice) {
+            if let bot = callBot {
+                CallVoicePickerSheet(
+                    botId: bot.id,
+                    botName: bot.name,
+                    serverVoice: bot.voice
+                )
+            }
+        }
 #if DEBUG
         .onAppear {
             if ProcessInfo.processInfo.arguments.contains("-voice-level-probe"),
@@ -66,14 +88,39 @@ struct VoiceModesView: View {
 #endif
     }
 
+    private var callHeader: some View {
+        VStack(spacing: 10) {
+            if let chat = controller.chat {
+                ChatAvatarView(chat: chat, size: 88)
+                    .accessibilityHidden(true)
+            }
+            Text(chatName)
+                .font(.system(.title2, design: .rounded).weight(.semibold))
+                .foregroundStyle(Color.white)
+            if let startedAt = controller.callStartedAt {
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    Text(VoiceSessionPolicy.callDurationLabel(elapsed: Date().timeIntervalSince(startedAt)))
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.55))
+                        .accessibilityLabel("Time in call")
+                }
+            }
+            Text(VoiceSessionPolicy.callStatusLine(for: controller.phase, micMuted: controller.isMuted))
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color.white.opacity(0.7))
+                .accessibilityAddTraits(.updatesFrequently)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     // MARK: - The orb
 
     private var orb: some View {
         TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 1.0 / 30.0, paused: reduceMotion)) { timeline in
             let _ = timeline.date
-            VoiceOrb(
+            PremiumVoiceOrb(
                 phase: controller.phase,
-                level: controller.micLevel,
+                micLevel: controller.micLevel,
                 voiceLevel: controller.voiceLevel,
                 reduceMotion: reduceMotion
             )
@@ -87,53 +134,37 @@ struct VoiceModesView: View {
             .accessibilityElement()
             .accessibilityLabel(accessibilityText)
             .accessibilityAddTraits(.isButton)
-            .accessibilityHint(controller.phase == .idle ? "Starts the microphone" : "Stops or interrupts")
+            .accessibilityHint(controller.phase == .idle ? "Starts listening" : "Stops or interrupts")
         }
     }
 
-    /// The one line under the orb: what was heard, what is happening, or
-    /// what the bot is saying — the state, in words.
+    /// The one line under the orb: what was heard or what the bot is saying.
     private var statusLine: some View {
-        VStack(spacing: 6) {
-            if let startedAt = controller.callStartedAt {
-                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    Text(Self.callDuration(since: startedAt))
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.4))
-                        .accessibilityLabel("Time in call")
-                }
-            }
-            Text(statusText)
-                .font(.system(.title3, design: .serif))
-                .foregroundStyle(statusIsBright ? Color.white : Color.white.opacity(0.55))
-                .multilineTextAlignment(.center)
-                .lineLimit(6)
-                .frame(maxWidth: .infinity, minHeight: 60, alignment: .top)
-                .animation(.easeOut(duration: 0.2), value: controller.phase)
-        }
-    }
-
-    /// Time in call — m:ss, or h:mm:ss past the hour.
-    private static func callDuration(since start: Date) -> String {
-        let total = max(0, Int(Date().timeIntervalSince(start)))
-        let hours = total / 3600
-        let minutes = total / 60 % 60
-        let seconds = total % 60
-        return hours > 0
-            ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
-            : String(format: "%d:%02d", minutes, seconds)
+        Text(statusText)
+            .font(.system(.title3, design: .serif))
+            .foregroundStyle(statusIsBright ? Color.white : Color.white.opacity(0.55))
+            .multilineTextAlignment(.center)
+            .lineLimit(6)
+            .frame(maxWidth: .infinity, minHeight: 60, alignment: .top)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: controller.phase)
     }
 
     private var statusText: String {
         switch controller.phase {
         case .idle:
-            return "Tap the orb to talk"
+            return VoiceSessionPolicy.callStatusLine(for: .idle, micMuted: controller.isMuted)
         case .listening:
-            return controller.heard.isEmpty ? "Listening…" : controller.heard
+            return controller.heard.isEmpty
+                ? VoiceSessionPolicy.callStatusLine(for: .listening, micMuted: controller.isMuted)
+                : controller.heard
         case .thinking:
-            return controller.heard.isEmpty ? "Thinking…" : "\(controller.heard)\nThinking…"
+            return controller.heard.isEmpty
+                ? VoiceSessionPolicy.callStatusLine(for: .thinking, micMuted: controller.isMuted)
+                : "\(controller.heard)\n\(VoiceSessionPolicy.callStatusLine(for: .thinking, micMuted: controller.isMuted))"
         case .speaking:
-            return controller.replyText
+            return controller.replyText.isEmpty
+                ? VoiceSessionPolicy.callStatusLine(for: .speaking, micMuted: controller.isMuted)
+                : controller.replyText
         }
     }
 
@@ -146,11 +177,72 @@ struct VoiceModesView: View {
 
     private var accessibilityText: String {
         switch controller.phase {
-        case .idle: return "Voice mode, idle"
+        case .idle: return controller.isMuted ? "Call muted. Tap to talk" : "Call idle. Tap to talk"
         case .listening: return "Listening. Tap to send"
         case .thinking: return "Waiting for the reply. Tap to interrupt"
         case .speaking: return "Speaking. Tap to interrupt"
         }
+    }
+
+    // MARK: - Call controls
+
+    private var callControls: some View {
+        VStack(spacing: 22) {
+            HStack(spacing: 36) {
+                Button {
+                    Haptics.selection()
+                    controller.toggleMute()
+                } label: {
+                    Image(systemName: controller.isMuted ? "mic.slash.fill" : "mic.fill")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(Color.white)
+                        .frame(width: 64, height: 64)
+                        .background(
+                            Circle().fill(controller.isMuted ? Color.white.opacity(0.28) : Color.white.opacity(0.12))
+                        )
+                        .contentShape(Circle())
+                }
+                .buttonStyle(VoiceControlButtonStyle(reduceMotion: reduceMotion))
+                .animation(reduceMotion ? nil : .snappy(duration: 0.24, extraBounce: 0.1), value: controller.isMuted)
+                .accessibilityLabel(controller.isMuted ? "Unmute microphone" : "Mute microphone")
+
+                CallRoutePicker()
+                    .frame(width: 64, height: 64)
+                    .background(Circle().fill(Color.white.opacity(0.12)))
+                    .clipShape(Circle())
+                    .accessibilityLabel("Audio output")
+
+                Button {
+                    Haptics.selection()
+                    showingCallVoice = true
+                } label: {
+                    Image(systemName: "waveform")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(Color.white)
+                        .frame(width: 64, height: 64)
+                        .background(Circle().fill(Color.white.opacity(0.12)))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(VoiceControlButtonStyle(reduceMotion: reduceMotion))
+                .disabled(callBot == nil)
+                .accessibilityLabel("Call voice")
+            }
+
+            Button {
+                Haptics.selection()
+                controller.close()
+            } label: {
+                Image(systemName: "phone.down.fill")
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(Color.white)
+                    .frame(width: 76, height: 76)
+                    .background(Circle().fill(Color.red))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(VoiceControlButtonStyle(reduceMotion: reduceMotion))
+            .accessibilityLabel("End call")
+        }
+        .padding(.bottom, 8)
     }
 
     // MARK: - Bottom bar
@@ -158,36 +250,6 @@ struct VoiceModesView: View {
     private var bottomBar: some View {
         HStack(spacing: 14) {
             composer
-            Button {
-                Haptics.selection()
-                controller.toggleMute()
-            } label: {
-                Image(systemName: controller.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(controller.isMuted ? Color.white.opacity(0.55) : Color.white)
-                    .frame(width: 44, height: 44)
-                    .background(
-                        Circle().fill(Color.white.opacity(controller.isMuted ? 0.24 : 0.10))
-                    )
-                    .contentShape(Circle())
-            }
-            .buttonStyle(VoiceControlButtonStyle(reduceMotion: reduceMotion))
-            .animation(reduceMotion ? nil : .snappy(duration: 0.24, extraBounce: 0.1), value: controller.isMuted)
-            .accessibilityLabel(controller.isMuted ? "Unmute replies" : "Mute replies")
-
-            Button {
-                Haptics.selection()
-                controller.close()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(Color.white)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(Color.white.opacity(0.10)))
-                    .contentShape(Circle())
-            }
-            .buttonStyle(VoiceControlButtonStyle(reduceMotion: reduceMotion))
-            .accessibilityLabel("Close voice mode")
         }
         .padding(.top, 8)
         .padding(.bottom, 12)

@@ -101,11 +101,90 @@ public struct VoiceOutputSettings: Equatable, Sendable {
         !customBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Per-bot call voice on this phone. Hub still uses server `bot.voice`.
+    public func resolvedCallVoice(botId: String, serverBotVoice: String?, defaults: UserDefaults = .standard) -> String? {
+        CallVoicePreferenceStore.resolvedVoice(
+            botId: botId,
+            engine: engine,
+            serverBotVoice: serverBotVoice,
+            globalCustomVoice: customVoice,
+            defaults: defaults
+        )
+    }
+
     private static func nonEmpty(_ value: String?, default fallback: String) -> String {
         guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return fallback
         }
         return value
+    }
+}
+
+/// Per-bot call voice stored on this phone, namespaced by bot id.
+///
+/// Separate from server `bot.voice`. On-device output can pin an
+/// `AVSpeechSynthesisVoice` identifier; a custom endpoint can optionally
+/// override the global custom voice. Hub continues to use the server voice.
+/// The custom TTS API key is never stored here.
+public struct CallVoicePreference: Codable, Equatable, Sendable {
+    public var onDeviceVoiceIdentifier: String
+    public var customVoiceOverride: String
+
+    public init(onDeviceVoiceIdentifier: String = "", customVoiceOverride: String = "") {
+        self.onDeviceVoiceIdentifier = onDeviceVoiceIdentifier
+        self.customVoiceOverride = customVoiceOverride
+    }
+}
+
+public enum CallVoicePreferenceStore: Sendable {
+    public static let keyPrefix = "companion.prefs.callVoice."
+
+    public static func storageKey(botId: String) -> String? {
+        let trimmed = botId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.:"))
+        let cleaned = String(trimmed.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" })
+        return keyPrefix + cleaned
+    }
+
+    public static func load(botId: String, defaults: UserDefaults = .standard) -> CallVoicePreference {
+        guard let key = storageKey(botId: botId),
+              let data = defaults.data(forKey: key),
+              let preference = try? JSONDecoder().decode(CallVoicePreference.self, from: data)
+        else {
+            return CallVoicePreference()
+        }
+        return preference
+    }
+
+    public static func save(_ preference: CallVoicePreference, botId: String, defaults: UserDefaults = .standard) {
+        guard let key = storageKey(botId: botId) else { return }
+        guard let data = try? JSONEncoder().encode(preference) else { return }
+        defaults.set(data, forKey: key)
+    }
+
+    public static func resolvedVoice(
+        botId: String,
+        engine: VoiceOutputEngine,
+        serverBotVoice: String?,
+        globalCustomVoice: String,
+        defaults: UserDefaults = .standard
+    ) -> String? {
+        switch engine {
+        case .hub:
+            let voice = serverBotVoice?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return voice.isEmpty ? nil : voice
+        case .onDevice:
+            let stored = load(botId: botId, defaults: defaults).onDeviceVoiceIdentifier
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return stored.isEmpty ? nil : stored
+        case .customEndpoint:
+            let override = load(botId: botId, defaults: defaults).customVoiceOverride
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !override.isEmpty { return override }
+            let global = globalCustomVoice.trimmingCharacters(in: .whitespacesAndNewlines)
+            return global.isEmpty ? nil : global
+        }
     }
 }
 

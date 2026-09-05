@@ -153,3 +153,155 @@ final class TtsEngineSelectionTests: XCTestCase {
         XCTAssertEqual(VoiceOutputEngine.allCases.count, 3)
     }
 }
+
+final class CallVoicePreferenceTests: XCTestCase {
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        super.setUp()
+        defaults = UserDefaults(suiteName: "CallVoicePreferenceTests")
+        defaults.removePersistentDomain(forName: "CallVoicePreferenceTests")
+    }
+
+    func testStorageKeyIsNamespacedByBotIdAndRejectsBlankIds() {
+        XCTAssertEqual(
+            CallVoicePreferenceStore.storageKey(botId: "bot-scout"),
+            "companion.prefs.callVoice.bot-scout"
+        )
+        XCTAssertEqual(
+            CallVoicePreferenceStore.storageKey(botId: "  bot-scout  "),
+            "companion.prefs.callVoice.bot-scout"
+        )
+        XCTAssertNil(CallVoicePreferenceStore.storageKey(botId: ""))
+        XCTAssertNil(CallVoicePreferenceStore.storageKey(botId: "   "))
+    }
+
+    func testTwoBotsDoNotShareACallVoice() {
+        CallVoicePreferenceStore.save(
+            CallVoicePreference(onDeviceVoiceIdentifier: "com.apple.voice.compact.en-US.Samantha", customVoiceOverride: "verse"),
+            botId: "bot-a",
+            defaults: defaults
+        )
+        CallVoicePreferenceStore.save(
+            CallVoicePreference(onDeviceVoiceIdentifier: "com.apple.voice.compact.en-GB.Daniel", customVoiceOverride: "alloy"),
+            botId: "bot-b",
+            defaults: defaults
+        )
+        XCTAssertEqual(
+            CallVoicePreferenceStore.load(botId: "bot-a", defaults: defaults).onDeviceVoiceIdentifier,
+            "com.apple.voice.compact.en-US.Samantha"
+        )
+        XCTAssertEqual(
+            CallVoicePreferenceStore.load(botId: "bot-b", defaults: defaults).onDeviceVoiceIdentifier,
+            "com.apple.voice.compact.en-GB.Daniel"
+        )
+        XCTAssertEqual(CallVoicePreferenceStore.load(botId: "bot-a", defaults: defaults).customVoiceOverride, "verse")
+        XCTAssertEqual(CallVoicePreferenceStore.load(botId: "missing", defaults: defaults), CallVoicePreference())
+    }
+
+    func testBlankBotIdDoesNotWriteAndDoesNotReadSecrets() {
+        var settings = VoiceOutputSettings()
+        settings.customAPIKey = "sk-secret"
+        settings.save(defaults: defaults)
+        CallVoicePreferenceStore.save(
+            CallVoicePreference(onDeviceVoiceIdentifier: "should-not-land", customVoiceOverride: "nope"),
+            botId: "",
+            defaults: defaults
+        )
+        XCTAssertEqual(VoiceOutputSettings.load(defaults: defaults).customAPIKey, "sk-secret")
+        XCTAssertEqual(CallVoicePreferenceStore.load(botId: "", defaults: defaults), CallVoicePreference())
+        let callVoiceKeys = defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix("companion.prefs.callVoice.") }
+        XCTAssertTrue(callVoiceKeys.isEmpty, "a blank bot id must not create a call-voice key")
+        XCTAssertFalse(
+            callVoiceKeys.contains { $0.contains("sk-secret") },
+            "call-voice storage must not leak the custom TTS key into its keys"
+        )
+    }
+
+    func testHubEngineKeepsTheServerBotVoice() {
+        CallVoicePreferenceStore.save(
+            CallVoicePreference(onDeviceVoiceIdentifier: "com.apple.voice.compact.en-US.Samantha", customVoiceOverride: "verse"),
+            botId: "bot-a",
+            defaults: defaults
+        )
+        XCTAssertEqual(
+            CallVoicePreferenceStore.resolvedVoice(
+                botId: "bot-a",
+                engine: .hub,
+                serverBotVoice: "hub-voice-1",
+                globalCustomVoice: "alloy",
+                defaults: defaults
+            ),
+            "hub-voice-1"
+        )
+    }
+
+    func testOnDeviceEngineUsesThePerBotIdentifier() {
+        CallVoicePreferenceStore.save(
+            CallVoicePreference(onDeviceVoiceIdentifier: "com.apple.voice.compact.en-US.Samantha"),
+            botId: "bot-a",
+            defaults: defaults
+        )
+        XCTAssertEqual(
+            CallVoicePreferenceStore.resolvedVoice(
+                botId: "bot-a",
+                engine: .onDevice,
+                serverBotVoice: "hub-voice-1",
+                globalCustomVoice: "alloy",
+                defaults: defaults
+            ),
+            "com.apple.voice.compact.en-US.Samantha"
+        )
+        XCTAssertNil(
+            CallVoicePreferenceStore.resolvedVoice(
+                botId: "bot-b",
+                engine: .onDevice,
+                serverBotVoice: "hub-voice-1",
+                globalCustomVoice: "alloy",
+                defaults: defaults
+            )
+        )
+    }
+
+    func testCustomEngineOverrideWinsThenFallsBackToGlobalVoice() {
+        CallVoicePreferenceStore.save(
+            CallVoicePreference(customVoiceOverride: "verse"),
+            botId: "bot-a",
+            defaults: defaults
+        )
+        XCTAssertEqual(
+            CallVoicePreferenceStore.resolvedVoice(
+                botId: "bot-a",
+                engine: .customEndpoint,
+                serverBotVoice: "hub-voice-1",
+                globalCustomVoice: "alloy",
+                defaults: defaults
+            ),
+            "verse"
+        )
+        XCTAssertEqual(
+            CallVoicePreferenceStore.resolvedVoice(
+                botId: "bot-b",
+                engine: .customEndpoint,
+                serverBotVoice: "hub-voice-1",
+                globalCustomVoice: "alloy",
+                defaults: defaults
+            ),
+            "alloy"
+        )
+    }
+
+    func testCallVoiceStoreNeverWritesTheCustomAPIKey() {
+        CallVoicePreferenceStore.save(
+            CallVoicePreference(onDeviceVoiceIdentifier: "samantha", customVoiceOverride: "verse"),
+            botId: "bot-a",
+            defaults: defaults
+        )
+        XCTAssertNil(defaults.string(forKey: VoiceOutputSettings.customAPIKeyKey))
+        let stored = defaults.object(forKey: CallVoicePreferenceStore.storageKey(botId: "bot-a") ?? "")
+        if let data = stored as? Data, let json = String(data: data, encoding: .utf8) {
+            XCTAssertFalse(json.contains("ttsCustomAPIKey"))
+            XCTAssertFalse(json.lowercased().contains("apiKey".lowercased()))
+        }
+    }
+}

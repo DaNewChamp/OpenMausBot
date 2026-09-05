@@ -21,6 +21,8 @@ public enum VoiceSessionPhase: Equatable, Sendable {
 }
 
 public enum VoiceSessionEvent: Equatable, Sendable {
+    /// The call opened. From idle this starts listening without an orb tap.
+    case opened
     /// The orb was tapped from idle and the microphone is wanted.
     case micReady
     /// Capture ended — by tap or by silence. `hasTranscript` says whether
@@ -76,7 +78,7 @@ public enum VoiceSessionPolicy: Sendable {
         switch event {
         case .closed:
             return .stopAll
-        case .micReady:
+        case .opened, .micReady:
             guard phase == .idle else { return .stay }
             return .listen
         case .micStopped(let hasTranscript):
@@ -162,6 +164,167 @@ public enum VoiceSessionPolicy: Sendable {
         case .listening: return "\(name) is listening"
         case .thinking: return "\(name) is thinking"
         case .speaking: return "\(name) is speaking"
+        }
+    }
+
+    /// Call-screen status: phone-call words, not island copy. Mic mute
+    /// replaces the waiting states; thinking and speaking still name the bot.
+    public static func callStatusLine(for phase: VoiceSessionPhase, micMuted: Bool) -> String {
+        if micMuted {
+            switch phase {
+            case .idle, .listening: return "Muted"
+            case .thinking: return "Thinking"
+            case .speaking: return "Speaking"
+            }
+        }
+        switch phase {
+        case .idle: return "Tap to talk"
+        case .listening: return "Listening"
+        case .thinking: return "Thinking"
+        case .speaking: return "Speaking"
+        }
+    }
+
+    /// Time in call — m:ss, or h:mm:ss past the hour.
+    public static func callDurationLabel(elapsed: TimeInterval) -> String {
+        let total = max(0, Int(elapsed))
+        let hours = total / 3600
+        let minutes = total / 60 % 60
+        let seconds = total % 60
+        return hours > 0
+            ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
+            : String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+/// Audio and background rules for a user-started agent call.
+///
+/// The session stays `playAndRecord` + `voiceChat` for the whole call so
+/// Bluetooth HFP and speakerphone keep working and an `audio` background
+/// mode can hold the process while the user is in the call. Capture and
+/// playback still never run together. This does not claim the call survives
+/// app termination — only backgrounding.
+public enum VoiceCallAudioPolicy: Sendable {
+    public static let category = "playAndRecord"
+    public static let mode = "voiceChat"
+    public static let defaultToSpeaker = true
+    public static let allowBluetooth = true
+    public static let allowsSimultaneousCaptureAndPlayback = false
+    public static let continuesAfterAppTermination = false
+
+    public static func shouldKeepAudioSessionActive(
+        isCallActive: Bool,
+        phase: VoiceSessionPhase
+    ) -> Bool {
+        _ = phase
+        return isCallActive
+    }
+
+    public static func shouldDeactivateAudioSession(isCallActive: Bool) -> Bool {
+        !isCallActive
+    }
+
+    public static func shouldSuspendCaptureOnBackground(isCallActive: Bool) -> Bool {
+        !isCallActive
+    }
+
+    public static func shouldKeepEventStreamInBackground(isCallActive: Bool) -> Bool {
+        isCallActive
+    }
+}
+
+/// Outgoing CallKit bookkeeping. No incoming call, no PushKit.
+///
+/// One UUID per agent call. System End Call closes the V Bot session;
+/// an in-app hang-up requests CXEndCallAction exactly once. Mute is
+/// mirrored in both directions without re-requesting the same value.
+public struct AgentCallKitState: Equatable, Sendable {
+    public var uuid: UUID?
+    public var isReported: Bool
+    public var isMuted: Bool
+    public var isEnding: Bool
+
+    public static let empty = AgentCallKitState(
+        uuid: nil,
+        isReported: false,
+        isMuted: false,
+        isEnding: false
+    )
+
+    public init(uuid: UUID? = nil, isReported: Bool = false, isMuted: Bool = false, isEnding: Bool = false) {
+        self.uuid = uuid
+        self.isReported = isReported
+        self.isMuted = isMuted
+        self.isEnding = isEnding
+    }
+}
+
+public enum AgentCallKitEvent: Equatable, Sendable {
+    case userStarted(handle: String)
+    case providerStarted
+    case userEnded
+    case systemEnded
+    case providerReset
+    case userSetMuted(Bool)
+    case systemSetMuted(Bool)
+}
+
+public enum AgentCallKitAction: Equatable, Sendable {
+    case requestStartOutgoing(uuid: UUID, handle: String)
+    case requestEnd(uuid: UUID)
+    case requestMute(uuid: UUID, muted: Bool)
+    case closeVoiceSession
+    case applyMuted(Bool)
+}
+
+public enum AgentCallKitPolicy: Sendable {
+    public static func reduce(
+        state: AgentCallKitState,
+        event: AgentCallKitEvent,
+        newUUID: UUID = UUID()
+    ) -> (AgentCallKitState, [AgentCallKitAction]) {
+        switch event {
+        case .userStarted(let handle):
+            if state.uuid != nil { return (state, []) }
+            let next = AgentCallKitState(uuid: newUUID, isReported: false, isMuted: false, isEnding: false)
+            return (next, [.requestStartOutgoing(uuid: newUUID, handle: handle)])
+        case .providerStarted:
+            guard state.uuid != nil, !state.isEnding else { return (state, []) }
+            var next = state
+            next.isReported = true
+            var actions: [AgentCallKitAction] = []
+            if next.isMuted, let uuid = next.uuid {
+                actions.append(.requestMute(uuid: uuid, muted: true))
+            }
+            return (next, actions)
+        case .userEnded:
+            guard let uuid = state.uuid, !state.isEnding else { return (state, []) }
+            var next = state
+            next.isEnding = true
+            return (next, [.requestEnd(uuid: uuid)])
+        case .systemEnded:
+            guard state.uuid != nil else { return (.empty, []) }
+            if state.isEnding {
+                return (.empty, [])
+            }
+            return (.empty, [.closeVoiceSession])
+        case .providerReset:
+            guard state.uuid != nil else { return (.empty, []) }
+            return (.empty, [.closeVoiceSession])
+        case .userSetMuted(let muted):
+            guard state.uuid != nil, state.isMuted != muted else { return (state, []) }
+            var next = state
+            next.isMuted = muted
+            var actions: [AgentCallKitAction] = [.applyMuted(muted)]
+            if let uuid = state.uuid, state.isReported {
+                actions.append(.requestMute(uuid: uuid, muted: muted))
+            }
+            return (next, actions)
+        case .systemSetMuted(let muted):
+            guard state.uuid != nil, state.isMuted != muted else { return (state, []) }
+            var next = state
+            next.isMuted = muted
+            return (next, [.applyMuted(muted)])
         }
     }
 }

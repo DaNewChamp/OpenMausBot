@@ -199,8 +199,11 @@ the host computer remain unreachable through the companion.
 The live connection is foreground-only. Notification frames produce native
 banners, sounds, time-sensitive approval alerts, and an app badge while connected;
 the resume cursor replays alerts missed during a short background pause. There is
-no APNs delivery after the app is terminated, no call mode or spoken replies,
-and no hosted relay. Composer dictation is available.
+no APNs delivery after the app is terminated, and no hosted relay. Opening
+voice with a bot is an outgoing call on this phone: listening starts after
+permissions, spoken replies loop back to listening, audio continues while
+the app is backgrounded, and it does not continue after the app is
+terminated. Composer dictation is available.
 Task management, SQLite transcript search,
 transcript sharing, reactions, and edit/version controls use narrow companion
 routes and the computer remains the source of truth. Tailscale is supported

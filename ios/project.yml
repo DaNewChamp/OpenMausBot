@@ -93,8 +93,10 @@ targets:
         NSCameraUsageDescription: >-
           V Bot uses the camera to scan a pairing QR code and to attach a
           photo to a message.
+        UIBackgroundModes:
+          - audio
         NSMicrophoneUsageDescription: >-
-          V Bot listens while you dictate a message to a bot.
+          V Bot listens while you talk to a bot, including during a voice call.
         NSPhotoLibraryUsageDescription: >-
           V Bot lets you pick a photo to attach to a message or use as an avatar.
         NSPhotoLibraryAddUsageDescription: >-

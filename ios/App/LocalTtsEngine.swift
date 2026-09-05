@@ -59,6 +59,7 @@ final class LocalTtsEngine: NSObject {
     private var envelope = AmplitudeEnvelope()
     private var pulseTimer: Timer?
     private var interruptionObserver: AnyCancellable?
+    private var streamVoiceIdentifier: String?
 
     private static let log = Logger(subsystem: "com.posival.openmausmobile", category: "local-tts")
 
@@ -81,8 +82,8 @@ final class LocalTtsEngine: NSObject {
     /// clip was stopped (a barge-in, a close, an interruption) or could not
     /// play; the caller's generation check decides whether anyone still
     /// cares, exactly as the player path does. One sentence in, one stream.
-    func speak(text: String) async throws {
-        let generation = try startStream()
+    func speak(text: String, voiceIdentifier: String? = nil) async throws {
+        let generation = try startStream(voiceIdentifier: voiceIdentifier)
         enqueue(text, generation: generation)
         finishStream(generation: generation)
         let finished = await waitUntilDrained(generation: generation)
@@ -91,11 +92,15 @@ final class LocalTtsEngine: NSObject {
 
     /// Stream-and-speak, step 1: negotiate the playback route — the caller
     /// has already paused dictation — and open a fresh generation. Throws
-    /// when the route cannot be taken.
-    func startStream() throws -> Int {
-        let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(.playback, mode: .spokenAudio)
-        try audioSession.setActive(true)
+    /// when the route cannot be taken. An active agent call already owns
+    /// playAndRecord + voiceChat; do not replace it with playback-only.
+    func startStream(voiceIdentifier: String? = nil) throws -> Int {
+        streamVoiceIdentifier = voiceIdentifier
+        if !CallAudioSession.isOwned {
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playback, mode: .spokenAudio)
+            try audioSession.setActive(true)
+        }
 
         stream.stop()
         envelope = AmplitudeEnvelope()
@@ -115,7 +120,12 @@ final class LocalTtsEngine: NSObject {
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return }
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier)
+        if let identifier = streamVoiceIdentifier,
+           let voice = AVSpeechSynthesisVoice(identifier: identifier) {
+            utterance.voice = voice
+        } else {
+            utterance.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier)
+        }
         stream.enqueue()
         inFlight.insert(utterance)
         synthesizer.speak(utterance)
@@ -154,7 +164,9 @@ final class LocalTtsEngine: NSObject {
             continuation.resume(returning: false)
         }
         stopPulse()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if !CallAudioSession.isOwned {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     /// The drain check: the last utterance is off the queue and the text
@@ -169,7 +181,9 @@ final class LocalTtsEngine: NSObject {
     /// the route is given back.
     private func endTurn() {
         stopPulse()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if !CallAudioSession.isOwned {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     private func startPulse() {

@@ -70,7 +70,7 @@ final class MessageSpeaker: NSObject, ObservableObject {
     /// the configured engine, and return when the last clip finishes or the
     /// run is stopped. One audible clip at a time, one generation token;
     /// `stop()` interrupts it the same way.
-    func speakForVoiceMode(text: String, voiceId: String?, session: Session) async {
+    func speakForVoiceMode(text: String, voiceId: String?, botId: String?, session: Session) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         generation += 1
@@ -86,7 +86,15 @@ final class MessageSpeaker: NSObject, ObservableObject {
             return
         case .onDevice:
             do {
-                try await localEngine.speak(text: trimmed)
+                try await localEngine.speak(
+                    text: trimmed,
+                    voiceIdentifier: CallVoicePreferenceStore.resolvedVoice(
+                        botId: botId ?? "",
+                        engine: .onDevice,
+                        serverBotVoice: voiceId,
+                        globalCustomVoice: settings.customVoice
+                    )
+                )
             } catch {
                 // A deliberate stop also lands here, discarded by the
                 // generation check below.
@@ -94,7 +102,16 @@ final class MessageSpeaker: NSObject, ObservableObject {
             }
         case .customEndpoint:
             do {
-                let audio = try await customClient.fetchAudio(text: trimmed, settings: settings)
+                var callSettings = settings
+                if let override = CallVoicePreferenceStore.resolvedVoice(
+                    botId: botId ?? "",
+                    engine: .customEndpoint,
+                    serverBotVoice: voiceId,
+                    globalCustomVoice: settings.customVoice
+                ) {
+                    callSettings.customVoice = override
+                }
+                let audio = try await customClient.fetchAudio(text: trimmed, settings: callSettings)
                 guard gen == generation else { return }
                 try await play(audio)
             } catch {
@@ -118,12 +135,16 @@ final class MessageSpeaker: NSObject, ObservableObject {
     /// stopped (false — a barge-in, a close, an interruption, an engine
     /// that could not start); the caller's phase check decides what the
     /// loop does next, exactly as `speakForVoiceMode` does.
-    func speakStream(chunks: AsyncStream<String>, session: Session) async -> Bool {
+    func speakStream(
+        chunks: AsyncStream<String>,
+        session: Session,
+        onDeviceVoiceIdentifier: String? = nil
+    ) async -> Bool {
         // Pause the mic before the playback route is negotiated, not after.
         dictation?.stop()
         let generation: Int
         do {
-            generation = try localEngine.startStream()
+            generation = try localEngine.startStream(voiceIdentifier: onDeviceVoiceIdentifier)
         } catch {
             session.actionError = "On-device speech could not play."
             return false
@@ -182,9 +203,11 @@ final class MessageSpeaker: NSObject, ObservableObject {
     }
 
     private func play(_ audio: Data) async throws {
-        let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(.playback, mode: .spokenAudio)
-        try audioSession.setActive(true)
+        if !CallAudioSession.isOwned {
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playback, mode: .spokenAudio)
+            try audioSession.setActive(true)
+        }
 
         let nextPlayer = try AVAudioPlayer(data: audio)
         nextPlayer.delegate = self
@@ -237,7 +260,9 @@ final class MessageSpeaker: NSObject, ObservableObject {
         player = nil
         clipContinuation?.resume(returning: false)
         clipContinuation = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if !CallAudioSession.isOwned {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     private enum ClipError: Error {

@@ -18,6 +18,20 @@ final class VoiceSessionPolicyTests: XCTestCase {
         XCTAssertEqual(decide(.idle, .micReady), .listen)
     }
 
+    func testOpeningACallStartsListeningWithoutAnOrbTap() {
+        XCTAssertEqual(decide(.idle, .opened), .listen)
+    }
+
+    func testOpenedMeansNothingOnceTheCallIsMoving() {
+        XCTAssertEqual(decide(.listening, .opened), .stay)
+        XCTAssertEqual(decide(.thinking, .opened), .stay)
+        XCTAssertEqual(decide(.speaking, .opened), .stay)
+    }
+
+    func testSpokenReplyStillResumesListening() {
+        XCTAssertEqual(decide(.speaking, .replySpoken), .listen)
+    }
+
     func testHeardSpeechSendsTheTranscript() {
         XCTAssertEqual(decide(.listening, .micStopped(hasTranscript: true)), .sendTranscript)
     }
@@ -145,6 +159,151 @@ final class VoiceSessionPolicyTests: XCTestCase {
         XCTAssertEqual(VoiceSessionPolicy.islandLine(for: .thinking), "Thinking…")
         XCTAssertEqual(VoiceSessionPolicy.islandLine(for: .speaking), "Speaking…")
         XCTAssertEqual(VoiceSessionPolicy.islandHeadline(name: "Scout", phase: .listening), "Scout is listening")
+    }
+
+    func testCallStatusCopyReadsLikeAPhoneCall() {
+        XCTAssertEqual(VoiceSessionPolicy.callStatusLine(for: .idle, micMuted: false), "Tap to talk")
+        XCTAssertEqual(VoiceSessionPolicy.callStatusLine(for: .listening, micMuted: false), "Listening")
+        XCTAssertEqual(VoiceSessionPolicy.callStatusLine(for: .thinking, micMuted: false), "Thinking")
+        XCTAssertEqual(VoiceSessionPolicy.callStatusLine(for: .speaking, micMuted: false), "Speaking")
+        XCTAssertEqual(VoiceSessionPolicy.callStatusLine(for: .idle, micMuted: true), "Muted")
+        XCTAssertEqual(VoiceSessionPolicy.callStatusLine(for: .listening, micMuted: true), "Muted")
+        XCTAssertEqual(VoiceSessionPolicy.callStatusLine(for: .thinking, micMuted: true), "Thinking")
+        XCTAssertEqual(VoiceSessionPolicy.callStatusLine(for: .speaking, micMuted: true), "Speaking")
+    }
+
+    func testCallDurationFormatsPastTheHour() {
+        XCTAssertEqual(VoiceSessionPolicy.callDurationLabel(elapsed: 0), "0:00")
+        XCTAssertEqual(VoiceSessionPolicy.callDurationLabel(elapsed: 9), "0:09")
+        XCTAssertEqual(VoiceSessionPolicy.callDurationLabel(elapsed: 75), "1:15")
+        XCTAssertEqual(VoiceSessionPolicy.callDurationLabel(elapsed: 3661), "1:01:01")
+        XCTAssertEqual(VoiceSessionPolicy.callDurationLabel(elapsed: -3), "0:00")
+    }
+
+    // MARK: - Call audio / background hold
+
+    func testCallAudioIsPlayAndRecordVoiceChatWithSpeakerAndBluetooth() {
+        XCTAssertEqual(VoiceCallAudioPolicy.category, "playAndRecord")
+        XCTAssertEqual(VoiceCallAudioPolicy.mode, "voiceChat")
+        XCTAssertTrue(VoiceCallAudioPolicy.defaultToSpeaker)
+        XCTAssertTrue(VoiceCallAudioPolicy.allowBluetooth)
+        XCTAssertFalse(VoiceCallAudioPolicy.allowsSimultaneousCaptureAndPlayback)
+        XCTAssertFalse(VoiceCallAudioPolicy.continuesAfterAppTermination)
+    }
+
+    func testActiveCallKeepsTheAudioSessionThroughEveryPhase() {
+        for phase in [VoiceSessionPhase.idle, .listening, .thinking, .speaking] {
+            XCTAssertTrue(
+                VoiceCallAudioPolicy.shouldKeepAudioSessionActive(isCallActive: true, phase: phase),
+                "thinking must not drop the call session or background audio dies"
+            )
+        }
+        XCTAssertFalse(VoiceCallAudioPolicy.shouldKeepAudioSessionActive(isCallActive: false, phase: .idle))
+        XCTAssertFalse(VoiceCallAudioPolicy.shouldDeactivateAudioSession(isCallActive: true))
+        XCTAssertTrue(VoiceCallAudioPolicy.shouldDeactivateAudioSession(isCallActive: false))
+    }
+
+    func testActiveCallContinuesInBackgroundAndKeepsTheEventStream() {
+        XCTAssertFalse(VoiceCallAudioPolicy.shouldSuspendCaptureOnBackground(isCallActive: true))
+        XCTAssertTrue(VoiceCallAudioPolicy.shouldSuspendCaptureOnBackground(isCallActive: false))
+        XCTAssertTrue(VoiceCallAudioPolicy.shouldKeepEventStreamInBackground(isCallActive: true))
+        XCTAssertFalse(VoiceCallAudioPolicy.shouldKeepEventStreamInBackground(isCallActive: false))
+    }
+
+    // MARK: - Outgoing CallKit, no incoming, end once, mute sync
+
+    func testStartingACallRequestsExactlyOneOutgoingCall() {
+        let uuid = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let (state, actions) = AgentCallKitPolicy.reduce(
+            state: .empty,
+            event: .userStarted(handle: "Scout"),
+            newUUID: uuid
+        )
+        XCTAssertEqual(state.uuid, uuid)
+        XCTAssertFalse(state.isEnding)
+        XCTAssertFalse(state.isMuted)
+        XCTAssertEqual(actions, [.requestStartOutgoing(uuid: uuid, handle: "Scout")])
+    }
+
+    func testASecondStartDoesNotCreateAnotherCall() {
+        let uuid = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let started = AgentCallKitPolicy.reduce(
+            state: .empty,
+            event: .userStarted(handle: "Scout"),
+            newUUID: uuid
+        ).0
+        let (state, actions) = AgentCallKitPolicy.reduce(
+            state: started,
+            event: .userStarted(handle: "Scout"),
+            newUUID: UUID()
+        )
+        XCTAssertEqual(state.uuid, uuid)
+        XCTAssertTrue(actions.isEmpty)
+    }
+
+    func testAppHangUpEndsTheSystemCallExactlyOnce() {
+        let uuid = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        var state = AgentCallKitPolicy.reduce(
+            state: .empty,
+            event: .userStarted(handle: "Scout"),
+            newUUID: uuid
+        ).0
+        state = AgentCallKitPolicy.reduce(state: state, event: .providerStarted, newUUID: uuid).0
+        let first = AgentCallKitPolicy.reduce(state: state, event: .userEnded, newUUID: uuid)
+        XCTAssertEqual(first.1, [.requestEnd(uuid: uuid)])
+        XCTAssertTrue(first.0.isEnding)
+        let second = AgentCallKitPolicy.reduce(state: first.0, event: .userEnded, newUUID: uuid)
+        XCTAssertTrue(second.1.isEmpty, "a second hang-up must not request another CXEndCallAction")
+        let fulfilled = AgentCallKitPolicy.reduce(state: first.0, event: .systemEnded, newUUID: uuid)
+        XCTAssertEqual(fulfilled.0, .empty)
+        XCTAssertTrue(fulfilled.1.isEmpty, "app-initiated end already closed voice; system fulfill must not close again")
+    }
+
+    func testSystemEndCallClosesTheVoiceSessionWithoutASecondEndRequest() {
+        let uuid = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        var state = AgentCallKitPolicy.reduce(
+            state: .empty,
+            event: .userStarted(handle: "Scout"),
+            newUUID: uuid
+        ).0
+        state = AgentCallKitPolicy.reduce(state: state, event: .providerStarted, newUUID: uuid).0
+        let ended = AgentCallKitPolicy.reduce(state: state, event: .systemEnded, newUUID: uuid)
+        XCTAssertEqual(ended.0, .empty)
+        XCTAssertEqual(ended.1, [.closeVoiceSession])
+        let leftover = AgentCallKitPolicy.reduce(state: ended.0, event: .userEnded, newUUID: uuid)
+        XCTAssertTrue(leftover.1.isEmpty)
+    }
+
+    func testMuteSyncsInBothDirectionsWithoutLooping() {
+        let uuid = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        var state = AgentCallKitPolicy.reduce(
+            state: .empty,
+            event: .userStarted(handle: "Scout"),
+            newUUID: uuid
+        ).0
+        state = AgentCallKitPolicy.reduce(state: state, event: .providerStarted, newUUID: uuid).0
+        let muted = AgentCallKitPolicy.reduce(state: state, event: .userSetMuted(true), newUUID: uuid)
+        XCTAssertTrue(muted.0.isMuted)
+        XCTAssertEqual(muted.1, [.applyMuted(true), .requestMute(uuid: uuid, muted: true)])
+        let same = AgentCallKitPolicy.reduce(state: muted.0, event: .userSetMuted(true), newUUID: uuid)
+        XCTAssertTrue(same.1.isEmpty, "repeating the same mute must not re-request CallKit")
+        let fromSystem = AgentCallKitPolicy.reduce(state: muted.0, event: .systemSetMuted(false), newUUID: uuid)
+        XCTAssertFalse(fromSystem.0.isMuted)
+        XCTAssertEqual(fromSystem.1, [.applyMuted(false)])
+        XCTAssertFalse(fromSystem.1.contains(.requestMute(uuid: uuid, muted: false)))
+    }
+
+    func testProviderResetClosesTheVoiceSessionAndClearsTheCall() {
+        let uuid = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        var state = AgentCallKitPolicy.reduce(
+            state: .empty,
+            event: .userStarted(handle: "Scout"),
+            newUUID: uuid
+        ).0
+        state = AgentCallKitPolicy.reduce(state: state, event: .providerStarted, newUUID: uuid).0
+        let reset = AgentCallKitPolicy.reduce(state: state, event: .providerReset, newUUID: uuid)
+        XCTAssertEqual(reset.0, .empty)
+        XCTAssertEqual(reset.1, [.closeVoiceSession])
     }
 
     // MARK: - Stream-and-speak utterance queue

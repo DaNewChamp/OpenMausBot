@@ -163,11 +163,20 @@ final class SpeechDictation: ObservableObject {
         // `.playAndRecord`. Composer dictation stays `.record` so it does
         // not duck whatever else is on the phone.
         if silenceGate != nil {
-            try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker])
+            // A live agent call already owns playAndRecord + voiceChat for
+            // the whole call. Reconfiguring here would drop Bluetooth HFP
+            // and deactivate between turns.
+            if !CallAudioSession.isOwned {
+                var options: AVAudioSession.CategoryOptions = []
+                if VoiceCallAudioPolicy.defaultToSpeaker { options.insert(.defaultToSpeaker) }
+                if VoiceCallAudioPolicy.allowBluetooth { options.insert(.allowBluetooth) }
+                try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
+                try session.setActive(true, options: .notifyOthersOnDeactivation)
+            }
         } else {
             try session.setCategory(.record, mode: .measurement)
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
         }
-        try session.setActive(true, options: .notifyOthersOnDeactivation)
 
         let engine = AVAudioEngine()
         let request = SFSpeechAudioBufferRecognitionRequest()
@@ -292,7 +301,9 @@ final class SpeechDictation: ObservableObject {
         audioEngine = nil
         recognizer = nil
         silenceGate = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if !CallAudioSession.isOwned {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     /// Root mean square of the buffer, linear 0...1-ish. Voice mode's orb

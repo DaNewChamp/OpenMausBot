@@ -999,6 +999,7 @@ final class Session: ObservableObject {
             islandEnabled: islandEnabled
         ) { [weak self] in
             self?.voicePresented = false
+            self?.resumeLingerAfterCallIfNeeded()
         }
         voicePresented = true
     }
@@ -1007,16 +1008,28 @@ final class Session: ObservableObject {
     func closeVoice() {
         voiceMode.close()
         voicePresented = false
+        resumeLingerAfterCallIfNeeded()
     }
 
     func handleVoiceScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .background:
-            voiceMode.suspendCapture()
+            if VoiceCallAudioPolicy.shouldSuspendCaptureOnBackground(isCallActive: voiceMode.isCallActive) {
+                voiceMode.suspendCapture()
+            }
         case .active:
             voiceMode.resumeAfterForeground()
         default:
             break
+        }
+    }
+
+    /// After a backgrounded call hangs up, resume the normal SSE linger so
+    /// the stream is not kept globally alive without an active call.
+    private func resumeLingerAfterCallIfNeeded() {
+        guard !voiceMode.isCallActive else { return }
+        if !NotificationCoordinator.shared.appIsActive {
+            linger()
         }
     }
 
@@ -1165,6 +1178,9 @@ final class Session: ObservableObject {
     /// is written down at a known point.
     func linger() {
         guard streamTask != nil else { return }
+        if VoiceCallAudioPolicy.shouldKeepEventStreamInBackground(isCallActive: voiceMode.isCallActive) {
+            return
+        }
         if lingerTask != .invalid {
             disconnect()
             return

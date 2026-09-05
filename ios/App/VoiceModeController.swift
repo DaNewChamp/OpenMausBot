@@ -38,8 +38,10 @@ final class VoiceModeController: ObservableObject {
     /// Live voice-output level for the orb while a reply is spoken,
     /// 0...1 — real playback metering, not a stand-in pulse.
     @Published private(set) var voiceLevel: Float = 0
-    /// Mute: replies are read on screen but never spoken.
+    /// Microphone mute, synced with the system call mute. Replies still speak.
     @Published var isMuted = false
+    /// True while a user-started agent call is live (not after hang-up).
+    var isCallActive: Bool { !didShutdown && chat != nil }
     /// Why the island is not live, when it is not — surfaced on the voice
     /// screen instead of failing silently.
     @Published private(set) var islandNote: String?
@@ -132,8 +134,15 @@ final class VoiceModeController: ObservableObject {
         openedWithPendingApproval = session.state.pendingApprovals.contains { $0.threadId == chat.threadId }
         didShutdown = false
         suspendedFromBackground = false
+        isMuted = false
         callStartedAt = Date()
         Self.active = self
+        CallAudioSession.configureForCall()
+        AgentCallKit.shared.attach(
+            close: { [weak self] in self?.close() },
+            mute: { [weak self] muted in self?.applySystemMute(muted) }
+        )
+        AgentCallKit.shared.startOutgoing(handle: chat.name)
 
         if islandEnabled {
             let liveBot = bot(in: session.state)
@@ -148,11 +157,7 @@ final class VoiceModeController: ObservableObject {
             self.island = island
         }
 
-#if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-voice-level-probe") {
-            fire(.micReady)
-        }
-#endif
+        fire(.opened)
 
         approvalObserver = session.$state.sink { [weak self] state in
             self?.watchApprovals(in: state)
@@ -249,6 +254,8 @@ final class VoiceModeController: ObservableObject {
         guard !didShutdown else { return }
         didShutdown = true
         suspendedFromBackground = false
+        AgentCallKit.shared.end()
+        AgentCallKit.shared.detach()
         if Self.active === self { Self.active = nil }
         watchTask?.cancel()
         watchTask = nil
@@ -275,6 +282,7 @@ final class VoiceModeController: ObservableObject {
         phase = .idle
         chat = nil
         callStartedAt = nil
+        CallAudioSession.release()
     }
 
     // MARK: - Input
@@ -298,9 +306,27 @@ final class VoiceModeController: ObservableObject {
     }
 
     func toggleMute() {
-        isMuted.toggle()
-        // Taking the mute off mid-turn does not retroactively speak; the
-        // next reply obeys the new setting.
+        applyMute(!isMuted, fromSystem: false)
+    }
+
+    /// System call mute from CallKit. Does not re-request CXSetMutedCallAction.
+    func applySystemMute(_ muted: Bool) {
+        applyMute(muted, fromSystem: true)
+    }
+
+    private func applyMute(_ muted: Bool, fromSystem: Bool) {
+        guard isMuted != muted else { return }
+        isMuted = muted
+        if !fromSystem {
+            AgentCallKit.shared.setMuted(muted)
+        }
+        if muted, phase == .listening {
+            dictation.stop()
+            heard = ""
+            fire(.micStopped(hasTranscript: false))
+        } else if !muted, phase == .idle {
+            fire(.micReady)
+        }
     }
 
     /// The composer in the bottom bar: a typed line joins the same loop —
@@ -353,6 +379,11 @@ final class VoiceModeController: ObservableObject {
         // Suspended from the background, nothing may open the mic — not
         // even a settle that somehow fires before the watcher is cancelled.
         guard !suspendedFromBackground else { return }
+        if isMuted {
+            phase = .idle
+            island?.update(phase)
+            return
+        }
         watchTask?.cancel()
         watchTask = nil
         endStreamTurn()
@@ -399,7 +430,7 @@ final class VoiceModeController: ObservableObject {
         voiceLevel = 0
         sentAt = Date()
         sawBusy = false
-        streamSpeakWanted = !isMuted && VoiceOutputSettings.load().engine == .onDevice
+        streamSpeakWanted = VoiceOutputSettings.load().engine == .onDevice
         replyChunker = streamSpeakWanted ? VoiceReplyChunker() : nil
         fedStreamCount = 0
         streamSettled = false
@@ -477,7 +508,11 @@ final class VoiceModeController: ObservableObject {
         chunkPump = continuation
         streamTask = Task { [weak self] in
             guard let self else { return }
-            let drained = await self.speaker.speakStream(chunks: stream, session: session)
+            let drained = await self.speaker.speakStream(
+                chunks: stream,
+                session: session,
+                onDeviceVoiceIdentifier: self.onDeviceCallVoiceIdentifier
+            )
             // A stopped stream already moved the loop along; only a
             // still-speaking turn ends from here.
             guard self.phase == .speaking else { return }
@@ -518,7 +553,7 @@ final class VoiceModeController: ObservableObject {
             if streamSpeakWanted {
                 settleStream()
             } else {
-                fire(.replySettled(hasReply: !replyText.isEmpty, shouldSpeak: !isMuted))
+                fire(.replySettled(hasReply: !replyText.isEmpty, shouldSpeak: true))
             }
         }
     }
@@ -536,7 +571,7 @@ final class VoiceModeController: ObservableObject {
         chunkPump = nil
         if phase == .thinking {
             // No sentence ever started speaking; the loop moves on now.
-            fire(.replySettled(hasReply: false, shouldSpeak: !isMuted))
+            fire(.replySettled(hasReply: false, shouldSpeak: true))
         }
     }
 
@@ -563,15 +598,34 @@ final class VoiceModeController: ObservableObject {
         let voice = voiceId
         Task { [weak self] in
             guard let self else { return }
-            await self.speaker.speakForVoiceMode(text: spoken, voiceId: voice, session: session)
+            await self.speaker.speakForVoiceMode(
+                text: spoken,
+                voiceId: voice,
+                botId: self.botId,
+                session: session
+            )
             guard self.phase == .speaking else { return }
             self.fire(.replySpoken)
         }
     }
 
+    private var botId: String? {
+        guard let chat, case let .bot(bot) = chat else { return nil }
+        return bot.id
+    }
+
     private var voiceId: String? {
         guard let session, let chat, case let .bot(bot) = chat else { return nil }
         return session.state.bot(bot.id)?.voice ?? bot.voice
+    }
+
+    private var onDeviceCallVoiceIdentifier: String? {
+        CallVoicePreferenceStore.resolvedVoice(
+            botId: botId ?? "",
+            engine: .onDevice,
+            serverBotVoice: nil,
+            globalCustomVoice: ""
+        )
     }
 
 #if DEBUG
